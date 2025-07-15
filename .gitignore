@@ -1,0 +1,105 @@
+# Created by venv; see https://docs.python.org/3/library/venv.html
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+libraries/venv/
+.venv/
+venv/
+ENV/
+env/
+
+# PyInstaller
+build/build/
+build/dist/
+*.manifest
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+
+# Windows
+Thumbs.db
+ehthumbs.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Sensitive Information
+utils/email-settings.txt
+*.key
+*.pem
+*.p12
+*.env
+.env.*
+config/secrets.json
+credentials.json
+
+# VPN Configuration Files
+plugins/vpn/wireguard/*.conf
+*.ovpn
+
+# Log Files
+*.log
+logs/
+
+# Temporary Files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Build artifacts
+*.dmg
+*.pkg
+*.exe
+*.msi
+*.deb
+*.rpm
+
+# Libraries 
+libraries/customtkinter/
+libraries/site-packages/
+libraries/*/  # Exclude all library directories
+
+# Windows metadata
+*Zone.Identifier
