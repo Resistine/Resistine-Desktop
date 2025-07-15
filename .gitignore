@@ -95,3 +95,11 @@ logs/
 *.msi
 *.deb
 *.rpm
+
+# Libraries 
+libraries/customtkinter/
+libraries/site-packages/
+libraries/*/  # Exclude all library directories
+
+# Windows metadata
+*Zone.Identifier
