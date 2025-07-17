@@ -38,4 +38,5 @@ tee==0.0.3
 tqdm==4.67.0
 typing_extensions==4.12.2
 urllib3==2.3.0
+pyinstaller==6.14.2
 

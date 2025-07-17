@@ -1,4 +1,5 @@
-# Created by venv; see https://docs.python.org/3/library/venv.html
+# Created by Jacqueline Edoro
+
 # Python
 __pycache__/
 *.py[cod]
@@ -15,11 +16,13 @@ lib/
 lib64/
 parts/
 sdist/
+*.spec
 var/
 wheels/
 pip-wheel-metadata/
 share/python-wheels/
 *.egg-info/
+*.pyc
 .installed.cfg
 *.egg
 MANIFEST
@@ -76,6 +79,8 @@ credentials.json
 
 # VPN Configuration Files
 plugins/vpn/wireguard/*.conf
+!plugins/vpn/wireguard/wg0-example.conf
+utils/email-settings.txt
 *.ovpn
 
 # Log Files
