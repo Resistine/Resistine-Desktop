@@ -44,10 +44,9 @@ case "$OS" in
         ;;
     Darwin*)
         # Install macOS Dependencies
+
         brew update
-        brew install python3
-        brew install python-tk
-        brew install wireguard-tools
+        brew install python3 python-tk wireguard-tools
         
         # Check if the venv folder is empty
         # Create a Virtual Environment
