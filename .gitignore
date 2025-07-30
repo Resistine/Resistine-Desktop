@@ -26,6 +26,7 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+.python-version
 
 # Virtual Environment
 libraries/venv/
@@ -83,6 +84,11 @@ plugins/vpn/wireguard/*.conf
 utils/email-settings.txt
 *.ovpn
 
+# Build Configuration 
+build_config.env
+build_config.local.env
+*.env.local
+
 # Log Files
 *.log
 logs/
@@ -92,6 +98,9 @@ logs/
 *.temp
 *.bak
 *.backup
+installer_temp/
+Resistine AI-*.dmg
+Resistine AI-*.pkg
 
 # Build artifacts
 *.dmg
