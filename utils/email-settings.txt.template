@@ -1,1 +1,15 @@
-your-email@example.com
+# Resistine Desktop - Email Settings Configuration
+# ================================================
+#
+# INSTRUCTIONS:
+# 1. Copy this file to the utils directory and rename it to "email-settings.txt"
+# 2. Replace the placeholder values below with your actual email configuration
+# 3. Remove or comment out any sections you don't need
+# 4. Save the file and restart the application
+#
+# This file is used for user authentication and email notifications in Resistine Desktop.
+# Keep this file secure as it contains sensitive information.
+#
+# ================================================
+
+example@gmail.com
