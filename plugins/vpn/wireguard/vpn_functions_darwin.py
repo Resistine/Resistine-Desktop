@@ -158,33 +158,6 @@ def check_service_status(interface_name, test_ip):
     except Exception as e:
         print(f"Error checking WireGuard status: {e}")
         return "Stopped"
-def check_service(interface_name, test_ip):
-    """
-    Check the status of the WireGuard VPN service.
-
-    :param interface_name: The name of the WireGuard interface.
-    :param test_ip: The IP address to ping for testing connectivity.
-    :return: "Running" if the service is up, "Stopped" otherwise.
-    """
-    try:
-        result = subprocess.run(['sudo', 'wg', 'show', interface_name], check=True, capture_output=True, text=True)
-    except Exception as e:
-        print(f"Error checking WireGuard interface {interface_name}: {e}")
-        return "Stopped"
-
-    try:
-        result = subprocess.run(['netstat', '-rn'], check=True, capture_output=True, text=True)
-    except Exception as e:
-        print(f"Error retrieving routing table: {e}")
-        return "Stopped"
-        
-    try:
-        result = subprocess.run(['ping', '-c', '4', test_ip], check=True, capture_output=True, text=True)
-    except Exception as e:
-        print(f"Error pinging {test_ip}: {e}")
-        return "Stopped"
-
-    return "Running"
 
 def check_wireguard_installed():
     """
