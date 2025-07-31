@@ -120,7 +120,7 @@ exe = EXE(
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
-    entitlements_file=None,
+    entitlements_file='Resistine.entitlements',
 )
 
 coll = COLLECT(
@@ -137,6 +137,8 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='Resistine AI.app',
+    icon='resources/icons/icon.ico',
+    bundle_identifier='com.resistine.desktop',
     info_plist={
         'CFBundleName': 'Resistine AI',
         'CFBundleDisplayName': 'Resistine AI',
@@ -173,14 +175,16 @@ app = BUNDLE(
         # Sign main executable
         if not run_command([
             "codesign", "--force", "--sign", signing_identity,
-            "--timestamp", "--options", "runtime", f"{app_path}/Contents/MacOS/Resistine AI"
+            "--timestamp", "--options", "runtime", "--entitlements", "Resistine.entitlements",
+            f"{app_path}/Contents/MacOS/Resistine AI"
         ], "Signing main executable"):
             sys.exit(1)
         
         # Sign entire app bundle
         if not run_command([
             "codesign", "--force", "--deep", "--sign", signing_identity,
-            "--timestamp", "--options", "runtime", app_path
+            "--timestamp", "--options", "runtime", "--entitlements", "Resistine.entitlements",
+            app_path
         ], "Signing app bundle"):
             sys.exit(1)
     
