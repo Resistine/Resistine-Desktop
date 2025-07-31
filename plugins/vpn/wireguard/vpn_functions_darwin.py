@@ -123,8 +123,42 @@ def generate_keys():
     except Exception as e:
         print(f"Error generating keys: {e}")
         return None
-
 def check_service_status(interface_name, test_ip):
+    """
+    Check the status of the WireGuard VPN service.
+    """
+    try:
+        # Get all WireGuard interfaces
+        result = subprocess.run(['sudo', 'wg', 'show'], capture_output=True, text=True, check=True)
+        
+        # Check if any interface is running (don't look for specific interface name)
+        if result.stdout.strip():
+            print(f"Found active WireGuard interfaces")
+            
+            # Check if we can ping the test IP
+            try:
+                ping_result = subprocess.run(['ping', '-c', '1', '-t', '2', test_ip], 
+                                           capture_output=True, text=True, timeout=5)
+                if ping_result.returncode == 0:
+                    print(f"Successfully pinged {test_ip}")
+                    return "Running"
+                else:
+                    print(f"Failed to ping {test_ip}")
+                    return "Stopped"
+            except Exception as e:
+                print(f"Error pinging {test_ip}: {e}")
+                return "Stopped"
+        else:
+            print("No active WireGuard interfaces found")
+            return "Stopped"
+            
+    except subprocess.CalledProcessError as e:
+        print(f"Error running wg show: {e}")
+        return "Stopped"
+    except Exception as e:
+        print(f"Error checking WireGuard status: {e}")
+        return "Stopped"
+def check_service(interface_name, test_ip):
     """
     Check the status of the WireGuard VPN service.
 
@@ -184,18 +218,46 @@ def start_vpn(config_path):
     except subprocess.CalledProcessError as e:
         print(f"Failed to start VPN: {e.stderr}")
         return False
-
-
-
+    
 def stop_vpn(config_path):
     """Stop the WireGuard VPN service with a specified configuration."""
     try:
         # Extract interface name from config file
         interface_name = os.path.basename(config_path).replace('.conf', '')
-        command = ['sudo', 'wg-quick', 'down', interface_name]
-        result = subprocess.run(command, capture_output=True, text=True, check=True)
-        print(f"VPN stopped successfully: {result.stdout}")
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to stop VPN: {e.stderr}")
+        
+        # Try to stop using wg-quick down with the full config path
+        try:
+            command = ['sudo', 'wg-quick', 'down', config_path]  # Use full path instead of just interface name
+            result = subprocess.run(command, capture_output=True, text=True, check=True)
+            print(f"VPN stopped successfully: {result.stdout}")
+            return True
+        except subprocess.CalledProcessError:
+            # If wg-quick down fails, try to stop manually
+            print(f"wg-quick down failed, trying manual stop for {interface_name}")
+            
+            # Find the actual interface name (might be utunX)
+            try:
+                result = subprocess.run(['sudo', 'wg', 'show'], capture_output=True, text=True, check=True)
+                lines = result.stdout.split('\n')
+                for line in lines:
+                    if 'interface:' in line and 'utun' in line:
+                        # Extract the actual interface name
+                        actual_interface = line.split(':')[1].strip()
+                        print(f"Found actual interface: {actual_interface}")
+                        
+                        # Stop the actual interface
+                        command = ['sudo', 'ifconfig', actual_interface, 'down']
+                        subprocess.run(command, capture_output=True, text=True, check=True)
+                        
+                        print(f"VPN stopped successfully using manual method")
+                        return True
+            except Exception as e:
+                print(f"Manual stop failed: {e}")
+                
         return False
+    except Exception as e:
+        print(f"Failed to stop VPN: {e}")
+        return False
+
+
+
