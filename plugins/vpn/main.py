@@ -5,8 +5,7 @@
 """
 This module contains the main plugin class for the VPN plugin.
 The VPN plugin displays VPN information and allows the user to manage VPN tunnels.
-This was modifed from vpn_functions_linux.py
-Author: Jacqueline E.
+Author: Javier Perez and Jacqueline Edoro 
 Copyright (c) Resistine 2025
 Licensed under the Apache License 2.0
 """
@@ -541,12 +540,15 @@ class Plugin(BasePlugin):
             print(f"Activating tunnel: {tunnel_name}")
 
             if is_wg_installed:
+                # Use system path for WireGuard operations
+                system_config_path = f"/etc/wireguard/{tunnel_name}.conf"
+                
                 if "Running" == my_vpn_status:
-                    stop_vpn(config_path)
+                    stop_vpn(system_config_path)
                     my_vpn_status = check_service_status(tunnel_name, "10.49.64.53")
                     self.update_plugin(self.id) 
                 elif "Stopped" == my_vpn_status:
-                    start_vpn(config_path)
+                    start_vpn(system_config_path)
                     my_vpn_status = check_service_status(tunnel_name, "10.49.64.53")
                     self.update_plugin(self.id) 
                 else:
