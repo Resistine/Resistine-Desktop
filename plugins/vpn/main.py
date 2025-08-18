@@ -19,6 +19,30 @@ from utils.encryption import *  # Ensure this module is correctly installed or r
 from tkinter import filedialog
 from PIL import Image
 
+# Function to get writable WireGuard directory
+def get_writable_wireguard_dir():
+    """Get a writable directory for WireGuard configuration files"""
+    if platform.system() == "Darwin":
+        # Use ~/Library/Application Support/Resistine AI/wireguard for macOS
+        home_dir = os.path.expanduser("~")
+        app_support_dir = os.path.join(home_dir, "Library", "Application Support", "Resistine AI")
+        wireguard_dir = os.path.join(app_support_dir, "wireguard")
+        os.makedirs(wireguard_dir, exist_ok=True)
+        return wireguard_dir
+    elif platform.system() == "Windows":
+        # Use %APPDATA%/Resistine AI/wireguard for Windows
+        appdata_dir = os.environ.get('APPDATA', os.path.expanduser("~"))
+        wireguard_dir = os.path.join(appdata_dir, "Resistine AI", "wireguard")
+        os.makedirs(wireguard_dir, exist_ok=True)
+        return wireguard_dir
+    else:
+        # Use ~/.config/resistine-ai/wireguard for Linux
+        home_dir = os.path.expanduser("~")
+        config_dir = os.path.join(home_dir, ".config", "resistine-ai")
+        wireguard_dir = os.path.join(config_dir, "wireguard")
+        os.makedirs(wireguard_dir, exist_ok=True)
+        return wireguard_dir
+
 # Define the global variable and initialize vpn status
 active_client_name = None
 if platform.system() == "Windows":
@@ -334,17 +358,19 @@ class Plugin(BasePlugin):
         file_path = filedialog.askopenfilename(filetypes=[("Config Files", "*.conf")])
 
         if file_path:
-            # Save the file to the wireguard folder in /AppData for windows and ./config for linux 
-            wireguard_folder = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'wireguard')
-            os.makedirs(wireguard_folder, exist_ok=True)
+            # Save the file to the writable wireguard folder
+            wireguard_folder = get_writable_wireguard_dir()
             destination_path = os.path.join(wireguard_folder, os.path.basename(file_path))
             print(f"Destination path: {destination_path}")
-            with open(file_path, 'rb') as src_file:
-                with open(destination_path, 'wb') as dst_file:
-                    dst_file.write(src_file.read())
-            print(f"File {file_path} saved to {destination_path}")
-            # Force update ONLY this plugin
-            self.update_plugin(self.id)  # Ensure it reloads the VPN plugin
+            try:
+                with open(file_path, 'rb') as src_file:
+                    with open(destination_path, 'wb') as dst_file:
+                        dst_file.write(src_file.read())
+                print(f"File {file_path} saved to {destination_path}")
+                # Force update ONLY this plugin
+                self.update_plugin(self.id)  # Ensure it reloads the VPN plugin
+            except Exception as e:
+                print(f"Error saving file: {e}")
         else:
             print("No file selected")
 
@@ -352,13 +378,16 @@ class Plugin(BasePlugin):
     def delete_tunnel(self, tunnel_name):
         selected_conf_file = tunnel_name
         if selected_conf_file:
-            wireguard_folder = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'wireguard')
+            wireguard_folder = get_writable_wireguard_dir()
             conf_file_path = os.path.join(wireguard_folder, f"{selected_conf_file}.conf")
             if os.path.exists(conf_file_path):
-                os.remove(conf_file_path)
-                print(f"Deleted configuration file: {conf_file_path}")
-                # Force update ONLY this plugin
-                self.update_plugin(self.id)  # Ensure it reloads the VPN plugin
+                try:
+                    os.remove(conf_file_path)
+                    print(f"Deleted configuration file: {conf_file_path}")
+                    # Force update ONLY this plugin
+                    self.update_plugin(self.id)  # Ensure it reloads the VPN plugin
+                except Exception as e:
+                    print(f"Error deleting file: {e}")
             else:
                 print(f"Configuration file not found: {conf_file_path}")
         else:
@@ -373,13 +402,16 @@ class Plugin(BasePlugin):
         """
         selected_conf_file = tunnel_name
         if selected_conf_file:
-            wireguard_folder = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'wireguard')
+            wireguard_folder = get_writable_wireguard_dir()
             conf_file_path = os.path.join(wireguard_folder, f"{selected_conf_file}.conf")
 
             def save_changes():
-                with open(conf_file_path, 'w') as conf_file:
-                    conf_file.write(text_area.get("1.0", tk.END))
-                settings_popup.destroy()
+                try:
+                    with open(conf_file_path, 'w') as conf_file:
+                        conf_file.write(text_area.get("1.0", tk.END))
+                    settings_popup.destroy()
+                except Exception as e:
+                    print(f"Error saving changes: {e}")
 
             def cancel_changes():
                 settings_popup.destroy()
@@ -414,9 +446,11 @@ class Plugin(BasePlugin):
         
         :return: A list of configuration file names.
         """
-        wireguard_folder = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'wireguard')
-        conf_files = [f for f in os.listdir(wireguard_folder) if f.endswith('.conf')]
-        return conf_files
+        wireguard_folder = get_writable_wireguard_dir()
+        if os.path.exists(wireguard_folder):
+            conf_files = [f for f in os.listdir(wireguard_folder) if f.endswith('.conf')]
+            return conf_files
+        return []
 
     def update_plugin(self, plugin_id):
         """
@@ -440,7 +474,7 @@ class Plugin(BasePlugin):
         :param tunnel_name: The name of the tunnel whose configuration values are to be retrieved.
         :return: A dictionary containing the configuration values.
         """
-        wireguard_folder = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'wireguard')
+        wireguard_folder = get_writable_wireguard_dir()
         conf_file_path = os.path.join(wireguard_folder, f"{tunnel_name}.conf")
 
         data = {
@@ -488,10 +522,18 @@ class Plugin(BasePlugin):
             NotImplementedError: If the platform is neither Linux nor Windows.
         """
         global my_vpn_status
+        
+        # Handle None or empty tunnel_name safely
+        if not tunnel_name:
+            print("❌ No tunnel name provided")
+            return
+            
         print(f"vpn status: {my_vpn_status} in activate_tunnel")
         interface_name = tunnel_name
-        wireguard_folder = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'wireguard')
-        config_path = os.path.join(wireguard_folder, tunnel_name + ".conf")
+        wireguard_folder = get_writable_wireguard_dir()
+        config_path = os.path.join(wireguard_folder, f"{tunnel_name}.conf")
+        
+        print(f"Using config path: {config_path}")
 
         # Check if WireGuard is installed
         is_wg_installed = check_wireguard_installed()
@@ -541,14 +583,14 @@ class Plugin(BasePlugin):
 
             if is_wg_installed:
                 # Use system path for WireGuard operations
-                system_config_path = f"/etc/wireguard/{tunnel_name}.conf"
+                
                 
                 if "Running" == my_vpn_status:
-                    stop_vpn(system_config_path)
+                    stop_vpn(config_path)
                     my_vpn_status = check_service_status(tunnel_name, "10.49.64.53")
                     self.update_plugin(self.id) 
                 elif "Stopped" == my_vpn_status:
-                    start_vpn(system_config_path)
+                    start_vpn(config_path)
                     my_vpn_status = check_service_status(tunnel_name, "10.49.64.53")
                     self.update_plugin(self.id) 
                 else:
