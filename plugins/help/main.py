@@ -55,7 +55,7 @@ class Plugin(BasePlugin):
         self.main_container.grid_rowconfigure(1, weight=8)  # 70% for markdown_viewer
         self.main_container.grid_rowconfigure(2, weight=1)  # 10% for open_docs_button
 
-        self.help_label = customtkinter.CTkLabel(self.main_container, text="Help", font=customtkinter.CTkFont(size=20))
+        self.help_label = customtkinter.CTkLabel(self.main_container, text="Help", font=customtkinter.CTkFont(size=20, weight="bold"))
         self.help_label.grid(row=0, column=0, padx=20, pady=10, sticky="new")
 
          # Load and parse the Markdown content

@@ -117,3 +117,6 @@ libraries/*/  # Exclude all library directories
 
 # Windows metadata
 *Zone.Identifier
+
+# User name
+plugins/settings/user_data.json
