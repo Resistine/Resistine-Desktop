@@ -1,6 +1,6 @@
 """
 VPN Functions for WireGuard on Windows
-Author: Peres J.
+Author: Sherwin
 Copyright (c) Resistine 2025
 Licensed under the Apache License 2.0
 """

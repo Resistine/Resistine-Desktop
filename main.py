@@ -10,7 +10,8 @@ Licensed under the Apache License 2.0
 import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), 'libraries'))
-
+import platform
+from wireguard_install import check_wireguard_installed  # Import the installation check
 import customtkinter
 from PIL import Image
 from plugins.plugin_manager import PluginManager
@@ -18,6 +19,12 @@ from utils import functions as myfunctions
 import re
 from tkinterweb import HtmlFrame
 import tkinter as tk
+
+# Ensure WireGuard is installed first (before app initialization)
+try:
+    check_wireguard_installed()
+except Exception as e:
+    print(f"WireGuard precheck failed: {e}")
 
 class App(customtkinter.CTk):
     """
