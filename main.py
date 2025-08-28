@@ -16,7 +16,8 @@ from PIL import Image
 from plugins.plugin_manager import PluginManager
 from utils import functions as myfunctions
 import re
-
+from tkinterweb import HtmlFrame
+import tkinter as tk
 
 class App(customtkinter.CTk):
     """
@@ -32,6 +33,7 @@ class App(customtkinter.CTk):
         super().__init__()
 
         self.title("Resistine AI")
+        self.iconbitmap(r"C:\Users\Developer_here\Desktop\Windows\Resistine-Desktop\resources\icons\icon.ico")
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         window_width = int(screen_width * 0.75)

@@ -5,7 +5,7 @@
 
 """
 This script is used to display the dashboard plugin in a grid format.
-Author: Peres J.
+Author: Resistine
 Copyright (c) Resistine 2025
 Licensed under the Apache License 2.0
 """

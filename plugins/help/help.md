@@ -1,4 +1,3 @@
-#I need to create a documentation on how to use this software. 
 ## How to Use This Software
 
 1. **Installation**
@@ -26,8 +25,7 @@
     - Follow the instructions to reset your password.
 
 2. **How can I contact support?**
-    - You can contact support via email at support@example.com.
-    - Alternatively, visit our [Contact Us](#contact-us) page for more options.
+    - You can contact support via the contact form and we will get back to you as soon as possible.
 
 3. **Why is the application running slow?**
     - Ensure your system meets the minimum requirements.
@@ -35,8 +33,8 @@
 
 ## Contact Information
 
-- **Email**: support@example.com
-- **Phone**: +1-800-123-4567
-- **Address**: 1234 Software St, Tech City, TX 75001, USA
+- **Contact form**: [Contact form](https://www.resistine.com/contact)
+- **Address**: Resistine GmbH, Lohmühlenstraße 65, 12435 Berlin, Germany
+               Resistine s.r.o., Lidická 19, 602 00 Brno, Czechia
 
-For more information, visit our [official website](https://www.example.com).
+For more information, visit our [official website](https://www.resistine.com/home).

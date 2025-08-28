@@ -6,7 +6,7 @@
 """
 This file contains the main plugin class for the Settings plugin.
 The plugin allows users to configure their account settings.
-Author: Peres J.
+Author: Resistine
 Copyright (c) Resistine 2025
 Licensed under the Apache License 2.0
 """

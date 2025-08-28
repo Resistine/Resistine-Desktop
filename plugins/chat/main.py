@@ -6,7 +6,7 @@
 """
 This module contains the main functionality for the Chat plugin.
 The plugin allows users to chat with the AI assistant.
-Author: Peres J.
+Author: Resistine
 Copyright (c) Resistine 2025
 Licensed under the Apache License 2.0
 """
