@@ -13,16 +13,17 @@ WIREGUARD_EXE_CANDIDATES = (
 )
 
 def is_wireguard_installed() -> bool:
-    """Return True if wg.exe is found in PATH or common install locations."""
-    if shutil.which("wg"):
+    """Return True if wg.exe is in PATH or common install locations."""
+    if shutil.which("wg") or shutil.which("wg.exe"):
         return True
     return any(os.path.exists(p) for p in WIREGUARD_EXE_CANDIDATES)
 
+def _wg_path() -> str:
+    """Return a resolvable path to wg.exe if available."""
+    return shutil.which("wg") or shutil.which("wg.exe") or next((p for p in WIREGUARD_EXE_CANDIDATES if os.path.exists(p)), "")
+
 def _launch_elevated(installer_path: str, params: str = "/S") -> bool:
-    """
-    Launch installer with elevation (UAC prompt). Returns True if launch succeeded.
-    Note: Silent switch (/S) may not be honored depending on the installer.
-    """
+    """Launch installer with elevation (UAC prompt)."""
     try:
         rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", installer_path, params, None, 1)
         if rc <= 32:
@@ -51,18 +52,23 @@ def install_wireguard_windows(timeout_seconds: int = 180) -> bool:
         time.sleep(3)
     return False
 
-def _wg_path() -> str:
-    """Return a resolvable path to wg.exe if available."""
-    return shutil.which("wg") or next((p for p in WIREGUARD_EXE_CANDIDATES if os.path.exists(p)), "")
-
 def check_wireguard_installed():
+    """Ensure WireGuard is present; install on Windows if missing."""
     if platform.system() != "Windows":
-        print("WireGuard auto-install is only implemented for Windows.")
+        # Non-Windows: only report status
+        if is_wireguard_installed():
+            exe = _wg_path() or "wg"
+            try:
+                out = subprocess.run([exe, "--version"], capture_output=True, text=True)
+                print((out.stdout or out.stderr).strip() or "WireGuard is already installed.")
+            except Exception:
+                print("WireGuard appears installed.")
+        else:
+            print("WireGuard not detected on this platform.")
         return
 
     try:
         if is_wireguard_installed():
-            # Try to print version; don’t crash if it fails
             exe = _wg_path() or "wg"
             try:
                 out = subprocess.run([exe, "--version"], capture_output=True, text=True)
@@ -77,11 +83,5 @@ def check_wireguard_installed():
             print("WireGuard installation completed.")
         else:
             print("WireGuard installation may have been cancelled or failed. Please install manually.")
-    except (FileNotFoundError, subprocess.CalledProcessError) as e:
-        # Robust fallback path
-        print(f"WireGuard not detected ({e}). Installing now...")
-        ok = install_wireguard_windows()
-        if ok and is_wireguard_installed():
-            print("WireGuard installation completed.")
-        else:
-            print("WireGuard installation may have been cancelled or failed. Please install manually.")
+    except Exception as e:
+        print(f"WireGuard check/install error: {e}")

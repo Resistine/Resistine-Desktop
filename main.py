@@ -12,6 +12,7 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), 'libraries'))
 import platform
 from wireguard_install import check_wireguard_installed  # Import the installation check
+from utils.keys import ensure_keys_exist, write_demo_config_if_absent
 import customtkinter
 from PIL import Image
 from plugins.plugin_manager import PluginManager
@@ -19,6 +20,13 @@ from utils import functions as myfunctions
 import re
 from tkinterweb import HtmlFrame
 import tkinter as tk
+
+# Generate keys and a demo config (first run)
+try:
+    ensure_keys_exist()
+    write_demo_config_if_absent()
+except Exception as e:
+    print(f"Key initialization failed: {e}")
 
 # Ensure WireGuard is installed first (before app initialization)
 try:

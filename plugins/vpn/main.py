@@ -18,6 +18,10 @@ import platform
 from utils.encryption import *  # Ensure this module is correctly installed or replace with the correct one
 from tkinter import filedialog
 from PIL import Image
+import subprocess
+import ctypes
+import sys
+from utils.keys import write_demo_config_if_absent
 
 # Function to get writable WireGuard directory
 def get_writable_wireguard_dir():
@@ -45,9 +49,16 @@ def get_writable_wireguard_dir():
 
 # Define the global variable and initialize vpn status
 active_client_name = None
+existing_interfaces = []
+
 if platform.system() == "Windows":
     from plugins.vpn.wireguard.vpn_functions_windows import *
-    existing_interfaces = subprocess.run(['wg', 'show', 'interfaces'], capture_output=True, text=True, check=True).stdout.split()
+    try:
+        existing_interfaces = subprocess.run(
+            ['wg', 'show', 'interfaces'], capture_output=True, text=True, check=True
+        ).stdout.split()
+    except Exception:
+        existing_interfaces = []
 elif platform.system() == "Linux":
     from plugins.vpn.wireguard.vpn_functions_linux import *
     from python_wireguard import Client, ServerConnection, Key
@@ -115,7 +126,15 @@ class Plugin(BasePlugin):
         conf_files = self.get_list_of_tunnels()
 
         if not conf_files:
-            print(f"No configuration files found in wireguard folder")
+            # Create a demo config so users see the expected format
+            try:
+                write_demo_config_if_absent()
+            except Exception as e:
+                print(f"Failed to create demo config: {e}")
+            conf_files = self.get_list_of_tunnels()
+
+        if not conf_files:
+            print("No configuration files found in wireguard folder")
             main_view = self.display_button_tunnel()
         else:
             print(f"Found configuration files: {conf_files}")

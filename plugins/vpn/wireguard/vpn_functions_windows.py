@@ -184,7 +184,6 @@ def check_service_status(tunnel_name, test_ip=None):
 def check_wireguard_installed():
     """
     Validate if WireGuard is installed.
-
     :return: True if WireGuard is installed, False otherwise.
     """
     try:
@@ -196,11 +195,14 @@ def check_wireguard_installed():
         )
         print("WireGuard is installed.")
         return True
-    except Exception as e:
-        print("WireGuard is installed, but there was an error executing 'wg.exe'.")
-        return False
     except FileNotFoundError:
         print("WireGuard is not installed or 'wg.exe' is not in the system's PATH.")
+        return False
+    except subprocess.CalledProcessError as e:
+        print(f"'wg.exe' returned an error: {e}")
+        return False
+    except Exception as e:
+        print(f"Unexpected error checking WireGuard: {e}")
         return False
 
 def install_tunnel(config_path):
