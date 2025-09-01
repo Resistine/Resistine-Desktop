@@ -9,7 +9,8 @@ Licensed under the Apache License 2.0
 
 import sys
 import os
-sys.path.append(os.path.join(os.path.dirname(__file__), 'libraries'))
+sys.path.append(resource_path('libraries'))
+#sys.path.append(os.path.join(os.path.dirname(__file__), 'libraries'))
 import platform
 from plugins.vpn.wireguard.wireguard_install import check_wireguard_installed  # Import the installation check
 from utils.keys import ensure_keys_exist, write_demo_config_if_absent
@@ -195,7 +196,11 @@ class App(customtkinter.CTk):
 
 if __name__ == "__main__":
     customtkinter.set_appearance_mode("system")
-    customtkinter.set_default_color_theme(os.path.join(os.path.dirname(__file__), "resources", "themes", "custom_theme.json"))
+    theme_path = resource_path(r"resources\themes\custom_theme.json")
+    try:
+        customtkinter.set_default_color_theme(theme_path)
+    except Exception as e:
+        print(f"Theme load failed: {e}")
     app = App()
     app.mainloop()
 
