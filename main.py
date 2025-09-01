@@ -11,7 +11,7 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), 'libraries'))
 import platform
-from wireguard_install import check_wireguard_installed  # Import the installation check
+from plugins.vpn.wireguard.wireguard_install import check_wireguard_installed  # Import the installation check
 from utils.keys import ensure_keys_exist, write_demo_config_if_absent
 import customtkinter
 from PIL import Image
