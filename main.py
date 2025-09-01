@@ -20,6 +20,7 @@ from utils import functions as myfunctions
 import re
 from tkinterweb import HtmlFrame
 import tkinter as tk
+from utils.paths import resource_path 
 
 # Generate keys and a demo config (first run)
 try:
@@ -48,7 +49,11 @@ class App(customtkinter.CTk):
         super().__init__()
 
         self.title("Resistine AI")
-        self.iconbitmap(r"C:\Users\Developer_here\Desktop\Windows\Resistine-Desktop\resources\icons\icon.ico")
+        icon_path = resource_path(r"resources\icons\icon.ico")
+        try:
+            self.iconbitmap(icon_path)
+        except Exception as e:
+            print(f"Icon load failed: {e}")
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         window_width = int(screen_width * 0.75)
