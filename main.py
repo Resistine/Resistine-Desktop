@@ -9,6 +9,7 @@ Licensed under the Apache License 2.0
 
 import sys
 import os
+from utils.paths import resource_path 
 sys.path.append(resource_path('libraries'))
 #sys.path.append(os.path.join(os.path.dirname(__file__), 'libraries'))
 import platform
@@ -21,7 +22,9 @@ from utils import functions as myfunctions
 import re
 from tkinterweb import HtmlFrame
 import tkinter as tk
-from utils.paths import resource_path 
+import importlib
+import traceback
+
 
 # Generate keys and a demo config (first run)
 try:
@@ -74,7 +77,8 @@ class App(customtkinter.CTk):
         
         :return: True if the email is registered, False otherwise.
         """
-        return os.path.isfile(os.path.join(os.path.dirname(__file__), "utils", "email-settings.txt"))
+        return os.path.isfile(os.path.join(resource_path("utils"), "email-settings.txt"))
+        #return os.path.isfile(os.path.join(os.path.dirname(__file__), "utils", "email-settings.txt"))
 
     def create_registration_screen(self):
         """
@@ -124,10 +128,15 @@ class App(customtkinter.CTk):
             return
         if hasattr(self, 'error_label'):
             self.error_label.destroy()
-        shares_folder = os.path.join(os.path.dirname(__file__), "utils")
+        #shares_folder = os.path.join(os.path.dirname(__file__), "utils")
+        #if not os.path.exists(shares_folder):
+            #os.makedirs(shares_folder)
+        #with open(os.path.join(shares_folder, "email-settings.txt"), "w") as f:
+            #f.write(email)
+        shares_folder = resource_path("utils")
         if not os.path.exists(shares_folder):
-            os.makedirs(shares_folder)
-        with open(os.path.join(shares_folder, "email-settings.txt"), "w") as f:
+            os.makedirs(shares_folder, exist_ok=True)
+        with open(os.path.join(shares_folder, "email-settings.txt"), "w", encoding="utf-8") as f:
             f.write(email)
         self.registration_frame.destroy()
         self.create_dashboard()

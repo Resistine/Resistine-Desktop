@@ -6,7 +6,8 @@ Copyright (c) Resistine 2025
 Licensed under the Apache License 2.0
 """
 
-from PIL import Image
+from PIL import Image, ImageDraw, ImageTk
+from utils.paths import resource_path
 import customtkinter
 import os 
 
@@ -113,16 +114,44 @@ class BasePlugin:
         """
         return self.translations
 
-    def create_icon(self, size):
+    def create_icon(self, size=(16, 16)):
         """
-        Create an icon for the plugin using the provided size.
+        Create the plugin icon, falling back to a generated badge if files are missing.
+        """
+        def _open_or_none(p):
+            try:
+                return Image.open(p) if p and os.path.isfile(p) else None
+            except Exception:
+                return None
 
-        :param size: The size of the icon.
-        :return: The created icon.
-        """
-        light_image = Image.open(self.icon_light)
-        dark_image = Image.open(self.icon_dark)
-        return customtkinter.CTkImage(light_image=dark_image, dark_image=light_image, size=size)
+        # Resolve provided paths (support relative names under resources/icons)
+        light_path = getattr(self, "icon_light_path", None) or getattr(self, "icon_light", None)
+        dark_path = getattr(self, "icon_dark_path", None) or getattr(self, "icon_dark", None)
+
+        if light_path and not os.path.isabs(light_path):
+            candidate = resource_path(os.path.join("resources", "icons", light_path))
+            if os.path.isfile(candidate):
+                light_path = candidate
+        if dark_path and not os.path.isabs(dark_path):
+            candidate = resource_path(os.path.join("resources", "icons", dark_path))
+            if os.path.isfile(candidate):
+                dark_path = candidate
+
+        light_image = _open_or_none(light_path)
+        dark_image = _open_or_none(dark_path)
+
+        if light_image is None:
+            # Generate a simple status dot as fallback
+            img = Image.new("RGBA", size, (0, 0, 0, 0))
+            d = ImageDraw.Draw(img)
+            status = getattr(self, "status", "OK")
+            color = {"OK": (0, 170, 0, 255), "Error": (200, 0, 0, 255), "Unknown": (120, 120, 120, 255)}.get(status, (120, 120, 120, 255))
+            d.ellipse([2, 2, size[0] - 2, size[1] - 2], fill=color)
+            light_image = img
+
+        light_image = light_image.resize(size, Image.LANCZOS)
+        self.icon_alert = ImageTk.PhotoImage(light_image)
+        return self.icon_alert
 
     def get_icon(self):
         """

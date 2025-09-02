@@ -11,6 +11,7 @@ import requests
 import zipfile
 import io
 import sys
+import traceback
 
 class PluginManager:
     """
@@ -23,7 +24,7 @@ class PluginManager:
         :param app: The application instance to which the plugins will be attached.
         """
         self.app = app
-        self.plugins = sorted(self.load_plugins(), key=lambda x: x.order)
+        self.plugins = sorted(self.load_plugins(), key=lambda x: getattr(x, "order", 0))
 
     def download_plugin(self, url):
         """
@@ -38,7 +39,7 @@ class PluginManager:
             response.raise_for_status()
             with zipfile.ZipFile(io.BytesIO(response.content)) as zip_ref:
                 zip_ref.extractall(os.path.join(plugins_path))
-            self.plugins = self.load_plugins()
+            self.plugins = sorted(self.load_plugins(), key=lambda x: getattr(x, "order", 0))
             self.app.create_dashboard()
             return "Plugin downloaded and extracted successfully."
         except requests.RequestException as e:
@@ -49,13 +50,38 @@ class PluginManager:
     def load_plugins(self):
         """
         Load all plugins from the plugins directory.
-        
         :return: A list of loaded plugin instances.
         """
         plugins_path = self.get_plugins_path()
-        plugin_dirs = [d for d in os.listdir(plugins_path) if os.path.isdir(os.path.join(plugins_path, d)) and not d.startswith('_')]
+        plugin_dirs = [
+            d for d in os.listdir(plugins_path)
+            if os.path.isdir(os.path.join(plugins_path, d))
+            and not d.startswith('_')
+            and d != "plugin_manager"
+        ]
+
+        # Build module names only if a main.py exists
+        module_names = []
+        for d in plugin_dirs:
+            if os.path.exists(os.path.join(plugins_path, d, "main.py")):
+                module_names.append(f"plugins.{d}.main")
+
         plugins = []
-        
+        for module_name in module_names:
+            try:
+                module = importlib.import_module(module_name)
+                if hasattr(module, "Plugin"):
+                    instance = module.Plugin(self.app)
+                    plugins.append(instance)
+                else:
+                    print(f"Module {module_name} has no Plugin class; skipping")
+            except Exception as e:
+                print(f"Failed to load plugin {module_name}: {e}")
+                traceback.print_exc()
+                continue
+
+        return plugins
+        '''
         for plugin_dir in plugin_dirs:
             module_name = f"plugins.{plugin_dir}.main"
             try:
@@ -68,6 +94,7 @@ class PluginManager:
                 plugin_instance.set_status("Error")  # Set the status of the plugin to "Error"
                 print(f"Failed to load plugin {module_name}: {e}")
         return plugins
+        '''
 
     def get_plugins_path(self):
         """
