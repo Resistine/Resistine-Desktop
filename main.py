@@ -24,6 +24,7 @@ from tkinterweb import HtmlFrame
 import tkinter as tk
 import importlib
 import traceback
+import tempfile
 
 
 # Generate keys and a demo config (first run)
@@ -39,6 +40,72 @@ try:
 except Exception as e:
     print(f"WireGuard precheck failed: {e}")
 
+class DebugWindow:
+    """Debug window to show logs; safe for windowed runs where sys.__stdout__ is None."""
+    def __init__(self, master=None):
+        self.master = master
+        self.top = None
+        self.text = None
+        self._orig_stdout = getattr(sys, "__stdout__", None)
+        self._orig_stderr = getattr(sys, "__stderr__", None)
+        self._log_file = None
+        # If no console streams, open a log file as fallback
+        if self._orig_stdout is None or self._orig_stderr is None:
+            try:
+                log_dir = os.path.join(os.environ.get("APPDATA", tempfile.gettempdir()), "Resistine AI", "logs")
+                os.makedirs(log_dir, exist_ok=True)
+                self._log_file = open(os.path.join(log_dir, "app.log"), "a", encoding="utf-8")
+            except Exception:
+                self._log_file = None
+
+    def open(self):
+        if self.top and self.top.winfo_exists():
+            return
+        self.top = customtkinter.CTkToplevel(self.master) if self.master else tk.Toplevel()
+        self.top.title("Logs")
+        container = customtkinter.CTkFrame(self.top)
+        container.pack(fill="both", expand=True)
+        self.text = tk.Text(container, height=18, wrap="word")
+        self.text.pack(fill="both", expand=True)
+
+    def write(self, msg: str):
+        if not msg:
+            return
+        try:
+            if self.text and self.text.winfo_exists():
+                self.text.insert("end", msg)
+                self.text.see("end")
+            elif self._orig_stdout is not None:
+                self._orig_stdout.write(msg)
+            elif self._log_file is not None:
+                self._log_file.write(msg)
+                self._log_file.flush()
+            # else: drop silently
+        except Exception:
+            # Never crash on logging
+            try:
+                if self._log_file:
+                    self._log_file.write(msg)
+                    self._log_file.flush()
+            except Exception:
+                pass
+
+    def flush(self):
+        try:
+            if self.text and self.text.winfo_exists():
+                self.text.update_idletasks()
+            elif self._log_file:
+                self._log_file.flush()
+        except Exception:
+            pass
+
+    def close(self):
+        try:
+            if self._log_file:
+                self._log_file.close()
+        except Exception:
+            pass
+
 class App(customtkinter.CTk):
     """
     @brief Main application class for Resistine AI.
@@ -51,6 +118,10 @@ class App(customtkinter.CTk):
         Check if the email is registered and create the appropriate screen.
         """
         super().__init__()
+        #self.debug = DebugWindow(self)
+
+        #sys.stdout = self.debug
+        #sys.stderr = self.debug
 
         self.title("Resistine AI")
         icon_path = resource_path(r"resources\icons\icon.ico")
@@ -147,21 +218,34 @@ class App(customtkinter.CTk):
         """
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
-        #Getting the plugin list from the PluginManager located in plugins folder. 
+
+        # Get plugin list once, refresh if new ones appear
         if not hasattr(App, 'plugin_list'):
             App.plugin_list = PluginManager(self).plugins
         else:
-            if len(App.plugin_list) < len(PluginManager(self).plugins):
-                App.plugin_list = PluginManager(self).plugins
+            current = PluginManager(self).plugins
+            if len(App.plugin_list) < len(current):
+                App.plugin_list = current
+
         self.plugin_list = App.plugin_list
+
+        if not self.plugin_list:
+            print("No plugins loaded. Check plugins folder and dependencies.")
+            # Show a minimal placeholder while user fixes setup
+            placeholder = customtkinter.CTkLabel(self, text="No plugins loaded")
+            placeholder.grid(row=0, column=1, sticky="nsew")
+            return
+
         number_plugins = len(self.plugin_list) + 1
 
         self.navigation_frame = customtkinter.CTkFrame(self, corner_radius=0)
         self.navigation_frame.grid(row=0, column=0, sticky="nsew")
         self.navigation_frame.grid_rowconfigure(number_plugins, weight=1)
 
-        self.navigation_frame_label = customtkinter.CTkLabel(self.navigation_frame, text="Resistine", image=None,
-                                                             compound="left", font=customtkinter.CTkFont(size=15, weight="bold"))
+        self.navigation_frame_label = customtkinter.CTkLabel(
+            self.navigation_frame, text="Resistine", image=None,
+            compound="left", font=customtkinter.CTkFont(size=15, weight="bold")
+        )
         self.navigation_frame_label.grid(row=0, column=0, padx=20, pady=20)
 
         self.frames = {}
@@ -169,39 +253,74 @@ class App(customtkinter.CTk):
         for plugin in self.plugin_list:
             frame_name = f'frame_{plugin.get_name()}'
             self.frames[frame_name] = plugin
-
             try:
-                # Create the buttons for each plugin
                 plugin.set_button(myfunctions.create_tab_button(
-                    self.navigation_frame, 
-                    plugin.get_name(), 
-                    plugin.get_icon(), 
-                    lambda p=plugin: self.select_frame_by_name(f'frame_{p.get_name()}', button = p.get_button()), 
-                    row, 
+                    self.navigation_frame,
+                    plugin.get_name(),
+                    plugin.get_icon(),
+                    lambda p=plugin: self.select_frame_by_name(f'frame_{p.get_name()}', button=p.get_button()),
+                    row,
                     0
                 ))
             except Exception as e:
                 print(f"Error loading plugin button {plugin.get_name()}, Error: {e}")
             row += 1
 
-        self.select_frame_by_name("frame_Dashboard", button = self.frames["frame_Dashboard"].get_button())
+        # Choose default frame: Dashboard if present, else first plugin
+        default_plugin = next(
+            (p for p in self.plugin_list if str(p.get_name()).strip().lower() == "dashboard"),
+            self.plugin_list[0]
+        )
+        default_frame_name = f'frame_{default_plugin.get_name()}'
+        default_button = getattr(default_plugin, "get_button", lambda: None)()
+
+        self.select_frame_by_name(default_frame_name, button=default_button)
 
     def select_frame_by_name(self, name, button=None):
         """
         Select and display the specified frame, and update the button appearance.
-        
-        :param name: The name of the frame to display.
-        :param button: The button associated with the frame.
         """
+        if name not in self.frames:
+            # Fallback to first available frame to avoid KeyError
+            first = next(iter(self.frames), None)
+            if not first:
+                print("select_frame_by_name called with no frames available.")
+                return
+            name = first
+            button = getattr(self.frames[name], "get_button", lambda: None)()
+
         for frame_name, frame in self.frames.items():
-            if frame_name == name:
-                if button:
-                    button.configure(fg_color=("gray75", "gray25"))
-                frame.create_main_screen().grid(row=0, column=1, sticky="nsew")
-            else:
-                if button:
-                    button.configure(fg_color="transparent")
-                frame.create_main_screen().grid_forget()
+            try:
+                if frame_name == name:
+                    if button:
+                        button.configure(fg_color=("gray75", "gray25"))
+                    frame.create_main_screen().grid(row=0, column=1, sticky="nsew")
+                else:
+                    # Don't toggle other plugin buttons here; each button callback will set itself active
+                    view = frame.create_main_screen()
+                    try:
+                        view.grid_forget()
+                    except Exception:
+                        pass
+            except Exception as e:
+                print(f"Failed to render frame {frame_name}: {e}")
+
+    # On close, restore stdio
+    def on_closing(self):
+        # Restore stdio and close logger
+        try:
+            sys.stdout = sys.__stdout__
+        except Exception:
+            sys.stdout = None
+        try:
+            sys.stderr = sys.__stderr__
+        except Exception:
+            sys.stderr = None
+        try:
+            self.debug.close()
+        finally:
+            self.destroy()
+
 
 if __name__ == "__main__":
     customtkinter.set_appearance_mode("system")
@@ -211,5 +330,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Theme load failed: {e}")
     app = App()
+    app.protocol("WM_DELETE_WINDOW", app.on_closing)
     app.mainloop()
 

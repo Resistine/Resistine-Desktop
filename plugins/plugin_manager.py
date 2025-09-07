@@ -12,6 +12,8 @@ import zipfile
 import io
 import sys
 import traceback
+import pkgutil
+from utils.paths import resource_path
 
 class PluginManager:
     """
@@ -47,65 +49,45 @@ class PluginManager:
         except zipfile.BadZipFile as e:
             return f"Failed to extract plugin: {e}"
 
+    def get_plugins_path(self):
+        return resource_path("plugins")
+
     def load_plugins(self):
         """
-        Load all plugins from the plugins directory.
-        :return: A list of loaded plugin instances.
+        Load all plugins from the plugins package (pkgutil), with filesystem fallback.
         """
-        plugins_path = self.get_plugins_path()
-        plugin_dirs = [
-            d for d in os.listdir(plugins_path)
-            if os.path.isdir(os.path.join(plugins_path, d))
-            and not d.startswith('_')
-            and d != "plugin_manager"
-        ]
+        modules = []
+        # Package-based discovery (preferred for PyInstaller)
+        try:
+            import plugins
+            for _, name, ispkg in pkgutil.iter_modules(plugins.__path__, prefix="plugins."):
+                #if ispkg and os.path.basename(name) not in ("__pycache__", "plugin_manager"):
+                if ispkg:
+                    modules.append(f"{name}.main")  # plugins.<name>.main
+        except Exception as e:
+            print(f"Package discovery failed: {e}")
+            traceback.print_exc()
 
-        # Build module names only if a main.py exists
-        module_names = []
-        for d in plugin_dirs:
-            if os.path.exists(os.path.join(plugins_path, d, "main.py")):
-                module_names.append(f"plugins.{d}.main")
+        # Filesystem fallback (dev runs)
+        if not modules:
+            plugins_path = self.get_plugins_path()
+            if os.path.isdir(plugins_path):
+                for d in os.listdir(plugins_path):
+                    full = os.path.join(plugins_path, d)
+                    if os.path.isdir(full) and d not in ("__pycache__", "plugin_manager") and not d.startswith("_"):
+                        if os.path.exists(os.path.join(full, "main.py")):
+                            modules.append(f"plugins.{d}.main")
 
-        plugins = []
-        for module_name in module_names:
+        loaded = []
+        for module_name in modules:
             try:
                 module = importlib.import_module(module_name)
                 if hasattr(module, "Plugin"):
-                    instance = module.Plugin(self.app)
-                    plugins.append(instance)
+                    loaded.append(module.Plugin(self.app))
                 else:
                     print(f"Module {module_name} has no Plugin class; skipping")
             except Exception as e:
                 print(f"Failed to load plugin {module_name}: {e}")
                 traceback.print_exc()
                 continue
-
-        return plugins
-        '''
-        for plugin_dir in plugin_dirs:
-            module_name = f"plugins.{plugin_dir}.main"
-            try:
-                module = importlib.import_module(module_name)
-                plugin_class = getattr(module, "Plugin")  # Adjust this if your plugin class names are different
-                plugin_instance = plugin_class(self.app)
-                plugins.append(plugin_instance)
-                plugin_instance.set_status("Ok")  # Set the status of the plugin to "Ok"
-            except Exception as e:
-                plugin_instance.set_status("Error")  # Set the status of the plugin to "Error"
-                print(f"Failed to load plugin {module_name}: {e}")
-        return plugins
-        '''
-
-    def get_plugins_path(self):
-        """
-        Get the path to the plugins directory.
-        
-        :return: The path to the plugins directory.
-        """
-        if getattr(sys, 'frozen', False):
-            # If the application is run as a bundle, the PyInstaller bootloader
-            # sets the sys._MEIPASS attribute to the path of the temporary directory
-            return os.path.join(sys._MEIPASS, 'plugins')
-        else:
-            # If the application is run normally, use the original path
-            return os.path.join(os.path.dirname(os.path.realpath(__file__)))
+        return loaded

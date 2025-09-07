@@ -115,43 +115,44 @@ class BasePlugin:
         return self.translations
 
     def create_icon(self, size=(16, 16)):
-        """
-        Create the plugin icon, falling back to a generated badge if files are missing.
-        """
+        """Create the plugin icon, falling back to a generated badge if missing, and return CTkImage."""
         def _open_or_none(p):
             try:
                 return Image.open(p) if p and os.path.isfile(p) else None
             except Exception:
                 return None
 
-        # Resolve provided paths (support relative names under resources/icons)
         light_path = getattr(self, "icon_light_path", None) or getattr(self, "icon_light", None)
         dark_path = getattr(self, "icon_dark_path", None) or getattr(self, "icon_dark", None)
 
         if light_path and not os.path.isabs(light_path):
-            candidate = resource_path(os.path.join("resources", "icons", light_path))
+            candidate = resource_path(os.path.join("resources", "icons", str(light_path)))
             if os.path.isfile(candidate):
                 light_path = candidate
         if dark_path and not os.path.isabs(dark_path):
-            candidate = resource_path(os.path.join("resources", "icons", dark_path))
+            candidate = resource_path(os.path.join("resources", "icons", str(dark_path)))
             if os.path.isfile(candidate):
                 dark_path = candidate
 
-        light_image = _open_or_none(light_path)
-        dark_image = _open_or_none(dark_path)
+        light_img = _open_or_none(light_path)
+        dark_img = _open_or_none(dark_path)
 
-        if light_image is None:
-            # Generate a simple status dot as fallback
-            img = Image.new("RGBA", size, (0, 0, 0, 0))
-            d = ImageDraw.Draw(img)
+        if light_img is None:
+            # Fallback: draw a simple status dot
+            light_img = Image.new("RGBA", size, (0, 0, 0, 0))
+            d = ImageDraw.Draw(light_img)
             status = getattr(self, "status", "OK")
             color = {"OK": (0, 170, 0, 255), "Error": (200, 0, 0, 255), "Unknown": (120, 120, 120, 255)}.get(status, (120, 120, 120, 255))
-            d.ellipse([2, 2, size[0] - 2, size[1] - 2], fill=color)
-            light_image = img
+            d.ellipse([2, 2, size[0]-2, size[1]-2], fill=color)
+            dark_img = light_img
 
-        light_image = light_image.resize(size, Image.LANCZOS)
-        self.icon_alert = ImageTk.PhotoImage(light_image)
-        return self.icon_alert
+        light_img = light_img.resize(size, Image.LANCZOS)
+        if dark_img is not None:
+            dark_img = dark_img.resize(size, Image.LANCZOS)
+
+        ctk_img = customtkinter.CTkImage(light_image=light_img, dark_image=dark_img or light_img, size=size)
+        self.icon_alert = ctk_img
+        return ctk_img
 
     def get_icon(self):
         """
