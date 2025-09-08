@@ -42,6 +42,30 @@ try:
 except Exception as e:
     print(f"WireGuard precheck failed: {e}")
 
+# Handle elevated VPN toggle before creating the App/UI
+if platform.system() == "Windows" and "--vpn-toggle" in sys.argv:
+    try:
+        idx = sys.argv.index("--vpn-toggle")
+        cfg = sys.argv[idx + 1] if len(sys.argv) > idx + 1 else None
+    except Exception:
+        cfg = None
+
+    if cfg:
+        try:
+            from plugins.vpn.wireguard.vpn_functions_windows import (
+                check_service_status, start_vpn, stop_vpn
+            )
+            tunnel_name = os.path.splitext(os.path.basename(cfg))[0]
+            status = check_service_status(tunnel_name, "10.49.64.53")
+            if status == "Running":
+                stop_vpn(cfg)
+            else:
+                start_vpn(cfg)
+        except Exception as e:
+            print(f"Elevated VPN toggle failed: {e}")
+    # Always exit the elevated helper process
+    sys.exit(0)
+
 class DebugWindow:
     """Debug window to show logs; safe for windowed runs where sys.__stdout__ is None."""
     def __init__(self, master=None):
@@ -107,28 +131,6 @@ class DebugWindow:
                 self._log_file.close()
         except Exception:
             pass
-
-# Handle elevated VPN toggle before creating the App/UI
-if platform.system() == "Windows" and "--vpn-toggle" in sys.argv:
-    try:
-        idx = sys.argv.index("--vpn-toggle")
-        cfg = sys.argv[idx + 1] if len(sys.argv) > idx + 1 else None
-    except Exception:
-        cfg = None
-    if cfg:
-        try:
-            from plugins.vpn.wireguard.vpn_functions_windows import (
-                check_service_status, start_vpn, stop_vpn
-            )
-            name = os.path.splitext(os.path.basename(cfg))[0]
-            status = check_service_status(name, "10.49.64.53")
-            if status == "Running":
-                stop_vpn(cfg)
-            else:
-                start_vpn(cfg)
-        except Exception as e:
-            print(f"Elevated VPN toggle failed: {e}")
-    sys.exit(0)
 
 class App(customtkinter.CTk):
     """
@@ -230,14 +232,16 @@ class App(customtkinter.CTk):
             return
         if hasattr(self, 'error_label'):
             self.error_label.destroy()
+
         #shares_folder = os.path.join(os.path.dirname(__file__), "utils")
         #if not os.path.exists(shares_folder):
             #os.makedirs(shares_folder)
         #with open(os.path.join(shares_folder, "email-settings.txt"), "w") as f:
             #f.write(email)
-        shares_folder = resource_path("utils")
+        #shares_folder = resource_path("utils")
         #if not os.path.exists(shares_folder):
             #os.makedirs(shares_folder, exist_ok=True)
+        shares_folder = user_resource_dir("utils")
         with open(os.path.join(shares_folder, "email-settings.txt"), "w", encoding="utf-8") as f:
             f.write(email)
         self.registration_frame.destroy()

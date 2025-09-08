@@ -51,8 +51,16 @@ def get_writable_wireguard_dir():
 active_client_name = None
 existing_interfaces = []
 
+
 if platform.system() == "Windows":
-    from plugins.vpn.wireguard.vpn_functions_windows import *
+    from plugins.vpn.wireguard.vpn_functions_windows import check_wireguard_installed
+    from plugins.vpn.wireguard.vpn_functions_windows import (
+        check_wireguard_interface,
+        install_tunnel,
+        start_vpn,
+        stop_vpn,
+        check_service_status,
+    )
     try:
         existing_interfaces = subprocess.run(
             ['wg', 'show', 'interfaces'], capture_output=True, text=True, check=True
@@ -69,6 +77,14 @@ elif platform.system() == "Darwin":
     existing_interfaces = os.popen('wg show interfaces').read().split()
 else:
     raise NotImplementedError("Unsupported platform")
+
+# Fallback if is_admin not imported from vpn_functions_windows
+if platform.system() == "Windows" and "is_admin" not in globals():
+    def is_admin():
+        try:
+            return ctypes.windll.shell32.IsUserAnAdmin()
+        except Exception:
+            return False
 
 
 for interface in existing_interfaces:

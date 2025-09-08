@@ -2,7 +2,7 @@ from plugins.base_plugin import BasePlugin
 import customtkinter
 import os
 import json
-from utils.paths import user_data_dir
+from utils.paths import user_data_dir, user_resource_dir
 
 class Plugin(BasePlugin):
     """
@@ -77,13 +77,26 @@ class Plugin(BasePlugin):
         #email_file_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))), "utils", "email-settings.txt")
         #with open(email_file_path, 'r') as file:
         email_file_path = os.path.join(user_data_dir(), "utils", "email-settings.txt")
-        with open(email_file_path, 'r', encoding='utf-8') as file:
-            email = file.read().strip()
+        #with open(email_file_path, 'r', encoding='utf-8') as file:
+           #email = file.read().strip()
+        email = ""
+        try:
+            if os.path.isfile(email_file_path):
+                with open(email_file_path, "r", encoding="utf-8") as fh:
+                    email = fh.read().strip()
+        except Exception as e:
+            print(f"Failed to read email settings: {e}")
+        # Show email or placeholder in the UI
+        # ...when saving an updated email from Settings...
+        target_dir = user_resource_dir("utils")
+        with open(os.path.join(target_dir, "email-settings.txt"), "w", encoding="utf-8") as fh:
+            fh.write(new_email.strip())
 
-        self.profile_email_label = customtkinter.CTkLabel(self.frame_5, text=f"Email: {email}", font=customtkinter.CTkFont(size=20))
-        self.profile_email_label.grid(row=1, column=0, padx=20, pady=10, columnspan=2)
+        #self.profile_email_label = customtkinter.CTkLabel(self.frame_5, text=f"Email: {email}", font=customtkinter.CTkFont(size=20))
+        #self.profile_email_label.grid(row=1, column=0, padx=20, pady=10, columnspan=2)
 
-        return self.frame_5
+        #return self.frame_5
+        
 
     def save_name(self):
         """
