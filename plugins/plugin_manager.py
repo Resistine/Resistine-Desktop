@@ -62,7 +62,7 @@ class PluginManager:
             import plugins
             for _, name, ispkg in pkgutil.iter_modules(plugins.__path__, prefix="plugins."):
                 #if ispkg and os.path.basename(name) not in ("__pycache__", "plugin_manager"):
-                if ispkg:
+                if ispkg and not name.endswith(".__pycache__"):
                     modules.append(f"{name}.main")  # plugins.<name>.main
         except Exception as e:
             print(f"Package discovery failed: {e}")

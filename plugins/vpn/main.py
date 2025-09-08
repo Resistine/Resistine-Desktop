@@ -636,8 +636,19 @@ class Plugin(BasePlugin):
                 except Exception as e:
                     print("Error installing VPN service:", e)
             else:
-                # Re-run the script with admin privileges
-                ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, __file__, None, 1)
+                # Elevate and re-run with a toggle flag
+                exe = sys.executable  # EXE when frozen, python.exe in dev
+                if getattr(sys, "frozen", False):
+                    params = f'--vpn-toggle "{config_path}"'
+                    workdir = None
+                else:
+                    # Re-run main script in dev with python.exe
+                    params = f'"{sys.argv[0]}" --vpn-toggle "{config_path}"'
+                    workdir = os.getcwd()
+                try:
+                    ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params, workdir, 1)
+                except Exception as e:
+                    print(f"Elevation failed: {e}")
         else:
             #if there is no platform
             

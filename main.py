@@ -10,6 +10,7 @@ Licensed under the Apache License 2.0
 import sys
 import os
 from utils.paths import resource_path 
+from utils.paths import user_data_dir, user_resource_dir
 sys.path.append(resource_path('libraries'))
 #sys.path.append(os.path.join(os.path.dirname(__file__), 'libraries'))
 import platform
@@ -25,6 +26,7 @@ import tkinter as tk
 import importlib
 import traceback
 import tempfile
+import platform
 
 
 # Generate keys and a demo config (first run)
@@ -106,6 +108,28 @@ class DebugWindow:
         except Exception:
             pass
 
+# Handle elevated VPN toggle before creating the App/UI
+if platform.system() == "Windows" and "--vpn-toggle" in sys.argv:
+    try:
+        idx = sys.argv.index("--vpn-toggle")
+        cfg = sys.argv[idx + 1] if len(sys.argv) > idx + 1 else None
+    except Exception:
+        cfg = None
+    if cfg:
+        try:
+            from plugins.vpn.wireguard.vpn_functions_windows import (
+                check_service_status, start_vpn, stop_vpn
+            )
+            name = os.path.splitext(os.path.basename(cfg))[0]
+            status = check_service_status(name, "10.49.64.53")
+            if status == "Running":
+                stop_vpn(cfg)
+            else:
+                start_vpn(cfg)
+        except Exception as e:
+            print(f"Elevated VPN toggle failed: {e}")
+    sys.exit(0)
+
 class App(customtkinter.CTk):
     """
     @brief Main application class for Resistine AI.
@@ -142,14 +166,21 @@ class App(customtkinter.CTk):
         else:
             self.create_dashboard()
 
-    def is_email_registered(self):
+    #def is_email_registered(self):
         """
         Check if the email is registered by verifying the existence of the email-settings.txt file.
         
         :return: True if the email is registered, False otherwise.
         """
-        return os.path.isfile(os.path.join(resource_path("utils"), "email-settings.txt"))
+        #return os.path.isfile(os.path.join(resource_path("utils"), "email-settings.txt"))
         #return os.path.isfile(os.path.join(os.path.dirname(__file__), "utils", "email-settings.txt"))
+    
+    def is_email_registered(self):
+        """
+        Check if the email is registered by verifying the existence of the email-settings.txt file.
+        """
+        email_path = os.path.join(user_data_dir(), "utils", "email-settings.txt")
+        return os.path.isfile(email_path)
 
     def create_registration_screen(self):
         """
@@ -205,8 +236,8 @@ class App(customtkinter.CTk):
         #with open(os.path.join(shares_folder, "email-settings.txt"), "w") as f:
             #f.write(email)
         shares_folder = resource_path("utils")
-        if not os.path.exists(shares_folder):
-            os.makedirs(shares_folder, exist_ok=True)
+        #if not os.path.exists(shares_folder):
+            #os.makedirs(shares_folder, exist_ok=True)
         with open(os.path.join(shares_folder, "email-settings.txt"), "w", encoding="utf-8") as f:
             f.write(email)
         self.registration_frame.destroy()
@@ -317,7 +348,9 @@ class App(customtkinter.CTk):
         except Exception:
             sys.stderr = None
         try:
-            self.debug.close()
+            #self.debug.close()
+            if hasattr(self, "debug") and self.debug:
+                self.debug.close()
         finally:
             self.destroy()
 

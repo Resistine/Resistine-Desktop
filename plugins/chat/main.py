@@ -17,6 +17,7 @@ from PIL import Image
 from openai import OpenAI
 import os
 from plugins.base_plugin import BasePlugin
+from utils.paths import user_data_dir
 
 
 class Plugin(BasePlugin):
@@ -42,10 +43,22 @@ class Plugin(BasePlugin):
             icon_dark_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "chat_dark.png"),
         )
         self.app = app
-        self.client = OpenAI(
+        '''self.client = OpenAI(
             #replace with your api key
             api_key= "X"
-        )
+        )'''
+        # Resolve API key from env or persistent file
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            secrets_dir = os.path.join(user_data_dir(), "secrets")
+            key_file = os.path.join(secrets_dir, "openai_api_key.txt")
+            if os.path.isfile(key_file):
+                with open(key_file, "r", encoding="utf-8") as fh:
+                    api_key = fh.read().strip()
+        if not api_key:
+            print("OPENAI_API_KEY not set. Set env var or place key in secrets/openai_api_key.txt")
+            api_key = "INVALID"
+        self.client = OpenAI(api_key=api_key)
 
     def send_message_to_chatgpt(self, message):
         """

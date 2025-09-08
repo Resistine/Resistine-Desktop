@@ -49,47 +49,50 @@ def clean_previous_builds():
             pass
 
 def ensure_package_markers():
-    """Ensure packages exist so pkgutil discovery works."""
-    needed = [
-        "plugins/__init__.py",
-        "plugins/dashboard/__init__.py",
-        "plugins/help/__init__.py",
-        "plugins/settings/__init__.py",
-        "plugins/vpn/__init__.py",
-        "plugins/vpn/wireguard/__init__.py",
-        "utils/__init__.py",
-    ]
-    for rel in needed:
-        p = ROOT / rel
-        p.parent.mkdir(parents=True, exist_ok=True)
-        if not p.exists():
-            p.write_text("", encoding="utf-8")
+    """Ensure packages exist so pkgutil discovery works and remove stray init.py files."""
+    (ROOT / "utils").mkdir(parents=True, exist_ok=True)
+    (ROOT / "plugins").mkdir(parents=True, exist_ok=True)
+
+    # Include root folders plus all subdirs
+    dirs = [ROOT / "utils", ROOT / "plugins"]
+    dirs += [d for d in (ROOT / "plugins").rglob("*") if d.is_dir()]
+
+    for p in dirs:
+        init_py = p / "__init__.py"
+        if not init_py.exists():
+            init_py.write_text("", encoding="utf-8")
+
+    # Remove incorrect init.py files (keep __init__.py)
+    for stray in (ROOT / "plugins").rglob("init.py"):
+        try:
+            stray.unlink()
+            print(f"🗑️  Removed stray {stray}")
+        except Exception:
+            pass
 
 def write_spec():
     """Generate a robust onefile spec that includes all assets and plugin code."""
     name = os.environ.get("APP_NAME", "ResistineAI")
     icon = os.environ.get("ICON", str(ROOT / "resources" / "icons" / "icon.ico"))
     console = os.environ.get("CONSOLE", "0") in ("1", "true", "True")
-    include_chat = os.environ.get("INCLUDE_CHAT", "0") in ("1", "true", "True")
+    include_chat = os.environ.get("INCLUDE_CHAT", "1") in ("1", "true", "True")  # default OFF
 
     hidden_openai = """
 hiddenimports += ['openai','httpx','httpcore','anyio','sniffio','pydantic','pydantic_core','typing_extensions']
 """ if include_chat else ""
 
+    # Use (src, dest) tuples for folders to avoid Tree/toc API differences
     spec = f"""# -*- mode: python ; coding: utf-8 -*-
 import os, sys
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 from PyInstaller.building.build_main import Analysis, PYZ, EXE
-from PyInstaller.building.datastruct import Tree
 
 # Robust project root (works when __file__ is unset)
 spec_path = globals().get('__file__') or (sys.argv[0] if sys.argv else os.getcwd())
 project_dir = os.path.abspath(os.path.dirname(spec_path)) if os.path.isfile(spec_path) else os.getcwd()
 
 hiddenimports = []
-# Pull in all plugin modules so pkgutil discovery can import them
 hiddenimports += collect_submodules('plugins')
-# 3rd-party modules and plugins your app uses
 hiddenimports += collect_submodules('tkinterweb')
 hiddenimports += collect_submodules('PIL')
 hiddenimports += collect_submodules('nacl')
@@ -105,13 +108,13 @@ hiddenimports += [
 ]
 
 datas = []
-# Force-copy your project trees so .png/.json/.conf/.md and .py files are present
+# Copy whole project trees (folders allowed in datas tuples)
 for folder in ['resources','libraries','utils','plugins']:
     p = os.path.join(project_dir, folder)
     if os.path.isdir(p):
-        datas += Tree(p, prefix=folder).toc
+        datas.append((p, folder))
 
-# Third-party package data (native binaries, cert bundle, libsodium DLLs)
+# Third-party data (native bins, cert bundle, libsodium DLLs)
 datas += collect_data_files('tkinterweb')
 datas += collect_data_files('certifi')
 datas += collect_data_files('nacl')
@@ -129,7 +132,7 @@ a = Analysis(
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=None,
-    noarchive=True,  # keep modules unpacked under _MEIPASS so pkgutil and __file__ paths work
+    noarchive=True,
 )
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=None)
@@ -159,9 +162,16 @@ def ensure_pyinstaller():
     return run_command([sys.executable, "-m", "pip", "install", "--upgrade", "pyinstaller"], "Installing/Upgrading PyInstaller")
 
 def install_requirements():
-    req = ROOT / "requirements_windows.txt"
-    if req.exists():
-        return run_command([sys.executable, "-m", "pip", "install", "-r", str(req)], "Installing app requirements")
+    # Support both names/locations
+    candidates = [
+        ROOT / "requirements_windows.txt",
+        ROOT / "requirements-windows.txt",
+        ROOT / "libraries" / "requirements_windows.txt",
+        ROOT / "libraries" / "requirements-windows.txt",
+    ]
+    req = next((p for p in candidates if p.exists()), None)
+    if req:
+        return run_command([sys.executable, "-m", "pip", "install", "-r", str(req)], f"Installing requirements from {req.name}")
     return True
 
 def sign_exe_if_configured():

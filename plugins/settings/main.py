@@ -2,6 +2,7 @@ from plugins.base_plugin import BasePlugin
 import customtkinter
 import os
 import json
+from utils.paths import user_data_dir
 
 class Plugin(BasePlugin):
     """
@@ -73,8 +74,10 @@ class Plugin(BasePlugin):
         self.save_button.grid_forget()  # Hide save button by default
 
         # Profile email (read from file)
-        email_file_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))), "utils", "email-settings.txt")
-        with open(email_file_path, 'r') as file:
+        #email_file_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))), "utils", "email-settings.txt")
+        #with open(email_file_path, 'r') as file:
+        email_file_path = os.path.join(user_data_dir(), "utils", "email-settings.txt")
+        with open(email_file_path, 'r', encoding='utf-8') as file:
             email = file.read().strip()
 
         self.profile_email_label = customtkinter.CTkLabel(self.frame_5, text=f"Email: {email}", font=customtkinter.CTkFont(size=20))
