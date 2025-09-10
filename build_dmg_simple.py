@@ -7,13 +7,13 @@ import shutil
 
 # Signing Configuration
 # Get your certificate ID with: security find-identity -v -p codesigning
-string signing_identity = 
+signing_identity = 
 # Your Apple ID email address
-string APPLE_ID=
+APPLE_ID=
 # Your app-specific password (generate at appleid.apple.com)
-string APPLE_PASSWORD=
+APPLE_PASSWORD=
 # Your Team ID (found in Apple Developer portal)
-string TEAM_ID=
+TEAM_ID=
 
 
 
