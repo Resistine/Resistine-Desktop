@@ -6,19 +6,13 @@
 - macOS 10.15 or later
 - Apple Developer Account (for code signing and notarization)
 
-## Setup Instructions
+## Setup Instructions for Mac OS
 
-### 1. Configuration Files
+### 1. Configuration
 
-#### Build Configuration
+#### Build Installer Configuration
 
-Copy the example configuration file and fill in your credentials:
-
-```bash
-cp build_config_exmaple.env build_config.env
-```
-
-Edit `build_config.env` with your Apple Developer credentials:
+Edit `build_dmg_simple.py` with your Apple Developer credentials:
 
 - `SIGNING_IDENTITY`: Your code signing certificate ID
 - `NOTARY_APPLE_ID`: Your Apple ID email
@@ -72,21 +66,9 @@ This will:
 - Build the application with PyInstaller
 - Sign the app with your Developer ID certificate
 - Create a DMG installer file
-
-### Manual Notarization
-
-Notarize the existing DMG:
-
-```bash
-./notarize_simple.sh
-```
-
+- Notarize and staple the dmg
 ## Output Files
-
-After successful build:
-
 - `dist/Resistine AI.app` - The signed application bundle
-- `Resistine AI-1.0.0.dmg` - Installer DMG (signed)
 - `Resistine AI-Notarized-1.0.0.dmg` - Notarized DMG (if using full build)
 
 
