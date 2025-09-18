@@ -15,6 +15,23 @@ public protocol HelperToolProtocol {
     func checkVPNStatus(interfaceName: String, testIP: String?, withReply reply: @escaping (String) -> Void)
 }
 
+// Helper function to find wg-quick path
+func findWgQuickPath() -> String? {
+    let wgQuickPaths = [
+        "/opt/homebrew/bin/wg-quick",
+        "/usr/local/bin/wg-quick",
+        "/usr/bin/wg-quick"
+    ]
+    
+    for path in wgQuickPaths {
+        if FileManager.default.fileExists(atPath: path) {
+            return path
+        }
+    }
+    
+    return nil
+}
+
 // XPC Communication setup
 class HelperToolDelegate: NSObject, NSXPCListenerDelegate, HelperToolProtocol {
     // Accept new XPC connections by setting up the exported interface and object.
@@ -53,43 +70,57 @@ class HelperToolDelegate: NSObject, NSXPCListenerDelegate, HelperToolProtocol {
 
     func startVPN(configPath: String, withReply reply: @escaping (String) -> Void) {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/bash")
-    
+        
         // Extract interface name from path (e.g., wg0.conf -> wg0)
         let interfaceName = URL(fileURLWithPath: configPath).deletingPathExtension().lastPathComponent
-    
-        // Use just the interface name - wg-quick will find the config automatically
-        process.arguments = ["-c", "wg-quick up \(interfaceName)"]
-    
+        
+        // Find wg-quick path
+        guard let wgQuickPath = findWgQuickPath() else {
+            reply("Error: wg-quick not found. Please install WireGuard.")
+            return
+        }
+        
+        // Call wg-quick directly
+        process.executableURL = URL(fileURLWithPath: wgQuickPath)
+        process.arguments = ["up", interfaceName]
+        
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
+        
         do {
-        try process.run()
+            try process.run()
             process.waitUntilExit()
         } catch {
             reply("Failed to start VPN: \(error.localizedDescription)")
             return
         }
+        
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         reply(output.isEmpty ? "VPN started successfully" : output)
     }
-    
-
-    
 
     func stopVPN(configPath: String, withReply reply: @escaping (String) -> Void) {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/bash")
-         // Extract interface name from path (e.g., wg0.conf -> wg0)
+        
+        // Extract interface name from path
         let interfaceName = URL(fileURLWithPath: configPath).deletingPathExtension().lastPathComponent
-    
-        // Use just the interface name - wg-quick will find the config automatically
-        process.arguments = ["-c", "wg-quick down \(interfaceName)"]
+        
+        // Find wg-quick path
+        guard let wgQuickPath = findWgQuickPath() else {
+            reply("Error: wg-quick not found. Please install WireGuard.")
+            return
+        }
+        
+        // Call wg-quick directly
+        process.executableURL = URL(fileURLWithPath: wgQuickPath)
+        process.arguments = ["down", interfaceName]
+        
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
+        
         do {
             try process.run()
             process.waitUntilExit()
@@ -97,18 +128,37 @@ class HelperToolDelegate: NSObject, NSXPCListenerDelegate, HelperToolProtocol {
             reply("Failed to stop VPN: \(error.localizedDescription)")
             return
         }
+        
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        reply(output.isEmpty ? "No output" : output)
+        reply(output.isEmpty ? "VPN stopped successfully" : output)
     }
-    
     func checkVPNStatus(interfaceName: String, testIP: String?, withReply reply: @escaping (String) -> Void) {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         
+        // Find wg path (wg command, not wg-quick) for status checking
+        let wgPaths = [
+            "/opt/homebrew/bin/wg",
+            "/usr/local/bin/wg",
+            "/usr/bin/wg"
+        ]
+        
+        var wgPath: String?
+        for path in wgPaths {
+            if FileManager.default.fileExists(atPath: path) {
+                wgPath = path
+                break
+            }
+        }
+        
+        guard let wgCommandPath = wgPath else {
+            reply("Error: wg command not found. Please install WireGuard.")
+            return
+        }
+
         // Check if WireGuard interface exists and is active
-        let wgCommand = "sudo wg show \(interfaceName)"
-        process.arguments = ["-c", wgCommand]
+        process.arguments = ["-c", "\(wgCommandPath) show \(interfaceName)"]
         
         let pipe = Pipe()
         process.standardOutput = pipe
@@ -165,9 +215,6 @@ class HelperToolDelegate: NSObject, NSXPCListenerDelegate, HelperToolProtocol {
         }
     }
 
-    
-    
-
     // Check that the codesigning matches between the main app and the helper app
     private func isValidClient(connection: NSXPCConnection) -> Bool {
         do {
@@ -198,10 +245,10 @@ if CommandLine.arguments.count > 1 {
         }
     } else if command.hasPrefix("checkVPNStatus ") {
         let tunnelName = String(command.dropFirst(15)) // Remove "checkVPNStatus "
-        delegate.checkVPNStatus(tunnelName: tunnelName, testIP: nil as String?) { result in
+        delegate.checkVPNStatus(interfaceName: tunnelName, testIP: nil, withReply: { result in
             print(result)
             exit(0)
-        }
+        })
     } else if command.hasPrefix("checkStatusWithIP ") {
         // Handle "checkStatusWithIP /path/to/config.conf 10.49.64.53"
         let parts = command.components(separatedBy: " ")
@@ -209,10 +256,10 @@ if CommandLine.arguments.count > 1 {
             let configPath = parts[1]
             let testIP = parts[2]
             let tunnelName = URL(fileURLWithPath: configPath).deletingPathExtension().lastPathComponent
-            delegate.checkVPNStatus(tunnelName: tunnelName, testIP: testIP) { result in
+            delegate.checkVPNStatus(interfaceName: tunnelName, testIP: testIP, withReply: { result in
                 print(result)
                 exit(0)
-            }
+            })
         } else {
             print("Error: checkStatusWithIP requires config path and test IP")
             exit(1)
@@ -231,6 +278,4 @@ if CommandLine.arguments.count > 1 {
     listener.delegate = delegate
     listener.resume()
     RunLoop.main.run()
-}
-
-// /usr/local/bin/ResistineHelper "startVPN /Users/dhahabwhbbjshehaha/Desktop/Resistine/Rm/untitled folder/Resistine-Desktop/apple_helper/wg0.conf"  
+} 
