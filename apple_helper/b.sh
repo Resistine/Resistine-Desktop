@@ -3,7 +3,7 @@ echo "Building Apple Helper Tool for App Bundle..."
 
 # Configuration variables
 SIGNING_IDENTITY="Developer ID Application: Resistine GmbH (C7KSRZC3Q9)"
-ENTITLEMENTS_FILE="../Resistine.entitlements"
+ENTITLEMENTS_FILE="ResistineHelper.entitlements"
 
 # Check source files exist
 if [ ! -f "main.swift" ] || [ ! -f "CodesignCheck.swift" ] || [ ! -f "com.resistine.plist" ]; then
