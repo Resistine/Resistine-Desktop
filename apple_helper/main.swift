@@ -14,24 +14,14 @@ public protocol HelperToolProtocol {
     func stopVPN(configPath: String, withReply reply: @escaping (String) -> Void)
     func checkVPNStatus(interfaceName: String, testIP: String?, withReply reply: @escaping (String) -> Void)
 }
-
-// Helper function to find wg-quick path
-func findWgQuickPath() -> String? {
-    let wgQuickPaths = [
-        "/opt/homebrew/bin/wg-quick",
-        "/usr/local/bin/wg-quick",
-        "/usr/bin/wg-quick"
-    ]
-    
-    for path in wgQuickPaths {
-        if FileManager.default.fileExists(atPath: path) {
-            return path
-        }
-    }
-    
-    return nil
+func findHomebrewBash() -> String? {
+    let possiblePaths = ["/opt/homebrew/bin/bash", "/usr/local/bin/bash"]
+    return possiblePaths.first { FileManager.default.fileExists(atPath: $0) }
 }
-
+func findWgQuick() -> String? {
+    let possiblePaths = ["/opt/homebrew/bin/wg-quick", "/usr/local/bin/wg-quick", "/usr/bin/wg-quick"]
+    return possiblePaths.first { FileManager.default.fileExists(atPath: $0) }
+}
 // XPC Communication setup
 class HelperToolDelegate: NSObject, NSXPCListenerDelegate, HelperToolProtocol {
     // Accept new XPC connections by setting up the exported interface and object.
@@ -69,20 +59,22 @@ class HelperToolDelegate: NSObject, NSXPCListenerDelegate, HelperToolProtocol {
     }
 
     func startVPN(configPath: String, withReply reply: @escaping (String) -> Void) {
-        let process = Process()
+        guard let bashPath = findHomebrewBash() else {
+            reply("Error: Homebrew bash (4+) not found. Please install.")
+            return
+        }
         
-        // Extract interface name from path (e.g., wg0.conf -> wg0)
-        let interfaceName = URL(fileURLWithPath: configPath).deletingPathExtension().lastPathComponent
-        
-        // Find wg-quick path
-        guard let wgQuickPath = findWgQuickPath() else {
+        guard let wgQuickPath = findWgQuick() else {
             reply("Error: wg-quick not found. Please install WireGuard.")
             return
         }
         
-        // Call wg-quick directly
-        process.executableURL = URL(fileURLWithPath: wgQuickPath)
-        process.arguments = ["up", interfaceName]
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: bashPath)
+        process.environment = ["PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"]
+        
+        let interfaceName = URL(fileURLWithPath: configPath).deletingPathExtension().lastPathComponent
+        process.arguments = ["-c", "\(wgQuickPath) up \(interfaceName)"]
         
         let pipe = Pipe()
         process.standardOutput = pipe
@@ -96,26 +88,29 @@ class HelperToolDelegate: NSObject, NSXPCListenerDelegate, HelperToolProtocol {
             return
         }
         
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        
         reply(output.isEmpty ? "VPN started successfully" : output)
     }
 
     func stopVPN(configPath: String, withReply reply: @escaping (String) -> Void) {
-        let process = Process()
+        guard let bashPath = findHomebrewBash() else {
+            reply("Error: Homebrew bash (4+) not found. Please install.")
+            return
+        }
         
-        // Extract interface name from path
-        let interfaceName = URL(fileURLWithPath: configPath).deletingPathExtension().lastPathComponent
-        
-        // Find wg-quick path
-        guard let wgQuickPath = findWgQuickPath() else {
+        guard let wgQuickPath = findWgQuick() else {
             reply("Error: wg-quick not found. Please install WireGuard.")
             return
         }
         
-        // Call wg-quick directly
-        process.executableURL = URL(fileURLWithPath: wgQuickPath)
-        process.arguments = ["down", interfaceName]
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: bashPath)
+        process.environment = ["PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"]
+        
+        let interfaceName = URL(fileURLWithPath: configPath).deletingPathExtension().lastPathComponent
+        process.arguments = ["-c", "\(wgQuickPath) down \(interfaceName)"]
         
         let pipe = Pipe()
         process.standardOutput = pipe
@@ -129,36 +124,19 @@ class HelperToolDelegate: NSObject, NSXPCListenerDelegate, HelperToolProtocol {
             return
         }
         
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        
         reply(output.isEmpty ? "VPN stopped successfully" : output)
     }
+    
     func checkVPNStatus(interfaceName: String, testIP: String?, withReply reply: @escaping (String) -> Void) {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/bash")
         
-        // Find wg path (wg command, not wg-quick) for status checking
-        let wgPaths = [
-            "/opt/homebrew/bin/wg",
-            "/usr/local/bin/wg",
-            "/usr/bin/wg"
-        ]
-        
-        var wgPath: String?
-        for path in wgPaths {
-            if FileManager.default.fileExists(atPath: path) {
-                wgPath = path
-                break
-            }
-        }
-        
-        guard let wgCommandPath = wgPath else {
-            reply("Error: wg command not found. Please install WireGuard.")
-            return
-        }
-
         // Check if WireGuard interface exists and is active
-        process.arguments = ["-c", "\(wgCommandPath) show \(interfaceName)"]
+        let wgCommand = "wg show \(interfaceName)"
+        process.arguments = ["-c", wgCommand]
         
         let pipe = Pipe()
         process.standardOutput = pipe
@@ -190,7 +168,7 @@ class HelperToolDelegate: NSObject, NSXPCListenerDelegate, HelperToolProtocol {
         // If test IP is provided, test connectivity
         if let testIP = testIP, !testIP.isEmpty {
             let pingProcess = Process()
-            pingProcess.executableURL = URL(fileURLWithPath: "/bin/bash")
+            pingProcess.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/bash")
             pingProcess.arguments = ["-c", "ping -c 4 \(testIP)"]
             
             let pingPipe = Pipe()
@@ -215,9 +193,18 @@ class HelperToolDelegate: NSObject, NSXPCListenerDelegate, HelperToolProtocol {
         }
     }
 
+    
+    
+
     // Check that the codesigning matches between the main app and the helper app
     private func isValidClient(connection: NSXPCConnection) -> Bool {
         do {
+            // Prefer TeamIdentifier match to allow different leaf certs from same Team
+            if let selfTeam = try CodesignCheck.teamIdentifierForSelf(),
+               let peerTeam = try CodesignCheck.teamIdentifier(forPID: connection.processIdentifier) {
+                return selfTeam == peerTeam
+            }
+            // Fallback to strict certificate chain comparison
             return try CodesignCheck.codeSigningMatches(pid: connection.processIdentifier)
         } catch {
             print("Helper code signing check failed with error: \(error)")
@@ -226,56 +213,11 @@ class HelperToolDelegate: NSObject, NSXPCListenerDelegate, HelperToolProtocol {
     }
 }
 
-if CommandLine.arguments.count > 1 {
-    let command = CommandLine.arguments[1]
-    let delegate = HelperToolDelegate() // Create delegate instance
-    
-    // Handle specific VPN commands
-    if command.hasPrefix("startVPN ") {
-        let configPath = String(command.dropFirst(9)) // Remove "startVPN "
-        delegate.startVPN(configPath: configPath) { result in
-            print(result)
-            exit(0)
-        }
-    } else if command.hasPrefix("stopVPN ") {
-        let configPath = String(command.dropFirst(8)) // Remove "stopVPN "
-        delegate.stopVPN(configPath: configPath) { result in
-            print(result)
-            exit(0)
-        }
-    } else if command.hasPrefix("checkVPNStatus ") {
-        let tunnelName = String(command.dropFirst(15)) // Remove "checkVPNStatus "
-        delegate.checkVPNStatus(interfaceName: tunnelName, testIP: nil, withReply: { result in
-            print(result)
-            exit(0)
-        })
-    } else if command.hasPrefix("checkStatusWithIP ") {
-        // Handle "checkStatusWithIP /path/to/config.conf 10.49.64.53"
-        let parts = command.components(separatedBy: " ")
-        if parts.count >= 3 {
-            let configPath = parts[1]
-            let testIP = parts[2]
-            let tunnelName = URL(fileURLWithPath: configPath).deletingPathExtension().lastPathComponent
-            delegate.checkVPNStatus(interfaceName: tunnelName, testIP: testIP, withReply: { result in
-                print(result)
-                exit(0)
-            })
-        } else {
-            print("Error: checkStatusWithIP requires config path and test IP")
-            exit(1)
-        }
-    } else {
-        // Handle regular commands
-        delegate.runCommand(command: command) { result in
-            print(result)
-            exit(0)
-        }
-    }
-} else {
-    // Normal XPC service mode
-    let delegate = HelperToolDelegate()
-    let listener = NSXPCListener(machServiceName: "com.resistine.helper")
-    listener.delegate = delegate
-    listener.resume()
-    RunLoop.main.run()
-} 
+// Normal XPC service mode
+let delegate = HelperToolDelegate()
+let listener = NSXPCListener(machServiceName: "com.resistine.helper")
+listener.delegate = delegate
+listener.resume()
+RunLoop.main.run()
+
+

@@ -31,7 +31,7 @@ class HelperToolManager: ObservableObject {
 
     // Function to manage the helper tool installation/uninstallation
     func manageHelperTool(action: HelperToolAction = .none) async {
-        let plistName = "\(helperToolIdentifier).plist"
+        let plistName = "com.resistine.plist"
         let service = SMAppService.daemon(plistName: plistName)
         var occurredError: NSError?
 
@@ -88,33 +88,8 @@ class HelperToolManager: ObservableObject {
         SMAppService.openSystemSettingsLoginItems()
     }
 
-    // Function to run privileged commands
-    func runCommand(_ command: String, completion: @escaping (String) -> Void) async {
-        if !isHelperToolInstalled {
-            completion("XPC: Helper tool is not installed")
-            return
-        }
+    
 
-        guard let connection = getConnection() else {
-            completion("XPC: Connection not available")
-            return
-        }
-
-        guard let proxy = connection.remoteObjectProxyWithErrorHandler({ error in
-            DispatchQueue.main.async {
-                completion("XPC: Connection error: \(error.localizedDescription)")
-            }
-        }) as? HelperToolProtocol else {
-            completion("XPC: Failed to get remote object")
-            return
-        }
-
-        proxy.runCommand(command: command) { output in
-            DispatchQueue.main.async {
-                completion(output)
-            }
-        }
-    }
 
 
     // Create/reuse XPC connection

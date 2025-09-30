@@ -34,6 +34,18 @@ struct CodesignCheck {
         return try codeSigningCertificates(forStaticCode: secStaticCode)
     }
 
+    // MARK: - Team Identifier Helpers
+
+    public static func teamIdentifierForSelf() throws -> String? {
+        guard let secStaticCode = try secStaticCodeSelf() else { return nil }
+        return try teamIdentifier(forStaticCode: secStaticCode)
+    }
+
+    public static func teamIdentifier(forPID pid: pid_t) throws -> String? {
+        guard let secStaticCode = try secStaticCode(forPID: pid) else { return nil }
+        return try teamIdentifier(forStaticCode: secStaticCode)
+    }
+
     public static func codeSigningCertificates(forURL url: URL) throws -> [SecCertificate] {
         guard let secStaticCode = try secStaticCode(forURL: url) else { return [] }
         return try codeSigningCertificates(forStaticCode: secStaticCode)
@@ -103,5 +115,10 @@ struct CodesignCheck {
             let secCodeInfo = try secCodeInfo(forStaticCode: secStaticCode),
             let secCertificates = secCodeInfo[kSecCodeInfoCertificates as String] as? [SecCertificate] else { return [] }
         return secCertificates
+    }
+
+    private static func teamIdentifier(forStaticCode secStaticCode: SecStaticCode) throws -> String? {
+        guard let secCodeInfo = try secCodeInfo(forStaticCode: secStaticCode) else { return nil }
+        return secCodeInfo[kSecCodeInfoTeamIdentifier as String] as? String
     }
 }
