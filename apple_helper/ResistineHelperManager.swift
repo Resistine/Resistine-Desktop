@@ -16,7 +16,7 @@ enum HelperToolAction {
 @MainActor
 class HelperToolManager: ObservableObject {
     private var helperConnection: NSXPCConnection?
-    let helperToolIdentifier = "com.resistine.helper"
+    let helperToolIdentifier = "com.resistine.plist"
     @Published var isHelperToolInstalled: Bool = false
     @Published var message: String = "Checking..."
     var status: String {

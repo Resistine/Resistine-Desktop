@@ -148,9 +148,95 @@ def stop_vpn(cfg):
 
 def status(iface, test_ip=None):
     """Check VPN status using the CLI wrapper"""
+    print(f"🔍 [STATUS] Checking status for interface: {iface}")
+    if test_ip:
+        print(f"🌐 [PING] Test IP provided: {test_ip}")
+    else:
+        print(f"🌐 [PING] No test IP provided - will only check interface status")
+    
     args = [CLI, "status", iface] + ([test_ip] if test_ip else [])
+    print(f"🚀 [COMMAND] Running: {' '.join(args)}")
+    
     r = subprocess.run(args, text=True, capture_output=True)
-    return (r.returncode == 0, r.stdout.strip() or r.stderr.strip())
+    
+    print(f"📊 [RESULT] Return code: {r.returncode}")
+    print(f"📤 [STDOUT] {r.stdout.strip()}")
+    if r.stderr.strip():
+        print(f"📤 [STDERR] {r.stderr.strip()}")
+    
+    success = r.returncode == 0
+    output = r.stdout.strip() or r.stderr.strip()
+    
+    if success:
+        if "Running" in output:
+            print(f"✅ [STATUS] VPN is Running")
+        else:
+            print(f"❌ [STATUS] VPN is Stopped")
+    else:
+        print(f"❌ [STATUS] Status check failed")
+    
+    return (success, output)
+
+def test_ping_connectivity(ip_address, count=3):
+    """Test ping connectivity to a specific IP address"""
+    print(f"🌐 [PING-TEST] Testing connectivity to: {ip_address}")
+    print(f"🌐 [PING-TEST] Ping count: {count}")
+    
+    try:
+        # Use ping command with specific parameters
+        cmd = ["ping", "-c", str(count), "-W", "2000", ip_address]
+        print(f"🚀 [PING-TEST] Running: {' '.join(cmd)}")
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        
+        print(f"📊 [PING-TEST] Return code: {result.returncode}")
+        print(f"📤 [PING-TEST] STDOUT: {result.stdout}")
+        if result.stderr:
+            print(f"📤 [PING-TEST] STDERR: {result.stderr}")
+        
+        if result.returncode == 0:
+            print(f"✅ [PING-TEST] Ping successful to {ip_address}")
+            return True, result.stdout
+        else:
+            print(f"❌ [PING-TEST] Ping failed to {ip_address}")
+            return False, result.stderr or result.stdout
+            
+    except subprocess.TimeoutExpired:
+        print(f"⏰ [PING-TEST] Ping timed out to {ip_address}")
+        return False, "Ping timed out"
+    except Exception as e:
+        print(f"❌ [PING-TEST] Ping error: {e}")
+        return False, str(e)
+
+def test_dns_resolution(hostname):
+    """Test DNS resolution for a hostname"""
+    print(f"🌐 [DNS-TEST] Testing DNS resolution for: {hostname}")
+    
+    try:
+        # Use nslookup command
+        cmd = ["nslookup", hostname]
+        print(f"🚀 [DNS-TEST] Running: {' '.join(cmd)}")
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        
+        print(f"📊 [DNS-TEST] Return code: {result.returncode}")
+        print(f"📤 [DNS-TEST] STDOUT: {result.stdout}")
+        if result.stderr:
+            print(f"📤 [DNS-TEST] STDERR: {result.stderr}")
+        
+        if result.returncode == 0:
+            print(f"✅ [DNS-TEST] DNS resolution successful for {hostname}")
+            return True, result.stdout
+        else:
+            print(f"❌ [DNS-TEST] DNS resolution failed for {hostname}")
+            return False, result.stderr or result.stdout
+            
+    except subprocess.TimeoutExpired:
+        print(f"⏰ [DNS-TEST] DNS lookup timed out for {hostname}")
+        return False, "DNS lookup timed out"
+    except Exception as e:
+        print(f"❌ [DNS-TEST] DNS lookup error: {e}")
+        return False, str(e)
 
 
 class VPNTestUI:
@@ -170,14 +256,12 @@ class VPNTestUI:
         
         self.setup_ui()
         
-        #if helper is registered then unregister it
-        if sm_status() == "enabled":
-            sm_unregister()
-            self.log_message("Helper unregistered")
         # Initial helper status
         self.update_helper_status()
         self.start_status_updates()
-      
+        if sm_status() == "enabled":
+            sm_unregister()
+            self.log_message("Helper unregistered")
         
     def setup_ui(self):
         """Setup the main UI components"""
@@ -232,6 +316,13 @@ class VPNTestUI:
         self.refresh_btn = ttk.Button(control_frame, text="Refresh", command=self.refresh_status)
         self.refresh_btn.pack(side=tk.LEFT, padx=5)
         
+        # Connectivity test buttons
+        self.ping_btn = ttk.Button(control_frame, text="Test Ping", command=self.test_ping)
+        self.ping_btn.pack(side=tk.LEFT, padx=5)
+        
+        self.dns_btn = ttk.Button(control_frame, text="Test DNS", command=self.test_dns)
+        self.dns_btn.pack(side=tk.LEFT, padx=5)
+        
         # Helper/Authorization controls
         helper_frame = ttk.LabelFrame(main_frame, text="Helper Authorization", padding="10")
         helper_frame.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
@@ -275,13 +366,31 @@ class VPNTestUI:
             filetypes=[("Config files", "*.conf"), ("All files", "*.*")]
         )
         if filename:
-            self.config_var.set(filename)
+            # Get the proper app support directory
+            from plugins.vpn.main import get_writable_wireguard_dir
+            wireguard_folder = get_writable_wireguard_dir()
+            destination_path = os.path.join(wireguard_folder, os.path.basename(filename))
+            
+            # Copy the config file to the proper location
+            try:
+                with open(filename, 'rb') as src_file:
+                    with open(destination_path, 'wb') as dst_file:
+                        dst_file.write(src_file.read())
+                print(f"✅ Config copied to: {destination_path}")
+                self.log_message(f"✅ Config copied to app support directory")
+            except Exception as e:
+                print(f"❌ Failed to copy config: {e}")
+                self.log_message(f"❌ Failed to copy config: {e}")
+                return
+            
+            # Use the destination path instead of the original
+            self.config_var.set(destination_path)
             # Auto-extract interface name from filename
             interface_name = Path(filename).stem
             self.interface_var.set(interface_name)
-            self.current_config = filename
+            self.current_config = destination_path  # Use the copied file path
             self.current_interface = interface_name
-            self.log_message(f"Selected config: {filename}")
+            self.log_message(f"Selected config: {destination_path}")
             self.log_message(f"Interface: {interface_name}")
     
     def log_message(self, message):
@@ -325,14 +434,22 @@ class VPNTestUI:
         def start_thread():
             try:
                 success, output = start_vpn(self.current_config)
-                if success:
+                if success or output:
+                    # Parse output to extract actual interface name (e.g., "utun6" from "[+] Interface for wg0 is utun6")
+                    import re
+                    match = re.search(r'Interface for \S+ is (\S+)', output)
+                    if match:
+                        actual_interface = match.group(1)
+                        self.current_interface = actual_interface
+                        self.log_message(f"ℹ️ Mapped to actual interface: {actual_interface}")
+                    
                     # Poll status up to 15s until interface reports up
                     test_ip = self.test_ip_var.get() if self.test_ip_var.get() else None
                     poll_ok = False
                     poll_output = ""
                     for _ in range(15):
                         s_ok, s_out = status(self.current_interface, test_ip)
-                        if s_ok:
+                        if s_ok and "Running" in s_out:
                             poll_ok = True
                             poll_output = s_out
                             break
@@ -340,7 +457,8 @@ class VPNTestUI:
                     if poll_ok:
                         self.log_message(f"✅ VPN started. Status: {poll_output}")
                     else:
-                        self.log_message(f"⚠️ VPN start returned success, but status not ready within 15s: {poll_output}")
+                        self.log_message(f"⚠️ VPN start output: {output}")
+                        self.log_message(f"⚠️ Status check: {poll_output}")
                 else:
                     self.log_message(f"❌ Failed to start VPN: {output}")
             except Exception as e:
@@ -366,22 +484,23 @@ class VPNTestUI:
         def stop_thread():
             try:
                 success, output = stop_vpn(self.current_config)
-                if success:
+                if success or output:
+                    self.log_message(f"ℹ️ Stop VPN output: {output}")
                     # Poll until status reports down (up to 15s)
                     test_ip = self.test_ip_var.get() if self.test_ip_var.get() else None
                     poll_down = False
                     poll_output = ""
                     for _ in range(15):
                         s_ok, s_out = status(self.current_interface, test_ip)
-                        if not s_ok:
+                        if "Stopped" in s_out or "down" in s_out.lower():
                             poll_down = True
                             poll_output = s_out
                             break
                         time.sleep(1)
                     if poll_down:
-                        self.log_message(f"✅ VPN stopped. Status now down: {poll_output}")
+                        self.log_message(f"✅ VPN stopped. Status: {poll_output}")
                     else:
-                        self.log_message(f"⚠️ VPN stop returned success, but interface still appears up within 15s: {s_out}")
+                        self.log_message(f"⚠️ VPN may still be running. Status: {poll_output}")
                 else:
                     self.log_message(f"❌ Failed to stop VPN: {output}")
             except Exception as e:
@@ -398,26 +517,87 @@ class VPNTestUI:
             return
         
         self.log_message("Checking VPN status...")
+        print(f"🔍 [MANUAL-STATUS] Manual status check requested for: {self.current_interface}")
         self.status_btn.config(state='disabled')
         
         def status_thread():
             try:
                 test_ip = self.test_ip_var.get() if self.test_ip_var.get() else None
+                print(f"🔍 [MANUAL-STATUS] Test IP: {test_ip}")
+                print(f"🔍 [MANUAL-STATUS] Calling status function...")
+                
                 success, output = status(self.current_interface, test_ip)
+                
+                print(f"🔍 [MANUAL-STATUS] Status function returned: success={success}, output='{output}'")
+                
                 if success:
                     self.log_message(f"✅ Status: {output}")
+                    print(f"✅ [MANUAL-STATUS] Status check successful: {output}")
                 else:
                     self.log_message(f"❌ Status check failed: {output}")
+                    print(f"❌ [MANUAL-STATUS] Status check failed: {output}")
             except Exception as e:
                 self.log_message(f"❌ Exception checking status: {e}")
+                print(f"❌ [MANUAL-STATUS] Exception: {e}")
             finally:
                 self.status_btn.config(state='normal')
+                print(f"🔍 [MANUAL-STATUS] Manual status check completed")
         
         threading.Thread(target=status_thread, daemon=True).start()
     
     def refresh_status(self):
         """Refresh VPN status"""
         self.check_status()
+    
+    def test_ping(self):
+        """Test ping connectivity to the test IP"""
+        test_ip = self.test_ip_var.get()
+        if not test_ip:
+            messagebox.showerror("Error", "Please enter a test IP address")
+            return
+        
+        self.log_message(f"Testing ping connectivity to {test_ip}...")
+        self.ping_btn.config(state='disabled')
+        
+        def ping_thread():
+            try:
+                success, output = test_ping_connectivity(test_ip)
+                if success:
+                    self.log_message(f"✅ Ping successful to {test_ip}")
+                    self.log_message(f"Ping output: {output}")
+                else:
+                    self.log_message(f"❌ Ping failed to {test_ip}")
+                    self.log_message(f"Ping error: {output}")
+            except Exception as e:
+                self.log_message(f"❌ Exception during ping test: {e}")
+            finally:
+                self.ping_btn.config(state='normal')
+        
+        threading.Thread(target=ping_thread, daemon=True).start()
+    
+    def test_dns(self):
+        """Test DNS resolution"""
+        # Test DNS resolution for a common hostname
+        hostname = "dashboard.resisti.net"  # You can change this to any hostname you want to test
+        
+        self.log_message(f"Testing DNS resolution for {hostname}...")
+        self.dns_btn.config(state='disabled')
+        
+        def dns_thread():
+            try:
+                success, output = test_dns_resolution(hostname)
+                if success:
+                    self.log_message(f"✅ DNS resolution successful for {hostname}")
+                    self.log_message(f"DNS output: {output}")
+                else:
+                    self.log_message(f"❌ DNS resolution failed for {hostname}")
+                    self.log_message(f"DNS error: {output}")
+            except Exception as e:
+                self.log_message(f"❌ Exception during DNS test: {e}")
+            finally:
+                self.dns_btn.config(state='normal')
+        
+        threading.Thread(target=dns_thread, daemon=True).start()
     
     def start_status_updates(self):
         """Start automatic status updates"""
@@ -426,18 +606,32 @@ class VPNTestUI:
                 if self.auto_refresh_var.get() and self.current_interface:
                     try:
                         test_ip = self.test_ip_var.get() if self.test_ip_var.get() else None
+                        print(f"🔄 [AUTO-REFRESH] Starting status check for {self.current_interface}")
+                        if test_ip:
+                            print(f"🔄 [AUTO-REFRESH] Using test IP: {test_ip}")
+                        
                         success, output = status(self.current_interface, test_ip)
+                        
                         if success:
                             self.log_message(f"🔄 Auto-refresh: {output}")
+                            print(f"🔄 [AUTO-REFRESH] Success: {output}")
                         else:
                             self.log_message(f"🔄 Auto-refresh failed: {output}")
+                            print(f"🔄 [AUTO-REFRESH] Failed: {output}")
                     except Exception as e:
                         self.log_message(f"🔄 Auto-refresh error: {e}")
-                time.sleep(5)
+                        print(f"🔄 [AUTO-REFRESH] Exception: {e}")
+                else:
+                    if not self.auto_refresh_var.get():
+                        print(f"🔄 [AUTO-REFRESH] Auto-refresh disabled")
+                    if not self.current_interface:
+                        print(f"🔄 [AUTO-REFRESH] No interface selected")
+                
+                print(f"🔄 [AUTO-REFRESH] Sleeping for 15 seconds...")
+                time.sleep(15)
         
         self.status_thread = threading.Thread(target=update_loop, daemon=True)
         self.status_thread.start()
-    
     def on_closing(self):
         """Handle window closing"""
         self.running = False
