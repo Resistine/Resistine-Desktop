@@ -41,12 +41,18 @@ func usage(_ code: Int32 = 2) -> Never {
 let args = CommandLine.arguments.dropFirst()
 guard let sub = args.first, let cmd = Command(rawValue: sub) else { usage() }
 
+// Keep a strong reference to the XPC connection for the lifetime of the process
+var xpcConnection: NSXPCConnection?
+
 func connect() -> HelperToolProtocol? {
-    let connection = NSXPCConnection(machServiceName: "com.resistine.helper", options: .privileged)
-    connection.remoteObjectInterface = NSXPCInterface(with: HelperToolProtocol.self)
-    connection.resume()
+    if xpcConnection == nil {
+        let connection = NSXPCConnection(machServiceName: "com.resistine.helper", options: .privileged)
+        connection.remoteObjectInterface = NSXPCInterface(with: HelperToolProtocol.self)
+        connection.resume()
+        xpcConnection = connection
+    }
     var proxy: HelperToolProtocol?
-    proxy = connection.remoteObjectProxyWithErrorHandler { err in
+    proxy = xpcConnection?.remoteObjectProxyWithErrorHandler { err in
         let msg = "XPC connection error: \(err.localizedDescription)\n"
         FileHandle.standardError.write(Data(msg.utf8))
         exit(3)
@@ -69,42 +75,37 @@ func waitReply(_ fn: (@escaping (String) -> Void) -> Void) -> String {
         result = reply
         sem.signal()
     }
-    _ = sem.wait(timeout: .now() + 60)
+    let waited = sem.wait(timeout: .now() + 60)
+    if waited == .timedOut {
+        return ""
+    }
     return result
+}
+
+// Locate the LaunchDaemon plist inside the surrounding .app bundle
+func resolveDaemonPlistPath() -> String? {
+    let bundlePath = Bundle.main.bundlePath // e.g. .../Contents/Library/LaunchServices
+    let bundleURL = URL(fileURLWithPath: bundlePath)
+    // Go up twice: LaunchServices -> Library -> Contents
+    let contentsURL = bundleURL.deletingLastPathComponent().deletingLastPathComponent()
+    let plistURL = contentsURL.appendingPathComponent("Library/LaunchDaemons/com.resistine.plist")
+    let path = plistURL.path
+    return FileManager.default.fileExists(atPath: path) ? path : nil
 }
 
 switch cmd {
 case .registerDaemon:
     do {
-        // Look for plist in app bundle first, then fall back to system location
-        let bundle = Bundle.main
-        let plistPath: String
-        
         print("🔍 Searching for plist file...")
-        print("📦 Bundle path: \(bundle.bundlePath)")
-        
-    
-        
-        if let bundlePlistPath = bundle.path(forResource: "com.resistine", ofType: "plist", inDirectory: "Contents/Library/LaunchDaemons") {
-            plistPath = bundlePlistPath
-            print("✅ Found plist in app bundle: \(plistPath)")
-        } else {
-            print("❌ Plist not found in app bundle")
+        print("📦 CLI bundle path: \(Bundle.main.bundlePath)")
+        guard let plistPath = resolveDaemonPlistPath() else {
+            print("❌ Plist not found in app bundle (expected at Contents/Library/LaunchDaemons/com.resistine.plist)")
             exit(1)
         }
-        
-        // Check if plist file exists
-        let fileManager = FileManager.default
-        if fileManager.fileExists(atPath: plistPath) {
-            print("✅ Plist file exists at: \(plistPath)")
-        } else {
-            print("❌ Plist file NOT found at: \(plistPath)")
-            FileHandle.standardError.write(Data("Plist file not found at: \(plistPath)\n".utf8))
-            exit(1)
-        }
-        
-        print("🔧 Creating SMAppService with plist: \(plistPath)")
-        let service = SMAppService.daemon(plistName: plistPath)
+        print("✅ Found plist in app bundle: \(plistPath)")
+        print("🔧 Creating SMAppService with plist name: com.resistine.plist")
+        // IMPORTANT: Pass the plist NAME, not full path
+        let service = SMAppService.daemon(plistName: "com.resistine.plist")
         
         print("📊 Current status before registration: \(service.status)")
         print("🚀 Attempting to register daemon...")
@@ -137,34 +138,16 @@ case .registerDaemon:
     }
 
 case .authStatus:
-    // Look for plist in app bundle first, then fall back to system location
-    let bundle = Bundle.main
-    let plistPath: String
-    
     print("🔍 Checking daemon status...")
-    print("📦 Bundle path: \(bundle.bundlePath)")
-    
-    
-    
-    if let bundlePlistPath = bundle.path(forResource: "com.resistine", ofType: "plist", inDirectory: "Contents/Library/LaunchDaemons") {
-            plistPath = bundlePlistPath
-            print("✅ Found plist in app bundle: \(plistPath)")
-    } else {
-            print("❌ Plist not found in app bundle")
-            exit(1)
-    }
-    
-    // Check if plist file exists
-    let fileManager = FileManager.default
-    if fileManager.fileExists(atPath: plistPath) {
-        print("✅ Plist file exists at: \(plistPath)")
-    } else {
-        print("❌ Plist file NOT found at: \(plistPath)")
+    print("📦 CLI bundle path: \(Bundle.main.bundlePath)")
+    guard let plistPath = resolveDaemonPlistPath() else {
+        print("❌ Plist not found in app bundle (expected at Contents/Library/LaunchDaemons/com.resistine.plist)")
         exit(1)
     }
-    
-    print("🔧 Creating SMAppService with plist: \(plistPath)")
-    let service = SMAppService.daemon(plistName: plistPath)
+    print("✅ Found plist in app bundle: \(plistPath)")
+    print("🔧 Creating SMAppService with plist name: com.resistine.plist")
+    // IMPORTANT: Pass the plist NAME, not full path
+    let service = SMAppService.daemon(plistName: "com.resistine.plist")
     
     print("📊 Current daemon status: \(service.status)")
     
@@ -196,7 +179,11 @@ case .startVPN:
     let config = String(args.dropFirst().first!)
     let reply = waitReply { proxy.startVPN(configPath: config, withReply: $0) }
     print(reply)
-    exit(reply.lowercased().contains("error") ? 1 : 0)
+    if reply.isEmpty || reply.lowercased().contains("error") {
+        exit(1)
+    } else {
+        exit(0)
+    }
 
 case .stopVPN:
     let proxy = requireProxy()
@@ -204,7 +191,11 @@ case .stopVPN:
     let config = String(args.dropFirst().first!)
     let reply = waitReply { proxy.stopVPN(configPath: config, withReply: $0) }
     print(reply)
-    exit(reply.lowercased().contains("error") ? 1 : 0)
+    if reply.isEmpty || reply.lowercased().contains("error") {
+        exit(1)
+    } else {
+        exit(0)
+    }
 
 case .status:
     let proxy = requireProxy()
@@ -214,7 +205,7 @@ case .status:
     let testIP = parts.count > 1 ? parts[1] : nil
     let reply = waitReply { proxy.checkVPNStatus(interfaceName: iface, testIP: testIP, withReply: $0) }
     print(reply)
-    exit(0)
+    exit(reply.isEmpty ? 1 : 0)
 
 case .run:
     let proxy = requireProxy()

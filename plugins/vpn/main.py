@@ -35,13 +35,16 @@ def get_writable_wireguard_dir():
         wireguard_dir = os.path.join(appdata_dir, "Resistine AI", "wireguard")
         os.makedirs(wireguard_dir, exist_ok=True)
         return wireguard_dir
-    else:
+    elif platform.system() == "Linux":
         # Use ~/.config/resistine-ai/wireguard for Linux
         home_dir = os.path.expanduser("~")
         config_dir = os.path.join(home_dir, ".config", "resistine-ai")
         wireguard_dir = os.path.join(config_dir, "wireguard")
         os.makedirs(wireguard_dir, exist_ok=True)
         return wireguard_dir
+    else:
+        raise NotImplementedError("Unsupported platform")
+    
 
 # Define the global variable and initialize vpn status
 active_client_name = None
@@ -54,19 +57,18 @@ elif platform.system() == "Linux":
     existing_interfaces = os.popen('wg show interfaces').read().split()
 elif platform.system() == "Darwin":
     from plugins.vpn.wireguard.vpn_functions_darwin import *
-    #from python_wireguard import Client, ServerConnection, Key
     existing_interfaces = os.popen('wg show interfaces').read().split()
 else:
     raise NotImplementedError("Unsupported platform")
 
 
 for interface in existing_interfaces:
-        status = check_service_status(interface, "10.49.64.53")
+        status = check_service_status(interface, "10.49.11.10")
         if status == "Running":
             active_client_name = interface
             break
 
-my_vpn_status = check_service_status(active_client_name, "10.49.64.53") if active_client_name else "Stopped"
+my_vpn_status = check_service_status(active_client_name, "10.49.11.10") if active_client_name else "Stopped"
 print(f"VPN Status in the init function : {my_vpn_status}")
 
 # Function to update listbox colors based on theme
@@ -513,13 +515,13 @@ class Plugin(BasePlugin):
     def activate_tunnel(self, tunnel_name):
         """
         Activates a VPN tunnel using WireGuard based on the provided tunnel name.
-        This function handles the activation of a VPN tunnel for both Linux and Windows platforms.
+        This function handles the activation of a VPN tunnel for both Linux, macOS and Windows platforms.
         It checks if WireGuard is installed, configures the VPN tunnel, and starts or stops the VPN service
         based on the current status.
         Args:
             tunnel_name (str): The name of the VPN tunnel to be activated.
         Raises:
-            NotImplementedError: If the platform is neither Linux nor Windows.
+            NotImplementedError: If the platform is neither Linux, macOS nor Windows.
         """
         global my_vpn_status
         
@@ -566,12 +568,12 @@ class Plugin(BasePlugin):
             if is_wg_installed:
                 if "Running" == my_vpn_status:
                     stop_vpn(config_path)
-                    my_vpn_status = check_service_status(tunnel_name, "10.49.64.53")
+                    my_vpn_status = check_service_status(tunnel_name, "10.49.11.10")
                     self.update_plugin(self.id) 
                 elif "Stopped" == my_vpn_status:
                     client.set_server(server_conn)
                     start_vpn(config_path)
-                    my_vpn_status = check_service_status(tunnel_name, "10.49.64.53")
+                    my_vpn_status = check_service_status(tunnel_name, "10.49.11.10")
                     self.update_plugin(self.id) 
                 else:
                     print("The service status is unknown.")    
@@ -581,17 +583,14 @@ class Plugin(BasePlugin):
             data = self.get_configuration_values(tunnel_name)
             print(f"Activating tunnel: {tunnel_name}")
 
-            if is_wg_installed:
-                # Use system path for WireGuard operations
-                
-                
+            if is_wg_installed: 
                 if "Running" == my_vpn_status:
                     stop_vpn(config_path)
-                    my_vpn_status = check_service_status(tunnel_name, "10.49.64.53")
+                    my_vpn_status = check_service_status(tunnel_name, "10.49.11.10")
                     self.update_plugin(self.id) 
                 elif "Stopped" == my_vpn_status:
                     start_vpn(config_path)
-                    my_vpn_status = check_service_status(tunnel_name, "10.49.64.53")
+                    my_vpn_status = check_service_status(tunnel_name, "10.49.11.10")
                     self.update_plugin(self.id) 
                 else:
                     print("The service status is unknown.")    
@@ -605,11 +604,11 @@ class Plugin(BasePlugin):
                     if check_wireguard_interface(tunnel_name):
                         if my_vpn_status == "Running":
                             stop_vpn(config_path)
-                            my_vpn_status = check_service_status(tunnel_name, "10.49.64.53")
+                            my_vpn_status = check_service_status(tunnel_name, "10.49.11.10")
                             self.update_plugin(self.id) 
                         else:
                             start_vpn(config_path)
-                            my_vpn_status = check_service_status(tunnel_name, "10.49.64.53")
+                            my_vpn_status = check_service_status(tunnel_name, "10.49.11.10")
                             self.update_plugin(self.id) 
                     else:
                         install_tunnel(config_path)

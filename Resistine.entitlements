@@ -5,7 +5,7 @@
 <dict>
     <!-- Basic App Sandbox -->
     <key>com.apple.security.app-sandbox</key>
-    <true/>
+    <false/>
     
     <!-- Network Permissions -->
     <key>com.apple.security.network.client</key>
@@ -13,6 +13,9 @@
     <key>com.apple.security.network.server</key>
     <true/>
     
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
     <!-- Allow execution of system tools (for wg-quick) -->
     <key>com.apple.security.temporary-exception.apple-events</key>
     <array>

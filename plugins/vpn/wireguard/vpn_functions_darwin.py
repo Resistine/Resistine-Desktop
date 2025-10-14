@@ -1,7 +1,8 @@
 """
-VPN Functions for WireGuard on Darwin (AppleScript Version)
-----------------------------------------------------------
-Uses AppleScript (osascript) for privileged operations instead of direct sudo commands.
+VPN Functions for WireGuard on macOS
+Author: Jacqueline Edoro
+Copyright (c) Resistine 2025
+Licensed under the Apache License 2.0
 """
 
 import sys
@@ -9,308 +10,285 @@ import os
 import subprocess
 import json
 import tempfile
+import re
 from typing import Tuple, Optional
 
-_stored_password = None
-def _request_password_once():
-    """Request password once and store it for future use"""
-    global _stored_password
+# Cache to map config names to actual utun interfaces (e.g., wg0 → utun6)
+_interface_cache = {}
+
+class HelperToolManager:
+    """Manages XPC communication with the privileged helper via ResistCli"""
     
-    if _stored_password is not None:
-        return _stored_password
+    def __init__(self):
+        self.cli_path = self._find_cli_path()
+        self.is_available = self.cli_path is not None
+        print(f"🔍 [HELPER] CLI Path: {self.cli_path}")
+        print(f"🔍 [HELPER] CLI Exists: {self.cli_path and os.path.exists(self.cli_path) if self.cli_path else False}")
     
-    try:
-        # Request password using AppleScript
-        apple_script = '''
-        tell application "System Events"
-            activate
-            set thePassword to display dialog "Resistine Desktop needs administrator privileges to manage VPN connections. Please enter your password:" default answer "" with title "Administrator Password Required" with icon caution with hidden answer
-            return text returned of thePassword
-        end tell
-        '''
+    def _find_cli_path(self):
+        """Locate ResistCli tool in the app bundle"""
+        # When frozen (PyInstaller), look relative to the executable
+        if getattr(sys, 'frozen', False):
+            # sys.executable is in Contents/MacOS/
+            macos_dir = os.path.dirname(sys.executable)
+            app_contents = os.path.abspath(os.path.join(macos_dir, ".."))
+            cli_path = os.path.join(app_contents, "Library", "LaunchServices", "ResistCli")
+            if os.path.exists(cli_path):
+                return cli_path
         
-        result = subprocess.run(
-            ["osascript", "-e", apple_script],
-            capture_output=True,
-            text=True,
-            timeout=60
-        )
+        # Development mode - search from script location
+        script_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        dev_cli_path = os.path.join(script_dir, "apple_helper", "cli", "ResistCli")
+        if os.path.exists(dev_cli_path):
+            return dev_cli_path
         
-        if result.returncode == 0:
-            _stored_password = result.stdout.strip()
-            print("✅ Password stored for VPN operations")
-            return _stored_password
-        else:
-            print("❌ Password request cancelled or failed")
-            return None
-            
-    except Exception as e:
-        print(f"❌ Error requesting password: {e}")
         return None
-def _run_wireguard_command(command: list, description: str = "This operation requires administrator privileges") -> Tuple[bool, str]:
-    """Run WireGuard command with stored password"""
-    global _stored_password
     
-    # Get password if not already stored
-    if _stored_password is None:
-        password = _request_password_once()
-        if password is None:
-            return False, "Password required but not provided"
+
     
-    try:
-        # Create a temporary script file to avoid escaping issues
-        script_content = f'''#!/bin/bash
-# {description}
-# Ensure we use bash 4+ and set proper environment
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-export SHELL="/bin/bash"
 
-# Run the command with proper argument handling
-{" ".join(f'"{arg}"' if ' ' in arg else arg for arg in command)}
-'''
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as f:
-            f.write(script_content)
-            script_path = f.name
-        
-        # Make script executable
-        os.chmod(script_path, 0o755)
-        
-        # Run with stored password using echo and sudo
-        sudo_command = f'echo "{_stored_password}" | sudo -S /bin/bash {script_path}'
-        
-        result = subprocess.run(
-            ["/bin/bash", "-c", sudo_command],
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-        
-        # Clean up
-        try:
-            os.unlink(script_path)
-        except:
-            pass
-        
-        if result.returncode == 0:
-            return True, result.stdout.strip()
-        else:
-            # If password is wrong, clear it and try again
-            if "incorrect password" in result.stderr.lower() or "authentication failure" in result.stderr.lower():
-                _stored_password = None
-                print("❌ Incorrect password, please try again")
-            return False, result.stderr.strip()
-            
-    except subprocess.TimeoutExpired:
-        return False, "Command timed out"
-    except Exception as e:
-        return False, str(e)
 
-def generate_keys():
-    """Generate WireGuard private and public keys using AppleScript."""
-    try:
-        # Find wg path
-        wg_path = _find_wireguard_path("wg")
-        if not wg_path:
-            print("❌ WireGuard not found")
-            return None
+# Initialize helper manager
+helper = HelperToolManager()
+
+# Add VPN-specific helper methods
+class VPNHelper:
+    """VPN-specific operations using the XPC helper"""
+    
+    @staticmethod
+    def start_vpn(config_path: str) -> Tuple[bool, str]:
+        """Start VPN using config file"""
+        if not helper.cli_path:
+            return (False, "Helper CLI not found")
         
-        # Generate private key using AppleScript
-        success, private_key = _run_wireguard_command([wg_path, "genkey"], "Generate WireGuard private key")
-        if not success:
-            print(f"❌ Failed to generate private key: {private_key}")
-            return None
-        
-        private_key = private_key.strip()
-        
-        # Generate public key from private key
         try:
             result = subprocess.run(
-                [wg_path, "pubkey"],
-                input=private_key,
+                [helper.cli_path, "start-vpn", config_path],
                 capture_output=True,
                 text=True,
-                timeout=10
+                timeout=30
             )
-            
-            if result.returncode == 0:
-                public_key = result.stdout.strip()
-            else:
-                print(f"❌ Failed to generate public key: {result.stderr}")
-                return None
-                
+            output = result.stdout.strip() or result.stderr.strip()
+            return (result.returncode == 0, output)
         except Exception as e:
-            print(f"❌ Exception generating public key: {e}")
-            return None
-
-        keys = {
-            "private_key": private_key,
-            "public_key": public_key
-        }
-
-        script_dir = os.path.dirname(__file__)
-        keys_path = os.path.join(script_dir, "keys.json")
-        with open(keys_path, "w") as json_file:
-            json.dump(keys, json_file, indent=4)
-
-        print("Keys generated successfully.")
-        return keys
-    except Exception as e:
-        print(f"Error generating keys: {e}")
-        return None
-
-# Updated functions using AppleScript
-def start_vpn(config_path):
-    """Start the WireGuard VPN service using AppleScript."""
-    try:
-        # Find wg-quick path
-        wg_quick_path = _find_wireguard_path("wg-quick")
-        if not wg_quick_path:
-            print("❌ WireGuard not found")
-            return False
+            return (False, str(e))
+    
+    @staticmethod
+    def stop_vpn(config_path: str) -> Tuple[bool, str]:
+        """Stop VPN using config file"""
+        if not helper.cli_path:
+            return (False, "Helper CLI not found")
         
-        # Check if config file exists
-        if not os.path.exists(config_path):
-            print(f"❌ Config file not found: {config_path}")
-            return False
+        try:
+            result = subprocess.run(
+                [helper.cli_path, "stop-vpn", config_path],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            output = result.stdout.strip() or result.stderr.strip()
+            return (result.returncode == 0, output)
+        except Exception as e:
+            return (False, str(e))
+    
+    @staticmethod
+    def check_status(interface_name: str, test_ip: Optional[str] = None) -> Tuple[bool, str]:
+        """Check VPN status"""
+        if not helper.cli_path:
+            print("⚠️ [HELPER] CLI path not available")
+            return (False, "Stopped")
         
-        # Extract interface name from config path
-        interface_name = os.path.splitext(os.path.basename(config_path))[0]
-        
-        # Copy config to system location for wg-quick
-        system_config_dir = "/opt/homebrew/etc/wireguard"
-        system_config_path = os.path.join(system_config_dir, f"{interface_name}.conf")
-        
-        # Create system config directory if it doesn't exist
-        success, _ = _run_wireguard_command(["mkdir", "-p", system_config_dir], "Create WireGuard config directory")
-        if not success:
-            print(f"❌ Failed to create config directory: {system_config_dir}")
-            return False
-        
-        # Copy config file to system location
-        success, _ = _run_wireguard_command(["cp", config_path, system_config_path], "Copy config to system location")
-        if not success:
-            print(f"❌ Failed to copy config to system location")
-            return False
-        
-        # Run wg-quick up command using interface name
-        success, output = _run_wireguard_command([wg_quick_path, "up", interface_name], "Start WireGuard VPN")
-        
-        if success:
-            print("✅ VPN started successfully")
-            return True
-        else:
-            # Check if the interface already exists and is running
-            if "already exists" in output:
-                print("✅ VPN is already running")
-                return True
-            else:
-                print(f"❌ Failed to start VPN: {output}")
-                return False
+        try:
+            cmd = [helper.cli_path, "status", interface_name]
+            if test_ip:
+                cmd.append(test_ip)
             
+            print(f"🔍 [HELPER] Running command: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            output = result.stdout.strip()
+            print(f"📊 [HELPER] Command result: returncode={result.returncode}, output='{output}'")
+            
+            # Status check returns "Running" or "Stopped"
+            if "Running" in output:
+                is_running = True
+            else:
+                is_running = False
+            return (is_running, output)
+
+        except subprocess.TimeoutExpired:
+            print(f"⏰ [HELPER] Command timed out after 30 seconds")
+            return (False, "Command timed out")
+        except FileNotFoundError:
+            print(f"❌ [HELPER] CLI executable not found: {helper.cli_path}")
+            return (False, "Helper not available")
+        except Exception as e:
+            print(f"❌ [HELPER] Command error: {e}")
+            return (False, str(e))
+
+vpn_helper = VPNHelper()
+
+
+
+def generate_keys():
+    """Generate WireGuard keys (not implemented - use WireGuard command line tools)"""
+    pass
+
+
+def create_wireguard_config(private_key, public_key, client_ip_address, allowedips, endpoint, config_path):
+    """
+    Create a WireGuard VPN configuration file.
+
+    :param private_key: The private key for the WireGuard interface.
+    :param public_key: The public key of the peer.
+    :param client_ip_address: The IP address of the client.
+    :param allowedips: The allowed IPs for the peer.
+    :param endpoint: The endpoint for the peer.
+    :param config_path: The path where the configuration file will be saved.
+    """
+    config_template = f"""[Interface]
+    PrivateKey = {private_key}
+    Address = {client_ip_address}
+
+    [Peer]
+    PublicKey = {public_key}
+    AllowedIPs = {allowedips}
+    Endpoint = {endpoint}
+    """
+
+    try:
+        script_dir = os.path.dirname(__file__)
+        config_file_path = os.path.join(script_dir, config_path)
+        with open(config_file_path, "w") as config_file:
+            config_file.write(config_template)
+        print(f"Configuration file created at {config_file_path}")
     except Exception as e:
-        print(f"❌ Exception: {e}")
+        print(f"Error writing configuration file: {e}")
+
+
+def start_vpn(config_path):
+    """Start VPN using the privileged helper"""
+    
+    
+    success, output = vpn_helper.start_vpn(config_path)
+    if success or "Interface for" in output:
+        print(f"✅ VPN started: {output}")
+        
+        # Extract and cache the actual utun interface
+        config_name = os.path.basename(config_path).replace('.conf', '')
+        match = re.search(r'Interface for \S+ is (\S+)', output)
+        if match:
+            actual_interface = match.group(1)
+            _interface_cache[config_name] = actual_interface
+        
+        return True
+    else:
+        print(f"❌ VPN start failed: {output}")
         return False
+
 
 def stop_vpn(config_path):
-    """Stop the WireGuard VPN service using AppleScript."""
-    try:
-        # Find wg-quick path
-        wg_quick_path = _find_wireguard_path("wg-quick")
-        if not wg_quick_path:
-            print("❌ WireGuard not found")
-            return False
+    """Stop VPN using the privileged helper"""
+    
+    
+    success, output = vpn_helper.stop_vpn(config_path)
+    if success or "stopped" in output.lower():
+        print(f"✅ VPN stopped: {output}")
         
-        # Extract interface name from config path
-        interface_name = os.path.splitext(os.path.basename(config_path))[0]
-        
-        # Run wg-quick down command using interface name
-        success, output = _run_wireguard_command([wg_quick_path, "down", interface_name], "Stop WireGuard VPN")
-        
-        if success:
-            print("✅ VPN stopped successfully")
-            return True
-        else:
-            print(f"❌ Failed to stop VPN: {output}")
-            return False
-            
-    except Exception as e:
-        print(f"❌ Exception: {e}")
+        # Clear the cached interface mapping
+        config_name = os.path.basename(config_path).replace('.conf', '')
+        if config_name in _interface_cache:
+            del _interface_cache[config_name]
+        print(f"🔍 [CACHE] Cleared mapping for {config_name}")
+        return True
+    else:
+        print(f"❌ VPN stop failed: {output}")
         return False
 
-def check_service_status(interface_name, test_ip):
-    """Check the status of the WireGuard VPN service using AppleScript."""
+
+
+
+def check_service_status(interface_name, test_ip=None):
+    """Check VPN status using the privileged helper
+    
+    Args:
+        interface_name: Config name (e.g., 'wg0') or actual interface name (e.g., 'utun10')
+        test_ip: Optional IP to ping for connectivity test
+    """
+    
+    
+    # Map config name to actual utun interface if available
+    actual_interface = _interface_cache.get(interface_name, interface_name)
+    
+    # If the interface_name is already a utun interface (starts with 'utun'), use it directly
+    if interface_name.startswith('utun'):
+        actual_interface = interface_name
+    
+    print(f"🔍 [STATUS] Checking status for interface: {interface_name} -> {actual_interface}")
     try:
-        # Find wg path
-        wg_path = _find_wireguard_path("wg")
-        if not wg_path:
-            return "Stopped"
+        # ✅ Don't pass test_ip to avoid ping tests
+        is_running, status = vpn_helper.check_status(actual_interface, None)
         
-        # Run wg show command using AppleScript
-        success, output = _run_wireguard_command([wg_path, "show"], "Check WireGuard status")
+        print(f"📊 [STATUS] Helper returned: is_running={is_running}, status='{status}'")
         
-        if success and output.strip():
-            # Check if there are active interfaces
-            lines = output.split('\n')
-            for line in lines:
-                if "interface:" in line and "utun" in line:
-                    return "Running"
-        
-        return "Stopped"
-            
+        return "Running" if is_running else "Stopped"
+    
     except Exception as e:
-        print(f"❌ Exception: {e}")
+        print(f"❌ [STATUS] Exception in check_service_status: {e}")
+        import traceback
+        traceback.print_exc()
         return "Stopped"
-def _find_wireguard_path(tool: str) -> Optional[str]:
-    """Find WireGuard tool path"""
-    search_paths = [
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        "/usr/bin",
-        "/bin"
-    ]
-    
-    for path in search_paths:
-        full_path = os.path.join(path, tool)
-        if os.path.exists(full_path) and os.access(full_path, os.X_OK):
-            return full_path
-    
-    return None
+
 
 def check_wireguard_installed():
-    """Check if WireGuard is installed."""
-    try:
-        wg_path = _find_wireguard_path("wg")
-        wg_quick_path = _find_wireguard_path("wg-quick")
-        print(f"wg_path: {wg_path}")
-        print(f"wg_quick_path: {wg_quick_path}")
-        if wg_path and wg_quick_path:
-            return True
+    """Check if WireGuard is available on the system"""
+    print("🔍 [WIREGUARD] Checking WireGuard installation...")
+    
+    # Check for wg binary in system locations (same as Swift helper)
+    wg_paths = [
+        "/usr/bin/wg",              # System installation (macOS built-in)
+        "/opt/homebrew/bin/wg",     # Apple Silicon Homebrew
+        "/usr/local/bin/wg"         # Intel Homebrew
+    ]
+    
+    wg_found = False
+    wg_path = None
+    for path in wg_paths:
+        if os.path.exists(path):
+            print(f"✅ WireGuard (wg) found at: {path}")
+            wg_found = True
+            wg_path = path
+            break
+    
+    if not wg_found:
+        print("❌ WireGuard (wg) not found in system locations")
+        print("💡 Please install WireGuard:")
+        print("   - Via Homebrew: brew install wireguard-tools")
+        print("   - Or download from: https://www.wireguard.com/install/")
         return False
-            
-    except Exception as e:
-        print(f"❌ Exception: {e}")
+    
+    # Check for wg-quick in system locations (same as Swift helper)
+    wg_quick_paths = [
+        "/usr/bin/wg-quick",          # System installation (macOS built-in)
+        "/opt/homebrew/bin/wg-quick", # Apple Silicon Homebrew
+        "/usr/local/bin/wg-quick"     # Intel Homebrew
+    ]
+    
+    wg_quick_found = False
+    wg_quick_path = None
+    for path in wg_quick_paths:
+        if os.path.exists(path):
+            print(f"✅ WireGuard (wg-quick) found at: {path}")
+            wg_quick_found = True
+            wg_quick_path = path
+            break
+    
+    if not wg_quick_found:
+        print("❌ WireGuard (wg-quick) not found in system locations")
+        print("💡 Please install WireGuard:")
+        print("   - Via Homebrew: brew install wireguard-tools")
+        print("   - Or download from: https://www.wireguard.com/install/")
         return False
-
-# Keep utility functions
-def is_admin():
-    """Check if the script is running with root privileges."""
-    return os.geteuid() == 0
-
-def run_as_admin(command):
-    """Run a command with administrator privileges using AppleScript."""
-    try:
-        success, output = _run_wireguard_command(command, "Run command with administrator privileges")
-        return success
-    except Exception as e:
-        print(f"❌ Exception: {e}")
-        return False
-
-def run_installer_as_admin(installer_path):
-    """Run an installer with administrator privileges using AppleScript."""
-    try:
-        success, output = _run_wireguard_command([installer_path], "Run installer with administrator privileges")
-        return success
-    except Exception as e:
-        print(f"❌ Exception: {e}")
-        return False
+    
+    
+    print("✅ WireGuard is properly installed and working on the system")
+    return True

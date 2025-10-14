@@ -4,29 +4,30 @@
 <dict>
     <key>com.apple.security.app-sandbox</key>
     <false/>
-    <key>com.apple.developer.privileged-helper</key>
-    <true/>
     <key>com.apple.security.network.client</key>
     <true/>
     <key>com.apple.security.network.server</key>
     <true/>
     <key>com.apple.security.temporary-exception.files.absolute-path.read-write</key>
     <array>
+        <!-- User's application support directory for configs -->
+        <string>$HOME/Library/Application Support/Resistine AI/</string>
+        <!-- System WireGuard directories (fallback/legacy) -->
         <string>/opt/homebrew/etc/wireguard/</string>
         <string>/usr/local/etc/wireguard/</string>
         <string>/etc/wireguard/</string>
+        <!-- Allow temporary directories for wg-quick runtime files -->
+        <string>/var/run/wireguard/</string>
     </array>
     <key>com.apple.security.temporary-exception.files.absolute-path.read-execute</key>
     <array>
-        <string>/opt/homebrew/bin/wg-quick</string>
-        <string>/usr/local/bin/wg-quick</string>
-        <string>/usr/bin/wg-quick</string>
-        <string>/opt/homebrew/bin/wg</string>
-        <string>/usr/local/bin/wg</string>
-        <string>/usr/bin/wg</string>
+        <!-- Bundled WireGuard binaries (primary) -->
+        <string>/Applications/Resistine AI.app/Contents/Resources/bin/</string>
+        <!-- System bash (required for running wg-quick) -->
         <string>/opt/homebrew/bin/bash</string>
         <string>/usr/local/bin/bash</string>
         <string>/bin/bash</string>
     </array>
+    
 </dict>
 </plist>

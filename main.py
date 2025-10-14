@@ -7,9 +7,12 @@ Copyright (c) Resistine 2025
 Licensed under the Apache License 2.0
 """
 
+
 import sys
 import os
-sys.path.append(os.path.join(os.path.dirname(__file__), 'libraries'))
+import logging
+import subprocess
+
 
 import customtkinter
 from PIL import Image
@@ -17,6 +20,97 @@ from plugins.plugin_manager import PluginManager
 from utils import functions as myfunctions
 import re
 
+import tkinter as tk
+import io
+
+
+class DebugWindow:
+    """Debug window to show print statements and logs in real-time"""
+    
+    def __init__(self, parent):
+        self.parent = parent
+        self.debug_window = None
+        self.text_widget = None
+        self.original_stdout = sys.stdout
+        self.original_stderr = sys.stderr
+        
+    def create_debug_window(self):
+        """Create the debug window"""
+        self.debug_window = tk.Toplevel(self.parent)
+        self.debug_window.title("Resistine Debug Output")
+        self.debug_window.geometry("800x600")
+        
+        # Create text widget WITHOUT scroll
+        self.text_widget = tk.Text(self.debug_window, wrap=tk.WORD)
+        self.text_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Add buttons
+        button_frame = tk.Frame(self.debug_window)
+        button_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        clear_button = tk.Button(button_frame, text="Clear", command=self.clear_output)
+        clear_button.pack(side=tk.LEFT, padx=5)
+        
+        save_button = tk.Button(button_frame, text="Save Log", command=self.save_log)
+        save_button.pack(side=tk.LEFT, padx=5)
+        
+        # Redirect stdout and stderr
+        self.redirect_output()
+        
+        # Add initial message
+        self.log_message("=== RESISTINE DEBUG WINDOW ===\n")
+        self.log_message("All print statements and logs will appear here.\n")
+        self.log_message("=" * 50 + "\n")
+        
+    def redirect_output(self):
+        """Redirect stdout and stderr to the debug window"""
+        class DebugOutput:
+            def __init__(self, debug_window):
+                self.debug_window = debug_window
+                
+            def write(self, text):
+                if text.strip():  # Only log non-empty text
+                    self.debug_window.log_message(text)
+                self.debug_window.original_stdout.write(text)
+                
+            def flush(self):
+                self.debug_window.original_stdout.flush()
+        
+        sys.stdout = DebugOutput(self)
+        sys.stderr = DebugOutput(self)
+    
+    def log_message(self, message):
+        """Add a message to the debug window"""
+        if self.text_widget:
+            self.text_widget.insert(tk.END, message)
+            self.text_widget.see(tk.END)  # Auto-scroll to bottom
+            self.text_widget.update_idletasks()
+    
+    def clear_output(self):
+        """Clear the debug output"""
+        if self.text_widget:
+            self.text_widget.delete(1.0, tk.END)
+    
+    def save_log(self):
+        """Save the debug output to a file"""
+        if self.text_widget:
+            content = self.text_widget.get(1.0, tk.END)
+            try:
+                import datetime
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"resistine_debug_{timestamp}.log"
+                
+                with open(filename, 'w') as f:
+                    f.write(content)
+                
+                self.log_message(f"Log saved to: {filename}\n")
+            except Exception as e:
+                self.log_message(f"Error saving log: {e}\n")
+    
+    def restore_output(self):
+        """Restore original stdout and stderr"""
+        sys.stdout = self.original_stdout
+        sys.stderr = self.original_stderr
 
 class App(customtkinter.CTk):
     """
@@ -30,7 +124,13 @@ class App(customtkinter.CTk):
         Check if the email is registered and create the appropriate screen.
         """
         super().__init__()
-
+        #self.debug_window = DebugWindow(self)
+        #self.debug_window.create_debug_window()
+        
+        # Register privileged helper on macOS (only runs once per install)
+        if sys.platform == 'darwin':
+            self._ensure_darwin_helper_registered()
+            
         self.title("Resistine AI")
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
@@ -52,6 +152,73 @@ class App(customtkinter.CTk):
         :return: True if the email is registered, False otherwise.
         """
         return os.path.isfile(os.path.join(os.path.dirname(__file__), "utils", "email-settings.txt"))
+
+    def _ensure_darwin_helper_registered(self):
+        """Register the privileged helper on macOS (runs silently on startup)"""
+        try:
+            from ServiceManagement import SMAppService
+            plist_name = "com.resistine.plist"
+            
+            # Create the service
+            try:
+                service = SMAppService.daemonServiceWithPlistName_(plist_name)
+            except:
+                try:
+                    service = SMAppService.daemonWithPlistName_(plist_name)
+                except:
+                    print("⚠️ Could not create SMAppService for helper")
+                    return
+            
+            # Check current status
+            status = int(service.status())
+            status_map = {0: "notRegistered", 1: "enabled", 2: "requiresApproval", 3: "notFound"}
+            status_str = status_map.get(status, "unknown")
+            
+            if status == 1:  # Already enabled
+                print("✅ Helper already enabled")
+                return
+            
+            if status == 2:  # Requires approval
+                print("⚠️ Helper registered but requires user approval")
+                self._prompt_helper_approval(service)
+                return
+            
+            # Not registered yet (0 or 3), try to register
+            print("🔧 Registering privileged helper...")
+            error = service.registerAndReturnError_(None)
+            
+            if error:
+                print(f"⚠️ Helper registration error: {error}")
+                # Check status again after registration attempt
+                new_status = int(service.status())
+                if new_status == 2:  # Now requires approval
+                    self._prompt_helper_approval(service)
+            else:
+                print("✅ Helper registered successfully")
+                
+        except ImportError:
+            print("⚠️ ServiceManagement framework not available")
+        except Exception as e:
+            print(f"⚠️ Helper registration error: {e}")
+    
+    def _prompt_helper_approval(self, service):
+        """Prompt user to approve helper in System Settings"""
+        try:
+            import tkinter.messagebox as messagebox
+            
+            response = messagebox.askyesno(
+                "Helper Approval Required",
+                "Resistine AI needs your approval to install a helper tool for VPN functionality.\n\n"
+                "Click 'Yes' to open System Settings where you can enable it in Login Items.",
+                icon='info'
+            )
+            
+            if response:
+                # Open System Settings → Login Items
+                service.openSystemSettingsLoginItems()
+                print("📱 Opened System Settings → Login Items")
+        except Exception as e:
+            print(f"⚠️ Could not prompt for approval: {e}")
 
     def create_registration_screen(self):
         """
@@ -172,8 +339,5 @@ class App(customtkinter.CTk):
                 frame.create_main_screen().grid_forget()
 
 if __name__ == "__main__":
-    customtkinter.set_appearance_mode("system")
-    customtkinter.set_default_color_theme(os.path.join(os.path.dirname(__file__), "resources", "themes", "custom_theme.json"))
     app = App()
     app.mainloop()
-
