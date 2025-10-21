@@ -53,7 +53,8 @@ class PluginManager:
         :return: A list of loaded plugin instances.
         """
         plugins_path = self.get_plugins_path()
-        plugin_dirs = [d for d in os.listdir(plugins_path) if os.path.isdir(os.path.join(plugins_path, d)) and not d.startswith('_')]
+        
+        plugin_dirs = [d for d in os.listdir(plugins_path) if os.path.isdir(os.path.join(plugins_path, d)) and not d.startswith('_') and d != 'login']
         plugins = []
         
         for plugin_dir in plugin_dirs:
