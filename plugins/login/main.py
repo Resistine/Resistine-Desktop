@@ -1,11 +1,3 @@
-"""
-Login Plugin for Resistine Desktop
-Handles OTP authentication with Odoo backend
-Author: Peres J.
-Copyright (c) Resistine 2025
-Licensed under the Apache License 2.0
-"""
-
 import customtkinter
 import requests
 import json
@@ -38,6 +30,9 @@ class Plugin(BasePlugin):
         self.smtp_port = SMTP_PORT
         self.smtp_username = SMTP_USERNAME
         self.smtp_password = SMTP_PASSWORD
+        
+        # New: Reference to the currently active input field
+        self.active_input_entry = None 
 
     def create_main_screen(self):
         """
@@ -118,9 +113,12 @@ class Plugin(BasePlugin):
         self.subtitle_label = customtkinter.CTkLabel(self.registration_frame, text="Please enter your email to receive an OTP", font=("Arial", 16))
         self.subtitle_label.grid(row=2, column=1, padx=20, pady=10, sticky="ew")
         
-        # Single input field that transforms from email to OTP
-        self.input_entry = customtkinter.CTkEntry(self.registration_frame, placeholder_text="Enter your email")
-        self.input_entry.grid(row=3, column=1, padx=20, pady=20, sticky="ew")
+        # Initial Email Input Field
+        self.email_entry = customtkinter.CTkEntry(self.registration_frame, placeholder_text="Enter your email")
+        self.email_entry.grid(row=3, column=1, padx=20, pady=20, sticky="ew")
+        
+        # Set the active input to the email entry initially
+        self.active_input_entry = self.email_entry
 
         # Single button that transforms from Send OTP to Verify OTP
         self.action_button = customtkinter.CTkButton(self.registration_frame, text="Send OTP", command=self.send_otp)
@@ -136,6 +134,7 @@ class Plugin(BasePlugin):
 
     def authenticate_with_odoo(self):
         """Authenticate with Odoo and get session info"""
+        # ... (rest of the function is unchanged)
         try:
             auth_url = f"{self.odoo_url}/web/session/authenticate"
             auth_data = {
@@ -161,6 +160,7 @@ class Plugin(BasePlugin):
 
     def check_customer_exists(self, email):
         """Check if customer exists in Odoo"""
+        # ... (rest of the function is unchanged)
         try:
             cookies = self.authenticate_with_odoo()
             if not cookies:
@@ -194,6 +194,7 @@ class Plugin(BasePlugin):
 
     def send_otp_email(self, email, otp):
         """Send OTP via email"""
+        # ... (rest of the function is unchanged)
         try:
             if not self.smtp_password:
                 # For testing, just show the OTP
@@ -229,7 +230,9 @@ class Plugin(BasePlugin):
 
     def send_otp(self):
         """Send OTP to customer email"""
-        email = self.input_entry.get().strip()
+        
+        # We must use self.email_entry here, as it's the active input during the SEND phase
+        email = self.email_entry.get().strip() 
         
         # Validate email format
         email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
@@ -247,40 +250,60 @@ class Plugin(BasePlugin):
             self.update_status("Email not found in our customer database", "red")
             return
 
-        # Generate and send OTP
+        # Generate and store OTP
         self.otp = self.generate_otp()
         self.email = email
         
-        # OTP generated and stored successfully
-        
         if self.send_otp_email(email, self.otp):
-            self.update_status("OTP sent successfully! Check your email.", "green")
-            self.transform_to_otp_input()
+            self.update_status("OTP sent successfully! Enter the code below.", "green")
+            # --- START OF NEW IMPLEMENTATION ---
+            self.setup_otp_entry()
+            # --- END OF NEW IMPLEMENTATION ---
         else:
             self.update_status("Failed to send OTP. Please try again.", "red")
-
-    def transform_to_otp_input(self):
-        """Transform the email input to OTP input for better UX"""
-        # Update the subtitle
-        self.subtitle_label.configure(text="Enter the 6-digit code sent to your email")
+            
+            
+    # New function to handle the switch from email to OTP input
+    def setup_otp_entry(self):
+        """Destroy the email entry and create a fresh OTP entry field."""
         
-        # Clear the input field once
-        self.input_entry.delete(0, 'end')
+        # 1. Destroy the old email entry
+        self.email_entry.destroy()
         
-        # Reconfigure the input field for OTP with proper placeholder
-        self.input_entry.configure(
-            placeholder_text="Enter 6-digit OTP",
-            show="*"  # Hide the OTP as user types for security
+        # 2. Update the subtitle
+        self.subtitle_label.configure(text=f"Enter the 6-digit code sent to {self.email}")
+        
+        # 3. Create the new OTP input field
+        self.otp_entry = customtkinter.CTkEntry(
+            self.registration_frame, 
+            placeholder_text="Enter OTP",
+            show="*" # Crucial for masking input
         )
         
-        # Update the button
+        # 4. Grid the new entry in the same spot
+        self.otp_entry.grid(row=3, column=1, padx=20, pady=20, sticky="ew")
+        
+        # 5. Update the active input reference
+        self.active_input_entry = self.otp_entry
+        
+        # 6. Bind the key press event for validation
+        self.otp_entry.bind("<KeyPress>", self.on_otp_key_press)
+        
+        # 7. Focus on the new input field
+        self.otp_entry.focus_set()
+        
+        # 8. Update the button
         self.action_button.configure(text="Verify OTP", command=self.verify_otp)
+
 
     def verify_otp(self):
         """Verify the entered OTP"""
-        entered_otp = self.input_entry.get().strip()
+        # We must now use self.otp_entry (which is self.active_input_entry)
+        # Note: If you want to keep the flexibility for future changes, use self.active_input_entry
+        entered_otp = self.active_input_entry.get().strip() 
+        
         print(entered_otp)
-        print(self.input_entry.get().strip())
+
         if not entered_otp:
             self.update_status("Please enter the OTP", "red")
             return
@@ -294,6 +317,13 @@ class Plugin(BasePlugin):
             self.app.create_dashboard()
         else:
             self.update_status("Invalid OTP. Please try again.", "red")
+
+    def on_otp_key_press(self, event):
+        """Only allow digits in the OTP field"""
+        # Allow digits, backspace, delete, and navigation keys
+        allowed_keys = ['BackSpace', 'Delete', 'Left', 'Right', 'Home', 'End', 'Tab']
+        if event.char and not event.char.isdigit() and event.keysym not in allowed_keys:
+            return 'break'
 
     def update_status(self, message, color="white"):
         """Update status label with message and color"""
