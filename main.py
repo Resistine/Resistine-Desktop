@@ -127,9 +127,11 @@ class App(customtkinter.CTk):
         #self.debug_window = DebugWindow(self)
         #self.debug_window.create_debug_window()
         
-        # Register privileged helper on macOS (only runs once per install)
+       #Things to run when app is launched
         if sys.platform == 'darwin':
+             # Register privileged helper on macOS (only runs once per install)
             self._ensure_darwin_helper_registered()
+        
             
         self.title("Resistine AI")
         screen_width = self.winfo_screenwidth()
@@ -140,18 +142,13 @@ class App(customtkinter.CTk):
         position_down = int(screen_height / 2 - window_height / 2)
         self.geometry(f"{window_width}x{window_height}+{position_right}+{position_down}")
 
-        if not self.is_email_registered():
-            self.create_registration_screen()
-        else:
-            self.create_dashboard()
-
-    def is_email_registered(self):
-        """
-        Check if the email is registered by verifying the existence of the email-settings.txt file.
+        # Always show login screen since we're using Odoo authentication
+        print("🔐 Creating login screen...")
+        self.create_login_screen()
+        print("✅ Login screen created")
         
-        :return: True if the email is registered, False otherwise.
-        """
-        return os.path.isfile(os.path.join(os.path.dirname(__file__), "utils", "email-settings.txt"))
+        # Ensure the login screen is visible
+        self.update()
 
     def _ensure_darwin_helper_registered(self):
         """Register the privileged helper on macOS (runs silently on startup)"""
@@ -220,6 +217,45 @@ class App(customtkinter.CTk):
         except Exception as e:
             print(f"⚠️ Could not prompt for approval: {e}")
 
+    def create_login_screen(self):
+        """
+        Create the login screen using the Login plugin.
+        """
+        # Import the login plugin
+        from plugins.login.main import Plugin as LoginPlugin
+        
+        # Create login plugin instance
+        self.login_plugin = LoginPlugin(self)
+        
+        # Create the login screen
+        self.login_frame = self.login_plugin.create_main_screen()
+        self.login_frame.grid(row=0, column=0, sticky="nsew")
+        
+        # Configure grid to ensure login screen takes full window
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        
+        # Ensure login screen is on top
+        self.login_frame.lift()
+
+    def destroy_login_screen(self):
+        """
+        Destroy the login screen and clean up resources.
+        """
+        if hasattr(self, 'login_frame'):
+            self.login_frame.destroy()
+            del self.login_frame
+        if hasattr(self, 'login_plugin'):
+            del self.login_plugin
+
+    def destroy_registration_screen(self):
+        """
+        Destroy the registration screen and clean up resources.
+        """
+        if hasattr(self, 'registration_frame'):
+            self.registration_frame.destroy()
+            del self.registration_frame
+
     def create_registration_screen(self):
         """
         Create the registration screen where the user can enter their email to register.
@@ -246,7 +282,6 @@ class App(customtkinter.CTk):
 
         self.register_button = customtkinter.CTkButton(self.registration_frame, text="Register", command=self.register_email)
         self.register_button.grid(row=4, column=1, padx=20, pady=20, sticky="nsew")
-
     def register_email(self):
         """
         Register the user's email by validating the input and saving it to a file.
@@ -273,15 +308,22 @@ class App(customtkinter.CTk):
             os.makedirs(shares_folder)
         with open(os.path.join(shares_folder, "email-settings.txt"), "w") as f:
             f.write(email)
-        self.registration_frame.destroy()
+        self.destroy_registration_screen()
         self.create_dashboard()
 
     def create_dashboard(self):
         """
         Create the main dashboard of the application, including loading plugins and creating navigation buttons.
         """
-        self.grid_rowconfigure(0, weight=1)
+        
+        for widget in self.winfo_children():
+            widget.grid_forget()
+        
+        # 2. Re-configure the main window (self) for the 2-column dashboard layout
+        self.grid_rowconfigure(0, weight=1)  # Only one row needed
+        self.grid_columnconfigure(0, weight=0) # Column 0 (Navigation): Weight 0 (only takes necessary width)
         self.grid_columnconfigure(1, weight=1)
+       
         #Getting the plugin list from the PluginManager located in plugins folder. 
         if not hasattr(App, 'plugin_list'):
             App.plugin_list = PluginManager(self).plugins
