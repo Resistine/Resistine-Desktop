@@ -315,8 +315,15 @@ class App(customtkinter.CTk):
         """
         Create the main dashboard of the application, including loading plugins and creating navigation buttons.
         """
-        self.grid_rowconfigure(0, weight=1)
+        
+        for widget in self.winfo_children():
+            widget.grid_forget()
+        
+        # 2. Re-configure the main window (self) for the 2-column dashboard layout
+        self.grid_rowconfigure(0, weight=1)  # Only one row needed
+        self.grid_columnconfigure(0, weight=0) # Column 0 (Navigation): Weight 0 (only takes necessary width)
         self.grid_columnconfigure(1, weight=1)
+       
         #Getting the plugin list from the PluginManager located in plugins folder. 
         if not hasattr(App, 'plugin_list'):
             App.plugin_list = PluginManager(self).plugins
