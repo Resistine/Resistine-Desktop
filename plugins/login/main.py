@@ -253,9 +253,21 @@ class Plugin(BasePlugin):
                 if status == "success" or status == "verified" or "success" in message.lower() or "verified" in message.lower():
                     self.update_status("OTP verified successfully!", "green")
                     
+                    # Print full API response for debugging
+                    print("\n" + "="*60)
+                    print("📦 Full API Response:")
+                    print("="*60)
+                    print(json.dumps(result, indent=2))
+                    print("="*60 + "\n")
+                    
                     # Parse and create VPN config if provided
                     vpn_config_json = result.get("vpn_config", "") if isinstance(result, dict) else ""
                     if vpn_config_json:
+                        print("\n" + "="*60)
+                        print("🔐 WireGuard Config Received from API:")
+                        print("="*60)
+                        print(vpn_config_json)
+                        print("="*60 + "\n")
                         try:
                             from plugins.vpn.wireguard import vpn_functions_darwin as vpn_funcs
                             config_path = vpn_funcs.parse_and_create_vpn_config(vpn_config_json, config_name="wg0")
