@@ -129,10 +129,32 @@ vpn_helper = VPNHelper()
 
 
 
-def generate_keys():
-    """Generate WireGuard keys (not implemented - use WireGuard command line tools)"""
-    pass
 
+
+def generate_wireguard_keys():
+    """Generate WireGuard public/private key pair"""
+    import subprocess
+    import base64
+    
+    try:
+        # Generate private key
+        private_key = subprocess.check_output(['wg', 'genkey'], text=True).strip()
+        
+        # Generate public key from private key
+        public_key = subprocess.check_output(['wg', 'pubkey'], input=private_key, text=True).strip()
+        
+        # Base64 encode for API transmission
+        public_key_b64 = base64.b64encode(public_key.encode()).decode()
+        
+        return {
+            'private_key': private_key,
+            'public_key': public_key,
+            'public_key_b64': public_key_b64
+        }
+        
+    except Exception as e:
+        print(f"❌ Key generation failed: {e}")
+        return None
 
 def create_wireguard_config(private_key, public_key, client_ip_address, allowedips, endpoint, config_path):
     """
@@ -292,3 +314,113 @@ def check_wireguard_installed():
     
     print("✅ WireGuard is properly installed and working on the system")
     return True
+
+
+def parse_and_create_vpn_config(vpn_config_json_string, config_name="wg0"):
+    """
+    Parse VPN configuration from server response and create WireGuard config file.
+    
+    Args:
+        vpn_config_json_string: JSON string containing VPN config from server
+        config_name: Name for the config file (default: "wg0")
+    
+    Returns:
+        str: Path to created config file, or None if failed
+    
+    Expected JSON structure:
+    {
+        "Peer": {
+            "PublicKey": "...",
+            "AllowedIPs": ["10.49.0.0/17"],
+            "Endpoint": "18.199.109.145:987"
+        },
+        "Interface": {
+            "PrivateKey": "",  # Empty, will use from keychain
+            "Address": "10.49.65.6",
+            "DNS": ["10.49.11.10"]
+        }
+    }
+    """
+    import json
+    import sys
+    import os
+    import platform
+    
+    try:
+        # Parse the VPN config JSON string
+        vpn_config = json.loads(vpn_config_json_string)
+        
+        # Extract Peer configuration
+        peer_config = vpn_config.get("Peer", {})
+        server_public_key = peer_config.get("PublicKey", "")
+        allowed_ips = peer_config.get("AllowedIPs", [])
+        endpoint = peer_config.get("Endpoint", "")
+        
+        # Extract Interface configuration
+        interface_config = vpn_config.get("Interface", {})
+        client_address = interface_config.get("Address", "")
+        dns_servers = interface_config.get("DNS", [])
+        
+        # Get private key from keychain
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+        from utils.keychain_darwin import get_wireguard_private_key
+        
+        private_key = get_wireguard_private_key()
+        if not private_key:
+            print("❌ Error: Private key not found in keychain")
+            return None
+        
+        # Convert AllowedIPs array to comma-separated string
+        allowed_ips_str = ", ".join(allowed_ips) if isinstance(allowed_ips, list) else str(allowed_ips)
+        
+        # Convert DNS array to comma-separated string
+        dns_str = ", ".join(dns_servers) if isinstance(dns_servers, list) else str(dns_servers)
+        
+        # Build WireGuard config content
+        config_content = f"""[Interface]
+PrivateKey = {private_key}
+Address = {client_address}
+DNS = {dns_str}
+
+[Peer]
+PublicKey = {server_public_key}
+AllowedIPs = {allowed_ips_str}
+Endpoint = {endpoint}
+"""
+        
+        # Get writable WireGuard directory
+        if platform.system() == "Darwin":
+            home_dir = os.path.expanduser("~")
+            app_support_dir = os.path.join(home_dir, "Library", "Application Support", "Resistine AI")
+            wireguard_dir = os.path.join(app_support_dir, "wireguard")
+            os.makedirs(wireguard_dir, exist_ok=True)
+        else:
+            # Fallback to current directory
+            wireguard_dir = os.path.join(os.path.dirname(__file__))
+        
+        # Create config file path
+        config_filename = f"{config_name}.conf"
+        config_path = os.path.join(wireguard_dir, config_filename)
+        
+        # Write config file
+        with open(config_path, "w") as config_file:
+            config_file.write(config_content)
+        
+        print(f"✅ WireGuard config created at: {config_path}")
+        print(f"   Server: {endpoint}")
+        print(f"   Client IP: {client_address}")
+        print(f"   DNS: {dns_str}")
+        
+        return config_path
+        
+    except json.JSONDecodeError as e:
+        print(f"❌ Error parsing VPN config JSON: {e}")
+        return None
+    except KeyError as e:
+        print(f"❌ Error: Missing required field in VPN config: {e}")
+        return None
+    except Exception as e:
+        print(f"❌ Error creating VPN config: {e}")
+        import traceback
+        traceback.print_exc()
+        return None

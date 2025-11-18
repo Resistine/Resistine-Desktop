@@ -1,10 +1,6 @@
 import customtkinter
 import requests
 import json
-import secrets
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 import os
 import re
 from PIL import Image
@@ -16,20 +12,13 @@ class Plugin(BasePlugin):
         
        
         self.app = app
-        self.otp = None
         self.email = None
         
-        # Odoo API Configuration
+    
         self.odoo_url = ODOO_URL
         self.odoo_db = ODOO_DB
         self.odoo_username = ODOO_USERNAME
         self.odoo_password = ODOO_PASSWORD
-        
-        # SMTP Configuration
-        self.smtp_server = SMTP_SERVER
-        self.smtp_port = SMTP_PORT
-        self.smtp_username = SMTP_USERNAME
-        self.smtp_password = SMTP_PASSWORD
         
         # New: Reference to the currently active input field
         self.active_input_entry = None 
@@ -188,51 +177,9 @@ class Plugin(BasePlugin):
             print(f"Error checking customer: {e}")
             return False
 
-    def generate_otp(self):
-        """Generate a 6-digit OTP"""
-        return str(secrets.randbelow(10**OTP_LENGTH - 10**(OTP_LENGTH-1)) + 10**(OTP_LENGTH-1))
-
-    def send_otp_email(self, email, otp):
-        """Send OTP via email"""
-        # ... (rest of the function is unchanged)
-        try:
-            if not self.smtp_password:
-                # For testing, just show the OTP
-                self.update_status(f"OTP for testing: {otp}", "orange")
-                return True
-
-            msg = MIMEMultipart()
-            msg['From'] = self.smtp_username
-            msg['To'] = email
-            msg['Subject'] = "Resistine Login Verification Code"
-            
-            body = f"""
-            Your Resistine login verification code is: {otp}
-            
-            This code will expire in {OTP_EXPIRY_MINUTES} minutes.
-            
-            If you didn't request this code, please ignore this email.
-            """
-            
-            msg.attach(MIMEText(body, 'plain'))
-            
-            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
-            server.starttls()
-            server.login(self.smtp_username, self.smtp_password)
-            text = msg.as_string()
-            server.sendmail(self.smtp_username, email, text)
-            server.quit()
-            
-            return True
-        except Exception as e:
-            print(f"Error sending email: {e}")
-            return False
-
     def send_otp(self):
         """Send OTP to customer email"""
-        
-        # We must use self.email_entry here, as it's the active input during the SEND phase
-        email = self.email_entry.get().strip() 
+        email = self.email_entry.get().strip()
         
         # Validate email format
         email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
@@ -250,21 +197,167 @@ class Plugin(BasePlugin):
             self.update_status("Email not found in our customer database", "red")
             return
 
-        # Generate and store OTP
-        self.otp = self.generate_otp()
+        # Store email (server generates OTP)
         self.email = email
         
-        if self.send_otp_email(email, self.otp):
-            self.update_status("OTP sent successfully! Enter the code below.", "green")
-            # --- START OF NEW IMPLEMENTATION ---
-            self.setup_otp_entry()
-            # --- END OF NEW IMPLEMENTATION ---
-        else:
-            self.update_status("Failed to send OTP. Please try again.", "red")
+        # Send OTP via API (server generates the OTP)
+        self.send_otp_api(email)
+
+    def send_otp_api(self, email):
+        """Send OTP via Resistine API (server generates the OTP)"""
+        try:
+            import requests
             
+            api_url = "https://validate.resistine.work/send-otp"
+            payload = {
+                "email": email
+            }
             
-    # New function to handle the switch from email to OTP input
-    def setup_otp_entry(self):
+            self.update_status("Sending OTP via API...", "blue")
+            
+            response = requests.post(api_url, json=payload, timeout=90)
+            
+            if response.status_code in range(200, 300):
+                self.update_status("OTP sent successfully! Check your email.", "green")
+                self.transform_to_otp_input()
+            else:
+                self.update_status(f"Failed to send OTP: Server error {response.status_code}", "red")
+                
+        except requests.exceptions.RequestException as e:
+            self.update_status(f"Network error: {str(e)}", "red")
+        except Exception as e:
+            self.update_status(f"Error sending OTP: {str(e)}", "red")
+
+    def verify_otp(self):
+        """Verify the entered OTP with Resistine API"""
+        entered_otp = self.active_input_entry.get().strip()
+        
+        if not entered_otp:
+            self.update_status("Please enter the OTP", "red")
+            return
+        
+        self.update_status("Verifying OTP with server...", "blue")
+        
+        try:
+            import requests
+            import json
+            import sys
+            import os
+            import base64
+            
+            # Import keychain utilities and VPN functions
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+            from utils.keychain_darwin import (
+                save_wireguard_keys, 
+                delete_wireguard_keys,
+                get_wireguard_private_key,
+                get_wireguard_public_key
+            )
+            from plugins.vpn.wireguard import vpn_functions_darwin as vpn_funcs
+            
+            # Step 1: Regenerate fresh keys for this sign-in session
+            # Delete old keys (if they exist) to ensure fresh key pair
+            delete_wireguard_keys()
+            
+            # Generate new key pair
+            keys = vpn_funcs.generate_wireguard_keys()
+            if not keys:
+                self.update_status("Failed to generate keys", "red")
+                return
+            
+            # Save both private and public keys to Keychain with iOS-compatible service names
+            if not save_wireguard_keys(keys['private_key'], keys['public_key']):
+                self.update_status("Failed to save keys securely", "red")
+                return
+            
+            # Get base64-encoded public key for API transmission
+            public_key_b64 = keys['public_key_b64']
+            
+            if not public_key_b64:
+                self.update_status("Failed to get public key", "red")
+                return
+            
+            api_url = "https://validate.resistine.work/verify-otp"
+            payload = {
+                "email": self.email,
+                "otp": entered_otp,
+                "host_url": "rfr1.resisti.net",
+                "vpn_name": "testVPNapi",
+                "client_public_key": public_key_b64
+            }
+            
+            response = requests.post(api_url, json=payload, timeout=90)
+            
+            if response.status_code in range(200, 300):
+                try:
+                    result = response.json()
+                except Exception as e:
+                    print(f"❌ Error parsing JSON: {e}")
+                    result = {}
+                
+                # Check for success - handle different response formats
+                status = result.get("status", "").lower() if isinstance(result, dict) else ""
+                message = result.get("message", "") if isinstance(result, dict) else ""
+                
+                # Check if verification was successful (status="success" or "verified" OR message contains "success" or "verified")
+                if status == "success" or status == "verified" or "success" in message.lower() or "verified" in message.lower():
+                    self.update_status("OTP verified successfully!", "green")
+                    
+                    # Parse and create VPN config if provided
+                    vpn_config_json = result.get("vpn_config", "") if isinstance(result, dict) else ""
+                    if vpn_config_json:
+                        try:
+                            from plugins.vpn.wireguard import vpn_functions_darwin as vpn_funcs
+                            config_path = vpn_funcs.parse_and_create_vpn_config(vpn_config_json, config_name="wg0")
+                            if config_path:
+                                print(f"✅ VPN configuration saved successfully")
+                            else:
+                                print(f"⚠️  Warning: Failed to create VPN config")
+                        except Exception as e:
+                            print(f"⚠️  Warning: Error creating VPN config: {e}")
+                    
+                    # Small delay to show success message, then transition
+                    def transition_to_dashboard():
+                        self.app.destroy_login_screen()
+                        self.app.create_dashboard()
+                    
+                    self.app.after(500, transition_to_dashboard)
+                else:
+                    self.update_status(f"OTP verification failed: {message or 'Unknown error'}", "red")
+                    
+            else:
+                self.update_status(f"Server error: {response.status_code}", "red")
+                
+        except requests.exceptions.RequestException as e:
+            self.update_status(f"Network error: {str(e)}", "red")
+        except Exception as e:
+            self.update_status(f"Verification error: {str(e)}", "red")
+
+    def on_otp_key_press(self, event):
+        """Only allow digits in the OTP field"""
+        # Allow digits, backspace, delete, and navigation keys
+        allowed_keys = ['BackSpace', 'Delete', 'Left', 'Right', 'Home', 'End', 'Tab']
+        if event.char and not event.char.isdigit() and event.keysym not in allowed_keys:
+            return 'break'
+
+    def update_status(self, message, color="white"):
+        """Update status label with message and color"""
+        self.status_label.configure(text=message, text_color=color)
+        self.status_label.update()
+
+    def get_name(self):
+        return self.name
+
+    def get_icon(self):
+        return self.icon
+
+    def get_button(self):
+        return self.button
+
+    def set_button(self, button):
+        self.button = button
+
+    def transform_to_otp_input(self):
         """Destroy the email entry and create a fresh OTP entry field."""
         
         # 1. Destroy the old email entry
@@ -294,50 +387,3 @@ class Plugin(BasePlugin):
         
         # 8. Update the button
         self.action_button.configure(text="Verify OTP", command=self.verify_otp)
-
-
-    def verify_otp(self):
-        """Verify the entered OTP"""
-        # We must now use self.otp_entry (which is self.active_input_entry)
-        # Note: If you want to keep the flexibility for future changes, use self.active_input_entry
-        entered_otp = self.active_input_entry.get().strip() 
-        
-        print(entered_otp)
-
-        if not entered_otp:
-            self.update_status("Please enter the OTP", "red")
-            return
-        
-        # Verify OTP match
-        
-        if entered_otp == self.otp:
-            self.update_status("Login successful!", "green")
-            # No need to save email settings - Odoo handles customer data
-            self.app.destroy_login_screen()
-            self.app.create_dashboard()
-        else:
-            self.update_status("Invalid OTP. Please try again.", "red")
-
-    def on_otp_key_press(self, event):
-        """Only allow digits in the OTP field"""
-        # Allow digits, backspace, delete, and navigation keys
-        allowed_keys = ['BackSpace', 'Delete', 'Left', 'Right', 'Home', 'End', 'Tab']
-        if event.char and not event.char.isdigit() and event.keysym not in allowed_keys:
-            return 'break'
-
-    def update_status(self, message, color="white"):
-        """Update status label with message and color"""
-        self.status_label.configure(text=message, text_color=color)
-        self.status_label.update()
-
-    def get_name(self):
-        return self.name
-
-    def get_icon(self):
-        return self.icon
-
-    def get_button(self):
-        return self.button
-
-    def set_button(self, button):
-        self.button = button
