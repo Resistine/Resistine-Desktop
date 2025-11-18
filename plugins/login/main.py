@@ -5,22 +5,16 @@ import os
 import re
 from PIL import Image
 from plugins.base_plugin import BasePlugin
-from .config import *
 
 class Plugin(BasePlugin):
     def __init__(self, app):
-        
-       
         self.app = app
         self.email = None
         
-    
-        self.odoo_url = ODOO_URL
-        self.odoo_db = ODOO_DB
-        self.odoo_username = ODOO_USERNAME
-        self.odoo_password = ODOO_PASSWORD
+        # API endpoint
+        self.api_base_url = "https://validate.resistine.work"
         
-        # New: Reference to the currently active input field
+        # Reference to the currently active input field
         self.active_input_entry = None 
 
     def create_main_screen(self):
@@ -121,64 +115,8 @@ class Plugin(BasePlugin):
         )
         self.status_label.grid(row=7, column=1, padx=20, pady=10)
 
-    def authenticate_with_odoo(self):
-        """Authenticate with Odoo and get session info"""
-        # ... (rest of the function is unchanged)
-        try:
-            auth_url = f"{self.odoo_url}/web/session/authenticate"
-            auth_data = {
-                "jsonrpc": "2.0",
-                "method": "call",
-                "params": {
-                    "db": self.odoo_db,
-                    "login": self.odoo_username,
-                    "password": self.odoo_password
-                },
-                "id": 1
-            }
-            
-            response = requests.post(auth_url, json=auth_data)
-            if response.status_code == 200:
-                result = response.json()
-                if "error" not in result:
-                    return response.cookies
-            return None
-        except Exception as e:
-            print(f"Odoo authentication error: {e}")
-            return None
-
-    def check_customer_exists(self, email):
-        """Check if customer exists in Odoo"""
-        # ... (rest of the function is unchanged)
-        try:
-            cookies = self.authenticate_with_odoo()
-            if not cookies:
-                return False
-
-            search_url = f"{self.odoo_url}/web/dataset/call_kw"
-            search_data = {
-                "jsonrpc": "2.0",
-                "method": "call",
-                "params": {
-                    "model": "res.partner",
-                    "method": "search_read",
-                    "args": [[["email", "=", email]]],
-                    "kwargs": {"fields": ["email", "name", "is_company"]}
-                },
-                "id": 1
-            }
-            
-            response = requests.post(search_url, json=search_data, cookies=cookies)
-            if response.status_code == 200:
-                result = response.json()
-                return len(result.get("result", [])) > 0
-            return False
-        except Exception as e:
-            print(f"Error checking customer: {e}")
-            return False
-
     def send_otp(self):
-        """Send OTP to customer email"""
+        """Send OTP to customer email via Resistine API"""
         email = self.email_entry.get().strip()
         
         # Validate email format
@@ -190,38 +128,53 @@ class Plugin(BasePlugin):
             self.update_status("Please enter a valid email address", "red")
             return
 
-        self.update_status("Checking customer status...", "blue")
-        
-        # Check if customer exists
-        if not self.check_customer_exists(email):
-            self.update_status("Email not found in our customer database", "red")
-            return
-
-        # Store email (server generates OTP)
+        # Store email
         self.email = email
         
-        # Send OTP via API (server generates the OTP)
+        # Send OTP via API - API handles all validation
         self.send_otp_api(email)
 
     def send_otp_api(self, email):
-        """Send OTP via Resistine API (server generates the OTP)"""
+        """Send OTP via Resistine API (server generates and validates the OTP)"""
         try:
-            import requests
-            
-            api_url = "https://validate.resistine.work/send-otp"
+            api_url = f"{self.api_base_url}/send-otp"
             payload = {
                 "email": email
             }
             
-            self.update_status("Sending OTP via API...", "blue")
+            self.update_status("Sending OTP...", "blue")
             
             response = requests.post(api_url, json=payload, timeout=90)
             
             if response.status_code in range(200, 300):
-                self.update_status("OTP sent successfully! Check your email.", "green")
-                self.transform_to_otp_input()
+                # Success status code - treat as success
+                try:
+                    result = response.json()
+                    # Get message from API response if available
+                    message = result.get("message", "") if isinstance(result, dict) else ""
+                    status = result.get("status", "").lower() if isinstance(result, dict) else ""
+                    
+                    # Check if there's an explicit error status
+                    if status in ["error", "failed", "failure"]:
+                        error_msg = message or result.get("error", "Failed to send OTP")
+                        self.update_status(f"Error: {error_msg}", "red")
+                    else:
+                        # Success - use API message if available, otherwise use default
+                        success_msg = message if message else "OTP sent successfully! Check your email."
+                        self.update_status(success_msg, "green")
+                        self.transform_to_otp_input()
+                except (ValueError, KeyError, json.JSONDecodeError):
+                    # If response is not valid JSON, assume success if status is 200-299
+                    self.update_status("OTP sent successfully! Check your email.", "green")
+                    self.transform_to_otp_input()
             else:
-                self.update_status(f"Failed to send OTP: Server error {response.status_code}", "red")
+                # Error status code
+                try:
+                    result = response.json()
+                    error_msg = result.get("message") or result.get("error", f"Server error {response.status_code}")
+                    self.update_status(f"Error: {error_msg}", "red")
+                except (ValueError, KeyError, json.JSONDecodeError):
+                    self.update_status(f"Failed to send OTP: Server error {response.status_code}", "red")
                 
         except requests.exceptions.RequestException as e:
             self.update_status(f"Network error: {str(e)}", "red")
@@ -239,10 +192,7 @@ class Plugin(BasePlugin):
         self.update_status("Verifying OTP with server...", "blue")
         
         try:
-            import requests
-            import json
             import sys
-            import os
             import base64
             
             # Import keychain utilities and VPN functions
@@ -277,7 +227,7 @@ class Plugin(BasePlugin):
                 self.update_status("Failed to get public key", "red")
                 return
             
-            api_url = "https://validate.resistine.work/verify-otp"
+            api_url = f"{self.api_base_url}/verify-otp"
             payload = {
                 "email": self.email,
                 "otp": entered_otp,
