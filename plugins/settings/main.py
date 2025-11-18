@@ -51,9 +51,19 @@ class Plugin(BasePlugin):
         self.profile_name_label = customtkinter.CTkLabel(self.frame_5, text="Name: Javier Peres", font=customtkinter.CTkFont(size=20))
         self.profile_name_label.grid(row=0, column=0, padx=20, pady=10)
 
+        # Try to read email from file, but handle case where it doesn't exist (API-based auth)
         email_file_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))), "utils", "email-settings.txt")
-        with open(email_file_path, 'r') as file:
-            email = file.read().strip()
+        email = "Not set"
+        if os.path.exists(email_file_path):
+            try:
+                with open(email_file_path, 'r') as file:
+                    email = file.read().strip()
+            except Exception as e:
+                print(f"Error reading email settings: {e}")
+                email = "Not available"
+        else:
+            # Email is stored via API authentication, not in local file
+            email = "Authenticated via API"
 
         self.profile_email_label = customtkinter.CTkLabel(self.frame_5, text=f"Email: {email}", font=customtkinter.CTkFont(size=20))
         self.profile_email_label.grid(row=1, column=0, padx=20, pady=10)
