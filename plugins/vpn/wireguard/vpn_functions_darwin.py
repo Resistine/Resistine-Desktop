@@ -132,28 +132,87 @@ vpn_helper = VPNHelper()
 
 
 def generate_wireguard_keys():
-    """Generate WireGuard public/private key pair"""
+    """
+    Generate WireGuard public/private key pair using proper cryptographic methods.
+    
+    WireGuard keys are:
+    - Private key: 32 bytes, base64-encoded (44 characters)
+    - Public key: 32 bytes, base64-encoded (44 characters), derived from private key
+    
+    The 'wg genkey' and 'wg pubkey' commands already output base64-encoded strings.
+    """
     import subprocess
     import base64
     
     try:
-        # Generate private key
+        # Check if wg command is available
+        try:
+            subprocess.run(['wg', '--version'], capture_output=True, check=True, timeout=5)
+        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+            print("❌ WireGuard 'wg' command not found. Please install WireGuard tools.")
+            return None
+        
+        # Generate private key (already base64-encoded, 44 chars)
         private_key = subprocess.check_output(['wg', 'genkey'], text=True).strip()
         
-        # Generate public key from private key
+        # Validate private key format (should be base64, 44 characters)
+        if not private_key or len(private_key) != 44:
+            print(f"❌ Invalid private key format: length={len(private_key) if private_key else 0}, expected=44")
+            return None
+        
+        # Validate it's valid base64
+        try:
+            base64.b64decode(private_key, validate=True)
+        except Exception as e:
+            print(f"❌ Private key is not valid base64: {e}")
+            return None
+        
+        # Generate public key from private key (already base64-encoded, 44 chars)
+        # This uses Curve25519 to derive the public key from the private key
         public_key = subprocess.check_output(['wg', 'pubkey'], input=private_key, text=True).strip()
         
-        # Base64 encode for API transmission
-        public_key_b64 = base64.b64encode(public_key.encode()).decode()
+        # Validate public key format (should be base64, 44 characters)
+        if not public_key or len(public_key) != 44:
+            print(f"❌ Invalid public key format: length={len(public_key) if public_key else 0}, expected=44")
+            return None
+        
+        # Validate it's valid base64
+        try:
+            base64.b64decode(public_key, validate=True)
+        except Exception as e:
+            print(f"❌ Public key is not valid base64: {e}")
+            return None
+        
+        # Verify the public key is derived from the private key
+        # Re-derive and compare to ensure correctness
+        verify_public = subprocess.check_output(['wg', 'pubkey'], input=private_key, text=True).strip()
+        if verify_public != public_key:
+            print("❌ Public key derivation verification failed")
+            return None
+        
+        # WireGuard keys are already base64-encoded, so public_key_b64 is just the public_key
+        # No need to double-encode
+        public_key_b64 = public_key
+        
+        print(f"✅ Generated WireGuard keys:")
+        print(f"   Private key length: {len(private_key)} chars")
+        print(f"   Public key length: {len(public_key)} chars")
+        print(f"   Public key (first 10 chars): {public_key[:10]}...")
         
         return {
             'private_key': private_key,
             'public_key': public_key,
-            'public_key_b64': public_key_b64
+            'public_key_b64': public_key_b64  # Already base64, no double encoding
         }
         
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Key generation command failed: {e}")
+        print(f"   stderr: {e.stderr if hasattr(e, 'stderr') else 'N/A'}")
+        return None
     except Exception as e:
         print(f"❌ Key generation failed: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def create_wireguard_config(private_key, public_key, client_ip_address, allowedips, endpoint, config_path):
