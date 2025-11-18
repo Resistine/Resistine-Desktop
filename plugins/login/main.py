@@ -227,6 +227,18 @@ class Plugin(BasePlugin):
                 self.update_status("Failed to get public key", "red")
                 return
             
+            # Validate public key format before sending
+            if len(public_key_b64) != 44:
+                print(f"⚠️ Warning: Public key length is {len(public_key_b64)}, expected 44 characters")
+                self.update_status("Invalid public key format", "red")
+                return
+            
+            print(f"\n🔐 WireGuard Public Key Details:")
+            print(f"   Length: {len(public_key_b64)} characters")
+            print(f"   Format: Base64-encoded (32 bytes)")
+            print(f"   Key (first 20 chars): {public_key_b64[:20]}...")
+            print(f"   Full key: {public_key_b64}\n")
+            
             api_url = f"{self.api_base_url}/verify-otp"
             payload = {
                 "email": self.email,
@@ -235,6 +247,8 @@ class Plugin(BasePlugin):
                 "vpn_name": "testVPNapi",
                 "client_public_key": public_key_b64
             }
+            
+            print(f"📤 Sending verify-otp request with public key...")
             
             response = requests.post(api_url, json=payload, timeout=90)
             
