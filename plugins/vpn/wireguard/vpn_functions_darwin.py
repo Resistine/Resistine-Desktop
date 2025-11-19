@@ -194,10 +194,10 @@ def generate_wireguard_keys():
         # No need to double-encode
         public_key_b64 = public_key
         
+        # Log key generation success without exposing sensitive data
         print(f"✅ Generated WireGuard keys:")
-        print(f"   Private key length: {len(private_key)} chars")
-        print(f"   Public key length: {len(public_key)} chars")
-        print(f"   Public key (first 10 chars): {public_key[:10]}...")
+        print(f"   Private key: [REDACTED] ({len(private_key)} chars)")
+        print(f"   Public key: [REDACTED] ({len(public_key)} chars)")
         
         return {
             'private_key': private_key,

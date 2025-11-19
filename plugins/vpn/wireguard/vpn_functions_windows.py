@@ -140,8 +140,8 @@ def generate_keys():
             json.dump(keys, json_file, indent=4)
 
         print("Keys generated successfully.")
-        print(f"Private Key: {private_key}")
-        print(f"Public Key: {public_key}")
+        print(f"Private Key: [REDACTED] ({len(private_key)} chars)")
+        print(f"Public Key: [REDACTED] ({len(public_key)} chars)")
     except Exception as e:
         print(f"Error generating keys: {e}")
 
