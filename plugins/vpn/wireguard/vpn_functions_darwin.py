@@ -133,86 +133,39 @@ vpn_helper = VPNHelper()
 
 def generate_wireguard_keys():
     """
-    Generate WireGuard public/private key pair using proper cryptographic methods.
+    Generate WireGuard public/private key pair.
     
     WireGuard keys are:
     - Private key: 32 bytes, base64-encoded (44 characters)
     - Public key: 32 bytes, base64-encoded (44 characters), derived from private key
     
-    The 'wg genkey' and 'wg pubkey' commands already output base64-encoded strings.
+    Returns:
+        dict: {
+            'private_key': str,   # Base64-encoded private key (44 chars)
+            'public_key': str     # Base64-encoded public key (44 chars)
+        }
+        None: If key generation fails
     """
-    import subprocess
-    import base64
+    
+    
     
     try:
-        # Check if wg command is available
-        try:
-            subprocess.run(['wg', '--version'], capture_output=True, check=True, timeout=5)
-        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
-            print("❌ WireGuard 'wg' command not found. Please install WireGuard tools.")
-            return None
         
-        # Generate private key (already base64-encoded, 44 chars)
         private_key = subprocess.check_output(['wg', 'genkey'], text=True).strip()
         
-        # Validate private key format (should be base64, 44 characters)
-        if not private_key or len(private_key) != 44:
-            print(f"❌ Invalid private key format: length={len(private_key) if private_key else 0}, expected=44")
-            return None
-        
-        # Validate it's valid base64
-        try:
-            base64.b64decode(private_key, validate=True)
-        except Exception as e:
-            print(f"❌ Private key is not valid base64: {e}")
-            return None
-        
-        # Generate public key from private key (already base64-encoded, 44 chars)
-        # This uses Curve25519 to derive the public key from the private key
         public_key = subprocess.check_output(['wg', 'pubkey'], input=private_key, text=True).strip()
-        
-        # Validate public key format (should be base64, 44 characters)
-        if not public_key or len(public_key) != 44:
-            print(f"❌ Invalid public key format: length={len(public_key) if public_key else 0}, expected=44")
-            return None
-        
-        # Validate it's valid base64
-        try:
-            base64.b64decode(public_key, validate=True)
-        except Exception as e:
-            print(f"❌ Public key is not valid base64: {e}")
-            return None
-        
-        # Verify the public key is derived from the private key
-        # Re-derive and compare to ensure correctness
-        verify_public = subprocess.check_output(['wg', 'pubkey'], input=private_key, text=True).strip()
-        if verify_public != public_key:
-            print("❌ Public key derivation verification failed")
-            return None
-        
-        # WireGuard keys are already base64-encoded, so public_key_b64 is just the public_key
-        # No need to double-encode
-        public_key_b64 = public_key
-        
-        # Log key generation success without exposing sensitive data
-        print(f"✅ Generated WireGuard keys:")
-        print(f"   Private key: [REDACTED] ({len(private_key)} chars)")
-        print(f"   Public key: [REDACTED] ({len(public_key)} chars)")
         
         return {
             'private_key': private_key,
             'public_key': public_key,
-            'public_key_b64': public_key_b64  # Already base64, no double encoding
+    
         }
         
     except subprocess.CalledProcessError as e:
         print(f"❌ Key generation command failed: {e}")
-        print(f"   stderr: {e.stderr if hasattr(e, 'stderr') else 'N/A'}")
         return None
     except Exception as e:
         print(f"❌ Key generation failed: {e}")
-        import traceback
-        traceback.print_exc()
         return None
 
 def create_wireguard_config(private_key, public_key, client_ip_address, allowedips, endpoint, config_path):
@@ -450,12 +403,12 @@ Endpoint = {endpoint}
         # Get writable WireGuard directory
         if platform.system() == "Darwin":
             home_dir = os.path.expanduser("~")
-            app_support_dir = os.path.join(home_dir, "Library", "Application Support", "Resistine AI")
-            wireguard_dir = os.path.join(app_support_dir, "wireguard")
-            os.makedirs(wireguard_dir, exist_ok=True)
-        else:
-            # Fallback to current directory
-            wireguard_dir = os.path.join(os.path.dirname(__file__))
+            documents_dir = os.path.join(home_dir, "Documents")
+        resistine_dir = os.path.join(documents_dir, "Resistine")
+        wireguard_dir = os.path.join(resistine_dir, "WireGuard")
+        os.makedirs(wireguard_dir, exist_ok=True)
+        
+        
         
         # Create config file path
         config_filename = f"{config_name}.conf"
@@ -471,7 +424,7 @@ Endpoint = {endpoint}
         print(f"   DNS: {dns_str}")
         
         return config_path
-        
+                                
     except json.JSONDecodeError as e:
         print(f"❌ Error parsing VPN config JSON: {e}")
         return None

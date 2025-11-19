@@ -3,10 +3,18 @@ import requests
 import json
 import os
 import re
+import logging
 from PIL import Image
 from plugins.base_plugin import BasePlugin
+from plugins.login import config
+
+# Set up logger for this module
+logger = logging.getLogger(__name__)
 
 class Plugin(BasePlugin):
+    REGISTRATION_GRID_ROWS = 8
+    REGISTRATION_GRID_COLS = 3
+    
     def __init__(self, app):
         self.app = app
         self.email = None
@@ -21,10 +29,10 @@ class Plugin(BasePlugin):
         """
         Initial login screen with centered "Login" button, "Resistine" name, and logo.
         """
-        print("🔐 Login plugin: Creating main screen...")
+        logger.debug("Login plugin: Creating main screen...")
         self.login_frame = customtkinter.CTkFrame(self.app, corner_radius=0, fg_color=self.app.cget("fg_color"))
         self.login_frame.grid(row=0, column=0, sticky="nsew")
-        print("✅ Login plugin: Main screen created")
+        logger.debug("Login plugin: Main screen created")
 
         # Grid config for centering the sub-frame
         self.login_frame.grid_rowconfigure(0, weight=1)  # Top spacer
@@ -48,7 +56,7 @@ class Plugin(BasePlugin):
             logo_image = logo_image.resize((60, 60))
             logo = customtkinter.CTkImage(logo_image, size=(60, 60))
         except Exception as e:
-            print(f"Logo load failed: {e}")
+            logger.warning(f"Logo load failed: {e}")
             logo = None
 
         # Resistine label with logo (top of sub-frame)
@@ -86,9 +94,9 @@ class Plugin(BasePlugin):
         self.registration_frame = customtkinter.CTkFrame(self.app, corner_radius=0, fg_color=self.app.cget("fg_color"))
         self.registration_frame.grid(row=0, column=0, sticky="nsew")
 
-        for i in range(8):  # Adjusted for more rows
+        for i in range(self.REGISTRATION_GRID_ROWS):
             self.registration_frame.grid_rowconfigure(i, weight=1)
-        for i in range(3):
+        for i in range(self.REGISTRATION_GRID_COLS):
             self.registration_frame.grid_columnconfigure(i, weight=1)
 
         self.welcome_label = customtkinter.CTkLabel(self.registration_frame, text="Welcome to Resistine", font=("Arial", 24))
@@ -146,13 +154,12 @@ class Plugin(BasePlugin):
             
             response = requests.post(api_url, json=payload, timeout=90)
             
-            if response.status_code in range(200, 300):
-                # Success status code - treat as success
+            if response.ok:
                 try:
                     result = response.json()
                     # Get message from API response if available
-                    message = result.get("message", "") if isinstance(result, dict) else ""
-                    status = result.get("status", "").lower() if isinstance(result, dict) else ""
+                    message = result.get("message", "")
+                    status = result.get("status", "").lower()
                     
                     # Check if there's an explicit error status
                     if status in ["error", "failed", "failure"]:
@@ -163,18 +170,19 @@ class Plugin(BasePlugin):
                         success_msg = message if message else "OTP sent successfully! Check your email."
                         self.update_status(success_msg, "green")
                         self.transform_to_otp_input()
-                except (ValueError, KeyError, json.JSONDecodeError):
-                    # If response is not valid JSON, assume success if status is 200-299
+                except json.JSONDecodeError:
+                    # Non-JSON success response
+                    logger.warning("Received non-JSON success response")
                     self.update_status("OTP sent successfully! Check your email.", "green")
                     self.transform_to_otp_input()
             else:
                 # Error status code
                 try:
-                    result = response.json()
-                    error_msg = result.get("message") or result.get("error", f"Server error {response.status_code}")
-                    self.update_status(f"Error: {error_msg}", "red")
-                except (ValueError, KeyError, json.JSONDecodeError):
-                    self.update_status(f"Failed to send OTP: Server error {response.status_code}", "red")
+                    error_data = response.json()
+                    error_msg = error_data.get("message") or error_data.get("error", f"Server error {response.status_code}")
+                except json.JSONDecodeError:
+                    error_msg = f"Server error {response.status_code}"
+                self.update_status(f"Error: {error_msg}", "red")
                 
         except requests.exceptions.RequestException as e:
             self.update_status(f"Network error: {str(e)}", "red")
@@ -207,6 +215,7 @@ class Plugin(BasePlugin):
             
             # Step 1: Regenerate fresh keys for this sign-in session
             # Delete old keys (if they exist) to ensure fresh key pair
+            logger.debug("Regenerating WireGuard keys for new login session")
             delete_wireguard_keys()
             
             # Generate new key pair
@@ -220,23 +229,15 @@ class Plugin(BasePlugin):
                 self.update_status("Failed to save keys securely", "red")
                 return
             
-            # Get base64-encoded public key for API transmission
-            public_key_b64 = keys['public_key_b64']
-            
-            if not public_key_b64:
+            # Get public key for API transmission (already base64-encoded)
+            public_key = keys['public_key']
+
+            if not public_key:
                 self.update_status("Failed to get public key", "red")
                 return
             
-            # Validate public key format before sending
-            if len(public_key_b64) != 44:
-                print(f"⚠️ Warning: Public key length is {len(public_key_b64)}, expected 44 characters")
-                self.update_status("Invalid public key format", "red")
-                return
-            
             # Log key validation without exposing sensitive data
-            print(f"\n🔐 WireGuard Public Key Validated:")
-            print(f"   Length: {len(public_key_b64)} characters ✓")
-            print(f"   Format: Base64-encoded (32 bytes) ✓")
+            logger.debug(f"WireGuard Public Key Validated: Length={len(public_key)} characters, Format=Base64-encoded (32 bytes)")
             
             api_url = f"{self.api_base_url}/verify-otp"
             payload = {
@@ -244,47 +245,41 @@ class Plugin(BasePlugin):
                 "otp": entered_otp,
                 "host_url": "rfr1.resisti.net",
                 "vpn_name": "testVPNapi",
-                "client_public_key": public_key_b64
+                "client_public_key": public_key  # Use public_key directly
             }
             
-            print(f"📤 Sending verify-otp request...")
+            logger.debug("Sending verify-otp request...")
             
             response = requests.post(api_url, json=payload, timeout=90)
             
-            if response.status_code in range(200, 300):
+            if response.ok:
                 try:
                     result = response.json()
-                except Exception as e:
-                    print(f"❌ Error parsing JSON: {e}")
+                except json.JSONDecodeError:
+                    # Non-JSON success response
+                    logger.warning("Received non-JSON success response")
                     result = {}
                 
                 # Check for success - handle different response formats
-                status = result.get("status", "").lower() if isinstance(result, dict) else ""
-                message = result.get("message", "") if isinstance(result, dict) else ""
+                status = result.get("status", "").lower()
+                message = result.get("message", "")
                 
                 # Check if verification was successful (status="success" or "verified" OR message contains "success" or "verified")
                 if status == "success" or status == "verified" or "success" in message.lower() or "verified" in message.lower():
                     self.update_status("OTP verified successfully!", "green")
                     
                     # Log API response status without exposing sensitive data
-                    print("\n" + "="*60)
-                    print("📦 API Response Status:")
-                    print("="*60)
-                    # Only print non-sensitive fields
                     safe_result = {
                         "status": result.get("status", ""),
                         "message": result.get("message", ""),
                         "vpn_config_received": bool(result.get("vpn_config", "")),
                     }
-                    print(json.dumps(safe_result, indent=2))
-                    print("="*60 + "\n")
+                    logger.info(f"API Response Status: {json.dumps(safe_result)}")
                     
                     # Parse and create VPN config if provided
-                    vpn_config_json = result.get("vpn_config", "") if isinstance(result, dict) else ""
+                    vpn_config_json = result.get("vpn_config", "")
                     if vpn_config_json:
-                        print("\n" + "="*60)
-                        print("🔐 WireGuard Config Received from API:")
-                        print("="*60)
+                        logger.debug("WireGuard config received from API")
                         # Parse and redact sensitive data from VPN config
                         try:
                             vpn_config = json.loads(vpn_config_json) if isinstance(vpn_config_json, str) else vpn_config_json
@@ -301,19 +296,19 @@ class Plugin(BasePlugin):
                                     "AllowedIPs": vpn_config["Peer"].get("AllowedIPs", []),
                                     "Endpoint": vpn_config["Peer"].get("Endpoint", "")
                                 }
-                            print(json.dumps(safe_config, indent=2))
-                        except:
-                            print("[VPN config received - content redacted for security]")
-                        print("="*60 + "\n")
+                            logger.debug(f"VPN Config (redacted): {json.dumps(safe_config)}")
+                        except Exception as e:
+                            logger.debug("VPN config received - content redacted for security")
+                            logger.debug(f"Error parsing VPN config for logging: {e}")
                         try:
                             from plugins.vpn.wireguard import vpn_functions_darwin as vpn_funcs
                             config_path = vpn_funcs.parse_and_create_vpn_config(vpn_config_json, config_name="wg0")
                             if config_path:
-                                print(f"✅ VPN configuration saved successfully")
+                                logger.info("VPN configuration saved successfully")
                             else:
-                                print(f"⚠️  Warning: Failed to create VPN config")
+                                logger.warning("Failed to create VPN config")
                         except Exception as e:
-                            print(f"⚠️  Warning: Error creating VPN config: {e}")
+                            logger.warning(f"Error creating VPN config: {e}")
                     
                     # Small delay to show success message, then transition
                     def transition_to_dashboard():
@@ -323,9 +318,17 @@ class Plugin(BasePlugin):
                     self.app.after(500, transition_to_dashboard)
                 else:
                     self.update_status(f"OTP verification failed: {message or 'Unknown error'}", "red")
+                    self.active_input_entry.delete(0, 'end')
                     
             else:
-                self.update_status(f"Server error: {response.status_code}", "red")
+                # HTTP error (4xx, 5xx)
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get("message") or error_data.get("error", f"Server error {response.status_code}")
+                except json.JSONDecodeError:
+                    error_msg = f"Server error {response.status_code}"
+                self.update_status(f"Error: {error_msg}", "red")
+                self.active_input_entry.delete(0, 'end')
                 
         except requests.exceptions.RequestException as e:
             self.update_status(f"Network error: {str(e)}", "red")
