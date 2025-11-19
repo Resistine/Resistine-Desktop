@@ -233,11 +233,10 @@ class Plugin(BasePlugin):
                 self.update_status("Invalid public key format", "red")
                 return
             
-            print(f"\n🔐 WireGuard Public Key Details:")
-            print(f"   Length: {len(public_key_b64)} characters")
-            print(f"   Format: Base64-encoded (32 bytes)")
-            print(f"   Key (first 20 chars): {public_key_b64[:20]}...")
-            print(f"   Full key: {public_key_b64}\n")
+            # Log key validation without exposing sensitive data
+            print(f"\n🔐 WireGuard Public Key Validated:")
+            print(f"   Length: {len(public_key_b64)} characters ✓")
+            print(f"   Format: Base64-encoded (32 bytes) ✓")
             
             api_url = f"{self.api_base_url}/verify-otp"
             payload = {
@@ -248,7 +247,7 @@ class Plugin(BasePlugin):
                 "client_public_key": public_key_b64
             }
             
-            print(f"📤 Sending verify-otp request with public key...")
+            print(f"📤 Sending verify-otp request...")
             
             response = requests.post(api_url, json=payload, timeout=90)
             
@@ -267,11 +266,17 @@ class Plugin(BasePlugin):
                 if status == "success" or status == "verified" or "success" in message.lower() or "verified" in message.lower():
                     self.update_status("OTP verified successfully!", "green")
                     
-                    # Print full API response for debugging
+                    # Log API response status without exposing sensitive data
                     print("\n" + "="*60)
-                    print("📦 Full API Response:")
+                    print("📦 API Response Status:")
                     print("="*60)
-                    print(json.dumps(result, indent=2))
+                    # Only print non-sensitive fields
+                    safe_result = {
+                        "status": result.get("status", ""),
+                        "message": result.get("message", ""),
+                        "vpn_config_received": bool(result.get("vpn_config", "")),
+                    }
+                    print(json.dumps(safe_result, indent=2))
                     print("="*60 + "\n")
                     
                     # Parse and create VPN config if provided
@@ -280,7 +285,25 @@ class Plugin(BasePlugin):
                         print("\n" + "="*60)
                         print("🔐 WireGuard Config Received from API:")
                         print("="*60)
-                        print(vpn_config_json)
+                        # Parse and redact sensitive data from VPN config
+                        try:
+                            vpn_config = json.loads(vpn_config_json) if isinstance(vpn_config_json, str) else vpn_config_json
+                            safe_config = {}
+                            if "Interface" in vpn_config:
+                                safe_config["Interface"] = {
+                                    "Address": vpn_config["Interface"].get("Address", ""),
+                                    "DNS": vpn_config["Interface"].get("DNS", []),
+                                    "PrivateKey": "[REDACTED]" if vpn_config["Interface"].get("PrivateKey") else None
+                                }
+                            if "Peer" in vpn_config:
+                                safe_config["Peer"] = {
+                                    "PublicKey": "[REDACTED]" if vpn_config["Peer"].get("PublicKey") else None,
+                                    "AllowedIPs": vpn_config["Peer"].get("AllowedIPs", []),
+                                    "Endpoint": vpn_config["Peer"].get("Endpoint", "")
+                                }
+                            print(json.dumps(safe_config, indent=2))
+                        except:
+                            print("[VPN config received - content redacted for security]")
                         print("="*60 + "\n")
                         try:
                             from plugins.vpn.wireguard import vpn_functions_darwin as vpn_funcs
