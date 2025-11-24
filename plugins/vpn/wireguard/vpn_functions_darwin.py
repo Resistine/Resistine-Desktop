@@ -9,9 +9,12 @@ import sys
 import os
 import subprocess
 import json
-import tempfile
 import re
+import platform
 from typing import Tuple, Optional
+from utils.functions import get_writable_wireguard_dir
+# DNS Configuration - Change this value to update DNS across the application
+DNS_SERVER = "10.49.11.10"
 
 # Cache to map config names to actual utun interfaces (e.g., wg0 → utun6)
 _interface_cache = {}
@@ -168,37 +171,6 @@ def generate_wireguard_keys():
         print(f"❌ Key generation failed: {e}")
         return None
 
-def create_wireguard_config(private_key, public_key, client_ip_address, allowedips, endpoint, config_path):
-    """
-    Create a WireGuard VPN configuration file.
-
-    :param private_key: The private key for the WireGuard interface.
-    :param public_key: The public key of the peer.
-    :param client_ip_address: The IP address of the client.
-    :param allowedips: The allowed IPs for the peer.
-    :param endpoint: The endpoint for the peer.
-    :param config_path: The path where the configuration file will be saved.
-    """
-    config_template = f"""[Interface]
-    PrivateKey = {private_key}
-    Address = {client_ip_address}
-
-    [Peer]
-    PublicKey = {public_key}
-    AllowedIPs = {allowedips}
-    Endpoint = {endpoint}
-    """
-
-    try:
-        script_dir = os.path.dirname(__file__)
-        config_file_path = os.path.join(script_dir, config_path)
-        with open(config_file_path, "w") as config_file:
-            config_file.write(config_template)
-        print(f"Configuration file created at {config_file_path}")
-    except Exception as e:
-        print(f"Error writing configuration file: {e}")
-
-
 def start_vpn(config_path):
     """Start VPN using the privileged helper"""
     
@@ -349,15 +321,10 @@ def parse_and_create_vpn_config(vpn_config_json_string, config_name="wg0"):
         "Interface": {
             "PrivateKey": "",  # Empty, will use from keychain
             "Address": "10.49.65.6",
-            "DNS": ["10.49.11.10"]
+            "DNS": ["10.49.11.10"]  # Uses DNS_SERVER constant (see top of file)
         }
     }
     """
-    import json
-    import sys
-    import os
-    import platform
-    
     try:
         # Parse the VPN config JSON string
         vpn_config = json.loads(vpn_config_json_string)
@@ -401,14 +368,10 @@ Endpoint = {endpoint}
 """
         
         # Get writable WireGuard directory
-        if platform.system() == "Darwin":
-            home_dir = os.path.expanduser("~")
-            documents_dir = os.path.join(home_dir, "Documents")
-        resistine_dir = os.path.join(documents_dir, "Resistine")
-        wireguard_dir = os.path.join(resistine_dir, "WireGuard")
-        os.makedirs(wireguard_dir, exist_ok=True)
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
         
         
+        wireguard_dir = get_writable_wireguard_dir()
         
         # Create config file path
         config_filename = f"{config_name}.conf"

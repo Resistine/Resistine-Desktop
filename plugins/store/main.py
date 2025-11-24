@@ -17,6 +17,9 @@ import os
 import webbrowser
 from plugins.plugin_manager import PluginManager
 
+# DNS Configuration - Change this value to update DNS across the application
+DNS_SERVER = "10.49.11.10"
+
 class Plugin(BasePlugin):
     """
     @brief Plugin class for the Store plugin.
@@ -157,7 +160,7 @@ class Plugin(BasePlugin):
         # Create options
         create_option(0, 0, product_image_light_path , product_image_dark_path, "Odoo", lambda: event_redirect(web_url))
         create_option(0, 1, product_image_light_path, product_image_dark_path, "ClamAV", lambda: event_redirect(web_url))
-        create_option(0, 2, product_image_light_path, product_image_dark_path, "Wazuh",  lambda: event_redirect("https://10.49.11.10/"))
+        create_option(0, 2, product_image_light_path, product_image_dark_path, "Wazuh",  lambda: event_redirect(f"https://{DNS_SERVER}/"))
         create_option(1, 0, product_image_light_path, product_image_dark_path, "VPN", lambda: event_redirect(web_url))
         create_option(1, 1, product_image_light_path, product_image_dark_path, "Calculator", lambda: event_download(direct_url))
         create_option(1, 2, product_image_light_path, product_image_dark_path, "Plugin 2", lambda: event_download(direct_url))
