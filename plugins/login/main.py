@@ -8,6 +8,7 @@ from PIL import Image
 from plugins.base_plugin import BasePlugin
 from plugins.login import config
 from plugins.login.api import LoginAPI
+from utils import config_manager
 
 # Set up logger for this module
 logger = logging.getLogger(__name__)
@@ -78,9 +79,29 @@ class Plugin(BasePlugin):
             command=self.show_registration_screen, 
             font=("Arial", 20)
         )
-        self.login_button.grid(row=1, column=0, padx=20, pady=20, sticky="n")
+        self.login_button.grid(row=1, column=1, padx=10, pady=20, sticky="n")
+
+        # Skip button (left of Login button)
+        self.skip_button = customtkinter.CTkButton(
+            self.center_frame,
+            text="Skip",
+            command=self.skip_login,
+            font=("Arial", 20),
+            fg_color="transparent",
+            border_width=2,
+            text_color=("gray10", "gray90")
+        )
+        self.skip_button.grid(row=1, column=0, padx=10, pady=20, sticky="n")
 
         return self.login_frame
+
+    def skip_login(self):
+        """
+        Skip the login process and go directly to the dashboard.
+        """
+        logger.info("User skipped login")
+        self.app.destroy_login_screen()
+        self.app.create_dashboard()
 
     def show_registration_screen(self):
         """
@@ -100,6 +121,19 @@ class Plugin(BasePlugin):
             self.registration_frame.grid_rowconfigure(i, weight=1)
         for i in range(self.REGISTRATION_GRID_COLS):
             self.registration_frame.grid_columnconfigure(i, weight=1)
+            
+        # Back button (top left)
+        self.back_button = customtkinter.CTkButton(
+            self.registration_frame,
+            text="← Back",
+            command=self.go_back,
+            width=80,
+            height=30,
+            fg_color="transparent",
+            text_color=("gray10", "gray90"),
+            anchor="w"
+        )
+        self.back_button.grid(row=0, column=0, padx=20, pady=20, sticky="nw")
 
         self.welcome_label = customtkinter.CTkLabel(self.registration_frame, text="Welcome to Resistine", font=("Arial", 24))
         self.welcome_label.grid(row=1, column=1, padx=20, pady=20, sticky="nsew")
@@ -124,6 +158,31 @@ class Plugin(BasePlugin):
             font=("Arial", 12)
         )
         self.status_label.grid(row=7, column=1, padx=20, pady=10)
+
+    def go_back(self):
+        """
+        Handle back button click.
+        If in OTP mode, go back to email entry.
+        If in Email mode, go back to main login screen.
+        """
+        if hasattr(self, 'otp_entry') and self.otp_entry.winfo_exists():
+            # In OTP mode, go back to email entry
+            self.otp_entry.destroy()
+            self.subtitle_label.configure(text="Please enter your email to receive an OTP")
+            
+            # Recreate email entry
+            self.email_entry = customtkinter.CTkEntry(self.registration_frame, placeholder_text="Enter your email")
+            self.email_entry.grid(row=3, column=1, padx=20, pady=20, sticky="ew")
+            if self.email:
+                self.email_entry.insert(0, self.email)
+            
+            self.active_input_entry = self.email_entry
+            self.action_button.configure(text="Send OTP", command=self.send_otp)
+            self.status_label.configure(text="")
+        else:
+            # In Email mode, go back to main login screen
+            self.registration_frame.destroy()
+            self.create_main_screen()
 
     def send_otp(self):
         """Send OTP to customer email via Resistine API"""
@@ -209,6 +268,9 @@ class Plugin(BasePlugin):
                         logger.info(f"VPN configuration saved to {config_path}")
                     else:
                         logger.warning("Failed to save VPN configuration")
+                
+                # Save login state
+                config_manager.save_login_state(self.email)
                 
                 # Small delay to show success message, then transition
                 def transition_to_dashboard():

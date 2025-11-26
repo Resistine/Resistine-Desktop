@@ -1,3 +1,5 @@
+# TODO: Check if this is still needed!
+
 """
 This script is used to encrypt and decrypt data using the Fernet symmetric encryption algorithm.
 It securely stores the encryption key using the keyring module or a local file.

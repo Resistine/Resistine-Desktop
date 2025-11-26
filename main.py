@@ -18,6 +18,7 @@ import customtkinter
 from PIL import Image
 from plugins.plugin_manager import PluginManager
 from utils import functions as myfunctions
+from utils import config_manager
 import re
 
 import tkinter as tk
@@ -142,12 +143,17 @@ class App(customtkinter.CTk):
         position_down = int(screen_height / 2 - window_height / 2)
         self.geometry(f"{window_width}x{window_height}+{position_right}+{position_down}")
 
-        # Always show login screen since we're using Odoo authentication
-        print("🔐 Creating login screen...")
-        self.create_login_screen()
-        print("✅ Login screen created")
+        # Check if already logged in
+        if config_manager.is_logged_in():
+            print("✅ User already logged in, skipping login screen...")
+            self.create_dashboard()
+        else:
+            # Always show login screen since we're using Odoo authentication
+            print("🔐 Creating login screen...")
+            self.create_login_screen()
+            print("✅ Login screen created")
         
-        # Ensure the login screen is visible
+        # Ensure the window is visible
         self.update()
 
     def _ensure_darwin_helper_registered(self):

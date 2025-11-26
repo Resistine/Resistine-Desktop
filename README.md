@@ -1,9 +1,14 @@
-# Resistine - Desktop Application
 
+# Resistine AI EndPoint Detection and Response (AI EDR) 
+for Windows, Mac and Linux Desktops
+
+Copyright (C) 2025  Resistine
+This program is free software under the terms of the GNU General Public License v2+
 
 ## Prerequisites
 
-- macOS 10.15 or later
+- Python 3.12 or later (unless using the precompiled distribution)
+- Windows 11, Linux or macOS 10.15 or later
 - Apple Developer Account (for code signing and notarization)
 
 ## Setup Instructions for Mac OS
