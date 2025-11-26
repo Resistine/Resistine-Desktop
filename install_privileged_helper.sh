@@ -7,7 +7,7 @@ set -euo pipefail
 # - Sets required ownership/permissions
 # - Bootstraps and enables the LaunchDaemon
 
-APP_DEFAULT="/Users/dhahabwhbbjshehaha/Desktop/Resistine/Rm/untitled folder/Resistine-Desktop/dist/Resistine AI.app"
+APP_DEFAULT="/Users/dhahabwhbbjshehaha/Desktop/Resistine/Rm/untitled folder/Resistine-Desktop/dist/Resistine.app"
 
 APP_PATH="${1:-$APP_DEFAULT}"
 
@@ -21,7 +21,7 @@ err() { echo "[error] $*" >&2; exit 1; }
 log() { echo "[info] $*"; }
 
 if [[ $EUID -ne 0 ]]; then
-  err "Run as root: sudo $0 [path_to_Resistine_AI.app]"
+  err "Run as root: sudo $0 [path_to_Resistine.app]"
 fi
 
 if [[ ! -d "$APP_PATH" ]]; then
