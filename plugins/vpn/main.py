@@ -356,7 +356,32 @@ class Plugin(BasePlugin):
 
         # --- Linux Implementation ---
         elif platform.system() == "Linux":
-            pass
+            print(f"Linux: Toggling {tunnel_name}")
+            
+            if not check_wireguard_installed():
+                print("WireGuard tools not found.")
+                return
+
+            if my_vpn_status == "Running":
+                # STOP
+                success = stop_vpn(config_path)
+                if success:
+                    my_vpn_status = "Stopped"
+                    active_client_name = None
+                else:
+                    print("Failed to stop VPN")
+            else:
+                # START
+                success = start_vpn(config_path)
+                if success:
+                    my_vpn_status = "Running"
+                    active_client_name = tunnel_name
+                    print("✅ VPN started successfully")
+                else:
+                    print("Failed to start VPN")
+            
+            # Refresh UI
+            self.update_plugin(self.id)
 
 
 

@@ -1,4 +1,4 @@
-# Resistine AI - Desktop Application
+# Resistine - Desktop Application
 
 
 ## Prerequisites
@@ -68,8 +68,8 @@ This will:
 - Create a DMG installer file
 - Notarize and staple the dmg
 ## Output Files
-- `dist/Resistine AI.app` - The signed application bundle
-- `Resistine AI-Notarized-1.0.0.dmg` - Notarized DMG (if using full build)
+- `dist/Resistine.app` - The signed application bundle
+- `Resistine-Notarized-1.0.0.dmg` - Notarized DMG (if using full build)
 
 
 ## License

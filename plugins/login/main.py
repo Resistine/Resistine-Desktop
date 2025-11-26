@@ -7,6 +7,7 @@ import logging
 from PIL import Image
 from plugins.base_plugin import BasePlugin
 from plugins.login import config
+from plugins.login.api import LoginAPI
 
 # Set up logger for this module
 logger = logging.getLogger(__name__)
@@ -21,6 +22,7 @@ class Plugin(BasePlugin):
         
         # API endpoint
         self.api_base_url = "https://validate.resistine.work"
+        self.api = LoginAPI(self.api_base_url)
         
         # Reference to the currently active input field
         self.active_input_entry = None 
@@ -144,50 +146,15 @@ class Plugin(BasePlugin):
 
     def send_otp_api(self, email):
         """Send OTP via Resistine API (server generates and validates the OTP)"""
-        try:
-            api_url = f"{self.api_base_url}/send-otp"
-            payload = {
-                "email": email
-            }
-            
-            self.update_status("Sending OTP...", "blue")
-            
-            response = requests.post(api_url, json=payload, timeout=90)
-            
-            if response.ok:
-                try:
-                    result = response.json()
-                    # Get message from API response if available
-                    message = result.get("message", "")
-                    status = result.get("status", "").lower()
-                    
-                    # Check if there's an explicit error status
-                    if status in ["error", "failed", "failure"]:
-                        error_msg = message or result.get("error", "Failed to send OTP")
-                        self.update_status(f"Error: {error_msg}", "red")
-                    else:
-                        # Success - use API message if available, otherwise use default
-                        success_msg = message if message else "OTP sent successfully! Check your email."
-                        self.update_status(success_msg, "green")
-                        self.transform_to_otp_input()
-                except json.JSONDecodeError:
-                    # Non-JSON success response
-                    logger.warning("Received non-JSON success response")
-                    self.update_status("OTP sent successfully! Check your email.", "green")
-                    self.transform_to_otp_input()
-            else:
-                # Error status code
-                try:
-                    error_data = response.json()
-                    error_msg = error_data.get("message") or error_data.get("error", f"Server error {response.status_code}")
-                except json.JSONDecodeError:
-                    error_msg = f"Server error {response.status_code}"
-                self.update_status(f"Error: {error_msg}", "red")
-                
-        except requests.exceptions.RequestException as e:
-            self.update_status(f"Network error: {str(e)}", "red")
-        except Exception as e:
-            self.update_status(f"Error sending OTP: {str(e)}", "red")
+        self.update_status("Sending OTP...", "blue")
+        
+        success, message, result = self.api.send_otp(email)
+        
+        if success:
+            self.update_status(message, "green")
+            self.transform_to_otp_input()
+        else:
+            self.update_status(f"Error: {message}", "red")
 
     def verify_otp(self):
         """Verify the entered OTP with Resistine API"""
@@ -201,138 +168,60 @@ class Plugin(BasePlugin):
         
         try:
             import sys
-            import base64
             
-            # Import keychain utilities and VPN functions
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-            from utils.keychain_darwin import (
-                save_wireguard_keys, 
-                delete_wireguard_keys,
-                get_wireguard_private_key,
-                get_wireguard_public_key
-            )
-            from plugins.vpn.wireguard import vpn_functions_darwin as vpn_funcs
-            
-            # Step 1: Regenerate fresh keys for this sign-in session
-            # Delete old keys (if they exist) to ensure fresh key pair
-            logger.debug("Regenerating WireGuard keys for new login session")
-            delete_wireguard_keys()
-            
-            # Generate new key pair
-            keys = vpn_funcs.generate_wireguard_keys()
-            if not keys:
-                self.update_status("Failed to generate keys", "red")
+            # Dynamic import based on platform
+            if sys.platform == "darwin":
+                from plugins.login import login_darwin as platform_login
+            elif sys.platform == "linux":
+                from plugins.login import login_linux as platform_login
+            else:
+                self.update_status(f"Unsupported platform: {sys.platform}", "red")
                 return
-            
-            # Save both private and public keys to Keychain with iOS-compatible service names
-            if not save_wireguard_keys(keys['private_key'], keys['public_key']):
-                self.update_status("Failed to save keys securely", "red")
-                return
-            
-            # Get public key for API transmission (already base64-encoded)
-            public_key = keys['public_key']
 
+            # Step 1: Setup VPN keys (Generate/Save/Get Public Key)
+            public_key = platform_login.setup_vpn_keys()
             if not public_key:
-                self.update_status("Failed to get public key", "red")
+                self.update_status("Failed to setup VPN keys", "red")
                 return
             
             # Log key validation without exposing sensitive data
-            logger.debug(f"WireGuard Public Key Validated: Length={len(public_key)} characters, Format=Base64-encoded (32 bytes)")
+            logger.debug(f"WireGuard Public Key Validated: Length={len(public_key)} characters")
             
-            api_url = f"{self.api_base_url}/verify-otp"
-            payload = {
-                "email": self.email,
-                "otp": entered_otp,
-                "host_url": "rfr1.resisti.net",
-                "vpn_name": "testVPNapi",
-                "client_public_key": public_key  # Use public_key directly
-            }
+            # Step 2: Verify OTP with API
+            success, message, result = self.api.verify_otp(self.email, entered_otp, public_key)
             
-            logger.debug("Sending verify-otp request...")
-            
-            response = requests.post(api_url, json=payload, timeout=90)
-            
-            if response.ok:
-                try:
-                    result = response.json()
-                except json.JSONDecodeError:
-                    # Non-JSON success response
-                    logger.warning("Received non-JSON success response")
-                    result = {}
+            if success:
+                self.update_status(message, "green")
                 
-                # Check for success - handle different response formats
-                status = result.get("status", "").lower()
-                message = result.get("message", "")
+                # Log API response status
+                safe_result = {
+                    "status": result.get("status", ""),
+                    "message": result.get("message", ""),
+                    "vpn_config_received": bool(result.get("vpn_config", "")),
+                }
+                logger.info(f"API Response Status: {json.dumps(safe_result)}")
                 
-                # Check if verification was successful (status="success" or "verified" OR message contains "success" or "verified")
-                if status == "success" or status == "verified" or "success" in message.lower() or "verified" in message.lower():
-                    self.update_status("OTP verified successfully!", "green")
-                    
-                    # Log API response status without exposing sensitive data
-                    safe_result = {
-                        "status": result.get("status", ""),
-                        "message": result.get("message", ""),
-                        "vpn_config_received": bool(result.get("vpn_config", "")),
-                    }
-                    logger.info(f"API Response Status: {json.dumps(safe_result)}")
-                    
-                    # Parse and create VPN config if provided
-                    vpn_config_json = result.get("vpn_config", "")
-                    if vpn_config_json:
-                        logger.debug("WireGuard config received from API")
-                        # Parse and redact sensitive data from VPN config
-                        try:
-                            vpn_config = json.loads(vpn_config_json) if isinstance(vpn_config_json, str) else vpn_config_json
-                            safe_config = {}
-                            if "Interface" in vpn_config:
-                                safe_config["Interface"] = {
-                                    "Address": vpn_config["Interface"].get("Address", ""),
-                                    "DNS": vpn_config["Interface"].get("DNS", []),
-                                    "PrivateKey": "[REDACTED]" if vpn_config["Interface"].get("PrivateKey") else None
-                                }
-                            if "Peer" in vpn_config:
-                                safe_config["Peer"] = {
-                                    "PublicKey": "[REDACTED]" if vpn_config["Peer"].get("PublicKey") else None,
-                                    "AllowedIPs": vpn_config["Peer"].get("AllowedIPs", []),
-                                    "Endpoint": vpn_config["Peer"].get("Endpoint", "")
-                                }
-                            logger.debug(f"VPN Config (redacted): {json.dumps(safe_config)}")
-                        except Exception as e:
-                            logger.debug("VPN config received - content redacted for security")
-                            logger.debug(f"Error parsing VPN config for logging: {e}")
-                        try:
-                            from plugins.vpn.wireguard import vpn_functions_darwin as vpn_funcs
-                            config_path = vpn_funcs.parse_and_create_vpn_config(vpn_config_json, config_name="wg0")
-                            if config_path:
-                                logger.info("VPN configuration saved successfully")
-                            else:
-                                logger.warning("Failed to create VPN config")
-                        except Exception as e:
-                            logger.warning(f"Error creating VPN config: {e}")
-                    
-                    # Small delay to show success message, then transition
-                    def transition_to_dashboard():
-                        self.app.destroy_login_screen()
-                        self.app.create_dashboard()
-                    
-                    self.app.after(500, transition_to_dashboard)
-                else:
-                    self.update_status(f"OTP verification failed: {message or 'Unknown error'}", "red")
-                    self.active_input_entry.delete(0, 'end')
-                    
+                # Step 3: Save VPN Configuration
+                vpn_config_json = result.get("vpn_config", "")
+                if vpn_config_json:
+                    config_path = platform_login.save_vpn_configuration(vpn_config_json)
+                    if config_path:
+                        logger.info(f"VPN configuration saved to {config_path}")
+                    else:
+                        logger.warning("Failed to save VPN configuration")
+                
+                # Small delay to show success message, then transition
+                def transition_to_dashboard():
+                    self.app.destroy_login_screen()
+                    self.app.create_dashboard()
+                
+                self.app.after(500, transition_to_dashboard)
             else:
-                # HTTP error (4xx, 5xx)
-                try:
-                    error_data = response.json()
-                    error_msg = error_data.get("message") or error_data.get("error", f"Server error {response.status_code}")
-                except json.JSONDecodeError:
-                    error_msg = f"Server error {response.status_code}"
-                self.update_status(f"Error: {error_msg}", "red")
+                self.update_status(f"Error: {message}", "red")
                 self.active_input_entry.delete(0, 'end')
                 
-        except requests.exceptions.RequestException as e:
-            self.update_status(f"Network error: {str(e)}", "red")
         except Exception as e:
+            logger.exception("Verification error")
             self.update_status(f"Verification error: {str(e)}", "red")
 
     def on_otp_key_press(self, event):

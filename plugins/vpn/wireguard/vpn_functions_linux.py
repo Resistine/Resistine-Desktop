@@ -14,8 +14,10 @@ import sys
 import os
 import subprocess
 import json
-from python_wireguard import Key
+import logging
 
+# Set up logger
+logger = logging.getLogger(__name__)
 
 def is_admin():
     """
@@ -57,63 +59,114 @@ def run_installer_as_admin(file_path):
         print("WireGuard installation command executed.")
     except Exception as e:
         print(f"Error during installation: {e}")
-
-def create_wireguard_config(private_key, public_key, client_ip_address, dns, allowed_ips, endpoint, port, config_path):
+        
+def generate_wireguard_keys():
     """
-    Create a WireGuard VPN configuration file.
-
-    :param private_key: The private key for the WireGuard interface.
-    :param public_key: The public key for the WireGuard peer.
-    :param client_ip_address: The IP address of the client.
-    :param dns: The DNS server to use.
-    :param allowed_ips: The allowed IPs for the WireGuard peer.
-    :param endpoint: The endpoint address of the WireGuard peer.
-    :param port: The port number of the WireGuard peer.
-    :param config_path: The path to save the configuration file.
+    Generate WireGuard public/private key pair using wg command.
+    
+    Returns:
+        dict: {
+            'private_key': str,
+            'public_key': str
+        }
+        None: If key generation fails
     """
-    config_template = f"""[Interface]
+    try:
+        private_key = subprocess.check_output(['wg', 'genkey'], text=True).strip()
+        public_key = subprocess.check_output(['wg', 'pubkey'], input=private_key, text=True).strip()
+        
+        return {
+            'private_key': private_key,
+            'public_key': public_key,
+        }
+        
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Key generation command failed: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Key generation failed: {e}")
+        return None
+
+def parse_and_create_vpn_config(vpn_config_json_string, config_name="wg0"):
+    """
+    Parse VPN configuration from server response and create WireGuard config file.
+    
+    Args:
+        vpn_config_json_string: JSON string containing VPN config from server
+        config_name: Name for the config file (default: "wg0")
+    
+    Returns:
+        str: Path to created config file, or None if failed
+    """
+    try:
+        # Parse the VPN config JSON string
+        vpn_config = json.loads(vpn_config_json_string)
+        
+        # Extract Peer configuration
+        peer_config = vpn_config.get("Peer", {})
+        server_public_key = peer_config.get("PublicKey", "")
+        allowed_ips = peer_config.get("AllowedIPs", [])
+        endpoint = peer_config.get("Endpoint", "")
+        
+        # Extract Interface configuration
+        interface_config = vpn_config.get("Interface", {})
+        client_address = interface_config.get("Address", "")
+        dns_servers = interface_config.get("DNS", [])
+        
+        # Get private key from keychain
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+        from utils.keychain_linux import get_wireguard_private_key
+        
+        private_key = get_wireguard_private_key()
+        if not private_key:
+            logger.error("Private key not found in keychain")
+            return None
+        
+        # Convert AllowedIPs array to comma-separated string
+        allowed_ips_str = ", ".join(allowed_ips) if isinstance(allowed_ips, list) else str(allowed_ips)
+        
+        # Convert DNS array to comma-separated string
+        dns_str = ", ".join(dns_servers) if isinstance(dns_servers, list) else str(dns_servers)
+        
+        # Build WireGuard config content
+        config_content = f"""[Interface]
 PrivateKey = {private_key}
-Address = {client_ip_address}
-DNS = {dns}
+Address = {client_address}
+DNS = {dns_str}
 
 [Peer]
-PublicKey = {public_key}
-AllowedIPs = {allowed_ips}
-Endpoint = {endpoint}:{port}
+PublicKey = {server_public_key}
+AllowedIPs = {allowed_ips_str}
+Endpoint = {endpoint}
 """
-
-    try:
-        script_dir = os.path.dirname(__file__)
-        config_file_path = os.path.join(script_dir, config_path)
-        with open(config_file_path, "w") as config_file:
-            config_file.write(config_template)
-        print(f"Configuration file created at {config_file_path}")
+        
+        # Determine config path using the shared utility
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+        from utils.functions import get_writable_wireguard_dir
+        
+        wireguard_dir = get_writable_wireguard_dir()
+        
+        # Create config file path
+        config_filename = f"{config_name}.conf"
+        config_path = os.path.join(wireguard_dir, config_filename)
+        
+        # Write config file
+        with open(config_path, "w") as config_file:
+            config_file.write(config_content)
+        
+        logger.info(f"WireGuard config created at: {config_path}")
+        
+        return config_path
+                                
+    except json.JSONDecodeError as e:
+        logger.error(f"Error parsing VPN config JSON: {e}")
+        return None
+    except KeyError as e:
+        logger.error(f"Error: Missing required field in VPN config: {e}")
+        return None
     except Exception as e:
-        print(f"Error writing configuration file: {e}")
-
-def generate_keys():
-    """
-    Generate WireGuard private and public keys.
-
-    :return: A dictionary containing the private and public keys.
-    """
-    try:
-        private_key, public_key = Key.key_pair()
-
-        keys = {
-            "private_key": private_key,
-            "public_key": public_key
-        }
-        script_dir = os.path.dirname(__file__)
-        keys_path = os.path.join(script_dir, "keys.json")
-        with open(keys_path, "w") as json_file:
-            json.dump(keys, json_file, indent=4)
-
-        print("Keys generated successfully.")
-        print(f"Private Key: {private_key}")
-        print(f"Public Key: {public_key}")
-    except Exception as e:
-        print(f"Error generating keys: {e}")
+        logger.error(f"Error creating VPN config: {e}")
+        return None
 
 def check_service_status(interface_name, test_ip):
     """
@@ -124,24 +177,21 @@ def check_service_status(interface_name, test_ip):
     :return: "Running" if the service is up, "Stopped" otherwise.
     """
     try:
-        result = subprocess.run(['sudo', 'wg', 'show', interface_name], check=True, capture_output=True, text=True)
+        # Check if interface exists
+        result = subprocess.run(['sudo', 'wg', 'show', interface_name], check=False, capture_output=True, text=True)
+        if result.returncode != 0:
+            return "Stopped"
+            
+        # Optional: Check connectivity
+        if test_ip:
+            ping_result = subprocess.run(['ping', '-c', '1', '-W', '1', test_ip], check=False, capture_output=True, text=True)
+            if ping_result.returncode != 0:
+                 logger.warning(f"Interface {interface_name} up but ping to {test_ip} failed.")
+                 
+        return "Running"
     except Exception as e:
-        print(f"Error checking WireGuard interface {interface_name}: {e}")
+        logger.error(f"Error checking WireGuard interface {interface_name}: {e}")
         return "Stopped"
-
-    try:
-        result = subprocess.run(['ip', 'route'], check=True, capture_output=True, text=True)
-    except Exception as e:
-        print(f"Error retrieving routing table: {e}")
-        return "Stopped"
-
-    try:
-        result = subprocess.run(['ping', '-c', '4', test_ip], check=True, capture_output=True, text=True)
-    except Exception as e:
-        print(f"Error pinging {test_ip}: {e}")
-        return "Stopped"
-
-    return "Running"
 
 def check_wireguard_installed():
     """
@@ -151,16 +201,16 @@ def check_wireguard_installed():
     """
     try:
         subprocess.run(['which', 'wg'], check=True, capture_output=True, text=True)
-        print("WireGuard (wg) is installed.")
+        # print("WireGuard (wg) is installed.")
     except Exception:
-        print("WireGuard (wg) is not installed.")
+        # print("WireGuard (wg) is not installed.")
         return False
 
     try:
         subprocess.run(['which', 'wg-quick'], check=True, capture_output=True, text=True)
-        print("WireGuard (wg-quick) is installed.")
+        # print("WireGuard (wg-quick) is installed.")
     except Exception:
-        print("WireGuard (wg-quick) is not installed.")
+        # print("WireGuard (wg-quick) is not installed.")
         return False
     return True
 
@@ -172,15 +222,13 @@ def stop_vpn(config_path):
     :return: True if the service is stopped successfully, False otherwise.
     """
     try:
-        interface_name = f'{config_path}'
-        command = ['wg-quick', 'down', interface_name]
+        # If config_path is a full path, wg-quick might need just the conf file or the interface name
+        # Usually wg-quick up /path/to/conf works.
+        command = ['sudo', 'wg-quick', 'down', config_path]
         output = subprocess.run(command, check=True)
-        if output.returncode != 0:
-            print("Failed to stop VPN service.")
-            return False
         return True
     except Exception as e:
-        print(f"Failed to stop VPN service: {e}")
+        logger.error(f"Failed to stop VPN service: {e}")
         return False
 
 def start_vpn(config_path):
@@ -191,13 +239,9 @@ def start_vpn(config_path):
     :return: True if the service is started successfully, False otherwise.
     """
     try:
-        interface_name = f'{config_path}'
-        command = ['wg-quick', 'up', interface_name]
+        command = ['sudo', 'wg-quick', 'up', config_path]
         output = subprocess.run(command, check=True)
-        if output.returncode != 0:
-            print("Failed to start VPN service.")
-            return False
         return True
     except Exception as e:
-        print(f"Failed to start VPN service: {e}")
+        logger.error(f"Failed to start VPN service: {e}")
         return False

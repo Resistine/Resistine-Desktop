@@ -1,10 +1,10 @@
 ## @file main.py
 ## @namespace main
 """
-This script is to run the main application for Resistine AI.
-Author: Peres J.
+This script is to run the main application for Resistine.
+Author: The Resistine Team: Javier, Jackie, Petr
 Copyright (c) Resistine 2025
-Licensed under the Apache License 2.0
+Licensed under the GNU General Public License 2.0
 """
 
 
@@ -114,8 +114,8 @@ class DebugWindow:
 
 class App(customtkinter.CTk):
     """
-    @brief Main application class for Resistine AI.
-    Main application class for Resistine AI.
+    @brief Main application class for Resistine.
+    Main application class for Resistine.
     """
     def __init__(self):
         """
@@ -133,7 +133,7 @@ class App(customtkinter.CTk):
             self._ensure_darwin_helper_registered()
         
             
-        self.title("Resistine AI")
+        self.title("Resistine")
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         window_width = int(screen_width * 0.75)
@@ -205,7 +205,7 @@ class App(customtkinter.CTk):
             
             response = messagebox.askyesno(
                 "Helper Approval Required",
-                "Resistine AI needs your approval to install a helper tool for VPN functionality.\n\n"
+        "Resistine needs your approval to install a helper tool for VPN functionality.\n\n"
                 "Click 'Yes' to open System Settings where you can enable it in Login Items.",
                 icon='info'
             )

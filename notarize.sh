@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "🍎 Notarizing Resistine AI with Apple..."
+echo "🍎 Notarizing Resistine with Apple..."
 
 # Load configuration from build_config.env
 if [ -f "build_config.env" ]; then
@@ -16,7 +16,7 @@ fi
 echo ""
 
 # Check if app exists
-if [ ! -d "dist/Resistine AI.app" ]; then
+if [ ! -d "dist/Resistine.app" ]; then
     echo "❌ Error: App not found. Run build_dmg.py first."
     exit 1
 fi
@@ -24,7 +24,7 @@ fi
 # Create temporary DMG
 echo "📦 Creating temporary DMG..."
 TEMP_DMG="temp_notarize.dmg"
-hdiutil create -volname "Resistine AI" -srcfolder "dist/Resistine AI.app" -ov -format UDZO "$TEMP_DMG"
+hdiutil create -volname "Resistine" -srcfolder "dist/Resistine.app" -ov -format UDZO "$TEMP_DMG"
 
 if [ $? -ne 0 ]; then
     echo "❌ Failed to create temporary DMG"
@@ -53,7 +53,7 @@ if [ $? -eq 0 ]; then
     
     # Staple the notarization ticket
     echo "📎 Stapling notarization ticket..."
-    xcrun stapler staple "dist/Resistine AI.app"
+    xcrun stapler staple "dist/Resistine.app"
     
     if [ $? -eq 0 ]; then
         echo "✅ Notarization ticket stapled!"
@@ -61,13 +61,13 @@ if [ $? -eq 0 ]; then
         # Create final notarized DMG
         echo "📦 Creating final notarized DMG..."
         mkdir -p installer_temp
-        cp -R "dist/Resistine AI.app" installer_temp/
+        cp -R "dist/Resistine.app" installer_temp/
         ln -s /Applications installer_temp/Applications
         
-        hdiutil create -volname "Resistine AI Installer" -srcfolder installer_temp -ov -format UDZO "Resistine AI-Notarized-1.0.0.dmg"
+        hdiutil create -volname "Resistine Installer" -srcfolder installer_temp -ov -format UDZO "Resistine-Notarized-1.0.0.dmg"
         
         if [ $? -eq 0 ]; then
-            echo "✅ Final notarized DMG created: Resistine AI-Notarized-1.0.0.dmg"
+            echo "✅ Final notarized DMG created: Resistine-Notarized-1.0.0.dmg"
             rm -rf installer_temp
         else
             echo "❌ Failed to create final DMG"

@@ -111,18 +111,18 @@ def get_writable_wireguard_dir():
     """Get a writable directory for WireGuard configuration files"""
     if platform.system() == "Darwin":
         home_dir = os.path.expanduser("~")
-        app_support_dir = os.path.join(home_dir, "Library", "Application Support", "Resistine AI")
+        app_support_dir = os.path.join(home_dir, "Library", "Application Support", "Resistine")
         wireguard_dir = os.path.join(app_support_dir, "wireguard")
         os.makedirs(wireguard_dir, exist_ok=True)
         return wireguard_dir
     elif platform.system() == "Windows":
         appdata_dir = os.environ.get('APPDATA', os.path.expanduser("~"))
-        wireguard_dir = os.path.join(appdata_dir, "Resistine AI", "wireguard")
+        wireguard_dir = os.path.join(appdata_dir, "Resistine", "wireguard")
         os.makedirs(wireguard_dir, exist_ok=True)
         return wireguard_dir
     elif platform.system() == "Linux":
         home_dir = os.path.expanduser("~")
-        config_dir = os.path.join(home_dir, ".config", "resistine-ai")
+        config_dir = os.path.join(home_dir, ".config", "resistine")
         wireguard_dir = os.path.join(config_dir, "wireguard")
         os.makedirs(wireguard_dir, exist_ok=True)
         return wireguard_dir

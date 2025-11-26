@@ -105,7 +105,7 @@ class Plugin(BasePlugin):
         container.grid(row=1, column=0, padx=15, pady=15, sticky="ew")
 
         # Insert initial message
-        self.chat_box.insert("end", "Resistine AI: ", "blue")
+        self.chat_box.insert("end", "Resistine: ", "blue")
         self.chat_box.insert("end", "Hello, I'm your AI assistant, how can I help you?\n", "user")
 
         container.grid_columnconfigure(0, weight=8)
@@ -133,6 +133,6 @@ class Plugin(BasePlugin):
         user_message = self.chat_entry.get()
         response = self.send_message_to_chatgpt(user_message)
         self.chat_box.insert("end", f"You: {user_message}\n", "user")
-        self.chat_box.insert("end", "Resistine AI: ", "blue")  # Insert the name with the tag
+        self.chat_box.insert("end", "Resistine: ", "blue")  # Insert the name with the tag
         self.chat_box.insert("end", f"{response}\n", "user")  # Insert the response without the tag
         self.chat_entry.delete(0, "end")

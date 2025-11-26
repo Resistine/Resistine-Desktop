@@ -59,7 +59,7 @@ def clean_previous_builds():
     if os.path.exists("build"):
         shutil.rmtree("build")
 def main():
-    print("🚀 Building Resistine AI with simplified signing...")
+    print("🚀 Building Resistine with simplified signing...")
     
     # Load configuration from build_config.env
     load_build_config()
@@ -84,7 +84,7 @@ def main():
     if not run_command(["pyinstaller", "resistine_simple.spec"], "Building with PyInstaller"):
         sys.exit(1)
     
-    app_path = "dist/Resistine AI.app"
+    app_path = "dist/Resistine.app"
     print("📦 Adding helper components to app bundle...")
     
     # Create LaunchDaemons directory and place the plist there
@@ -179,7 +179,7 @@ def main():
         if not run_command([
             "codesign", "--force", "--sign", signing_identity,
             "--timestamp", "--options", "runtime", "--entitlements", "Resistine.entitlements",
-            f"{app_path}/Contents/MacOS/Resistine AI"
+            f"{app_path}/Contents/MacOS/Resistine"
         ], "Signing main executable"):
             sys.exit(1)
         
@@ -194,14 +194,14 @@ def main():
     # Create DMG
     print("💿 Creating DMG...")
     with tempfile.TemporaryDirectory() as temp_dir:
-        shutil.copytree(app_path, os.path.join(temp_dir, "Resistine AI.app"))
+        shutil.copytree(app_path, os.path.join(temp_dir, "Resistine.app"))
         os.symlink("/Applications", os.path.join(temp_dir, "Applications"))
         
 
         if not run_command([
-            "hdiutil", "create", "-volname", "Resistine AI Installer",
+            "hdiutil", "create", "-volname", "Resistine Installer",
             "-srcfolder", temp_dir, "-ov", "-format", "UDZO",
-            "Resistine AI-1.0.0.dmg"
+            "Resistine-1.0.0.dmg"
         ], "Creating installer DMG"):
             sys.exit(1)
         

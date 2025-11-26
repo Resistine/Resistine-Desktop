@@ -38,7 +38,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='Resistine AI',
+    name='Resistine',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -59,24 +59,24 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='Resistine AI',
+    name='Resistine',
 )
 
 app = BUNDLE(
     coll,
-    name='Resistine AI.app',
+    name='Resistine.app',
     icon='resources/icons/icon.ico',
-    bundle_identifier='com.resistine.ai',
+    bundle_identifier='com.resistine',
     info_plist={
-        'CFBundleName': 'Resistine AI',
-        'CFBundleDisplayName': 'Resistine AI',
-        'CFBundleIdentifier': 'com.resistine.ai',
+        'CFBundleName': 'Resistine',
+        'CFBundleDisplayName': 'Resistine',
+        'CFBundleIdentifier': 'com.resistine',
         'CFBundleVersion': '1.0.0',
         'CFBundleShortVersionString': '1.0.0',
         'NSHighResolutionCapable': True,
         'LSMinimumSystemVersion': '10.15.0',
-        'NSAppleEventsUsageDescription': 'Resistine AI needs to access system features for VPN management.',
-        'NSNetworkVolumesUsageDescription': 'Resistine AI needs network access for VPN functionality.',
+        'NSAppleEventsUsageDescription': 'Resistine needs to access system features for VPN management.',
+        'NSNetworkVolumesUsageDescription': 'Resistine needs network access for VPN functionality.',
         'SMPrivilegedExecutables': {
             'com.resistine.helper': 'identifier "com.resistine.helper" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = C7KSRZC3Q9'
         },

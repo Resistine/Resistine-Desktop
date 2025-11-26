@@ -11,7 +11,7 @@
     <key>com.apple.security.temporary-exception.files.absolute-path.read-write</key>
     <array>
         <!-- User's application support directory for configs -->
-        <string>$HOME/Library/Application Support/Resistine AI/</string>
+        <string>$HOME/Library/Application Support/Resistine/</string>
         <!-- System WireGuard directories (fallback/legacy) -->
         <string>/opt/homebrew/etc/wireguard/</string>
         <string>/usr/local/etc/wireguard/</string>
@@ -22,7 +22,7 @@
     <key>com.apple.security.temporary-exception.files.absolute-path.read-execute</key>
     <array>
         <!-- Bundled WireGuard binaries (primary) -->
-        <string>/Applications/Resistine AI.app/Contents/Resources/bin/</string>
+        <string>/Applications/Resistine.app/Contents/Resources/bin/</string>
         <!-- System bash (required for running wg-quick) -->
         <string>/opt/homebrew/bin/bash</string>
         <string>/usr/local/bin/bash</string>
