@@ -2,7 +2,7 @@
 Linux Keychain Utilities for Secure Key Storage
 Author: Resistine Team
 Copyright (c) Resistine 2025
-Licensed under the Apache License 2.0
+Licensed under the GNU General Public License v2 or later
 """
 
 import os

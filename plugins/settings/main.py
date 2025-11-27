@@ -6,9 +6,9 @@
 """
 This file contains the main plugin class for the Settings plugin.
 The plugin allows users to configure their account settings.
-Author: Peres J.
+Author: Peres J. and the Resistine Team
 Copyright (c) Resistine 2025
-Licensed under the Apache License 2.0
+Licensed under the GNU General Public License v2 or later
 """
 
 from plugins.base_plugin import BasePlugin
@@ -48,7 +48,7 @@ class Plugin(BasePlugin):
         self.frame_5.grid_columnconfigure(0, weight=1)
         self.frame_5.grid_rowconfigure((0, 1, 2), weight=1)
 
-        self.profile_name_label = customtkinter.CTkLabel(self.frame_5, text="Name: Javier Peres", font=customtkinter.CTkFont(size=20))
+        self.profile_name_label = customtkinter.CTkLabel(self.frame_5, text="Name: ", font=customtkinter.CTkFont(size=20))
         self.profile_name_label.grid(row=0, column=0, padx=20, pady=10)
 
         # Try to read email from file, but handle case where it doesn't exist (API-based auth)

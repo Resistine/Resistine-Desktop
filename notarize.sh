@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# Author: Jackie and the Resistine Team
+# Copyright: Resistine (c) 2024
+# Licensed under the GNU General Public License v2 or later
+
 echo "🍎 Notarizing Resistine with Apple..."
 
 # Load configuration from build_config.env

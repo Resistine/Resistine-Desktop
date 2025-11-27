@@ -7,6 +7,11 @@ set -euo pipefail
 # - Sets required ownership/permissions
 # - Bootstraps and enables the LaunchDaemon
 
+# Author: Jackie and the Resistine Team
+# Copyright: Resistine (c) 2024
+# Licensed under the GNU General Public License v2 or later
+
+# TODO: this ...
 APP_DEFAULT="/Users/dhahabwhbbjshehaha/Desktop/Resistine/Rm/untitled folder/Resistine-Desktop/dist/Resistine.app"
 
 APP_PATH="${1:-$APP_DEFAULT}"
