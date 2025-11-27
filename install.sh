@@ -5,8 +5,9 @@
 # If the libraries/venv folder already exists, it prompts the user to delete it before proceeding.
 # Usage: ./install.sh
 
-# Author: Peres J., P3
-# License: GNU General Public License v2.0 or later
+# Author: P3, Peres J. and the Resistine Team
+# Copyright (c) Resistine 2025
+# Licensed under the GNU General Public License v2 or later
 
 # Print commands and their arguments as they are executed
 set -x

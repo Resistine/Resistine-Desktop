@@ -2,8 +2,8 @@
 # Resistine AI EndPoint Detection and Response (AI EDR) 
 for Windows, Mac and Linux Desktops
 
-Copyright (C) 2025  Resistine
-This program is free software under the terms of the GNU General Public License v2+
+Copyright (C) 2025 Resistine
+This program is free software under the terms of the GNU General Public License v2 or later
 
 ## Prerequisites
 

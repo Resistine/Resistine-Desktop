@@ -4,9 +4,9 @@
 This script is used to encrypt and decrypt data using the Fernet symmetric encryption algorithm.
 It securely stores the encryption key using the keyring module or a local file.
 The encrypted data is stored in a dictionary format and can be retrieved later.
-Author: Peres J.
+Author: Peres J. and the Resistine Team
 Copyright (c) Resistine 2025
-Licensed under the Apache License 2.0
+Licensed under the GNU General Public License v2 or later
 """
 
 from cryptography.fernet import Fernet

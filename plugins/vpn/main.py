@@ -7,7 +7,7 @@ This module contains the main plugin class for the VPN plugin.
 The VPN plugin displays VPN information and allows the user to manage VPN tunnels.
 Author: Javier Perez and Jacqueline Edoro 
 Copyright (c) Resistine 2025
-Licensed under the Apache License 2.0
+Licensed under the GNU General Public License v2 or later
 """
 
 from plugins.base_plugin import BasePlugin

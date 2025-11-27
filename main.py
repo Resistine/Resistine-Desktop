@@ -1,12 +1,11 @@
 ## @file main.py
 ## @namespace main
 """
-This script is to run the main application for Resistine.
-Author: The Resistine Team: Javier, Jackie, Petr
+This script is to run the main window for the Resistine AI EndPoint application.
+Author: Javier, Petr, Jackie and the Resistine Team
 Copyright (c) Resistine 2025
-Licensed under the GNU General Public License 2.0
+Licensed under the GNU General Public License v2 or later
 """
-
 
 import sys
 import os

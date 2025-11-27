@@ -1,3 +1,13 @@
+# -*- coding: utf-8 -*-
+# @file plugins/login/login_darwin.py
+# @namespace plugins.login.login_darwin
+# Description: macOS-specific implementation for WireGuard VPN key management and configuration saving.
+
+# Author: Jackie and the Resistine Team
+# Copyright: Resistine (c) 2025
+# Licensed under the GNU General Public License v2 or later
+
+
 import logging
 import json
 import os

@@ -1,3 +1,13 @@
+# -*- coding: utf-8 -*-
+# @file plugins/login/main.py
+# @namespace plugins.login.main
+# Description: Main window of the Resistine login plugin for Resistine Desktop Application
+
+# Author: Sherwin and the Resistine Team
+# Copyright: Resistine (c) 2025
+# Licensed under the GNU General Public License v2 or later
+
+
 import customtkinter
 import requests
 import json

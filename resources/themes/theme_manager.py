@@ -1,9 +1,9 @@
 """
 This script is used to detect the system theme (dark or light) and update the UI accordingly. 
 It uses the customtkinter module to set the theme of the application.
-Author: Peres J.
+Author: Peres J. and the Resistine Team
 Copyright (c) Resistine 2025
-Licensed under the Apache License 2.0
+Licensed under the GNU General Public License v2 or later
 """
 
 

@@ -5,9 +5,9 @@
 
 """
 This is the main file for the Help plugin, that provides help documentation.
-Author: Peres J.
+Author: Peres J. and the Resistine Team
 Copyright (c) Crescentiva 2025
-Licensed under the Apache License 2.0
+Licensed under the GNU General Public License v2 or later
 """
 
 from plugins.base_plugin import BasePlugin
