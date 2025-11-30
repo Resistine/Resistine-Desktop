@@ -14,6 +14,8 @@ Licensed under the GNU General Public License v2 or later
 from plugins.base_plugin import BasePlugin
 import customtkinter
 import os 
+from utils import config_manager
+from utils.i18n import get_text
 
 class Plugin(BasePlugin):
     """
@@ -46,10 +48,12 @@ class Plugin(BasePlugin):
         """
         self.frame_5 = customtkinter.CTkFrame(self.app, corner_radius=0, fg_color="transparent")
         self.frame_5.grid_columnconfigure(0, weight=1)
-        self.frame_5.grid_rowconfigure((0, 1, 2), weight=1)
-
+        # Add more rows for API key settings
+        self.frame_5.grid_rowconfigure((0, 1, 2, 3, 4, 5), weight=0)
+        
+        # --- Profile Section ---
         self.profile_name_label = customtkinter.CTkLabel(self.frame_5, text="Name: ", font=customtkinter.CTkFont(size=20))
-        self.profile_name_label.grid(row=0, column=0, padx=20, pady=10)
+        self.profile_name_label.grid(row=0, column=0, padx=20, pady=(20, 10), sticky="w")
 
         # Try to read email from file, but handle case where it doesn't exist (API-based auth)
         email_file_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))), "utils", "email-settings.txt")
@@ -66,8 +70,58 @@ class Plugin(BasePlugin):
             email = "Authenticated via API"
 
         self.profile_email_label = customtkinter.CTkLabel(self.frame_5, text=f"Email: {email}", font=customtkinter.CTkFont(size=20))
-        self.profile_email_label.grid(row=1, column=0, padx=20, pady=10)
+        self.profile_email_label.grid(row=1, column=0, padx=20, pady=10, sticky="w")
+        
+        # --- Separator ---
+        separator = customtkinter.CTkFrame(self.frame_5, height=2, fg_color="gray50")
+        separator.grid(row=2, column=0, padx=20, pady=20, sticky="ew")
+
+        # --- OpenAI API Key Section ---
+        self.api_key_label = customtkinter.CTkLabel(
+            self.frame_5, 
+            text=get_text('settings.apikey.label'), 
+            font=customtkinter.CTkFont(size=16, weight="bold")
+        )
+        self.api_key_label.grid(row=3, column=0, padx=20, pady=(10, 5), sticky="w")
+        
+        self.api_key_entry = customtkinter.CTkEntry(
+            self.frame_5, 
+            placeholder_text=get_text('settings.apikey.placeholder'),
+            width=400,
+            show="*"  # Mask the key
+        )
+        self.api_key_entry.grid(row=4, column=0, padx=20, pady=5, sticky="w")
+        
+        # Pre-fill existing key if available
+        existing_key = config_manager.get_openai_api_key()
+        if existing_key:
+            self.api_key_entry.insert(0, existing_key)
+            
+        self.save_key_button = customtkinter.CTkButton(
+            self.frame_5,
+            text=get_text('settings.apikey.save'),
+            command=self.save_api_key
+        )
+        self.save_key_button.grid(row=5, column=0, padx=20, pady=10, sticky="w")
+        
+        self.status_label = customtkinter.CTkLabel(self.frame_5, text="", font=customtkinter.CTkFont(size=12))
+        self.status_label.grid(row=6, column=0, padx=20, pady=5, sticky="w")
 
         return self.frame_5
 
-  
+    def save_api_key(self):
+        """Save the OpenAI API key securely."""
+        api_key = self.api_key_entry.get().strip()
+        
+        if not api_key:
+            # If empty, maybe clear it? For now just return
+            return
+            
+        success = config_manager.save_openai_api_key(api_key)
+        
+        if success:
+            self.status_label.configure(text=get_text('settings.apikey.saved_success'), text_color="green")
+            # Clear status after 3 seconds
+            self.app.after(3000, lambda: self.status_label.configure(text=""))
+        else:
+            self.status_label.configure(text=get_text('settings.apikey.saved_error'), text_color="red")

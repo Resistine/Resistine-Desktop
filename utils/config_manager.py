@@ -2,6 +2,7 @@ import os
 import json
 import platform
 import logging
+from utils.encryption import encrypt_data, decrypt_data, get_or_create_key
 
 logger = logging.getLogger(__name__)
 
@@ -73,3 +74,62 @@ def clear_login_state():
     except Exception as e:
         logger.error(f"Failed to clear login state: {e}")
         return False
+
+
+# OpenAI API Key Management
+
+def save_openai_api_key(api_key):
+    """
+    Save the OpenAI API key securely using the encryption module.
+    The key is stored in the system keyring (encrypted).
+    
+    :param api_key: The OpenAI API key to save
+    :return: True if successful, False otherwise
+    """
+    try:
+        # Ensure encryption key exists
+        get_or_create_key()
+        
+        # Encrypt and store the API key
+        encrypted_data = encrypt_data({"openai_api_key": api_key})
+        
+        logger.info("OpenAI API key saved securely")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save OpenAI API key: {e}")
+        return False
+
+
+def get_openai_api_key():
+    """
+    Retrieve the OpenAI API key from secure storage.
+    
+    :return: The API key string, or None if not found or on error
+    """
+    try:
+        decrypted_data = decrypt_data()
+        api_key = decrypted_data.get("openai_api_key")
+        
+        if api_key:
+            logger.info("OpenAI API key retrieved successfully")
+        else:
+            logger.warning("OpenAI API key not found in encrypted data")
+        
+        return api_key
+    except ValueError as e:
+        # No encrypted data found
+        logger.info("No OpenAI API key configured yet")
+        return None
+    except Exception as e:
+        logger.error(f"Failed to retrieve OpenAI API key: {e}")
+        return None
+
+
+def has_openai_api_key():
+    """
+    Check if an OpenAI API key is configured.
+    
+    :return: True if API key exists, False otherwise
+    """
+    api_key = get_openai_api_key()
+    return api_key is not None and api_key.strip() != ""
