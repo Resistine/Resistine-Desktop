@@ -126,6 +126,6 @@ class Plugin(BasePlugin):
         for index, plugin in enumerate(self.plugins):
             row = index // len(cols)
             col = index % len(cols)
-            myfunctions.create_option(row, col, self.grid_frame, plugin)      
+            myfunctions.create_plugin_card(row, col, self.grid_frame, plugin)      
 
         return self.main_frame

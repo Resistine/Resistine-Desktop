@@ -1,15 +1,13 @@
 import customtkinter
 import math
-import os
-import platform
 
-def create_option(row, column, container_frame, plugin):
+def create_plugin_card(row, column, container_frame, plugin):
     """
-    Create an option frame with an icon, title, status, and status icon, and make it clickable to open the plugin's main screen.
+    Create a plugin card frame with an icon, title, status, and status icon, and make it clickable to open the plugin's main screen.
     
     :param row: The row position in the grid.
     :param column: The column position in the grid.
-    :param container_frame: The parent frame to contain this option.
+    :param container_frame: The parent frame to contain this plugin card.
     :param plugin: The plugin object containing the icon, name, status, and main screen creation method.
     """
     # Create a frame for the option
@@ -106,25 +104,3 @@ def calculate_rows_cols(num_plugins):
     cols = math.ceil(math.sqrt(num_plugins))
     rows = math.ceil(num_plugins / cols)
     return tuple(range(rows)), tuple(range(cols))
-
-def get_writable_wireguard_dir():
-    """Get a writable directory for WireGuard configuration files"""
-    if platform.system() == "Darwin":
-        home_dir = os.path.expanduser("~")
-        app_support_dir = os.path.join(home_dir, "Library", "Application Support", "Resistine")
-        wireguard_dir = os.path.join(app_support_dir, "wireguard")
-        os.makedirs(wireguard_dir, exist_ok=True)
-        return wireguard_dir
-    elif platform.system() == "Windows":
-        appdata_dir = os.environ.get('APPDATA', os.path.expanduser("~"))
-        wireguard_dir = os.path.join(appdata_dir, "Resistine", "wireguard")
-        os.makedirs(wireguard_dir, exist_ok=True)
-        return wireguard_dir
-    elif platform.system() == "Linux":
-        home_dir = os.path.expanduser("~")
-        config_dir = os.path.join(home_dir, ".config", "resistine")
-        wireguard_dir = os.path.join(config_dir, "wireguard")
-        os.makedirs(wireguard_dir, exist_ok=True)
-        return wireguard_dir
-    else:
-        raise NotImplementedError("Unsupported platform")

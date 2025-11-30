@@ -38,3 +38,4 @@ tee
 tqdm
 typing_extensions
 urllib3
+pyinstaller

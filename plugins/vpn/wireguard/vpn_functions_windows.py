@@ -1,45 +1,3 @@
-import os
-import subprocess
-import time
-from plugins.vpn.wireguard.wireguard_install import find_wireguard_exe, ensure_wireguard_app_installed
-import ctypes
-
-
-class NonAdminAccessError(Exception):
-    """Raised when admin privileges are required to manage WireGuard tunnels."""
-    pass
-
-def is_admin():
-    """Check if the current user is an administrator on Windows."""
-    try:
-        return ctypes.windll.shell32.IsUserAnAdmin() != 0
-    except Exception as e:
-        return False
-
-def can_manage_tunnels_without_admin():
-    """Check if the LimitedOperatorGroup registry setting allows non-admin users to manage tunnels."""
-    try:
-        import winreg
-        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WireGuard", 0, winreg.KEY_READ)
-        value, _ = winreg.QueryValueEx(key, "LimitedOperatorGroup")
-        winreg.CloseKey(key)
-        # Log for debugging
-        from utils.paths import user_data_dir
-        log_path = os.path.join(user_data_dir(), "vpn_debug.log")
-        with open(log_path, "a") as f:
-            f.write(f"Registry check: value = '{value}', expected 'S-1-5-32-545', match = {value == 'S-1-5-32-545'}\n")
-            f.write(f"is_admin: {is_admin()}\n")
-        return value == "S-1-5-32-545"
-    except Exception as e:
-        from utils.paths import user_data_dir
-        log_path = os.path.join(user_data_dir(), "vpn_debug.log")
-        with open(log_path, "a") as f:
-            f.write(f"Registry check failed: {str(e)}\n")
-        return False
-
-def _check_service_access(service_name):
-    """Return True if the current token can stop/start the given service."""
-    scm_handle = None
     service_handle = None
     SERVICE_STOP = 0x20
     SERVICE_START = 0x10
@@ -62,19 +20,6 @@ def _check_service_access(service_name):
             ctypes.windll.advapi32.CloseServiceHandle(service_handle)
         if scm_handle:
             ctypes.windll.advapi32.CloseServiceHandle(scm_handle)
-
-def check_wireguard_interface(tunnel_name):
-    """Check if tunnel interface exists (via service status)."""
-    status = check_service_status(tunnel_name)
-    return status in ["Running", "Stopped"]
-
-def get_config_path(tunnel_name):
-    from utils.functions import get_writable_wireguard_dir
-    return os.path.join(get_writable_wireguard_dir(), f"{tunnel_name}.conf")
-
-def start_vpn(tunnel_name):
-    """Start VPN using WireGuard app."""
-    wg_exe = find_wireguard_exe()
     if not wg_exe:
         if not ensure_wireguard_app_installed():
             return False
@@ -84,7 +29,8 @@ def start_vpn(tunnel_name):
     
     # For installed tunnels, use service control
     manage_without_admin = can_manage_tunnels_without_admin()
-    config_path = get_config_path(tunnel_name)
+def get_config_path(tunnel_name):
+    return os.path.join(get_writable_wireguard_dir(), f"{tunnel_name}.conf")
     from utils.paths import user_data_dir
     log_path = os.path.join(user_data_dir(), "vpn_debug.log")
     with open(log_path, "a") as f:
