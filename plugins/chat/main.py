@@ -19,6 +19,8 @@ import os
 from plugins.base_plugin import BasePlugin
 
 
+from utils import config_manager
+
 class Plugin(BasePlugin):
     """
     @brief Plugin class for the Chat plugin.
@@ -43,8 +45,7 @@ class Plugin(BasePlugin):
         )
         self.app = app
         self.client = OpenAI(
-            #replace with your api key
-            api_key= "X"
+            api_key=config_manager.get_openai_api_key()
         )
 
     def send_message_to_chatgpt(self, message):

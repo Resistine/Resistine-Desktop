@@ -34,5 +34,10 @@
   "main.registration.button": "Register",
   "main.registration.error.empty": "Email cannot be empty",
   "main.registration.error.invalid": "Invalid email format",
-  "main.plugin.error_loading": "Error loading plugin button {plugin_name}, Error: {error}"
+  "main.plugin.error_loading": "Error loading plugin button {plugin_name}, Error: {error}",
+  "settings.apikey.label": "OpenAI API Key:",
+  "settings.apikey.placeholder": "sk-...",
+  "settings.apikey.save": "Save Key",
+  "settings.apikey.saved_success": "✅ API Key saved successfully!",
+  "settings.apikey.saved_error": "❌ Failed to save API Key"
 }

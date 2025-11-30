@@ -210,7 +210,7 @@ class App(customtkinter.CTk):
             
             response = messagebox.askyesno(
                 "Helper Approval Required",
-        "Resistine needs your approval to install a helper tool for VPN functionality.\n\n"
+                "Resistine needs your approval to install a helper tool for VPN functionality.\n\n"
                 "Click 'Yes' to open System Settings where you can enable it in Login Items.",
                 icon='info'
             )
