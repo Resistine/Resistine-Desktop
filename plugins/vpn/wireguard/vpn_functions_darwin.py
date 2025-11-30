@@ -12,7 +12,13 @@ import json
 import re
 import platform
 from typing import Tuple, Optional
-from utils.functions import get_writable_wireguard_dir
+from utils.config_manager import get_config_dir
+
+def get_writable_wireguard_dir():
+    """Get a writable directory for WireGuard configuration files"""
+    wireguard_dir = os.path.join(get_config_dir(), "wireguard")
+    os.makedirs(wireguard_dir, exist_ok=True)
+    return wireguard_dir
 # DNS Configuration - Change this value to update DNS across the application
 DNS_SERVER = "10.49.11.10"
 
@@ -47,10 +53,6 @@ class HelperToolManager:
         
         return None
     
-
-    
-
-
 # Initialize helper manager
 helper = HelperToolManager()
 
@@ -130,9 +132,166 @@ class VPNHelper:
 
 vpn_helper = VPNHelper()
 
+# Keychain Management Functions
 
+def save_to_keychain(key_name, key_value, service_name="ResistineVPN"):
+    """
+    Save a key/value pair to macOS Keychain
+    
+    Args:
+        key_name: Name identifier for the key (e.g., 'private_key', 'api_token')
+        key_value: The actual value to store securely
+        service_name: Service name in Keychain (default: 'ResistineVPN')
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Use security command to store in keychain
+        subprocess.run([
+            'security', 'add-generic-password',
+            '-a', 'resistine-vpn-keys',  # Account name matching iOS
+            '-s', service_name,
+            '-w', key_value,
+            '-T', '',  # No specific application access
+            '-U'  # Update if exists
+        ], check=True, capture_output=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Keychain save failed: {e}")
+        if e.stderr:
+            print(f"   Error details: {e.stderr.decode()}")
+        return False
+    except Exception as e:
+        print(f"❌ Keychain save failed: {e}")
+        return False
 
+def get_from_keychain(key_name, service_name="ResistineVPN"):
+    """
+    Retrieve a key/value pair from macOS Keychain
+    
+    Args:
+        key_name: Name identifier for the key (e.g., 'private_key', 'api_token')
+        service_name: Service name in Keychain (default: 'ResistineVPN')
+    
+    Returns:
+        str: The stored value, or None if not found
+    """
+    try:
+        result = subprocess.check_output([
+            'security', 'find-generic-password',
+            '-a', 'resistine-vpn-keys',  # Account name matching iOS
+            '-s', service_name,
+            '-w'
+        ], text=True, stderr=subprocess.DEVNULL).strip()
+        return result if result else None
+    except subprocess.CalledProcessError:
+        # Key not found in keychain
+        return None
+    except Exception as e:
+        print(f"❌ Keychain retrieval failed: {e}")
+        return None
 
+def delete_from_keychain(key_name, service_name="ResistineVPN"):
+    """
+    Delete a key/value pair from macOS Keychain
+    
+    Args:
+        key_name: Name identifier for the key to delete
+        service_name: Service name in Keychain (default: 'ResistineVPN')
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        subprocess.run([
+            'security', 'delete-generic-password',
+            '-a', 'resistine-vpn-keys',  # Account name matching iOS
+            '-s', service_name
+        ], check=True, capture_output=True)
+        return True
+    except subprocess.CalledProcessError:
+        # Key doesn't exist, which is fine
+        return True
+    except Exception as e:
+        print(f"❌ Keychain deletion failed: {e}")
+        return False
+
+def key_exists_in_keychain(key_name, service_name="ResistineVPN"):
+    """
+    Check if a key exists in macOS Keychain
+    
+    Args:
+        key_name: Name identifier for the key to check
+        service_name: Service name in Keychain (default: 'ResistineVPN')
+    
+    Returns:
+        bool: True if key exists, False otherwise
+    """
+    try:
+        subprocess.check_output([
+            'security', 'find-generic-password',
+            '-a', 'resistine-vpn-keys',  # Account name matching iOS
+            '-s', service_name,
+            '-w'
+        ], stderr=subprocess.DEVNULL)
+        return True
+    except subprocess.CalledProcessError:
+        return False
+    except Exception:
+        return False
+
+def save_wireguard_keys(private_key, public_key):
+    """
+    Save WireGuard keys to Keychain with iOS-compatible service names
+    
+    Args:
+        private_key: WireGuard private key (string)
+        public_key: WireGuard public key (string)
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    # Save private key with iOS-compatible service name
+    private_success = save_to_keychain(
+        'private_key', 
+        private_key, 
+        service_name='com.resistine.wireguard.privatekey'
+    )
+    
+    # Save public key with iOS-compatible service name
+    public_success = save_to_keychain(
+        'public_key', 
+        public_key, 
+        service_name='com.resistine.wireguard.publickey'
+    )
+    
+    return private_success and public_success
+
+def get_wireguard_private_key():
+    """Get WireGuard private key from Keychain"""
+    return get_from_keychain('private_key', service_name='com.resistine.wireguard.privatekey')
+
+def get_wireguard_public_key():
+    """Get WireGuard public key from Keychain"""
+    return get_from_keychain('public_key', service_name='com.resistine.wireguard.publickey')
+
+def delete_wireguard_keys():
+    """
+    Delete WireGuard keys from Keychain (for key regeneration)
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    private_deleted = delete_from_keychain('private_key', service_name='com.resistine.wireguard.privatekey')
+    public_deleted = delete_from_keychain('public_key', service_name='com.resistine.wireguard.publickey')
+    return private_deleted and public_deleted
+
+def wireguard_keys_exist():
+    """Check if WireGuard keys exist in Keychain"""
+    private_exists = key_exists_in_keychain('private_key', service_name='com.resistine.wireguard.privatekey')
+    public_exists = key_exists_in_keychain('public_key', service_name='com.resistine.wireguard.publickey')
+    return private_exists and public_exists
 
 def generate_wireguard_keys():
     """
@@ -149,19 +308,13 @@ def generate_wireguard_keys():
         }
         None: If key generation fails
     """
-    
-    
-    
     try:
-        
         private_key = subprocess.check_output(['wg', 'genkey'], text=True).strip()
-        
         public_key = subprocess.check_output(['wg', 'pubkey'], input=private_key, text=True).strip()
         
         return {
             'private_key': private_key,
             'public_key': public_key,
-    
         }
         
     except subprocess.CalledProcessError as e:
@@ -173,7 +326,6 @@ def generate_wireguard_keys():
 
 def start_vpn(config_path):
     """Start VPN using the privileged helper"""
-    
     
     success, output = vpn_helper.start_vpn(config_path)
     if success or "Interface for" in output:
@@ -191,10 +343,8 @@ def start_vpn(config_path):
         print(f"❌ VPN start failed: {output}")
         return False
 
-
 def stop_vpn(config_path):
     """Stop VPN using the privileged helper"""
-    
     
     success, output = vpn_helper.stop_vpn(config_path)
     if success or "stopped" in output.lower():
@@ -210,9 +360,6 @@ def stop_vpn(config_path):
         print(f"❌ VPN stop failed: {output}")
         return False
 
-
-
-
 def check_service_status(interface_name, test_ip=None):
     """Check VPN status using the privileged helper
     
@@ -220,7 +367,6 @@ def check_service_status(interface_name, test_ip=None):
         interface_name: Config name (e.g., 'wg0') or actual interface name (e.g., 'utun10')
         test_ip: Optional IP to ping for connectivity test
     """
-    
     
     # Map config name to actual utun interface if available
     actual_interface = _interface_cache.get(interface_name, interface_name)
@@ -243,7 +389,6 @@ def check_service_status(interface_name, test_ip=None):
         import traceback
         traceback.print_exc()
         return "Stopped"
-
 
 def check_wireguard_installed():
     """Check if WireGuard is available on the system"""
@@ -295,10 +440,8 @@ def check_wireguard_installed():
         print("   - Or download from: https://www.wireguard.com/install/")
         return False
     
-    
     print("✅ WireGuard is properly installed and working on the system")
     return True
-
 
 def parse_and_create_vpn_config(vpn_config_json_string, config_name="wg0"):
     """
@@ -340,10 +483,7 @@ def parse_and_create_vpn_config(vpn_config_json_string, config_name="wg0"):
         client_address = interface_config.get("Address", "")
         dns_servers = interface_config.get("DNS", [])
         
-        # Get private key from keychain
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-        from utils.keychain_darwin import get_wireguard_private_key
-        
+        # Get private key from keychain (local function)
         private_key = get_wireguard_private_key()
         if not private_key:
             print("❌ Error: Private key not found in keychain")
@@ -368,9 +508,6 @@ Endpoint = {endpoint}
 """
         
         # Get writable WireGuard directory
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-        
-        
         wireguard_dir = get_writable_wireguard_dir()
         
         # Create config file path
@@ -380,6 +517,9 @@ Endpoint = {endpoint}
         # Write config file
         with open(config_path, "w") as config_file:
             config_file.write(config_content)
+        
+        # Set strict permissions (600) to avoid "world accessible" warning
+        os.chmod(config_path, 0o600)
         
         print(f"✅ WireGuard config created at: {config_path}")
         print(f"   Server: {endpoint}")

@@ -16,13 +16,13 @@ set -x
 set -e
 
 # Check if the venv folder already exists in the libraries folder
-if [ -d "libraries/venv" ]; then
-    echo "libraries/venv folder already exists. Do you want to delete it? (y/n)"
+if [ -d ".venv" ]; then
+    echo ".venv folder already exists. Do you want to delete it? (y/n)"
     read delete_venv
     if [ "$delete_venv" == "y" ]; then
-        rm -rf libraries/venv
+        rm -rf .venv
     else
-        echo "Please delete the libraries/venv folder and run this script again."
+        echo "Please delete the .venv folder and run this script again."
         exit 1
     fi
 fi
@@ -41,8 +41,21 @@ case "$OS" in
     distro_tags="$(printf '%s %s' "${ID}" "${ID_LIKE}")"
     case "$distro_tags" in
       *debian*|*ubuntu*)
-        sudo apt update
-        sudo apt install -y python3 python3-venv python3-pip python3-tk wireguard-tools
+        # Check if packages are already installed
+        PACKAGES_TO_INSTALL=""
+        for pkg in python3 python3-venv python3-pip python3-tk wireguard-tools; do
+          if ! dpkg -s "$pkg" &>/dev/null; then
+            PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL $pkg"
+          fi
+        done
+        
+        if [ -n "$PACKAGES_TO_INSTALL" ]; then
+          echo "Installing missing packages:$PACKAGES_TO_INSTALL"
+          sudo apt update
+          sudo apt install -y $PACKAGES_TO_INSTALL
+        else
+          echo "All required packages are already installed."
+        fi
         ;;
       *rhel*|*fedora*|*centos*)
         pkg_mgr="$(command -v dnf || command -v yum || true)"
@@ -50,11 +63,38 @@ case "$OS" in
           echo "dnf/yum not found."
           exit 1
         fi
-        sudo "$pkg_mgr" install -y python3 python3-pip python3-tkinter wireguard-tools
+        
+        # Check if packages are already installed
+        PACKAGES_TO_INSTALL=""
+        for pkg in python3 python3-pip python3-tkinter wireguard-tools; do
+          if ! rpm -q "$pkg" &>/dev/null; then
+            PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL $pkg"
+          fi
+        done
+        
+        if [ -n "$PACKAGES_TO_INSTALL" ]; then
+          echo "Installing missing packages:$PACKAGES_TO_INSTALL"
+          sudo "$pkg_mgr" install -y $PACKAGES_TO_INSTALL
+        else
+          echo "All required packages are already installed."
+        fi
         ;;
       *suse*)
-        sudo zypper refresh
-        sudo zypper install -y python3 python3-pip python3-tk wireguard-tools
+        # Check if packages are already installed
+        PACKAGES_TO_INSTALL=""
+        for pkg in python3 python3-pip python3-tk wireguard-tools; do
+          if ! rpm -q "$pkg" &>/dev/null; then
+            PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL $pkg"
+          fi
+        done
+        
+        if [ -n "$PACKAGES_TO_INSTALL" ]; then
+          echo "Installing missing packages:$PACKAGES_TO_INSTALL"
+          sudo zypper refresh
+          sudo zypper install -y $PACKAGES_TO_INSTALL
+        else
+          echo "All required packages are already installed."
+        fi
         ;;
       *)
         # TODO: This should be improved to support more distros
@@ -63,10 +103,8 @@ case "$OS" in
         ;;
     esac
 
-    python3 -m venv libraries/venv
-    source libraries/venv/bin/activate
-    python3 -m pip install -r libraries/requirements-linux.txt
-    python3 main.py
+    # Create venv as regular user (not with sudo)
+    python3 -m venv .venv
     ;;
 
   # MACOS
@@ -78,21 +116,26 @@ case "$OS" in
       echo "Homebrew not found. Install from https://brew.sh"
       exit 1
     fi
-    brew update
-    brew install python@3.12 tcl-tk wireguard-tools
+    
+    # Check if packages are already installed
+    PACKAGES_TO_INSTALL=""
+    for pkg in python@3.12 tcl-tk wireguard-tools; do
+      if ! brew list "$pkg" &>/dev/null; then
+        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL $pkg"
+      fi
+    done
+    
+    if [ -n "$PACKAGES_TO_INSTALL" ]; then
+      echo "Installing missing packages:$PACKAGES_TO_INSTALL"
+      brew update
+      brew install $PACKAGES_TO_INSTALL
+    else
+      echo "All required packages are already installed."
+    fi
 
     # Ensure we use Homebrew's Python
     PY="$(brew --prefix python@3.12)/bin/python3"
-    "$PY" -m venv libraries/venv
-    source libraries/venv/bin/activate
-
-    # Make brewed Tcl/Tk visible (for Tkinter)
-    export PATH="$(brew --prefix tcl-tk)/bin:$PATH"
-    export LDFLAGS="-L$(brew --prefix tcl-tk)/lib"
-    export CPPFLAGS="-I$(brew --prefix tcl-tk)/include"
-
-    python3 -m pip install -r libraries/requirements-mac.txt
-    python3 main.py
+    "$PY" -m venv .venv
     ;;
 
   # Windows (Git Bash, Cygwin, MSYS2)
@@ -104,15 +147,19 @@ case "$OS" in
       echo "Chocolatey not found. Install from https://chocolatey.org/install"
       exit 1
     fi
-    choco upgrade chocolatey
-    choco install -y python
-
-    if [ ! -d "libraries/venv" ]; then
-      python -m venv libraries/venv
+    
+    # Check if Python is already installed
+    if ! choco list --local-only python --exact &>/dev/null | grep -q "1 packages installed"; then
+      echo "Installing Python..."
+      choco upgrade chocolatey
+      choco install -y python
+    else
+      echo "Python is already installed."
     fi
-    source libraries/venv/Scripts/activate
-    python -m pip install -r libraries/requirements-windows.txt
-    python main.py
+
+    if [ ! -d ".venv" ]; then
+      python -m venv .venv
+    fi
     ;;
 
   # Unsupported OS
@@ -123,5 +170,8 @@ case "$OS" in
     ;;
 esac
 
-# Deactivate the virtual environment
-deactivate
+# Installation complete, now run the application
+echo ""
+echo "Installation complete! Starting the application..."
+echo ""
+./run.sh

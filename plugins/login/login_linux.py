@@ -15,12 +15,6 @@ import sys
 # Add project root to path to ensure imports work
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from utils.keychain_linux import (
-    save_wireguard_keys, 
-    delete_wireguard_keys,
-    get_wireguard_private_key,
-    get_wireguard_public_key
-)
 from plugins.vpn.wireguard import vpn_functions_linux as vpn_funcs
 
 logger = logging.getLogger(__name__)
@@ -34,7 +28,7 @@ def setup_vpn_keys():
         # Step 1: Regenerate fresh keys for this sign-in session
         # Delete old keys (if they exist) to ensure fresh key pair
         logger.debug("Regenerating WireGuard keys for new login session")
-        delete_wireguard_keys()
+        vpn_funcs.delete_wireguard_keys()
         
         # Generate new key pair
         keys = vpn_funcs.generate_wireguard_keys()
@@ -43,7 +37,7 @@ def setup_vpn_keys():
             return None
         
         # Save both private and public keys
-        if not save_wireguard_keys(keys['private_key'], keys['public_key']):
+        if not vpn_funcs.save_wireguard_keys(keys['private_key'], keys['public_key']):
             logger.error("Failed to save keys securely")
             return None
         

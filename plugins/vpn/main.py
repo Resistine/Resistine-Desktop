@@ -19,25 +19,20 @@ import subprocess
 import re
 import sys
 import ctypes
-from utils.functions import get_writable_wireguard_dir
-
 # --- Platform Specific Imports ---
 # We assume these modules provide 'vpn_helper' and necessary logic
 if platform.system() == "Windows":
-    
     from plugins.vpn.wireguard.vpn_functions_windows import * 
+    wireguard_folder = get_writable_wireguard_dir()
     
 elif platform.system() == "Linux":
-    
     from python_wireguard import Client, ServerConnection, Key
     from plugins.vpn.wireguard.vpn_functions_linux import *
+    wireguard_folder = get_writable_wireguard_dir()
 
 elif platform.system() == "Darwin":
-    
     from plugins.vpn.wireguard.vpn_functions_darwin import *
-
-# Get the writable wireguard directory
-wireguard_folder = get_writable_wireguard_dir()
+    wireguard_folder = get_writable_wireguard_dir()
 # DNS Configuration - Change this value to update DNS across the application
 DNS_SERVER = "10.49.11.10"
 

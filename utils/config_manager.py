@@ -6,25 +6,61 @@ from utils.encryption import encrypt_data, decrypt_data, get_or_create_key
 
 logger = logging.getLogger(__name__)
 
+# User directories
+HOME_DIR = os.path.expanduser("~")
+
+# Platform identifiers
+PLATFORM_DARWIN = "Darwin"
+PLATFORM_LINUX = "Linux"
+PLATFORM_WINDOWS = "Windows"
+
+# Application names
+APP_NAME = "Resistine"
+APP_NAME_LOWER = "resistine"
+
+# macOS path components
+MACOS_LIBRARY = "Library"
+MACOS_APP_SUPPORT = "Application Support"
+
+# Linux path components
+LINUX_CONFIG_DIR = ".config"
+
+# Fallback directory
+FALLBACK_DIR = ".resistine"
+# Configuration files
+LOGIN_STATE_FILE = "login.json"
+
+# Environment variables
+WINDOWS_APPDATA_ENV = 'APPDATA'
+
+# JSON keys
+KEY_LOGGED_IN = "logged_in"
+KEY_EMAIL = "email"
+KEY_OPENAI_API_KEY = "openai_api_key"
+
+# Error messages
+ERR_UNSUPPORTED_PLATFORM = "Unsupported platform"
+
 def get_config_dir():
     """Get the configuration directory based on the platform."""
-    if platform.system() == "Darwin":
-        home_dir = os.path.expanduser("~")
-        return os.path.join(home_dir, "Library", "Application Support", "Resistine")
-    elif platform.system() == "Linux":
-        home_dir = os.path.expanduser("~")
-        return os.path.join(home_dir, ".config", "resistine")
-    elif platform.system() == "Windows":
-        appdata_dir = os.environ.get('APPDATA', os.path.expanduser("~"))
-        return os.path.join(appdata_dir, "Resistine")
+    if platform.system() == PLATFORM_DARWIN:
+        return os.path.join(HOME_DIR, MACOS_LIBRARY, MACOS_APP_SUPPORT, APP_NAME)
+    elif platform.system() == PLATFORM_LINUX:
+        return os.path.join(HOME_DIR, LINUX_CONFIG_DIR, APP_NAME_LOWER)
+    elif platform.system() == PLATFORM_WINDOWS:
+        appdata_dir = os.environ.get(WINDOWS_APPDATA_ENV, HOME_DIR)
+        return os.path.join(appdata_dir, APP_NAME)
     else:
         # Fallback for other systems
-        return os.path.join(os.path.expanduser("~"), ".resistine")
+        return os.path.join(HOME_DIR, FALLBACK_DIR)
+# Subdirectory names
+
+        
 
 def get_login_state_file():
     """Get the path to the login state file."""
     config_dir = get_config_dir()
-    return os.path.join(config_dir, "login.json")
+    return os.path.join(config_dir, LOGIN_STATE_FILE)
 
 def save_login_state(email):
     """Save the login state to a file."""
@@ -35,8 +71,8 @@ def save_login_state(email):
         
         state_file = get_login_state_file()
         data = {
-            "logged_in": True,
-            "email": email
+            KEY_LOGGED_IN: True,
+            KEY_EMAIL: email
         }
         
         with open(state_file, 'w') as f:
@@ -58,7 +94,7 @@ def is_logged_in():
         with open(state_file, 'r') as f:
             data = json.load(f)
             
-        return data.get("logged_in", False)
+        return data.get(KEY_LOGGED_IN, False)
     except Exception as e:
         logger.error(f"Failed to check login state: {e}")
         return False
@@ -91,7 +127,7 @@ def save_openai_api_key(api_key):
         get_or_create_key()
         
         # Encrypt and store the API key
-        encrypted_data = encrypt_data({"openai_api_key": api_key})
+        encrypted_data = encrypt_data({KEY_OPENAI_API_KEY: api_key})
         
         logger.info("OpenAI API key saved securely")
         return True
@@ -108,7 +144,7 @@ def get_openai_api_key():
     """
     try:
         decrypted_data = decrypt_data()
-        api_key = decrypted_data.get("openai_api_key")
+        api_key = decrypted_data.get(KEY_OPENAI_API_KEY)
         
         if api_key:
             logger.info("OpenAI API key retrieved successfully")
