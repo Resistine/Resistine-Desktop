@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 
-# Description: This script runs the Resistine application.
+# Description: This script updates all dependencies and runs the Resistine application.
 # If the .venv folder does not exist, it will run the install.sh script first.
 # Usage: ./run.sh
 
-# Author: P3, Peres J. and the Resistine Team
+# Author: P3 and the Resistine Team
 # Copyright (c) Resistine 2025
 # Licensed under the GNU General Public License v2 or later
 
@@ -21,28 +21,19 @@ if [ ! -d ".venv" ]; then
     exit 0
 fi
 
+# Activate virtual environment
+source .venv/bin/activate
+
 # Detect the operating system
 OS="$(uname -s)"
 case "$OS" in
   Linux*)
-    # Activate virtual environment
-    source .venv/bin/activate
-    
     # Install/update requirements if needed
-    python3 -m pip install -q -r libraries/requirements-linux.txt
-    
-    # Run the application
-    python3 main.py
-    
-    # Deactivate the virtual environment
-    deactivate
+    python3 -m pip install -U -q -r libraries/requirements-linux.txt
     ;;
 
   # MACOS
   Darwin*)
-    # Activate virtual environment
-    source .venv/bin/activate
-
     # Make brewed Tcl/Tk visible (for Tkinter)
     if command -v brew >/dev/null; then
       export PATH="$(brew --prefix tcl-tk)/bin:$PATH"
@@ -51,28 +42,13 @@ case "$OS" in
     fi
 
     # Install/update requirements if needed
-    python3 -m pip install -q -r libraries/requirements-mac.txt
-    
-    # Run the application
-    python3 main.py
-    
-    # Deactivate the virtual environment
-    deactivate
+    python3 -m pip install -U -q -r libraries/requirements-mac.txt
     ;;
 
   # Windows (Git Bash, Cygwin, MSYS2)
   CYGWIN*|MINGW*|MSYS*)
-    # Activate virtual environment
-    source .venv/Scripts/activate
-    
     # Install/update requirements if needed
-    python -m pip install -q -r libraries/requirements-windows.txt
-    
-    # Run the application
-    python main.py
-    
-    # Deactivate the virtual environment
-    deactivate
+    python -m pip install -U -q -r libraries/requirements-windows.txt
     ;;
 
   # Unsupported OS
@@ -81,3 +57,10 @@ case "$OS" in
     exit 1
     ;;
 esac
+
+# Run the application
+python3 main.py
+    
+# Deactivate the virtual environment
+deactivate
+
