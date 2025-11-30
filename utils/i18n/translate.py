@@ -46,14 +46,14 @@ def translate_text(text, target_lang, source_lang='en'):
         'fr': 'French',
         'it': 'Italian',
         'pt': 'Portuguese',
-        'ru': 'Russian',
-        'zh': 'Chinese',
         'ja': 'Japanese',
         'ko': 'Korean',
         'ar': 'Arabic',
+        'tr': 'Turkish',
         'nl': 'Dutch',
         'pl': 'Polish',
-        'tr': 'Turkish',
+        'cs': 'Czech',
+        'sk': 'Slovak'
     }
     
     target_name = lang_names.get(target_lang, target_lang)
