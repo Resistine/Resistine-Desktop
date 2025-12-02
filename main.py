@@ -11,7 +11,8 @@ import sys
 import os
 import logging
 import subprocess
-
+import tkinter as tk
+import io
 
 import customtkinter
 from PIL import Image
@@ -20,97 +21,12 @@ from utils import functions as myfunctions
 from utils import config_manager
 import re
 
-import tkinter as tk
-import io
+# Debug Window
+DEBUG_WINDOW = True
+from utils.debug_window import DebugWindow
 
 
-class DebugWindow:
-    """Debug window to show print statements and logs in real-time"""
-    
-    def __init__(self, parent):
-        self.parent = parent
-        self.debug_window = None
-        self.text_widget = None
-        self.original_stdout = sys.stdout
-        self.original_stderr = sys.stderr
-        
-    def create_debug_window(self):
-        """Create the debug window"""
-        self.debug_window = tk.Toplevel(self.parent)
-        self.debug_window.title("Resistine Debug Output")
-        self.debug_window.geometry("800x600")
-        
-        # Create text widget WITHOUT scroll
-        self.text_widget = tk.Text(self.debug_window, wrap=tk.WORD)
-        self.text_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Add buttons
-        button_frame = tk.Frame(self.debug_window)
-        button_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        clear_button = tk.Button(button_frame, text="Clear", command=self.clear_output)
-        clear_button.pack(side=tk.LEFT, padx=5)
-        
-        save_button = tk.Button(button_frame, text="Save Log", command=self.save_log)
-        save_button.pack(side=tk.LEFT, padx=5)
-        
-        # Redirect stdout and stderr
-        self.redirect_output()
-        
-        # Add initial message
-        self.log_message("=== RESISTINE DEBUG WINDOW ===\n")
-        self.log_message("All print statements and logs will appear here.\n")
-        self.log_message("=" * 50 + "\n")
-        
-    def redirect_output(self):
-        """Redirect stdout and stderr to the debug window"""
-        class DebugOutput:
-            def __init__(self, debug_window):
-                self.debug_window = debug_window
-                
-            def write(self, text):
-                if text.strip():  # Only log non-empty text
-                    self.debug_window.log_message(text)
-                self.debug_window.original_stdout.write(text)
-                
-            def flush(self):
-                self.debug_window.original_stdout.flush()
-        
-        sys.stdout = DebugOutput(self)
-        sys.stderr = DebugOutput(self)
-    
-    def log_message(self, message):
-        """Add a message to the debug window"""
-        if self.text_widget:
-            self.text_widget.insert(tk.END, message)
-            self.text_widget.see(tk.END)  # Auto-scroll to bottom
-            self.text_widget.update_idletasks()
-    
-    def clear_output(self):
-        """Clear the debug output"""
-        if self.text_widget:
-            self.text_widget.delete(1.0, tk.END)
-    
-    def save_log(self):
-        """Save the debug output to a file"""
-        if self.text_widget:
-            content = self.text_widget.get(1.0, tk.END)
-            try:
-                import datetime
-                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"resistine_debug_{timestamp}.log"
-                
-                with open(filename, 'w') as f:
-                    f.write(content)
-                
-                self.log_message(f"Log saved to: {filename}\n")
-            except Exception as e:
-                self.log_message(f"Error saving log: {e}\n")
-    
-    def restore_output(self):
-        """Restore original stdout and stderr"""
-        sys.stdout = self.original_stdout
-        sys.stderr = self.original_stderr
+
 
 class App(customtkinter.CTk):
     """
@@ -124,8 +40,10 @@ class App(customtkinter.CTk):
         Check if the email is registered and create the appropriate screen.
         """
         super().__init__()
-        #self.debug_window = DebugWindow(self)
-        #self.debug_window.create_debug_window()
+        
+        if DEBUG_WINDOW:
+            self.debug_window = DebugWindow(self)
+            self.debug_window.create_debug_window()
         
        #Things to run when app is launched
         if sys.platform == 'darwin':
@@ -150,51 +68,16 @@ class App(customtkinter.CTk):
         else:
             # Always show login screen since we're using Odoo authentication
             print("🔐 Creating login screen...")
-            self.create_login_screen()
+            # Import the login plugin
+            from plugins.login.main import Plugin as LoginPlugin
+            
+            # Create login plugin instance
+            self.login_plugin = LoginPlugin(self)
+            self.login_plugin.show()
             print("✅ Login screen created")
         
         # Ensure the window is visible
         self.update()
-
-
-
-    def create_login_screen(self):
-        """
-        Create the login screen using the Login plugin.
-        """
-        # Import the login plugin
-        from plugins.login.main import Plugin as LoginPlugin
-        
-        # Create login plugin instance
-        self.login_plugin = LoginPlugin(self)
-        
-        # Create the login screen
-        self.login_frame = self.login_plugin.create_main_screen()
-        self.login_frame.grid(row=0, column=0, sticky="nsew")
-        
-        # Configure grid to ensure login screen takes full window
-        self.grid_rowconfigure(0, weight=1)
-        self.grid_columnconfigure(0, weight=1)
-        
-        # Ensure login screen is on top
-        self.login_frame.lift()
-
-    def destroy_login_screen(self):
-        """
-        Destroy the login screen and clean up resources.
-        """
-        if hasattr(self, 'login_frame'):
-            self.login_frame.destroy()
-            del self.login_frame
-        if hasattr(self, 'login_plugin'):
-            del self.login_plugin
-
-
-
-
-
-
-
 
 
     def create_dashboard(self):
@@ -203,6 +86,8 @@ class App(customtkinter.CTk):
         """
         
         for widget in self.winfo_children():
+            if isinstance(widget, (tk.Toplevel, customtkinter.CTkToplevel)):
+                continue
             widget.grid_forget()
         
         # 2. Re-configure the main window (self) for the 2-column dashboard layout
@@ -248,6 +133,7 @@ class App(customtkinter.CTk):
             row += 1
 
         self.select_frame_by_name("frame_Dashboard", button = self.frames["frame_Dashboard"].get_button())
+
 
     def select_frame_by_name(self, name, button=None):
         """
