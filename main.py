@@ -11,6 +11,7 @@ import sys
 import os
 import logging
 import subprocess
+import argparse
 import tkinter as tk
 import io
 
@@ -21,7 +22,7 @@ from utils import functions as myfunctions
 from utils import config_manager
 import re
 
-# Debug Window
+# Debug Window - controlled by command-line arguments
 DEBUG_WINDOW = True
 from utils.debug_window import DebugWindow
 
@@ -153,5 +154,51 @@ class App(customtkinter.CTk):
                 frame.create_main_screen().grid_forget()
 
 if __name__ == "__main__":
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(
+        description='Resistine Desktop Application',
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        '-d', '--debug',
+        action='store_true',
+        help='Enable debug window for real-time logging'
+    )
+    parser.add_argument(
+        '-v', '--verbose',
+        action='store_true',
+        help='Enable verbose logging output'
+    )
+    parser.add_argument(
+        '--log-level',
+        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+        default='INFO',
+        help='Set logging level (default: INFO)'
+    )
+    
+    args = parser.parse_args()
+    
+    # Configure logging based on arguments
+    log_level = getattr(logging, args.log_level)
+    logging.basicConfig(
+        level=log_level,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    if args.verbose:
+        logging.info(f"Verbose mode enabled")
+        logging.info(f"Platform: {sys.platform}")
+        logging.info(f"Python version: {sys.version}")
+        logging.info(f"Working directory: {os.getcwd()}")
+    
+    # Set debug window flag from command-line argument
+    if not DEBUG_WINDOW and args.debug:
+        DEBUG_WINDOW = True
+    
+    if DEBUG_WINDOW:
+        logging.info("Debug window enabled via command-line argument")
+    
+    # Start the application
     app = App()
     app.mainloop()

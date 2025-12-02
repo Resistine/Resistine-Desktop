@@ -44,10 +44,19 @@ class Plugin(BasePlugin):
             icon_dark_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "chat_dark.png"),
         )
         self.app = app
+        self.client = None
+        self.reinitialize_client()
+
+    def reinitialize_client(self):
+        """
+        Reinitialize the OpenAI client with the current API key.
+        This allows the plugin to detect newly saved API keys without restarting.
+        """
         api_key = config_manager.get_openai_api_key()
         if api_key:
             try:
                 self.client = OpenAI(api_key=api_key)
+                print("Chat plugin: OpenAI client initialized successfully")
             except Exception as e:
                 print(f"Chat plugin: Failed to initialize OpenAI client: {e}")
                 self.client = None
@@ -59,6 +68,10 @@ class Plugin(BasePlugin):
         """
         Send a message to the ChatGPT model and return the response.
         """
+        # Try to reinitialize if client is None (in case key was just added)
+        if not self.client:
+            self.reinitialize_client()
+        
         if not self.client:
             return "Error: OpenAI API key not configured or invalid. Please check your settings."
 
