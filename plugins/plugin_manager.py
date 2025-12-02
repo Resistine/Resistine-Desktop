@@ -66,8 +66,8 @@ class PluginManager:
                 plugins.append(plugin_instance)
                 plugin_instance.set_status("Ok")  # Set the status of the plugin to "Ok"
             except Exception as e:
-                plugin_instance.set_status("Error")  # Set the status of the plugin to "Error"
                 print(f"Failed to load plugin {module_name}: {e}")
+                # We cannot set status on plugin_instance if it wasn't created
         return plugins
 
     def get_plugins_path(self):
