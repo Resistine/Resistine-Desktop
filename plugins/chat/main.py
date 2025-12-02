@@ -44,14 +44,24 @@ class Plugin(BasePlugin):
             icon_dark_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "chat_dark.png"),
         )
         self.app = app
-        self.client = OpenAI(
-            api_key=config_manager.get_openai_api_key()
-        )
+        api_key = config_manager.get_openai_api_key()
+        if api_key:
+            try:
+                self.client = OpenAI(api_key=api_key)
+            except Exception as e:
+                print(f"Chat plugin: Failed to initialize OpenAI client: {e}")
+                self.client = None
+        else:
+            self.client = None
+            print("Chat plugin: No OpenAI API key found. Chat functionality disabled.")
 
     def send_message_to_chatgpt(self, message):
         """
         Send a message to the ChatGPT model and return the response.
         """
+        if not self.client:
+            return "Error: OpenAI API key not configured or invalid. Please check your settings."
+
         messages = [
             {"role": "system", "content": "You are SOC Copilot specialized in cybersecurity."},
         ]
