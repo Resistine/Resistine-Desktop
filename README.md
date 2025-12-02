@@ -11,7 +11,37 @@ This program is free software under the terms of the GNU General Public License 
 - Windows 11, Linux or macOS 10.15 or later
 - Apple Developer Account (for code signing and notarization)
 
-## Setup Instructions for Mac OS
+
+## Installation
+
+$ ./install.sh
+
+This will install and run Resistine EndPoint
+
+## Running Resistine
+
+$ ./run.sh
+
+This will update the dependencies and run Resistine EndPoint
+
+## Command Line Arguments
+
+usage: main.py [-h] [-d] [-v] [--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}]
+
+Resistine Desktop Application
+
+options:
+  -h, --help           Show this help message and exit
+  -d, --debug          Enable debug window for real-time logging
+  -v, --verbose        Enable verbose logging output
+  --log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}
+                       Set logging level (default: INFO)
+
+
+
+
+
+# Setup Instructions for Mac OS
 
 ### 1. Configuration
 
@@ -46,17 +76,6 @@ Edit `plugins/vpn/wireguard/wg0.conf` with your VPN server details:
 Add your OpenAI API key for functional AI.
 Edit `plugins/chat/main.py` on line 47 with your OpenAI api key
 
-### 3. Email (Optional)
-
-If you want to bypass login, configure the email settings template:
-
-```bash
-cp utils/email-settings.txt.template utils/email-settings.txt
-```
-
-Edit `utils/email-settings.txt` with your email :
-
-
 
 ## Building the Application
 
@@ -76,7 +95,3 @@ This will:
 - `dist/Resistine.app` - The signed application bundle
 - `Resistine-Notarized-1.0.0.dmg` - Notarized DMG (if using full build)
 
-
-## License
-
-See LICENSE file for details.

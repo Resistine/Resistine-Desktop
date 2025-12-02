@@ -11,7 +11,7 @@ set -euo pipefail
 # Copyright: Resistine (c) 2024
 # Licensed under the GNU General Public License v2 or later
 
-# TODO: this ...
+# TODO: remove this, Jackie daslasldkjasdkljasdkasjdlkas
 APP_DEFAULT="/Users/dhahabwhbbjshehaha/Desktop/Resistine/Rm/untitled folder/Resistine-Desktop/dist/Resistine.app"
 
 APP_PATH="${1:-$APP_DEFAULT}"

@@ -28,27 +28,34 @@ def is_keyring_secure():
     - Null/Fail backends
     - EncryptedKeyring (uses a master password that may be stored insecurely)
     
+    Secure backends include:
+    - SecretService.Keyring (GNOME Keyring on Linux)
+    - Keychain (macOS)
+    - WinVaultKeyring (Windows Credential Locker)
+    
     :return: True if secure, False otherwise
     :raises InsecureKeyringuException: If the backend is insecure with instructions
     """
     backend = keyring.get_keyring()
     backend_name = backend.__class__.__name__
     backend_module = backend.__class__.__module__
+    backend_full_path = f"{backend_module}.{backend_name}"
     
-    # List of known insecure backends
-    insecure_backends = [
-        'PlaintextKeyring',
-        'EncryptedKeyring',
-        'Keyring',  # Base class fallback
+    # List of known insecure backend modules/paths
+    insecure_backend_patterns = [
+        'keyring.backends.fail',
+        'keyring.backends.null',
+        'keyring.backends.PlaintextKeyring',
+        'keyring.backends.EncryptedKeyring',
     ]
     
-    # Check if backend module indicates a fail/null backend or is an insecure backend
-    if ('fail' in backend_module.lower() or 'null' in backend_module.lower() or 
-        backend_name in insecure_backends):
-        raise InsecureKeyringuException(
-            get_text('encryption.insecure_backend', 
-                    backend=f"{backend_module}.{backend_name}")
-        )
+    # Check if backend matches any insecure pattern
+    for pattern in insecure_backend_patterns:
+        if pattern.lower() in backend_full_path.lower():
+            raise InsecureKeyringuException(
+                get_text('encryption.insecure_backend', 
+                        backend=backend_full_path)
+            )
     
     return True
 

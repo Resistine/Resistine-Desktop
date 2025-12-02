@@ -121,6 +121,15 @@ class Plugin(BasePlugin):
         
         if success:
             self.status_label.configure(text=get_text('settings.apikey.saved_success'), text_color="green")
+            
+            # Reinitialize the chat plugin's OpenAI client if it's loaded
+            if hasattr(self.app, 'plugin_list'):
+                for plugin in self.app.plugin_list:
+                    if plugin.get_name() == "Chat" and hasattr(plugin, 'reinitialize_client'):
+                        plugin.reinitialize_client()
+                        print("Chat plugin reinitialized with new API key")
+                        break
+            
             # Clear status after 3 seconds
             self.app.after(3000, lambda: self.status_label.configure(text=""))
         else:
