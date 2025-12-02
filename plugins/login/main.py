@@ -38,6 +38,28 @@ class Plugin(BasePlugin):
         # Reference to the currently active input field
         self.active_input_entry = None 
 
+    def show(self):
+        """
+        Create and show the login screen.
+        """
+        self.login_frame = self.create_main_screen()
+        self.login_frame.grid(row=0, column=0, sticky="nsew")
+        
+        # Configure grid to ensure login screen takes full window
+        self.app.grid_rowconfigure(0, weight=1)
+        self.app.grid_columnconfigure(0, weight=1)
+        
+        # Ensure login screen is on top
+        self.login_frame.lift()
+
+    def destroy(self):
+        """
+        Destroy the login screen and clean up resources.
+        """
+        if hasattr(self, 'login_frame'):
+            self.login_frame.destroy()
+            del self.login_frame 
+
     def create_main_screen(self):
         """
         Initial login screen with centered "Login" button, "Resistine" name, and logo.
@@ -110,7 +132,7 @@ class Plugin(BasePlugin):
         Skip the login process and go directly to the dashboard.
         """
         logger.info("User skipped login")
-        self.app.destroy_login_screen()
+        self.destroy()
         self.app.create_dashboard()
 
     def show_registration_screen(self):
@@ -240,15 +262,15 @@ class Plugin(BasePlugin):
             
             # Dynamic import based on platform
             if sys.platform == "darwin":
-                from plugins.login import login_darwin as platform_login
+                from plugins.vpn.wireguard.vpn_functions_darwin import setup_vpn_keys, save_vpn_configuration
             elif sys.platform == "linux":
-                from plugins.login import login_linux as platform_login
+                from plugins.vpn.wireguard.vpn_functions_linux import setup_vpn_keys, save_vpn_configuration
             else:
                 self.update_status(f"Unsupported platform: {sys.platform}", "red")
                 return
 
             # Step 1: Setup VPN keys (Generate/Save/Get Public Key)
-            public_key = platform_login.setup_vpn_keys()
+            public_key = setup_vpn_keys()
             if not public_key:
                 self.update_status("Failed to setup VPN keys", "red")
                 return
@@ -273,7 +295,7 @@ class Plugin(BasePlugin):
                 # Step 3: Save VPN Configuration
                 vpn_config_json = result.get("vpn_config", "")
                 if vpn_config_json:
-                    config_path = platform_login.save_vpn_configuration(vpn_config_json)
+                    config_path = save_vpn_configuration(vpn_config_json)
                     if config_path:
                         logger.info(f"VPN configuration saved to {config_path}")
                     else:
@@ -284,7 +306,7 @@ class Plugin(BasePlugin):
                 
                 # Small delay to show success message, then transition
                 def transition_to_dashboard():
-                    self.app.destroy_login_screen()
+                    self.destroy()
                     self.app.create_dashboard()
                 
                 self.app.after(500, transition_to_dashboard)
