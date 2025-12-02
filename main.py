@@ -130,7 +130,8 @@ class App(customtkinter.CTk):
        #Things to run when app is launched
         if sys.platform == 'darwin':
              # Register privileged helper on macOS (only runs once per install)
-            self._ensure_darwin_helper_registered()
+            from plugins.vpn.wireguard.vpn_functions_darwin import ensure_helper_registered
+            ensure_helper_registered()
         
             
         self.title("Resistine")
@@ -155,72 +156,7 @@ class App(customtkinter.CTk):
         # Ensure the window is visible
         self.update()
 
-    def _ensure_darwin_helper_registered(self):
-        """Register the privileged helper on macOS (runs silently on startup)"""
-        try:
-            from ServiceManagement import SMAppService
-            plist_name = "com.resistine.plist"
-            
-            # Create the service
-            try:
-                service = SMAppService.daemonServiceWithPlistName_(plist_name)
-            except:
-                try:
-                    service = SMAppService.daemonWithPlistName_(plist_name)
-                except:
-                    print("⚠️ Could not create SMAppService for helper")
-                    return
-            
-            # Check current status
-            status = int(service.status())
-            status_map = {0: "notRegistered", 1: "enabled", 2: "requiresApproval", 3: "notFound"}
-            status_str = status_map.get(status, "unknown")
-            
-            if status == 1:  # Already enabled
-                print("✅ Helper already enabled")
-                return
-            
-            if status == 2:  # Requires approval
-                print("⚠️ Helper registered but requires user approval")
-                self._prompt_helper_approval(service)
-                return
-            
-            # Not registered yet (0 or 3), try to register
-            print("🔧 Registering privileged helper...")
-            error = service.registerAndReturnError_(None)
-            
-            if error:
-                print(f"⚠️ Helper registration error: {error}")
-                # Check status again after registration attempt
-                new_status = int(service.status())
-                if new_status == 2:  # Now requires approval
-                    self._prompt_helper_approval(service)
-            else:
-                print("✅ Helper registered successfully")
-                
-        except ImportError:
-            print("⚠️ ServiceManagement framework not available")
-        except Exception as e:
-            print(f"⚠️ Helper registration error: {e}")
-    
-    def _prompt_helper_approval(self, service):
-        """Prompt user to approve helper in System Settings"""
-        try:
-            import tkinter.messagebox as messagebox
-            
-            response = messagebox.askyesno(
-                "Helper Approval Required",
-                "Resistine needs your approval to install a helper tool for VPN functionality.\n\n"
-                "Click 'Yes' to open System Settings where you can enable it in Login Items.",
-                icon='info'
-            )
-            
-            if response:
-                # Open System Settings → Login Items
-                service.openSystemSettingsLoginItems()
-                print("📱 Opened System Settings → Login Items")
-        except Exception as e:
-            print(f"⚠️ Could not prompt for approval: {e}")
+
 
     def create_login_screen(self):
         """
@@ -253,68 +189,13 @@ class App(customtkinter.CTk):
         if hasattr(self, 'login_plugin'):
             del self.login_plugin
 
-    def destroy_registration_screen(self):
-        """
-        Destroy the registration screen and clean up resources.
-        """
-        if hasattr(self, 'registration_frame'):
-            self.registration_frame.destroy()
-            del self.registration_frame
 
-    def create_registration_screen(self):
-        """
-        Create the registration screen where the user can enter their email to register.
-        """
-        self.grid_rowconfigure(0, weight=1)
-        self.grid_columnconfigure(0, weight=1)
 
-        self.registration_frame = customtkinter.CTkFrame(self, corner_radius=0, fg_color=self.cget("fg_color"))
-        self.registration_frame.grid(row=0, column=0, sticky="nsew")
 
-        for i in range(6):
-            self.registration_frame.grid_rowconfigure(i, weight=1)
-        for i in range(3):
-            self.registration_frame.grid_columnconfigure(i, weight=1)
 
-        self.welcome_label = customtkinter.CTkLabel(self.registration_frame, text="Welcome to Resistine", font=("Arial", 24))
-        self.welcome_label.grid(row=1, column=1, padx=20, pady=20, sticky="nsew")
-        self.registration_frame.grid_rowconfigure(0, weight=1)
-        self.subtitle_label = customtkinter.CTkLabel(self.registration_frame, text="Please register to have access to our product", font=("Arial", 16))
-        self.subtitle_label.grid(row=2, column=1, padx=20, pady=10, sticky="ew")
-        self.registration_frame.grid_rowconfigure(1, weight=5)
-        self.email_entry = customtkinter.CTkEntry(self.registration_frame, placeholder_text="Enter your email")
-        self.email_entry.grid(row=3, column=1, padx=20, pady=20, sticky="ew")
 
-        self.register_button = customtkinter.CTkButton(self.registration_frame, text="Register", command=self.register_email)
-        self.register_button.grid(row=4, column=1, padx=20, pady=20, sticky="nsew")
-    def register_email(self):
-        """
-        Register the user's email by validating the input and saving it to a file.
-        If the email is invalid or empty, display an error message.
-        """
-        email = self.email_entry.get()
-        email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-        if not email:
-            if hasattr(self, 'error_label'):
-                self.error_label.destroy()
-            self.error_label = customtkinter.CTkLabel(self.registration_frame, text="Email cannot be empty", font=("Arial", 12), text_color="red")
-            self.error_label.grid(row=5, column=1, padx=20, pady=10, sticky="ew")
-            return
-        elif not re.match(email_regex, email):
-            if hasattr(self, 'error_label'):
-                self.error_label.destroy()
-            self.error_label = customtkinter.CTkLabel(self.registration_frame, text="Invalid email format", font=("Arial", 12), text_color="red")
-            self.error_label.grid(row=5, column=1, padx=20, pady=10, sticky="ew")
-            return
-        if hasattr(self, 'error_label'):
-            self.error_label.destroy()
-        shares_folder = os.path.join(os.path.dirname(__file__), "utils")
-        if not os.path.exists(shares_folder):
-            os.makedirs(shares_folder)
-        with open(os.path.join(shares_folder, "email-settings.txt"), "w") as f:
-            f.write(email)
-        self.destroy_registration_screen()
-        self.create_dashboard()
+
+
 
     def create_dashboard(self):
         """

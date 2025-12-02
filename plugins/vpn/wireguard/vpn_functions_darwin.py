@@ -539,3 +539,150 @@ Endpoint = {endpoint}
         import traceback
         traceback.print_exc()
         return None
+
+def setup_vpn_keys():
+    """
+    Generate and save new WireGuard keys for the session.
+    Returns the public key if successful, None otherwise.
+    """
+    try:
+        # Step 1: Regenerate fresh keys for this sign-in session
+        # Delete old keys (if they exist) to ensure fresh key pair
+        print("Regenerating WireGuard keys for new login session")
+        delete_wireguard_keys()
+        
+        # Generate new key pair
+        keys = generate_wireguard_keys()
+        if not keys:
+            print("❌ Failed to generate keys")
+            return None
+        
+        # Save both private and public keys to Keychain with iOS-compatible service names
+        if not save_wireguard_keys(keys['private_key'], keys['public_key']):
+            print("❌ Failed to save keys securely")
+            return None
+        
+        # Get public key for API transmission
+        public_key = keys['public_key']
+        
+        if not public_key:
+            print("❌ Failed to get public key")
+            return None
+            
+        print(f"✅ WireGuard Public Key Validated: Length={len(public_key)} characters")
+        return public_key
+
+    except Exception as e:
+        print(f"❌ Error setting up VPN keys: {e}")
+        return None
+
+def save_vpn_configuration(vpn_config_json):
+    """
+    Parse and save the VPN configuration.
+    Returns the path to the saved config file if successful, None otherwise.
+    """
+    try:
+        if not vpn_config_json:
+            return None
+            
+        print("WireGuard config received from API")
+        
+        # Log redacted config for debugging
+        try:
+            vpn_config = json.loads(vpn_config_json) if isinstance(vpn_config_json, str) else vpn_config_json
+            safe_config = {}
+            if "Interface" in vpn_config:
+                safe_config["Interface"] = {
+                    "Address": vpn_config["Interface"].get("Address", ""),
+                    "DNS": vpn_config["Interface"].get("DNS", []),
+                    "PrivateKey": "[REDACTED]" if vpn_config["Interface"].get("PrivateKey") else None
+                }
+            if "Peer" in vpn_config:
+                safe_config["Peer"] = {
+                    "PublicKey": "[REDACTED]" if vpn_config["Peer"].get("PublicKey") else None,
+                    "AllowedIPs": vpn_config["Peer"].get("AllowedIPs", []),
+                    "Endpoint": vpn_config["Peer"].get("Endpoint", "")
+                }
+            print(f"VPN Config (redacted): {json.dumps(safe_config)}")
+        except Exception as e:
+            print(f"Error parsing VPN config for logging: {e}")
+
+        # Create config file
+        config_path = parse_and_create_vpn_config(vpn_config_json, config_name="wg0")
+        
+        if config_path:
+            print("✅ VPN configuration saved successfully")
+            return config_path
+        else:
+            print("❌ Failed to create VPN config")
+            return None
+            
+    except Exception as e:
+        print(f"❌ Error creating VPN config: {e}")
+        return None
+def ensure_helper_registered():
+    """Register the privileged helper on macOS (runs silently on startup)"""
+    try:
+        from ServiceManagement import SMAppService
+        plist_name = "com.resistine.plist"
+        
+        # Create the service
+        try:
+            service = SMAppService.daemonServiceWithPlistName_(plist_name)
+        except:
+            try:
+                service = SMAppService.daemonWithPlistName_(plist_name)
+            except:
+                print("⚠️ Could not create SMAppService for helper")
+                return
+        
+        # Check current status
+        status = int(service.status())
+        status_map = {0: "notRegistered", 1: "enabled", 2: "requiresApproval", 3: "notFound"}
+        status_str = status_map.get(status, "unknown")
+        
+        if status == 1:  # Already enabled
+            print("✅ Helper already enabled")
+            return
+        
+        if status == 2:  # Requires approval
+            print("⚠️ Helper registered but requires user approval")
+            prompt_helper_approval(service)
+            return
+        
+        # Not registered yet (0 or 3), try to register
+        print("🔧 Registering privileged helper...")
+        error = service.registerAndReturnError_(None)
+        
+        if error:
+            print(f"⚠️ Helper registration error: {error}")
+            # Check status again after registration attempt
+            new_status = int(service.status())
+            if new_status == 2:  # Now requires approval
+                prompt_helper_approval(service)
+        else:
+            print("✅ Helper registered successfully")
+            
+    except ImportError:
+        print("⚠️ ServiceManagement framework not available")
+    except Exception as e:
+        print(f"⚠️ Helper registration error: {e}")
+
+def prompt_helper_approval(service):
+    """Prompt user to approve helper in System Settings"""
+    try:
+        import tkinter.messagebox as messagebox
+        
+        response = messagebox.askyesno(
+            "Helper Approval Required",
+            "Resistine needs your approval to install a helper tool for VPN functionality.\n\n"
+            "Click 'Yes' to open System Settings where you can enable it in Login Items.",
+            icon='info'
+        )
+        
+        if response:
+            # Open System Settings → Login Items
+            service.openSystemSettingsLoginItems()
+            print("📱 Opened System Settings → Login Items")
+    except Exception as e:
+        print(f"⚠️ Could not prompt for approval: {e}")
