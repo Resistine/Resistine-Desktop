@@ -159,7 +159,7 @@ class Plugin(BasePlugin):
             title_label.bind("<Button-1>", lambda event: main_event())
 
         # For testing purposes
-        web_url = "https://resistine.crescentiva.com/"
+        web_url = "https://www.resistine.com/"
         file_id = "1PjHT9rgXSenzT7lBTy6CijPMn0kqNpAG"
         direct_url = f"https://drive.google.com/uc?export=download&id={file_id}"
 

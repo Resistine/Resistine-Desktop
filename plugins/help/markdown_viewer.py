@@ -16,7 +16,7 @@ class MarkdownViewer(customtkinter.CTkFrame):
         self.docs_dir = docs_dir
 
         # Navigation bar
-        self.nav_frame = customtkinter.CTkFrame(self, height=40)
+        self.nav_frame = customtkinter.CTkFrame(self, height=40, fg_color="transparent")
         self.nav_frame.pack(fill="x", padx=10, pady=(10, 0))
         self.nav_frame.pack_propagate(False)
 
@@ -59,22 +59,39 @@ class MarkdownViewer(customtkinter.CTkFrame):
         self.home_file = None
 
     def get_help_files(self):
-        """Get list of help files from docs directory."""
-        if not self.docs_dir or not os.path.exists(self.docs_dir):
-            return []
-
+        """Get list of help files from docs directory and root."""
         files = []
-        for file in os.listdir(self.docs_dir):
-            if file.endswith(".md"):
-                files.append(file)
+
+        # Add root files
+        if self.docs_dir:
+            project_root = os.path.dirname(self.docs_dir)
+            root_files = ["README.md", "LICENSE"]
+            for f in root_files:
+                if os.path.exists(os.path.join(project_root, f)):
+                    files.append(f)
+
+        # Add docs files
+        if self.docs_dir and os.path.exists(self.docs_dir):
+            for file in os.listdir(self.docs_dir):
+                if file.endswith(".md"):
+                    files.append(file)
+
         return sorted(files)
 
     def navigate_to_file(self, filename):
         """Navigate to a help file from dropdown."""
         if self.docs_dir:
-            file_path = os.path.join(self.docs_dir, filename)
-            if os.path.exists(file_path):
-                self.load_file(file_path)
+            # Check if it's a root file
+            project_root = os.path.dirname(self.docs_dir)
+            root_path = os.path.join(project_root, filename)
+
+            if os.path.exists(root_path):
+                self.load_file(root_path)
+            else:
+                # Check docs dir
+                file_path = os.path.join(self.docs_dir, filename)
+                if os.path.exists(file_path):
+                    self.load_file(file_path)
 
     def go_home(self):
         """Navigate back to home file."""
@@ -118,6 +135,12 @@ class MarkdownViewer(customtkinter.CTkFrame):
             )
             return
 
+        # Update dropdown selection
+        if hasattr(self, "file_dropdown"):
+            filename = os.path.basename(file_path)
+            if filename in self.help_files:
+                self.file_dropdown.set(filename)
+
         if file_path.endswith(".md"):
             with open(file_path, "r", encoding="utf-8") as f:
                 md_content = f.read()
@@ -138,31 +161,114 @@ class MarkdownViewer(customtkinter.CTkFrame):
 
             css = f"<style>{css_content}</style>"
 
-            self.html_frame.load_html(css + html_content)
-        else:
+            # Set base_url for relative links
+            base_url = "file://" + os.path.abspath(self.current_dir) + "/"
+            self.html_frame.load_html(css + html_content, base_url=base_url)
+        elif file_path.endswith(".html") or file_path.endswith(".htm"):
             self.html_frame.load_file(file_path)
+        else:
+            # Handle plain text files (LICENSE, etc.)
+            with open(file_path, "r", encoding="utf-8") as f:
+                text_content = f.read()
+
+            # # Escape HTML special characters
+            # text_content = (
+            #     text_content.replace("&", "&amp;")
+            #     .replace("<", "&lt;")
+            #     .replace(">", "&gt;")
+            # )
+
+            # Linkify URLs
+            import re
+
+            # Regex to match URLs, excluding < and > and escaped &lt; &gt;
+            # We look for http/https URLs
+            # This regex stops at whitespace, <, >, or &lt; or &gt;
+            url_pattern = re.compile(r"(https?://(?:(?!&lt;|[<>]).)+)")
+
+            parts = url_pattern.split(text_content)
+            final_content = []
+
+            for i, part in enumerate(parts):
+                if i % 2 == 0:
+                    # This is text, escape it
+                    escaped_part = (
+                        part.replace("&", "&amp;")
+                        .replace("<", "&lt;")
+                        .replace(">", "&gt;")
+                    )
+                    final_content.append(escaped_part)
+                else:
+                    # This is a URL, make it a link
+                    # Check if the URL ends with punctuation that should be stripped
+                    url = part
+                    trailing_punct = ""
+
+                    # Handle trailing &gt; if it somehow got included (though regex should prevent it)
+                    if url.endswith("&gt;"):
+                        url = url[:-4]
+                        trailing_punct = "&gt;" + trailing_punct
+
+                    # Common trailing punctuation
+                    if (
+                        url.endswith(".")
+                        or url.endswith(",")
+                        or url.endswith(";")
+                        or url.endswith(")")
+                    ):
+                        trailing_punct = url[-1] + trailing_punct
+                        url = url[:-1]
+
+                    final_content.append(f'<a href="{url}">{url}</a>{trailing_punct}')
+
+            text_content = "".join(final_content)
+
+            # Get current appearance mode
+            appearance_mode = customtkinter.get_appearance_mode()
+
+            # Load CSS from external file
+            plugin_dir = os.path.dirname(os.path.abspath(__file__))
+            if appearance_mode == "Dark":
+                css_file = os.path.join(plugin_dir, "styles_dark.css")
+            else:
+                css_file = os.path.join(plugin_dir, "styles_light.css")
+
+            with open(css_file, "r", encoding="utf-8") as f:
+                css_content = f.read()
+
+            css = f"<style>{css_content}</style>"
+
+            # Wrap in pre tag for preformatted text
+            html_content = f"{css}<pre>{text_content}</pre>"
+
+            self.html_frame.load_html(html_content)
 
     def on_link_click(self, url):
         print(f"Link clicked: {url}")
-        print(f"Current dir: {self.current_dir}")
+        # TODO: this is an example for debug/verbose output
+        # print(f"Current dir: {self.current_dir}")
 
         # Check if it's a local file
         if "://" not in url:
             # Relative path
             target_path = os.path.join(self.current_dir, url)
-            print(f"Checking relative path: {target_path}")
+            # TODO: this is an example for debug/verbose output
+            # print(f"Checking relative path: {target_path}")
             if os.path.exists(target_path):
-                print(f"Loading file: {target_path}")
+                # print(f"Loading file: {target_path}")
                 self.load_file(target_path)
                 return  # Don't call default handler
         elif url.startswith("file://"):
             target_path = url[7:]
-            print(f"Checking file:// path: {target_path}")
+            # TODO: this is an example for debug/verbose output
+            # print(f"Checking file:// path: {target_path}")
             if os.path.exists(target_path):
-                print(f"Loading file: {target_path}")
+                # print(f"Loading file: {target_path}")
                 self.load_file(target_path)
                 return  # Don't call default handler
 
+        # TODO: In case we would like to open something safe, let's do it here
+        # For example, we could open a local file or a web page
         # External link - open in browser
         print(f"Opening external link: {url}")
         webbrowser.open(url)
