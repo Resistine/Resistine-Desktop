@@ -24,8 +24,8 @@ def get_writable_wireguard_dir():
     return wireguard_dir
 
 
-# DNS Configuration - Change this value to update DNS across the application
-DNS_SERVER = "10.49.11.10"
+
+
 
 # Cache to map config names to actual utun interfaces (e.g., wg0 → utun6)
 _interface_cache = {}
