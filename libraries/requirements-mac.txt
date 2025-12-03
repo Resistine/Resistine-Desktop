@@ -32,14 +32,13 @@ python-dotenv
 python-wireguard
 pyuac
 requests
-SecretStorage
+secretstorage
 sniffio
 tee
+tkinterweb
 tqdm
 typing_extensions
 urllib3
 pyinstaller
-objc
-Foundation
-ServiceManagement
+pyobjc
 

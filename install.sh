@@ -118,13 +118,28 @@ case "$OS" in
       exit 1
     fi
     
-    # Check if packages are already installed
     PACKAGES_TO_INSTALL=""
-    for pkg in python@3.12 tcl-tk wireguard-tools; do
-      if ! brew list "$pkg" &>/dev/null; then
-        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL $pkg"
-      fi
-    done
+
+    # Check for Python
+    if command -v python3 >/dev/null; then
+        echo "Python3 is already installed."
+    else
+        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL python"
+    fi
+
+    # Check for WireGuard
+    if command -v wg >/dev/null; then
+        echo "WireGuard tools are already installed."
+    else
+        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL wireguard-tools"
+    fi
+
+    # Check for tcl-tk (via tkinter import)
+    if command -v python3 >/dev/null && python3 -c "import tkinter" >/dev/null 2>&1; then
+        echo "tcl-tk (tkinter) is already installed."
+    else
+        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL tcl-tk"
+    fi
     
     if [ -n "$PACKAGES_TO_INSTALL" ]; then
       echo "Installing missing packages:$PACKAGES_TO_INSTALL"
@@ -134,9 +149,8 @@ case "$OS" in
       echo "All required packages are already installed."
     fi
 
-    # Ensure we use Homebrew's Python
-    PY="$(brew --prefix python@3.12)/bin/python3"
-    "$PY" -m venv .venv
+    # Create venv using the available python3
+    python3 -m venv .venv
     ;;
 
   # Windows (Git Bash, Cygwin, MSYS2)
