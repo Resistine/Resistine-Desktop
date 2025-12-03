@@ -1,4 +1,48 @@
+import os
+import subprocess
+import ctypes
+import time
+import logging
+from utils.settings import get_config_dir
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+def get_writable_wireguard_dir():
+    """Get the directory where WireGuard configs are stored."""
+    config_dir = get_config_dir()
+    wg_dir = os.path.join(config_dir, "wireguard")
+    os.makedirs(wg_dir, exist_ok=True)
+    return wg_dir
+
+def get_config_path(tunnel_name):
+    """Get the full path to a tunnel configuration file."""
+    return os.path.join(get_writable_wireguard_dir(), f"{tunnel_name}.conf")
+
+def find_wireguard_exe():
+    """Find the WireGuard executable."""
+    # Standard installation path
+    wg_exe = r"C:\Program Files\WireGuard\wireguard.exe"
+    if os.path.exists(wg_exe):
+        return wg_exe
+    return None
+
+def ensure_wireguard_app_installed():
+    """Check if WireGuard is installed."""
+    return find_wireguard_exe() is not None
+
+def can_manage_tunnels_without_admin():
+    """
+    Check if the user can manage tunnels without admin privileges.
+    On Windows, this usually requires the LimitedOperatorGroup, but for simplicity
+    we'll assume admin/UAC is needed for service control unless configured otherwise.
+    """
+    return False
+
+def _check_service_access(service_name):
+    """Check if we can access the service handle."""
     service_handle = None
+    scm_handle = None
     SERVICE_STOP = 0x20
     SERVICE_START = 0x10
     SERVICE_QUERY_STATUS = 0x04
@@ -20,6 +64,10 @@
             ctypes.windll.advapi32.CloseServiceHandle(service_handle)
         if scm_handle:
             ctypes.windll.advapi32.CloseServiceHandle(scm_handle)
+
+def start_vpn(tunnel_name):
+    """Start the VPN tunnel."""
+    wg_exe = find_wireguard_exe()
     if not wg_exe:
         if not ensure_wireguard_app_installed():
             return False
@@ -27,18 +75,16 @@
         if not wg_exe:
             return False
     
-    # For installed tunnels, use service control
     manage_without_admin = can_manage_tunnels_without_admin()
-def get_config_path(tunnel_name):
-    return os.path.join(get_writable_wireguard_dir(), f"{tunnel_name}.conf")
-    from utils.paths import user_data_dir
-    log_path = os.path.join(user_data_dir(), "vpn_debug.log")
+    config_path = get_config_path(tunnel_name)
+    
+    # Logging for debug
+    log_path = os.path.join(get_config_dir(), "vpn_debug.log")
     with open(log_path, "a") as f:
         f.write(f"start_vpn: can_manage = {manage_without_admin}, config_path_exists = {os.path.exists(config_path)}\n")
-    # Allow operations to proceed even without LimitedOperatorGroup permissions
-    # The system will prompt for admin privileges if needed
 
     service_name = f"WireGuardTunnel${tunnel_name}"
+    
     if not _check_service_access(service_name):
         with open(log_path, "a") as f:
             f.write("start_vpn: service access denied (QueryServiceStatusEx failed), will attempt operation anyway\n")
@@ -52,13 +98,15 @@ def get_config_path(tunnel_name):
             diag_output = (diag.stdout or "") + (diag.stderr or "")
         except Exception as diag_error:
             diag_output = f"sc query diagnostic failed: {diag_error}"
+        
         with open(log_path, "a") as f:
             f.write(f"start_vpn: sc query diagnostic -> {diag_output.strip()}\n")
+            
         if "1060" in diag_output:
             with open(log_path, "a") as f:
                 f.write("start_vpn: service missing, cannot proceed\n")
             return False
-        # Allow operation to proceed - system will prompt for admin if needed
+
     try:
         # Use ShellExecute to properly trigger UAC prompts for admin elevation
         with open(log_path, "a") as f:
@@ -81,7 +129,6 @@ def get_config_path(tunnel_name):
         # ShellExecute returns > 32 on success, <= 32 on error
         if result > 32:
             # Wait a moment for the service to start
-            import time
             time.sleep(2)
 
             # Check if service actually started
@@ -120,17 +167,15 @@ def stop_vpn(tunnel_name):
     if not wg_exe:
         return False
     
-    # For installed tunnels, use /stop
     manage_without_admin = can_manage_tunnels_without_admin()
     config_path = get_config_path(tunnel_name)
-    from utils.paths import user_data_dir
-    log_path = os.path.join(user_data_dir(), "vpn_debug.log")
+    
+    log_path = os.path.join(get_config_dir(), "vpn_debug.log")
     with open(log_path, "a") as f:
         f.write(f"stop_vpn: can_manage = {manage_without_admin}, config_path_exists = {os.path.exists(config_path)}\n")
-    # Allow operations to proceed even without LimitedOperatorGroup permissions
-    # The system will prompt for admin privileges if needed
 
     service_name = f"WireGuardTunnel${tunnel_name}"
+    
     if not _check_service_access(service_name):
         with open(log_path, "a") as f:
             f.write("stop_vpn: service access denied (QueryServiceStatusEx failed), will attempt operation anyway\n")
@@ -150,7 +195,7 @@ def stop_vpn(tunnel_name):
             with open(log_path, "a") as f:
                 f.write("stop_vpn: service missing, cannot proceed\n")
             return False
-        # Allow operation to proceed - system will prompt for admin if needed
+
     try:
         # Use ShellExecute to properly trigger UAC prompts for admin elevation
         with open(log_path, "a") as f:
@@ -173,7 +218,6 @@ def stop_vpn(tunnel_name):
         # ShellExecute returns > 32 on success, <= 32 on error
         if result > 32:
             # Wait a moment for the service to stop
-            import time
             time.sleep(2)
 
             # Check if service actually stopped
@@ -286,6 +330,5 @@ def run_elevated_powershell(script_path, arguments=""):
     except Exception as e:
         print(f"Error running elevated PowerShell: {e}")
         return False
-
 
 print("✅ WireGuard app integration loaded")
