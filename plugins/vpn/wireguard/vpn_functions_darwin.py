@@ -5,114 +5,130 @@ Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
 
-import sys
-import os
-import subprocess
 import json
-import re
+import os
 import platform
-from typing import Tuple, Optional
-from utils.config_manager import get_config_dir
+import re
+import subprocess
+import sys
+from typing import Optional, Tuple
+
+from utils import settings
+from utils.settings import get_config_dir
+
 
 def get_writable_wireguard_dir():
     """Get a writable directory for WireGuard configuration files"""
     wireguard_dir = os.path.join(get_config_dir(), "wireguard")
     os.makedirs(wireguard_dir, exist_ok=True)
     return wireguard_dir
+
+
 # DNS Configuration - Change this value to update DNS across the application
 DNS_SERVER = "10.49.11.10"
 
 # Cache to map config names to actual utun interfaces (e.g., wg0 → utun6)
 _interface_cache = {}
 
+
 class HelperToolManager:
     """Manages XPC communication with the privileged helper via ResistCli"""
-    
+
     def __init__(self):
         self.cli_path = self._find_cli_path()
         self.is_available = self.cli_path is not None
         print(f"🔍 [HELPER] CLI Path: {self.cli_path}")
-        print(f"🔍 [HELPER] CLI Exists: {self.cli_path and os.path.exists(self.cli_path) if self.cli_path else False}")
-    
+        print(
+            f"🔍 [HELPER] CLI Exists: {self.cli_path and os.path.exists(self.cli_path) if self.cli_path else False}"
+        )
+
     def _find_cli_path(self):
         """Locate ResistCli tool in the app bundle"""
         # When frozen (PyInstaller), look relative to the executable
-        if getattr(sys, 'frozen', False):
+        if getattr(sys, "frozen", False):
             # sys.executable is in Contents/MacOS/
             macos_dir = os.path.dirname(sys.executable)
             app_contents = os.path.abspath(os.path.join(macos_dir, ".."))
-            cli_path = os.path.join(app_contents, "Library", "LaunchServices", "ResistCli")
+            cli_path = os.path.join(
+                app_contents, "Library", "LaunchServices", "ResistCli"
+            )
             if os.path.exists(cli_path):
                 return cli_path
-        
+
         # Development mode - search from script location
         script_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
         dev_cli_path = os.path.join(script_dir, "apple_helper", "cli", "ResistCli")
         if os.path.exists(dev_cli_path):
             return dev_cli_path
-        
+
         return None
-    
+
+
 # Initialize helper manager
 helper = HelperToolManager()
+
 
 # Add VPN-specific helper methods
 class VPNHelper:
     """VPN-specific operations using the XPC helper"""
-    
+
     @staticmethod
     def start_vpn(config_path: str) -> Tuple[bool, str]:
         """Start VPN using config file"""
         if not helper.cli_path:
             return (False, "Helper CLI not found")
-        
+
         try:
             result = subprocess.run(
                 [helper.cli_path, "start-vpn", config_path],
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=30,
             )
             output = result.stdout.strip() or result.stderr.strip()
             return (result.returncode == 0, output)
         except Exception as e:
             return (False, str(e))
-    
+
     @staticmethod
     def stop_vpn(config_path: str) -> Tuple[bool, str]:
         """Stop VPN using config file"""
         if not helper.cli_path:
             return (False, "Helper CLI not found")
-        
+
         try:
             result = subprocess.run(
                 [helper.cli_path, "stop-vpn", config_path],
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=30,
             )
             output = result.stdout.strip() or result.stderr.strip()
             return (result.returncode == 0, output)
         except Exception as e:
             return (False, str(e))
-    
+
     @staticmethod
-    def check_status(interface_name: str, test_ip: Optional[str] = None) -> Tuple[bool, str]:
+    def check_status(
+        interface_name: str, test_ip: Optional[str] = None
+    ) -> Tuple[bool, str]:
         """Check VPN status"""
         if not helper.cli_path:
             print("⚠️ [HELPER] CLI path not available")
             return (False, "Stopped")
-        
+
         try:
             cmd = [helper.cli_path, "status", interface_name]
             if test_ip:
                 cmd.append(test_ip)
-            
+
             print(f"🔍 [HELPER] Running command: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             output = result.stdout.strip()
-            print(f"📊 [HELPER] Command result: returncode={result.returncode}, output='{output}'")
-            
+            print(
+                f"📊 [HELPER] Command result: returncode={result.returncode}, output='{output}'"
+            )
+
             # Status check returns "Running" or "Stopped"
             if "Running" in output:
                 is_running = True
@@ -130,177 +146,68 @@ class VPNHelper:
             print(f"❌ [HELPER] Command error: {e}")
             return (False, str(e))
 
+
 vpn_helper = VPNHelper()
 
 # Keychain Management Functions
 
-def save_to_keychain(key_name, key_value, service_name="ResistineVPN"):
-    """
-    Save a key/value pair to macOS Keychain
-    
-    Args:
-        key_name: Name identifier for the key (e.g., 'private_key', 'api_token')
-        key_value: The actual value to store securely
-        service_name: Service name in Keychain (default: 'ResistineVPN')
-    
-    Returns:
-        bool: True if successful, False otherwise
-    """
-    try:
-        # Use security command to store in keychain
-        subprocess.run([
-            'security', 'add-generic-password',
-            '-a', 'resistine-vpn-keys',  # Account name matching iOS
-            '-s', service_name,
-            '-w', key_value,
-            '-T', '',  # No specific application access
-            '-U'  # Update if exists
-        ], check=True, capture_output=True)
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Keychain save failed: {e}")
-        if e.stderr:
-            print(f"   Error details: {e.stderr.decode()}")
-        return False
-    except Exception as e:
-        print(f"❌ Keychain save failed: {e}")
-        return False
 
-def get_from_keychain(key_name, service_name="ResistineVPN"):
-    """
-    Retrieve a key/value pair from macOS Keychain
-    
-    Args:
-        key_name: Name identifier for the key (e.g., 'private_key', 'api_token')
-        service_name: Service name in Keychain (default: 'ResistineVPN')
-    
-    Returns:
-        str: The stored value, or None if not found
-    """
-    try:
-        result = subprocess.check_output([
-            'security', 'find-generic-password',
-            '-a', 'resistine-vpn-keys',  # Account name matching iOS
-            '-s', service_name,
-            '-w'
-        ], text=True, stderr=subprocess.DEVNULL).strip()
-        return result if result else None
-    except subprocess.CalledProcessError:
-        # Key not found in keychain
-        return None
-    except Exception as e:
-        print(f"❌ Keychain retrieval failed: {e}")
-        return None
+# Key management functions removed - replaced by utils.settings
 
-def delete_from_keychain(key_name, service_name="ResistineVPN"):
-    """
-    Delete a key/value pair from macOS Keychain
-    
-    Args:
-        key_name: Name identifier for the key to delete
-        service_name: Service name in Keychain (default: 'ResistineVPN')
-    
-    Returns:
-        bool: True if successful, False otherwise
-    """
-    try:
-        subprocess.run([
-            'security', 'delete-generic-password',
-            '-a', 'resistine-vpn-keys',  # Account name matching iOS
-            '-s', service_name
-        ], check=True, capture_output=True)
-        return True
-    except subprocess.CalledProcessError:
-        # Key doesn't exist, which is fine
-        return True
-    except Exception as e:
-        print(f"❌ Keychain deletion failed: {e}")
-        return False
-
-def key_exists_in_keychain(key_name, service_name="ResistineVPN"):
-    """
-    Check if a key exists in macOS Keychain
-    
-    Args:
-        key_name: Name identifier for the key to check
-        service_name: Service name in Keychain (default: 'ResistineVPN')
-    
-    Returns:
-        bool: True if key exists, False otherwise
-    """
-    try:
-        subprocess.check_output([
-            'security', 'find-generic-password',
-            '-a', 'resistine-vpn-keys',  # Account name matching iOS
-            '-s', service_name,
-            '-w'
-        ], stderr=subprocess.DEVNULL)
-        return True
-    except subprocess.CalledProcessError:
-        return False
-    except Exception:
-        return False
 
 def save_wireguard_keys(private_key, public_key):
     """
-    Save WireGuard keys to Keychain with iOS-compatible service names
-    
+    Save WireGuard keys.
+
     Args:
         private_key: WireGuard private key (string)
         public_key: WireGuard public key (string)
-    
+
     Returns:
         bool: True if successful, False otherwise
     """
-    # Save private key with iOS-compatible service name
-    private_success = save_to_keychain(
-        'private_key', 
-        private_key, 
-        service_name='com.resistine.wireguard.privatekey'
-    )
-    
-    # Save public key with iOS-compatible service name
-    public_success = save_to_keychain(
-        'public_key', 
-        public_key, 
-        service_name='com.resistine.wireguard.publickey'
-    )
-    
-    return private_success and public_success
+    p1 = settings.set_secret("wireguard", "private_key", private_key)
+    p2 = settings.set_secret("wireguard", "public_key", public_key)
+    return p1 and p2
+
 
 def get_wireguard_private_key():
     """Get WireGuard private key from Keychain"""
-    return get_from_keychain('private_key', service_name='com.resistine.wireguard.privatekey')
+    return settings.get_secret("wireguard", "private_key")
+
 
 def get_wireguard_public_key():
     """Get WireGuard public key from Keychain"""
-    return get_from_keychain('public_key', service_name='com.resistine.wireguard.publickey')
+    return settings.get_secret("wireguard", "public_key")
+
 
 def delete_wireguard_keys():
     """
     Delete WireGuard keys from Keychain (for key regeneration)
-    
+
     Returns:
         bool: True if successful, False otherwise
     """
-    private_deleted = delete_from_keychain('private_key', service_name='com.resistine.wireguard.privatekey')
-    public_deleted = delete_from_keychain('public_key', service_name='com.resistine.wireguard.publickey')
-    return private_deleted and public_deleted
+    d1 = settings.delete("wireguard", "private_key")
+    d2 = settings.delete("wireguard", "public_key")
+    return d1 and d2
+
 
 def wireguard_keys_exist():
     """Check if WireGuard keys exist in Keychain"""
-    private_exists = key_exists_in_keychain('private_key', service_name='com.resistine.wireguard.privatekey')
-    public_exists = key_exists_in_keychain('public_key', service_name='com.resistine.wireguard.publickey')
-    return private_exists and public_exists
+    private_key = settings.get_secret("wireguard", "private_key")
+    public_key = settings.get_secret("wireguard", "public_key")
+    return bool(private_key and public_key)
+
 
 def generate_wireguard_keys():
     """
     Generate WireGuard public/private key pair.
-    
+
     WireGuard keys are:
     - Private key: 32 bytes, base64-encoded (44 characters)
     - Public key: 32 bytes, base64-encoded (44 characters), derived from private key
-    
+
     Returns:
         dict: {
             'private_key': str,   # Base64-encoded private key (44 chars)
@@ -309,14 +216,16 @@ def generate_wireguard_keys():
         None: If key generation fails
     """
     try:
-        private_key = subprocess.check_output(['wg', 'genkey'], text=True).strip()
-        public_key = subprocess.check_output(['wg', 'pubkey'], input=private_key, text=True).strip()
-        
+        private_key = subprocess.check_output(["wg", "genkey"], text=True).strip()
+        public_key = subprocess.check_output(
+            ["wg", "pubkey"], input=private_key, text=True
+        ).strip()
+
         return {
-            'private_key': private_key,
-            'public_key': public_key,
+            "private_key": private_key,
+            "public_key": public_key,
         }
-        
+
     except subprocess.CalledProcessError as e:
         print(f"❌ Key generation command failed: {e}")
         return None
@@ -324,34 +233,36 @@ def generate_wireguard_keys():
         print(f"❌ Key generation failed: {e}")
         return None
 
+
 def start_vpn(config_path):
     """Start VPN using the privileged helper"""
-    
+
     success, output = vpn_helper.start_vpn(config_path)
     if success or "Interface for" in output:
         print(f"✅ VPN started: {output}")
-        
+
         # Extract and cache the actual utun interface
-        config_name = os.path.basename(config_path).replace('.conf', '')
-        match = re.search(r'Interface for \S+ is (\S+)', output)
+        config_name = os.path.basename(config_path).replace(".conf", "")
+        match = re.search(r"Interface for \S+ is (\S+)", output)
         if match:
             actual_interface = match.group(1)
             _interface_cache[config_name] = actual_interface
-        
+
         return True
     else:
         print(f"❌ VPN start failed: {output}")
         return False
 
+
 def stop_vpn(config_path):
     """Stop VPN using the privileged helper"""
-    
+
     success, output = vpn_helper.stop_vpn(config_path)
     if success or "stopped" in output.lower():
         print(f"✅ VPN stopped: {output}")
-        
+
         # Clear the cached interface mapping
-        config_name = os.path.basename(config_path).replace('.conf', '')
+        config_name = os.path.basename(config_path).replace(".conf", "")
         if config_name in _interface_cache:
             del _interface_cache[config_name]
         print(f"🔍 [CACHE] Cleared mapping for {config_name}")
@@ -360,47 +271,54 @@ def stop_vpn(config_path):
         print(f"❌ VPN stop failed: {output}")
         return False
 
+
 def check_service_status(interface_name, test_ip=None):
     """Check VPN status using the privileged helper
-    
+
     Args:
         interface_name: Config name (e.g., 'wg0') or actual interface name (e.g., 'utun10')
         test_ip: Optional IP to ping for connectivity test
     """
-    
+
     # Map config name to actual utun interface if available
     actual_interface = _interface_cache.get(interface_name, interface_name)
-    
+
     # If the interface_name is already a utun interface (starts with 'utun'), use it directly
-    if interface_name.startswith('utun'):
+    if interface_name.startswith("utun"):
         actual_interface = interface_name
-    
-    print(f"🔍 [STATUS] Checking status for interface: {interface_name} -> {actual_interface}")
+
+    print(
+        f"🔍 [STATUS] Checking status for interface: {interface_name} -> {actual_interface}"
+    )
     try:
         # ✅ Don't pass test_ip to avoid ping tests
         is_running, status = vpn_helper.check_status(actual_interface, None)
-        
-        print(f"📊 [STATUS] Helper returned: is_running={is_running}, status='{status}'")
-        
+
+        print(
+            f"📊 [STATUS] Helper returned: is_running={is_running}, status='{status}'"
+        )
+
         return "Running" if is_running else "Stopped"
-    
+
     except Exception as e:
         print(f"❌ [STATUS] Exception in check_service_status: {e}")
         import traceback
+
         traceback.print_exc()
         return "Stopped"
+
 
 def check_wireguard_installed():
     """Check if WireGuard is available on the system"""
     print("🔍 [WIREGUARD] Checking WireGuard installation...")
-    
+
     # Check for wg binary in system locations (same as Swift helper)
     wg_paths = [
-        "/usr/bin/wg",              # System installation (macOS built-in)
-        "/opt/homebrew/bin/wg",     # Apple Silicon Homebrew
-        "/usr/local/bin/wg"         # Intel Homebrew
+        "/usr/bin/wg",  # System installation (macOS built-in)
+        "/opt/homebrew/bin/wg",  # Apple Silicon Homebrew
+        "/usr/local/bin/wg",  # Intel Homebrew
     ]
-    
+
     wg_found = False
     wg_path = None
     for path in wg_paths:
@@ -409,21 +327,21 @@ def check_wireguard_installed():
             wg_found = True
             wg_path = path
             break
-    
+
     if not wg_found:
         print("❌ WireGuard (wg) not found in system locations")
         print("💡 Please install WireGuard:")
         print("   - Via Homebrew: brew install wireguard-tools")
         print("   - Or download from: https://www.wireguard.com/install/")
         return False
-    
+
     # Check for wg-quick in system locations (same as Swift helper)
     wg_quick_paths = [
-        "/usr/bin/wg-quick",          # System installation (macOS built-in)
-        "/opt/homebrew/bin/wg-quick", # Apple Silicon Homebrew
-        "/usr/local/bin/wg-quick"     # Intel Homebrew
+        "/usr/bin/wg-quick",  # System installation (macOS built-in)
+        "/opt/homebrew/bin/wg-quick",  # Apple Silicon Homebrew
+        "/usr/local/bin/wg-quick",  # Intel Homebrew
     ]
-    
+
     wg_quick_found = False
     wg_quick_path = None
     for path in wg_quick_paths:
@@ -432,28 +350,29 @@ def check_wireguard_installed():
             wg_quick_found = True
             wg_quick_path = path
             break
-    
+
     if not wg_quick_found:
         print("❌ WireGuard (wg-quick) not found in system locations")
         print("💡 Please install WireGuard:")
         print("   - Via Homebrew: brew install wireguard-tools")
         print("   - Or download from: https://www.wireguard.com/install/")
         return False
-    
+
     print("✅ WireGuard is properly installed and working on the system")
     return True
+
 
 def parse_and_create_vpn_config(vpn_config_json_string, config_name="wg0"):
     """
     Parse VPN configuration from server response and create WireGuard config file.
-    
+
     Args:
         vpn_config_json_string: JSON string containing VPN config from server
         config_name: Name for the config file (default: "wg0")
-    
+
     Returns:
         str: Path to created config file, or None if failed
-    
+
     Expected JSON structure:
     {
         "Peer": {
@@ -471,30 +390,38 @@ def parse_and_create_vpn_config(vpn_config_json_string, config_name="wg0"):
     try:
         # Parse the VPN config JSON string
         vpn_config = json.loads(vpn_config_json_string)
-        
+
         # Extract Peer configuration
         peer_config = vpn_config.get("Peer", {})
         server_public_key = peer_config.get("PublicKey", "")
         allowed_ips = peer_config.get("AllowedIPs", [])
         endpoint = peer_config.get("Endpoint", "")
-        
+
         # Extract Interface configuration
         interface_config = vpn_config.get("Interface", {})
         client_address = interface_config.get("Address", "")
         dns_servers = interface_config.get("DNS", [])
-        
+
         # Get private key from keychain (local function)
         private_key = get_wireguard_private_key()
         if not private_key:
             print("❌ Error: Private key not found in keychain")
             return None
-        
+
         # Convert AllowedIPs array to comma-separated string
-        allowed_ips_str = ", ".join(allowed_ips) if isinstance(allowed_ips, list) else str(allowed_ips)
-        
+        allowed_ips_str = (
+            ", ".join(allowed_ips)
+            if isinstance(allowed_ips, list)
+            else str(allowed_ips)
+        )
+
         # Convert DNS array to comma-separated string
-        dns_str = ", ".join(dns_servers) if isinstance(dns_servers, list) else str(dns_servers)
-        
+        dns_str = (
+            ", ".join(dns_servers)
+            if isinstance(dns_servers, list)
+            else str(dns_servers)
+        )
+
         # Build WireGuard config content
         config_content = f"""[Interface]
 PrivateKey = {private_key}
@@ -506,28 +433,28 @@ PublicKey = {server_public_key}
 AllowedIPs = {allowed_ips_str}
 Endpoint = {endpoint}
 """
-        
+
         # Get writable WireGuard directory
         wireguard_dir = get_writable_wireguard_dir()
-        
+
         # Create config file path
         config_filename = f"{config_name}.conf"
         config_path = os.path.join(wireguard_dir, config_filename)
-        
+
         # Write config file
         with open(config_path, "w") as config_file:
             config_file.write(config_content)
-        
+
         # Set strict permissions (600) to avoid "world accessible" warning
         os.chmod(config_path, 0o600)
-        
+
         print(f"✅ WireGuard config created at: {config_path}")
         print(f"   Server: {endpoint}")
         print(f"   Client IP: {client_address}")
         print(f"   DNS: {dns_str}")
-        
+
         return config_path
-                                
+
     except json.JSONDecodeError as e:
         print(f"❌ Error parsing VPN config JSON: {e}")
         return None
@@ -537,8 +464,10 @@ Endpoint = {endpoint}
     except Exception as e:
         print(f"❌ Error creating VPN config: {e}")
         import traceback
+
         traceback.print_exc()
         return None
+
 
 def setup_vpn_keys():
     """
@@ -550,31 +479,32 @@ def setup_vpn_keys():
         # Delete old keys (if they exist) to ensure fresh key pair
         print("Regenerating WireGuard keys for new login session")
         delete_wireguard_keys()
-        
+
         # Generate new key pair
         keys = generate_wireguard_keys()
         if not keys:
             print("❌ Failed to generate keys")
             return None
-        
+
         # Save both private and public keys to Keychain with iOS-compatible service names
-        if not save_wireguard_keys(keys['private_key'], keys['public_key']):
+        if not save_wireguard_keys(keys["private_key"], keys["public_key"]):
             print("❌ Failed to save keys securely")
             return None
-        
+
         # Get public key for API transmission
-        public_key = keys['public_key']
-        
+        public_key = keys["public_key"]
+
         if not public_key:
             print("❌ Failed to get public key")
             return None
-            
+
         print(f"✅ WireGuard Public Key Validated: Length={len(public_key)} characters")
         return public_key
 
     except Exception as e:
         print(f"❌ Error setting up VPN keys: {e}")
         return None
+
 
 def save_vpn_configuration(vpn_config_json):
     """
@@ -584,24 +514,34 @@ def save_vpn_configuration(vpn_config_json):
     try:
         if not vpn_config_json:
             return None
-            
+
         print("WireGuard config received from API")
-        
+
         # Log redacted config for debugging
         try:
-            vpn_config = json.loads(vpn_config_json) if isinstance(vpn_config_json, str) else vpn_config_json
+            vpn_config = (
+                json.loads(vpn_config_json)
+                if isinstance(vpn_config_json, str)
+                else vpn_config_json
+            )
             safe_config = {}
             if "Interface" in vpn_config:
                 safe_config["Interface"] = {
                     "Address": vpn_config["Interface"].get("Address", ""),
                     "DNS": vpn_config["Interface"].get("DNS", []),
-                    "PrivateKey": "[REDACTED]" if vpn_config["Interface"].get("PrivateKey") else None
+                    "PrivateKey": (
+                        "[REDACTED]"
+                        if vpn_config["Interface"].get("PrivateKey")
+                        else None
+                    ),
                 }
             if "Peer" in vpn_config:
                 safe_config["Peer"] = {
-                    "PublicKey": "[REDACTED]" if vpn_config["Peer"].get("PublicKey") else None,
+                    "PublicKey": (
+                        "[REDACTED]" if vpn_config["Peer"].get("PublicKey") else None
+                    ),
                     "AllowedIPs": vpn_config["Peer"].get("AllowedIPs", []),
-                    "Endpoint": vpn_config["Peer"].get("Endpoint", "")
+                    "Endpoint": vpn_config["Peer"].get("Endpoint", ""),
                 }
             print(f"VPN Config (redacted): {json.dumps(safe_config)}")
         except Exception as e:
@@ -609,23 +549,26 @@ def save_vpn_configuration(vpn_config_json):
 
         # Create config file
         config_path = parse_and_create_vpn_config(vpn_config_json, config_name="wg0")
-        
+
         if config_path:
             print("✅ VPN configuration saved successfully")
             return config_path
         else:
             print("❌ Failed to create VPN config")
             return None
-            
+
     except Exception as e:
         print(f"❌ Error creating VPN config: {e}")
         return None
+
+
 def ensure_helper_registered():
     """Register the privileged helper on macOS (runs silently on startup)"""
     try:
         from ServiceManagement import SMAppService
+
         plist_name = "com.resistine.plist"
-        
+
         # Create the service
         try:
             service = SMAppService.daemonServiceWithPlistName_(plist_name)
@@ -635,25 +578,30 @@ def ensure_helper_registered():
             except:
                 print("⚠️ Could not create SMAppService for helper")
                 return
-        
+
         # Check current status
         status = int(service.status())
-        status_map = {0: "notRegistered", 1: "enabled", 2: "requiresApproval", 3: "notFound"}
+        status_map = {
+            0: "notRegistered",
+            1: "enabled",
+            2: "requiresApproval",
+            3: "notFound",
+        }
         status_str = status_map.get(status, "unknown")
-        
+
         if status == 1:  # Already enabled
             print("✅ Helper already enabled")
             return
-        
+
         if status == 2:  # Requires approval
             print("⚠️ Helper registered but requires user approval")
             prompt_helper_approval(service)
             return
-        
+
         # Not registered yet (0 or 3), try to register
         print("🔧 Registering privileged helper...")
         error = service.registerAndReturnError_(None)
-        
+
         if error:
             print(f"⚠️ Helper registration error: {error}")
             # Check status again after registration attempt
@@ -662,24 +610,25 @@ def ensure_helper_registered():
                 prompt_helper_approval(service)
         else:
             print("✅ Helper registered successfully")
-            
+
     except ImportError:
         print("⚠️ ServiceManagement framework not available")
     except Exception as e:
         print(f"⚠️ Helper registration error: {e}")
 
+
 def prompt_helper_approval(service):
     """Prompt user to approve helper in System Settings"""
     try:
         import tkinter.messagebox as messagebox
-        
+
         response = messagebox.askyesno(
             "Helper Approval Required",
             "Resistine needs your approval to install a helper tool for VPN functionality.\n\n"
             "Click 'Yes' to open System Settings where you can enable it in Login Items.",
-            icon='info'
+            icon="info",
         )
-        
+
         if response:
             # Open System Settings → Login Items
             service.openSystemSettingsLoginItems()
