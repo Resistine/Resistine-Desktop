@@ -40,7 +40,5 @@ tqdm
 typing_extensions
 urllib3
 pyinstaller
-objc
-Foundation
-ServiceManagement
+pyobjc
 
