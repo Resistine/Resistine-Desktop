@@ -34,6 +34,7 @@ pyuac
 requests
 sniffio
 tee
+tkinterweb
 tqdm
 typing_extensions
 urllib3
