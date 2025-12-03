@@ -22,7 +22,14 @@ if [ ! -d ".venv" ]; then
 fi
 
 # Activate virtual environment
-source .venv/bin/activate
+if [ -f ".venv/bin/activate" ]; then
+    source .venv/bin/activate
+elif [ -f ".venv/Scripts/activate" ]; then
+    source .venv/Scripts/activate
+else
+    echo "Error: Cannot find activation script. Please run install.sh."
+    exit 1
+fi
 
 # Detect the operating system
 OS="$(uname -s)"
@@ -59,7 +66,7 @@ case "$OS" in
 esac
 
 # Run the application
-python3 main.py
+python main.py
     
 # Deactivate the virtual environment
 deactivate

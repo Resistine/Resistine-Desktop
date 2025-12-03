@@ -24,7 +24,7 @@ from utils import functions as myfunctions
 from utils import settings
 
 # Debug Window - controlled by command-line arguments
-DEBUG_WINDOW = True
+DEBUG_WINDOW = False
 from utils.debug_window import DebugWindow
 
 
