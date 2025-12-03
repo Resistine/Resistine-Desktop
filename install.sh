@@ -22,7 +22,8 @@ if [ -d ".venv" ]; then
     if [ "$delete_venv" == "y" ]; then
         rm -rf .venv
     else
-        echo "Please delete the .venv folder and run this script again."
+        echo "In case you want to run the app, just run the ./run.sh.
+        In case you want to reinstall it, please delete the .venv folder and run this script again."
         exit 1
     fi
 fi
@@ -117,13 +118,28 @@ case "$OS" in
       exit 1
     fi
     
-    # Check if packages are already installed
     PACKAGES_TO_INSTALL=""
-    for pkg in python@3.12 tcl-tk wireguard-tools; do
-      if ! brew list "$pkg" &>/dev/null; then
-        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL $pkg"
-      fi
-    done
+
+    # Check for Python
+    if command -v python3 >/dev/null; then
+        echo "Python3 is already installed."
+    else
+        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL python"
+    fi
+
+    # Check for WireGuard
+    if command -v wg >/dev/null; then
+        echo "WireGuard tools are already installed."
+    else
+        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL wireguard-tools"
+    fi
+
+    # Check for tcl-tk (via tkinter import)
+    if command -v python3 >/dev/null && python3 -c "import tkinter" >/dev/null 2>&1; then
+        echo "tcl-tk (tkinter) is already installed."
+    else
+        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL tcl-tk"
+    fi
     
     if [ -n "$PACKAGES_TO_INSTALL" ]; then
       echo "Installing missing packages:$PACKAGES_TO_INSTALL"
@@ -133,9 +149,8 @@ case "$OS" in
       echo "All required packages are already installed."
     fi
 
-    # Ensure we use Homebrew's Python
-    PY="$(brew --prefix python@3.12)/bin/python3"
-    "$PY" -m venv .venv
+    # Create venv using the available python3
+    python3 -m venv .venv
     ;;
 
   # Windows (Git Bash, Cygwin, MSYS2)
@@ -143,18 +158,16 @@ case "$OS" in
     # TODO: This should be run instead:
     # build_win_simple.py in the branch Test-Windows-Version
     
-    if ! command -v choco >/dev/null; then
-      echo "Chocolatey not found. Install from https://chocolatey.org/install"
-      exit 1
-    fi
-    
-    # Check if Python is already installed
-    if ! choco list --local-only python --exact &>/dev/null | grep -q "1 packages installed"; then
-      echo "Installing Python..."
-      choco upgrade chocolatey
-      choco install -y python
+    if ! command -v python >/dev/null; then
+        echo "Python not found. Checking for winget..."
+        if ! command -v winget >/dev/null; then
+            echo "winget not found. Please ensure App Installer is installed from Microsoft Store."
+            exit 1
+        fi
+        echo "Installing Python via winget..."
+        winget install -e --id Python.Python.3.13 --accept-package-agreements --accept-source-agreements
     else
-      echo "Python is already installed."
+        echo "Python is already installed."
     fi
 
     if [ ! -d ".venv" ]; then

@@ -20,7 +20,7 @@ jaraco.functools
 jeepney
 jiter
 keyring
-Markdown
+markdown
 more-itertools
 openai
 packaging
@@ -28,14 +28,15 @@ pillow
 pycparser
 pydantic
 pydantic_core
+pyinstaller
 python-dotenv
 python-wireguard
 pyuac
 requests
-SecretStorage
+secretstorage
 sniffio
 tee
+tkinterweb
 tqdm
 typing_extensions
 urllib3
-pyinstaller
