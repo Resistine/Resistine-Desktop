@@ -163,6 +163,25 @@ class MarkdownViewer(customtkinter.CTkFrame):
 
             # Set base_url for relative links
             base_url = "file://" + os.path.abspath(self.current_dir) + "/"
+
+            # Post-process HTML to linkify URLs in code blocks
+            # Find <pre><code>...</code></pre> blocks
+            import re
+
+            code_block_pattern = re.compile(
+                r"(<pre><code>)(.*?)(</code></pre>)", re.DOTALL
+            )
+
+            def replace_code_block(match):
+                prefix = match.group(1)
+                content = match.group(2)
+                suffix = match.group(3)
+                # Content is already HTML escaped by markdown
+                linked_content = self._linkify_text(content, is_escaped=True)
+                return f"{prefix}{linked_content}{suffix}"
+
+            html_content = code_block_pattern.sub(replace_code_block, html_content)
+
             self.html_frame.load_html(css + html_content, base_url=base_url)
         elif file_path.endswith(".html") or file_path.endswith(".htm"):
             self.html_frame.load_file(file_path)
@@ -171,57 +190,8 @@ class MarkdownViewer(customtkinter.CTkFrame):
             with open(file_path, "r", encoding="utf-8") as f:
                 text_content = f.read()
 
-            # # Escape HTML special characters
-            # text_content = (
-            #     text_content.replace("&", "&amp;")
-            #     .replace("<", "&lt;")
-            #     .replace(">", "&gt;")
-            # )
-
-            # Linkify URLs
-            import re
-
-            # Regex to match URLs, excluding < and > and escaped &lt; &gt;
-            # We look for http/https URLs
-            # This regex stops at whitespace, <, >, or &lt; or &gt;
-            url_pattern = re.compile(r"(https?://(?:(?!&lt;|[<>]).)+)")
-
-            parts = url_pattern.split(text_content)
-            final_content = []
-
-            for i, part in enumerate(parts):
-                if i % 2 == 0:
-                    # This is text, escape it
-                    escaped_part = (
-                        part.replace("&", "&amp;")
-                        .replace("<", "&lt;")
-                        .replace(">", "&gt;")
-                    )
-                    final_content.append(escaped_part)
-                else:
-                    # This is a URL, make it a link
-                    # Check if the URL ends with punctuation that should be stripped
-                    url = part
-                    trailing_punct = ""
-
-                    # Handle trailing &gt; if it somehow got included (though regex should prevent it)
-                    if url.endswith("&gt;"):
-                        url = url[:-4]
-                        trailing_punct = "&gt;" + trailing_punct
-
-                    # Common trailing punctuation
-                    if (
-                        url.endswith(".")
-                        or url.endswith(",")
-                        or url.endswith(";")
-                        or url.endswith(")")
-                    ):
-                        trailing_punct = url[-1] + trailing_punct
-                        url = url[:-1]
-
-                    final_content.append(f'<a href="{url}">{url}</a>{trailing_punct}')
-
-            text_content = "".join(final_content)
+            # Linkify URLs (text is not escaped yet)
+            text_content = self._linkify_text(text_content, is_escaped=False)
 
             # Get current appearance mode
             appearance_mode = customtkinter.get_appearance_mode()
@@ -243,32 +213,71 @@ class MarkdownViewer(customtkinter.CTkFrame):
 
             self.html_frame.load_html(html_content)
 
+    def _linkify_text(self, text, is_escaped=False):
+        """Convert URLs in text to anchor tags."""
+        import re
+
+        # Regex to match URLs, excluding < and > and escaped &lt; &gt;
+        # We look for http/https URLs
+        # This regex stops at whitespace, <, >, or &lt; or &gt;
+        url_pattern = re.compile(r"(https?://(?:(?!&lt;|&gt;|[<>]).)+)")
+
+        parts = url_pattern.split(text)
+        final_content = []
+
+        for i, part in enumerate(parts):
+            if i % 2 == 0:
+                # This is text
+                if not is_escaped:
+                    # Escape it if not already escaped
+                    part = (
+                        part.replace("&", "&amp;")
+                        .replace("<", "&lt;")
+                        .replace(">", "&gt;")
+                    )
+                final_content.append(part)
+            else:
+                # This is a URL, make it a link
+                # Check if the URL ends with punctuation that should be stripped
+                url = part
+                trailing_punct = ""
+
+                # Handle trailing &gt; if it somehow got included
+                if url.endswith("&gt;"):
+                    url = url[:-4]
+                    trailing_punct = "&gt;" + trailing_punct
+
+                # Common trailing punctuation
+                if (
+                    url.endswith(".")
+                    or url.endswith(",")
+                    or url.endswith(";")
+                    or url.endswith(")")
+                ):
+                    trailing_punct = url[-1] + trailing_punct
+                    url = url[:-1]
+
+                final_content.append(f'<a href="{url}">{url}</a>{trailing_punct}')
+
+        return "".join(final_content)
+
     def on_link_click(self, url):
         print(f"Link clicked: {url}")
-        # TODO: this is an example for debug/verbose output
         # print(f"Current dir: {self.current_dir}")
 
         # Check if it's a local file
         if "://" not in url:
             # Relative path
             target_path = os.path.join(self.current_dir, url)
-            # TODO: this is an example for debug/verbose output
-            # print(f"Checking relative path: {target_path}")
             if os.path.exists(target_path):
-                # print(f"Loading file: {target_path}")
                 self.load_file(target_path)
                 return  # Don't call default handler
         elif url.startswith("file://"):
             target_path = url[7:]
-            # TODO: this is an example for debug/verbose output
-            # print(f"Checking file:// path: {target_path}")
             if os.path.exists(target_path):
-                # print(f"Loading file: {target_path}")
                 self.load_file(target_path)
                 return  # Don't call default handler
 
-        # TODO: In case we would like to open something safe, let's do it here
-        # For example, we could open a local file or a web page
         # External link - open in browser
         print(f"Opening external link: {url}")
         webbrowser.open(url)
