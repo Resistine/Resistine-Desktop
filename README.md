@@ -2,9 +2,6 @@
 
 for Windows, Mac and Linux Desktops
 
-Copyright (C) 2025 Resistine
-This program is free software under the terms of the GNU General Public License v2 or later
-
 ## Prerequisites
 
 - Python 3.12 or later (unless using the precompiled distribution)
@@ -36,7 +33,7 @@ options:
 --log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}
 Set logging level (default: INFO)
 
-# Setup Instructions for Mac OS
+## Setup Instructions for Mac OS
 
 ### 1. Configuration
 
@@ -71,9 +68,9 @@ Edit `plugins/vpn/wireguard/wg0.conf` with your VPN server details:
 Add your OpenAI API key for functional AI.
 Edit `plugins/chat/main.py` on line 47 with your OpenAI api key
 
-## Building the Application
+### Building the Application
 
-### Quick Build (Signed but not notarized)
+#### Quick Build (Signed but not notarized)
 
 ```bash
 python3 build_dmg_simple.py
@@ -86,7 +83,22 @@ This will:
 - Create a DMG installer file
 - Notarize and staple the dmg
 
-## Output Files
+### Output Files
 
 - `dist/Resistine.app` - The signed application bundle
 - `Resistine-Notarized-1.0.0.dmg` - Notarized DMG (if using full build)
+
+
+## License
+
+Resistine AI EndPoint Detection and Response (AI EDR)
+
+for Windows, Mac and Linux Desktops
+
+Copyright (C) 2025 Resistine
+
+This program is free software under the terms of the GNU General Public License v2 or later
+
+Resistine comes with ABSOLUTELY NO WARRANTY.
+
+See the [LICENSE](../LICENSE) file for more details.
