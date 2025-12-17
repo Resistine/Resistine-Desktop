@@ -138,7 +138,12 @@ case "$OS" in
     if command -v python3 >/dev/null && python3 -c "import tkinter" >/dev/null 2>&1; then
         echo "tcl-tk (tkinter) is already installed."
     else
-        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL tcl-tk"
+        if command -v python3 >/dev/null; then
+            PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+            PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL python-tk@$PY_VER"
+        else
+            PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL tcl-tk"
+        fi
     fi
     
     if [ -n "$PACKAGES_TO_INSTALL" ]; then
@@ -165,7 +170,7 @@ case "$OS" in
             exit 1
         fi
         echo "Installing Python via winget..."
-        winget install -e --id Python.Python.3.13 --accept-package-agreements --accept-source-agreements
+        winget install -e --id Python.Python.3.14 --accept-package-agreements --accept-source-agreements
     else
         echo "Python is already installed."
     fi
