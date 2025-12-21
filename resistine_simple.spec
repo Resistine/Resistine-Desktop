@@ -18,7 +18,8 @@ a = Analysis(
         'PIL', 'PIL._tkinter_finder', 'customtkinter', 'darkdetect',
         'keyring', 'cryptography', 'cryptography.fernet', 'markdown', 'openai', 'requests',
         'objc', 'Foundation','ServiceManagement', 
-        'html2text', 'html2text.html2text', 'plugins.plugin_manager', 'utils.functions'
+        'html2text', 'html2text.html2text', 'plugins.plugin_manager', 'utils.functions',
+        'tkinterweb', 'tkinterweb_tkhtml'
     ],
     
     hookspath=[],
