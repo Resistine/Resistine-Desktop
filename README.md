@@ -5,7 +5,7 @@ for Windows, Mac and Linux Desktops
 ## Prerequisites
 
 - Python 3.12 or later (unless using the precompiled distribution)
-- Windows 11, Linux or macOS 10.15 or later
+- Windows 11, Linux and macOS 15 or later
 - Apple Developer Account (for code signing and notarization)
 
 ## Installation
@@ -28,10 +28,22 @@ Resistine Desktop Application
 
 options:
 -h, --help Show this help message and exit
--d, --debug Enable debug window for real-time logging
--v, --verbose Enable verbose logging output
---log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}
+-d, --debug Enable debug mode for real-time debugging
+-l, --log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}
 Set logging level (default: INFO)
+
+## Coding and debugging
+
+To run Resistine in debug mode, use the following command:
+
+$ ./run.sh -d
+
+This will run Resistine in debug mode, which enables a few features:
+
+- A runtime inspector that allows you to inspect the runtime state of the application
+- DEPRECATED: You can also use the debug window that allows you to inspect the runtime state of the application
+
+The application automatically detects if it is running in IDEs (like VSCode, PyCharm / JetBrains) and enables the debug mode.
 
 ## Setup Instructions for Mac OS
 
@@ -87,7 +99,6 @@ This will:
 
 - `dist/Resistine.app` - The signed application bundle
 - `Resistine-Notarized-1.0.0.dmg` - Notarized DMG (if using full build)
-
 
 ## License
 
