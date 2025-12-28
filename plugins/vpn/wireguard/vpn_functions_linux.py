@@ -5,7 +5,7 @@ This module contains functions for managing a WireGuard VPN on Linux.
 The functions include checking if WireGuard is installed, generating keys,
 creating a WireGuard configuration file, starting and stopping the VPN service,
 and checking the status of the VPN service.
-Author: Peres J. and the Resistine Team
+Author: Petr and the Resistine Team
 Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
@@ -13,8 +13,11 @@ Licensed under the GNU General Public License v2 or later
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
+import tkinter as tk
+from tkinter import simpledialog
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -41,6 +44,63 @@ def is_admin():
     return os.geteuid() == 0
 
 
+def run_privileged_command(command_args):
+    """
+    Run a command with elevated privileges using pkexec or sudo fallback.
+
+    :param command_args: List of command arguments (e.g., ["wg", "show"])
+    :return: subprocess.CompletedProcess or None if failed
+    """
+    # Try pkexec first (standard GUI way)
+    if shutil.which("pkexec"):
+        try:
+            logger.info(f"Attempting to run with pkexec: {command_args}")
+            # pkexec runs the command directly, handling the GUI prompt
+            return subprocess.run(
+                ["pkexec"] + command_args, check=True, capture_output=True, text=True
+            )
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"pkexec failed: {e}. Falling back to sudo.")
+        except Exception as e:
+            logger.warning(f"pkexec error: {e}. Falling back to sudo.")
+
+    # Fallback to sudo with GUI password prompt
+    logger.info("Falling back to sudo with GUI password prompt")
+
+    # Create a hidden root window for the dialog
+    root = tk.Tk()
+    root.withdraw()  # Hide the main window
+
+    password = simpledialog.askstring(
+        "Password Required",
+        f"Privileges required for: {' '.join(command_args)}\nEnter sudo password:",
+        show="*",
+        parent=root,
+    )
+
+    root.destroy()
+
+    if not password:
+        logger.warning("User cancelled password prompt")
+        return None
+
+    try:
+        # Run sudo with -S to read password from stdin
+        return subprocess.run(
+            ["sudo", "-S"] + command_args,
+            input=password + "\n",
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        logger.error(f"sudo failed: {e.stderr}")
+        return None
+    except Exception as e:
+        logger.error(f"sudo error: {e}")
+        return None
+
+
 def run_as_admin(file_path):
     """
     Attempt to elevate the script to admin privileges on Linux.
@@ -53,12 +113,12 @@ def run_as_admin(file_path):
         return True
     else:
         print("Attempting to elevate to root...")
-        try:
-            subprocess.run(["sudo", sys.executable, file_path], check=True)
+        result = run_privileged_command([sys.executable, file_path])
+        if result and result.returncode == 0:
             print("Elevation request accepted.")
             return True
-        except Exception as e:
-            print(f"Elevation request denied or failed: {e}")
+        else:
+            print("Elevation request denied or failed.")
             return False
 
 
@@ -67,13 +127,22 @@ def run_installer_as_admin(file_path):
     Run an installer file with admin privileges.
 
     :param file_path: The path to the installer file.
+    :return: True if successful, False otherwise.
     """
     try:
         print(f"Running installer as admin: {file_path}...")
-        subprocess.run(["sudo", "apt", "install", "wireguard"], check=True)
-        print("WireGuard installation command executed.")
+        # Note: apt might be interactive, but for now we try basic install
+        # Ideally we'd use a proper packagekit client, but this is a quick fix
+        result = run_privileged_command(["apt", "install", "-y", "wireguard"])
+        if result and result.returncode == 0:
+            print("WireGuard installation command executed.")
+            return True
+        else:
+            print("Failed to install WireGuard.")
+            return False
     except Exception as e:
         print(f"Error during installation: {e}")
+        return False
 
 
 def generate_wireguard_keys():
@@ -104,6 +173,44 @@ def generate_wireguard_keys():
     except Exception as e:
         logger.error(f"Key generation failed: {e}")
         return None
+
+
+def get_wireguard_private_key():
+    """Retrieve the WireGuard private key from the keys file."""
+    try:
+        if os.path.exists(KEYS_FILE_PATH):
+            with open(KEYS_FILE_PATH, "r") as f:
+                keys = json.load(f)
+                return keys.get("private_key")
+        return None
+    except Exception as e:
+        logger.error(f"Error retrieving private key: {e}")
+        return None
+
+
+def save_wireguard_keys(private_key, public_key):
+    """Save the WireGuard keys to the keys file securely."""
+    try:
+        os.makedirs(os.path.dirname(KEYS_FILE_PATH), exist_ok=True)
+        keys = {"private_key": private_key, "public_key": public_key}
+        with open(KEYS_FILE_PATH, "w") as f:
+            json.dump(keys, f)
+        os.chmod(KEYS_FILE_PATH, 0o600)
+        return True
+    except Exception as e:
+        logger.error(f"Error saving keys: {e}")
+        return False
+
+
+def delete_wireguard_keys():
+    """Delete the WireGuard keys file."""
+    try:
+        if os.path.exists(KEYS_FILE_PATH):
+            os.remove(KEYS_FILE_PATH)
+        return True
+    except Exception as e:
+        logger.error(f"Error deleting keys: {e}")
+        return False
 
 
 def parse_and_create_vpn_config(vpn_config_json_string, config_name="wg0"):
@@ -165,7 +272,6 @@ Endpoint = {endpoint}
 """
 
         # Determine config path using the shared utility
-        # Determine config path using the shared utility
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
         wireguard_dir = get_writable_wireguard_dir()
@@ -206,13 +312,9 @@ def check_service_status(interface_name, test_ip):
     """
     try:
         # Check if interface exists
-        result = subprocess.run(
-            ["sudo", "wg", "show", interface_name],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
+        result = run_privileged_command(["wg", "show", interface_name])
+
+        if not result or result.returncode != 0:
             return "Stopped"
 
         # Optional: Check connectivity
@@ -242,18 +344,14 @@ def check_wireguard_installed():
     """
     try:
         subprocess.run(["which", "wg"], check=True, capture_output=True, text=True)
-        # print("WireGuard (wg) is installed.")
     except Exception:
-        # print("WireGuard (wg) is not installed.")
         return False
 
     try:
         subprocess.run(
             ["which", "wg-quick"], check=True, capture_output=True, text=True
         )
-        # print("WireGuard (wg-quick) is installed.")
     except Exception:
-        # print("WireGuard (wg-quick) is not installed.")
         return False
     return True
 
@@ -266,11 +364,11 @@ def stop_vpn(config_path):
     :return: True if the service is stopped successfully, False otherwise.
     """
     try:
-        # If config_path is a full path, wg-quick might need just the conf file or the interface name
-        # Usually wg-quick up /path/to/conf works.
-        command = ["sudo", "wg-quick", "down", config_path]
-        output = subprocess.run(command, check=True)
-        return True
+        command = ["wg-quick", "down", config_path]
+        result = run_privileged_command(command)
+        if result and result.returncode == 0:
+            return True
+        return False
     except Exception as e:
         logger.error(f"Failed to stop VPN service: {e}")
         return False
@@ -284,9 +382,11 @@ def start_vpn(config_path):
     :return: True if the service is started successfully, False otherwise.
     """
     try:
-        command = ["sudo", "wg-quick", "up", config_path]
-        output = subprocess.run(command, check=True)
-        return True
+        command = ["wg-quick", "up", config_path]
+        result = run_privileged_command(command)
+        if result and result.returncode == 0:
+            return True
+        return False
     except Exception as e:
         logger.error(f"Failed to start VPN service: {e}")
         return False
@@ -299,7 +399,6 @@ def setup_vpn_keys():
     """
     try:
         # Step 1: Regenerate fresh keys for this sign-in session
-        # Delete old keys (if they exist) to ensure fresh key pair
         logger.debug("Regenerating WireGuard keys for new login session")
         delete_wireguard_keys()
 

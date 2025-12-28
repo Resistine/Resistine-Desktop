@@ -8,24 +8,23 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import argparse
-import io
 import logging
 import os
-import re
-import subprocess
 import sys
 import tkinter as tk
 
 import customtkinter
-from PIL import Image
 
 from plugins.plugin_manager import PluginManager
-from utils import functions as myfunctions
+from utils import functions as functions
 from utils import settings
 
 # Debug Window - controlled by command-line arguments
-DEBUG_WINDOW = False
 from utils.debug_window import DebugWindow
+from utils.inspector import RuntimeInspector
+
+DEBUG_WINDOW = False
+DEBUG = False
 
 
 class App(customtkinter.CTk):
@@ -130,7 +129,7 @@ class App(customtkinter.CTk):
             try:
                 # Create the buttons for each plugin
                 plugin.set_button(
-                    myfunctions.create_tab_button(
+                    functions.create_tab_button(
                         self.navigation_frame,
                         plugin.get_name(),
                         plugin.get_icon(),
@@ -177,12 +176,10 @@ if __name__ == "__main__":
         "-d",
         "--debug",
         action="store_true",
-        help="Enable debug window for real-time logging",
+        help="Enable debug mode for real-time debugging",
     )
     parser.add_argument(
-        "-v", "--verbose", action="store_true", help="Enable verbose logging output"
-    )
-    parser.add_argument(
+        "-l",
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         default="INFO",
@@ -191,27 +188,34 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Configure logging based on arguments
+    # Configure logging based on configuration and flags
     log_level = getattr(logging, args.log_level)
+
+    # Determine if we should be in DEBUG mode
+    if args.debug or functions.is_running_in_ide():
+        DEBUG = True
+
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    if args.verbose:
-        logging.info(f"Verbose mode enabled")
-        logging.info(f"Platform: {sys.platform}")
-        logging.info(f"Python version: {sys.version}")
-        logging.info(f"Working directory: {os.getcwd()}")
-
-    # Set debug window flag from command-line argument
-    if not DEBUG_WINDOW and args.debug:
-        DEBUG_WINDOW = True
-
+    # DEPRECATED: Debug window flag can be set from code only
     if DEBUG_WINDOW:
-        logging.info("Debug window enabled via command-line argument")
+        logging.info("Debug window enabled")
 
     # Start the application
     app = App()
+
+    if DEBUG:
+        logging.info("Debug mode enabled")
+        logging.info("Platform: %s", sys.platform)
+        logging.info("Python version: %s", sys.version)
+        logging.info("Working directory: %s", os.getcwd())
+        logging.info("Running in IDE: %s", functions.is_running_in_ide())
+
+        # Attach Inspector
+        app.inspector = RuntimeInspector(app)
+
     app.mainloop()
