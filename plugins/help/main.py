@@ -1,3 +1,12 @@
+## @file main.py
+## @namespace plugins.help
+"""
+This plugin provides help documentation.
+Author: Petr and the Resistine Team
+Copyright (c) Resistine 2025
+Licensed under the GNU General Public License v2 or later
+"""
+
 import os
 
 import customtkinter

@@ -155,15 +155,40 @@ class App(customtkinter.CTk):
         :param name: The name of the frame to display.
         :param button: The button associated with the frame.
         """
+        # Clear the main area before showing the new frame
+        for widget in self.grid_slaves(row=0, column=1):
+            widget.grid_forget()
+
         for frame_name, frame in self.frames.items():
             if frame_name == name:
                 if button:
                     button.configure(fg_color=("gray75", "gray25"))
-                frame.create_main_screen().grid(row=0, column=1, sticky="nsew")
+                try:
+                    frame.create_main_screen().grid(row=0, column=1, sticky="nsew")
+                except Exception as e:
+                    print(f"Error loading plugin frame {name}: {e}")
+                    # Update status to error so it shows on the dashboard
+                    frame.set_status("Error")
+
+                    # Update button color to red for immediate feedback
+                    btn = frame.get_button()
+                    if btn:
+                        btn.configure(text_color="red")
+
+                    # Show error message in place of the plugin content
+                    error_frame = customtkinter.CTkFrame(self)
+                    error_frame.grid(row=0, column=1, sticky="nsew")
+
+                    error_label = customtkinter.CTkLabel(
+                        error_frame,
+                        text=f"Error loading plugin:\n{e}",
+                        text_color="red",
+                        wraplength=400,
+                    )
+                    error_label.pack(expand=True, padx=20, pady=20)
             else:
                 if button:
                     button.configure(fg_color="transparent")
-                frame.create_main_screen().grid_forget()
 
 
 if __name__ == "__main__":

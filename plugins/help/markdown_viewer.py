@@ -1,3 +1,12 @@
+## @file markdown_viewer.py
+## @namespace plugins.help
+"""
+Markdown viewer for the Help plugin, that provides help documentation.
+Author: Petr and the Resistine Team
+Copyright (c) Resistine 2025
+Licensed under the GNU General Public License v2 or later
+"""
+
 import os
 import webbrowser
 
@@ -7,6 +16,10 @@ from tkinterweb import HtmlFrame
 
 
 class MarkdownViewer(customtkinter.CTkFrame):
+
+    # Root files to add to the dropdown
+    root_files = ["README.md", "LICENSE.md"]
+
     def __init__(self, master, docs_dir=None, **kwargs):
         super().__init__(master, **kwargs)
 
@@ -65,8 +78,7 @@ class MarkdownViewer(customtkinter.CTkFrame):
         # Add root files
         if self.docs_dir:
             project_root = os.path.dirname(self.docs_dir)
-            root_files = ["README.md", "LICENSE"]
-            for f in root_files:
+            for f in self.root_files:
                 if os.path.exists(os.path.join(project_root, f)):
                     files.append(f)
 
