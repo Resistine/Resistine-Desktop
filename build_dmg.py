@@ -45,14 +45,14 @@ def run_command(cmd, description):
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
         print(f"✅ {description} completed")
-        return True
+        return result
     except subprocess.CalledProcessError as e:
         print(f"❌ Error: {e}")
         if e.stdout:
             print(f"stdout: {e.stdout}")
         if e.stderr:
             print(f"stderr: {e.stderr}")
-        return False
+        return None
 
 
 def clean_previous_builds():
