@@ -16,9 +16,9 @@ import os
 import shutil
 import subprocess
 import sys
-import tkinter as tk
 
 from utils.dialogs import CTkPasswordDialog
+from utils.i18n import get_text
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -82,8 +82,8 @@ def run_privileged_command(command_args):
     logger.info("Falling back to sudo with themed password prompt")
 
     dialog = CTkPasswordDialog(
-        title="Password Required",
-        text=f"Privileges required for: {' '.join(command_args)}\nEnter sudo password:",
+        title=get_text("dialog.password.title"),
+        text=get_text("vpn.linux.privileges_required", command=command_args[0]),
     )
     password = dialog.get_input()
 

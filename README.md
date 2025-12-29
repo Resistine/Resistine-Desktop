@@ -22,7 +22,7 @@ This will update the dependencies and run Resistine EndPoint
 
 ## Command Line Arguments
 
-usage: main.py [-h] [-d] [-v] [--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}]
+usage: main.py [-h] [-d] [-l {DEBUG,INFO,WARNING,ERROR,CRITICAL}]
 
 Resistine Desktop Application
 
@@ -112,4 +112,4 @@ This program is free software under the terms of the GNU General Public License 
 
 Resistine comes with ABSOLUTELY NO WARRANTY.
 
-See the [LICENSE](../LICENSE) file for more details.
+See the [LICENSE](LICENSE.md) file for more details.
