@@ -17,7 +17,8 @@ import shutil
 import subprocess
 import sys
 import tkinter as tk
-from tkinter import simpledialog
+
+from utils.dialogs import CTkPasswordDialog
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -54,31 +55,37 @@ def run_privileged_command(command_args):
     # Try pkexec first (standard GUI way)
     if shutil.which("pkexec"):
         try:
-            logger.info(f"Attempting to run with pkexec: {command_args}")
+            # Resolve absolute path for the command
+            # pkexec often fails if the command is not in its minimal PATH (exit code 126)
+            executable = shutil.which(command_args[0])
+            full_command_args = (
+                [executable] + command_args[1:] if executable else command_args
+            )
+
+            logger.info(f"Attempting to run with pkexec: {full_command_args}")
             # pkexec runs the command directly, handling the GUI prompt
             return subprocess.run(
-                ["pkexec"] + command_args, check=True, capture_output=True, text=True
+                ["pkexec"] + full_command_args,
+                check=True,
+                capture_output=True,
+                text=True,
             )
         except subprocess.CalledProcessError as e:
-            logger.warning(f"pkexec failed: {e}. Falling back to sudo.")
+            error_msg = e.stderr.strip() or e.stdout.strip() or "No output"
+            logger.warning(
+                f"pkexec failed (code {e.returncode}): {error_msg}. Falling back to sudo."
+            )
         except Exception as e:
             logger.warning(f"pkexec error: {e}. Falling back to sudo.")
 
     # Fallback to sudo with GUI password prompt
-    logger.info("Falling back to sudo with GUI password prompt")
+    logger.info("Falling back to sudo with themed password prompt")
 
-    # Create a hidden root window for the dialog
-    root = tk.Tk()
-    root.withdraw()  # Hide the main window
-
-    password = simpledialog.askstring(
-        "Password Required",
-        f"Privileges required for: {' '.join(command_args)}\nEnter sudo password:",
-        show="*",
-        parent=root,
+    dialog = CTkPasswordDialog(
+        title="Password Required",
+        text=f"Privileges required for: {' '.join(command_args)}\nEnter sudo password:",
     )
-
-    root.destroy()
+    password = dialog.get_input()
 
     if not password:
         logger.warning("User cancelled password prompt")
