@@ -12,6 +12,7 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import os
+from pathlib import Path
 
 import customtkinter
 
@@ -21,17 +22,9 @@ from utils.i18n import get_text
 
 
 class Plugin(BasePlugin):
-    """
-    @brief Plugin class for the Settings plugin.
-    Plugin class for the Settings plugin, that allows user to configure their account settings.
-    """
+    """Settings plugin (API key + theme controls)."""
 
     def __init__(self, app):
-        """
-        @brief Initialize the Settings plugin.
-        Initialize the Settings plugin with the specified parameters.
-        :param app: Main application object.
-        """
         super().__init__(
             id="010",
             order=10,
@@ -49,17 +42,39 @@ class Plugin(BasePlugin):
         )
         self.app = app
 
+    def _themes_dir(self) -> str:
+        project_root = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+        )
+        return os.path.join(project_root, "resources", "themes")
+
+    def _available_color_themes(self) -> list[str]:
+        themes_dir = Path(self._themes_dir())
+        if not themes_dir.exists():
+            return []
+        return sorted([p.stem for p in themes_dir.glob("*.json")])
+
+    def _apply_theme_refresh(self):
+        # Prefer a lightweight refresh (no plugin re-instantiation)
+        if hasattr(self.app, "refresh_ui_theme"):
+            try:
+                self.app.refresh_ui_theme()
+                return
+            except Exception as e:
+                print(f"Theme refresh failed: {e}")
+
+        # Fallback: at least force a repaint
+        try:
+            self.app.update_idletasks()
+        except Exception:
+            pass
+
     def create_main_screen(self):
-        """
-        @brief Create the main screen for the Settings plugin.
-        Create the main screen for the Settings plugin.
-        """
         self.frame_5 = customtkinter.CTkFrame(
             self.app, corner_radius=0, fg_color="transparent"
         )
         self.frame_5.grid_columnconfigure(0, weight=1)
-        # Add more rows for API key settings
-        self.frame_5.grid_rowconfigure((0, 1, 2, 3, 4, 5), weight=0)
+        self.frame_5.grid_rowconfigure(tuple(range(0, 20)), weight=0)
 
         # --- Profile Section ---
         self.profile_name_label = customtkinter.CTkLabel(
@@ -86,7 +101,6 @@ class Plugin(BasePlugin):
                 print(f"Error reading email settings: {e}")
                 email = "Not available"
         else:
-            # Email is stored via API authentication, not in local file
             email = "Authenticated via API"
 
         self.profile_email_label = customtkinter.CTkLabel(
@@ -110,11 +124,10 @@ class Plugin(BasePlugin):
             self.frame_5,
             placeholder_text=get_text("settings.apikey.placeholder"),
             width=400,
-            show="*",  # Mask the key
+            show="*",
         )
         self.api_key_entry.grid(row=4, column=0, padx=20, pady=5, sticky="w")
 
-        # Pre-fill existing key if available
         existing_key = settings.get_secret("chat", "openai_api_key")
         if existing_key:
             self.api_key_entry.insert(0, existing_key)
@@ -131,6 +144,61 @@ class Plugin(BasePlugin):
         )
         self.status_label.grid(row=6, column=0, padx=20, pady=5, sticky="w")
 
+        # --- Separator (Theme) ---
+        separator2 = customtkinter.CTkFrame(self.frame_5, height=2, fg_color="gray50")
+        separator2.grid(row=7, column=0, padx=20, pady=20, sticky="ew")
+
+        # --- Appearance / Theme Section ---
+        appearance_title = customtkinter.CTkLabel(
+            self.frame_5,
+            text="Appearance",
+            font=customtkinter.CTkFont(size=16, weight="bold"),
+        )
+        appearance_title.grid(row=8, column=0, padx=20, pady=(0, 10), sticky="w")
+
+        appearance_label = customtkinter.CTkLabel(
+            self.frame_5,
+            text="Appearance Mode:",
+            font=customtkinter.CTkFont(size=14),
+        )
+        appearance_label.grid(row=9, column=0, padx=20, pady=(0, 5), sticky="w")
+
+        self.appearance_mode_var = customtkinter.StringVar(
+            value=customtkinter.get_appearance_mode()
+        )
+        appearance_menu = customtkinter.CTkOptionMenu(
+            self.frame_5,
+            values=["Light", "Dark", "System"],
+            variable=self.appearance_mode_var,
+            command=self.change_appearance_mode,
+            width=240,
+        )
+        appearance_menu.grid(row=10, column=0, padx=20, pady=(0, 15), sticky="w")
+
+        theme_label = customtkinter.CTkLabel(
+            self.frame_5,
+            text="Color Theme:",
+            font=customtkinter.CTkFont(size=14),
+        )
+        theme_label.grid(row=11, column=0, padx=20, pady=(0, 5), sticky="w")
+
+        themes = self._available_color_themes()
+        if not themes:
+            themes = ["resistine_ctk"]
+
+        # Attempt to keep current default theme if possible
+        default_theme = "resistine_ctk" if "resistine_ctk" in themes else themes[0]
+        self.color_theme_var = customtkinter.StringVar(value=default_theme)
+
+        theme_menu = customtkinter.CTkOptionMenu(
+            self.frame_5,
+            values=themes,
+            variable=self.color_theme_var,
+            command=self.change_color_theme,
+            width=240,
+        )
+        theme_menu.grid(row=12, column=0, padx=20, pady=(0, 15), sticky="w")
+
         return self.frame_5
 
     def save_api_key(self):
@@ -138,7 +206,6 @@ class Plugin(BasePlugin):
         api_key = self.api_key_entry.get().strip()
 
         if not api_key:
-            # If empty, maybe clear it? For now just return
             return
 
         success = settings.set_secret("chat", "openai_api_key", api_key)
@@ -151,16 +218,31 @@ class Plugin(BasePlugin):
             # Reinitialize the chat plugin's OpenAI client if it's loaded
             if hasattr(self.app, "plugin_list"):
                 for plugin in self.app.plugin_list:
-                    if plugin.get_name() == "Chat" and hasattr(
-                        plugin, "reinitialize_client"
-                    ):
+                    if plugin.get_name() == "Chat" and hasattr(plugin, "reinitialize_client"):
                         plugin.reinitialize_client()
                         print("Chat plugin reinitialized with new API key")
                         break
 
-            # Clear status after 3 seconds
             self.app.after(3000, lambda: self.status_label.configure(text=""))
         else:
             self.status_label.configure(
                 text=get_text("settings.apikey.saved_error"), text_color="red"
             )
+
+    def change_appearance_mode(self, new_appearance_mode: str):
+        """Change Light/Dark/System appearance."""
+        try:
+            customtkinter.set_appearance_mode(new_appearance_mode)
+        finally:
+            self._apply_theme_refresh()
+
+    def change_color_theme(self, theme_name: str):
+        """Change CTk JSON color theme."""
+        themes_dir = self._themes_dir()
+        theme_file = f"{theme_name}.json" if not theme_name.endswith(".json") else theme_name
+        theme_path = os.path.join(themes_dir, theme_file)
+        if os.path.exists(theme_path):
+            customtkinter.set_default_color_theme(theme_path)
+            self._apply_theme_refresh()
+        else:
+            print(f"Theme not found: {theme_path}")

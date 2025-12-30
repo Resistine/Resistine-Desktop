@@ -151,45 +151,101 @@ class App(customtkinter.CTk):
     def select_frame_by_name(self, name, button=None):
         """
         Select and display the specified frame, and update the button appearance.
+        Uses theme-aware colors for active/inactive states.
 
         :param name: The name of the frame to display.
-        :param button: The button associated with the frame.
+        :param button: (legacy) button passed by callers; ignored in favor of each plugin's own button.
         """
-        # Clear the main area before showing the new frame
-        for widget in self.grid_slaves(row=0, column=1):
-            widget.grid_forget()
+        self.current_frame_name = name
 
-        for frame_name, frame in self.frames.items():
-            if frame_name == name:
-                if button:
-                    button.configure(fg_color=("gray75", "gray25"))
+        # Hide/destroy the currently displayed main screen (so we don't create all plugin screens each switch)
+        try:
+            if hasattr(self, "_current_main_screen") and self._current_main_screen is not None:
                 try:
-                    frame.create_main_screen().grid(row=0, column=1, sticky="nsew")
-                except Exception as e:
-                    print(f"Error loading plugin frame {name}: {e}")
-                    # Update status to error so it shows on the dashboard
-                    frame.set_status("Error")
+                    self._current_main_screen.grid_forget()
+                except Exception:
+                    pass
+                try:
+                    self._current_main_screen.destroy()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        self._current_main_screen = None
 
-                    # Update button color to red for immediate feedback
-                    btn = frame.get_button()
-                    if btn:
-                        btn.configure(text_color="red")
+        # Update button styles for all plugins
+        for frame_name, frame in getattr(self, "frames", {}).items():
+            btn = frame.get_button() if hasattr(frame, "get_button") else None
+            if not btn:
+                continue
 
-                    # Show error message in place of the plugin content
-                    error_frame = customtkinter.CTkFrame(self)
-                    error_frame.grid(row=0, column=1, sticky="nsew")
-
-                    error_label = customtkinter.CTkLabel(
-                        error_frame,
-                        text=f"Error loading plugin:\n{e}",
-                        text_color="red",
-                        wraplength=400,
-                    )
-                    error_label.pack(expand=True, padx=20, pady=20)
+            if frame_name == name:
+                btn.configure(
+                    fg_color=("gray75", "gray25"),
+                    hover_color=("gray70", "gray30"),
+                )
             else:
-                if button:
-                    button.configure(fg_color="transparent")
+                btn.configure(
+                    fg_color="transparent",
+                    hover_color=("gray80", "gray20"),
+                )
 
+        # Create and show the selected plugin screen
+        frame = self.frames.get(name) if hasattr(self, "frames") else None
+        if not frame:
+            return
+
+        main_screen = frame.create_main_screen()
+        main_screen.grid(row=0, column=1, sticky="nsew")
+        main_screen.grid_columnconfigure(0, weight=1)
+        main_screen.grid_rowconfigure(0, weight=1)
+        self._current_main_screen = main_screen
+
+    def refresh_ui_theme(self):
+        """Refresh sidebar colors and re-render the currently selected frame after theme changes."""
+        try:
+            appearance_mode = customtkinter.get_appearance_mode()
+            if appearance_mode == "System":
+                try:
+                    import subprocess
+                    if sys.platform == "darwin":
+                        result = subprocess.run(
+                            ['defaults', 'read', '-g', 'AppleInterfaceStyle'],
+                            capture_output=True,
+                            text=True,
+                        )
+                        appearance_mode = "Dark" if result.returncode == 0 and "Dark" in result.stdout else "Light"
+                    else:
+                        appearance_mode = "Light"
+                except Exception:
+                    appearance_mode = "Light"
+
+            sidebar_bg = "#1c1c1e" if appearance_mode == "Dark" else "#f0eff6"
+            sidebar_text_color = "#ffffff" if appearance_mode == "Dark" else "#000000"
+
+            if hasattr(self, 'navigation_frame') and self.navigation_frame is not None:
+                try:
+                    self.navigation_frame.configure(fg_color=sidebar_bg)
+                except Exception:
+                    pass
+
+            if hasattr(self, 'navigation_frame_label') and self.navigation_frame_label is not None:
+                try:
+                    self.navigation_frame_label.configure(text_color=sidebar_text_color)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"⚠️ refresh_ui_theme error: {e}")
+
+        # Re-render the active frame to pick up theme-aware colors
+        try:
+            name = getattr(self, 'current_frame_name', None)
+            if name and hasattr(self, 'frames') and name in self.frames:
+                frame = self.frames[name]
+                btn = frame.get_button() if hasattr(frame, 'get_button') else None
+                self.select_frame_by_name(name, button=btn)
+        except Exception as e:
+            print(f"⚠️ refresh_ui_theme re-render error: {e}")
 
 if __name__ == "__main__":
     # Parse command-line arguments
