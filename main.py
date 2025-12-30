@@ -41,6 +41,11 @@ class App(customtkinter.CTk):
         """
         super().__init__()
 
+        # Theme: fixed Resistine CTk theme; only appearance mode varies (System/Light/Dark)
+        customtkinter.set_default_color_theme("resources/themes/resistine_ctk.json")
+        customtkinter.set_appearance_mode("System")
+
+
         if DEBUG_WINDOW:
             self.debug_window = DebugWindow(self)
             self.debug_window.create_debug_window()

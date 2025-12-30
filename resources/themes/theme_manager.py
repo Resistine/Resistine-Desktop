@@ -41,7 +41,7 @@ class ThemeManager:
 
     def set_custom_theme(self, theme):
         """Set the custom theme using customtkinter."""
-        theme_path = os.path.join(os.path.dirname(__file__), "custom_theme.json")
+        theme_path = os.path.join(os.path.dirname(__file__), "resistine_ctk.json")
         
         if theme == "dark":
             ctk.set_default_color_theme(theme_path)  # Dark theme
