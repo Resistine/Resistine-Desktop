@@ -86,6 +86,27 @@ class App(customtkinter.CTk):
         # Ensure the window is visible
         self.update()
 
+    def _effective_appearance_mode(self) -> str:
+        """Return effective appearance: Light or Dark (resolves System on macOS)."""
+        mode = customtkinter.get_appearance_mode()
+        if mode != "System":
+            return mode
+
+        if sys.platform == "darwin":
+            try:
+                import subprocess
+
+                result = subprocess.run(
+                    ["defaults", "read", "-g", "AppleInterfaceStyle"],
+                    capture_output=True,
+                    text=True,
+                )
+                return "Dark" if result.returncode == 0 and "Dark" in result.stdout else "Light"
+            except Exception:
+                return "Light"
+
+        return "Light"
+
     def create_dashboard(self):
         """
         Create the main dashboard of the application, including loading plugins and creating navigation buttons.
@@ -111,10 +132,16 @@ class App(customtkinter.CTk):
                 App.plugin_list = PluginManager(self).plugins
         self.plugin_list = App.plugin_list
         number_plugins = len(self.plugin_list) + 1
+        # Theme-aware navigation sidebar (matches UI_Dev color placement)
+        appearance_mode = self._effective_appearance_mode()
+        sidebar_bg = "#1c1c1e" if appearance_mode == "Dark" else "#f0eff6"
+        sidebar_text_color = "#ffffff" if appearance_mode == "Dark" else "#000000"
 
-        self.navigation_frame = customtkinter.CTkFrame(self, corner_radius=0)
-        self.navigation_frame.grid(row=0, column=0, sticky="nsew")
+        self.navigation_frame = customtkinter.CTkFrame(self, corner_radius=0, fg_color=sidebar_bg)
+        self.navigation_frame.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
+        self.grid_columnconfigure(0, minsize=220)
         self.navigation_frame.grid_rowconfigure(number_plugins, weight=1)
+        self.navigation_frame.grid_columnconfigure(0, weight=1)
 
         self.navigation_frame_label = customtkinter.CTkLabel(
             self.navigation_frame,
@@ -122,6 +149,7 @@ class App(customtkinter.CTk):
             image=None,
             compound="left",
             font=customtkinter.CTkFont(size=15, weight="bold"),
+            text_color=sidebar_text_color,
         )
         self.navigation_frame_label.grid(row=0, column=0, padx=20, pady=20)
 
@@ -183,17 +211,7 @@ class App(customtkinter.CTk):
             btn = frame.get_button() if hasattr(frame, "get_button") else None
             if not btn:
                 continue
-
-            if frame_name == name:
-                btn.configure(
-                    fg_color=("gray75", "gray25"),
-                    hover_color=("gray70", "gray30"),
-                )
-            else:
-                btn.configure(
-                    fg_color="transparent",
-                    hover_color=("gray80", "gray20"),
-                )
+            functions.apply_tab_button_state(btn, is_active=(frame_name == name))
 
         # Create and show the selected plugin screen
         frame = self.frames.get(name) if hasattr(self, "frames") else None
@@ -209,22 +227,7 @@ class App(customtkinter.CTk):
     def refresh_ui_theme(self):
         """Refresh sidebar colors and re-render the currently selected frame after theme changes."""
         try:
-            appearance_mode = customtkinter.get_appearance_mode()
-            if appearance_mode == "System":
-                try:
-                    import subprocess
-                    if sys.platform == "darwin":
-                        result = subprocess.run(
-                            ['defaults', 'read', '-g', 'AppleInterfaceStyle'],
-                            capture_output=True,
-                            text=True,
-                        )
-                        appearance_mode = "Dark" if result.returncode == 0 and "Dark" in result.stdout else "Light"
-                    else:
-                        appearance_mode = "Light"
-                except Exception:
-                    appearance_mode = "Light"
-
+            appearance_mode = self._effective_appearance_mode()
             sidebar_bg = "#1c1c1e" if appearance_mode == "Dark" else "#f0eff6"
             sidebar_text_color = "#ffffff" if appearance_mode == "Dark" else "#000000"
 
@@ -239,6 +242,16 @@ class App(customtkinter.CTk):
                     self.navigation_frame_label.configure(text_color=sidebar_text_color)
                 except Exception:
                     pass
+
+            # Ensure sidebar buttons update colors after appearance changes
+            try:
+                for frame_name, frame in getattr(self, 'frames', {}).items():
+                    btn = frame.get_button() if hasattr(frame, 'get_button') else None
+                    if not btn:
+                        continue
+                    functions.apply_tab_button_state(btn, is_active=(frame_name == getattr(self, 'current_frame_name', None)))
+            except Exception:
+                pass
         except Exception as e:
             print(f"⚠️ refresh_ui_theme error: {e}")
 
