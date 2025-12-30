@@ -78,7 +78,8 @@ def create_plugin_card(row, column, container_frame, plugin):
 
 def create_tab_button(frame, name, icon, command=None, row=0, col=0):
     """
-    Create a button for a tab with the specified name, icon, and command.
+    Create a modern button for a tab with the specified name, icon, and command.
+    Uses theme-aware colors so switching System/Light/Dark updates correctly.
 
     :param frame: The parent frame to contain this button.
     :param name: The name to display on the button.
@@ -88,22 +89,54 @@ def create_tab_button(frame, name, icon, command=None, row=0, col=0):
     :param col: The column position in the grid.
     :return: The created button.
     """
+    resistine_blue = "#0D5394"
+    hover_bg_light = "#F5F5F5"
+    hover_bg_dark = "#2A2A2A"
+
     frame_button = customtkinter.CTkButton(
         frame,
-        corner_radius=0,
-        height=40,
-        border_spacing=10,
+        corner_radius=12,
+        height=48,
+        border_spacing=15,
         text=name,
         fg_color="transparent",
-        text_color=("gray10", "gray90"),
-        hover_color=("gray70", "gray30"),
+        # tuple order is (light, dark)
+        text_color=("#000000", "#ffffff"),
+        hover_color=(hover_bg_light, hover_bg_dark),
+        border_width=0,
+        border_color=resistine_blue,
         image=icon,
         anchor="w",
         command=command,
     )
     frame_button.grid(row=row, column=col, sticky="ew")
 
+    # Add Resistine blue accent on hover via border
+    def on_enter(_e):
+        frame_button.configure(border_width=2)
+
+    def on_leave(_e):
+        frame_button.configure(border_width=0)
+
+    frame_button.bind("<Enter>", on_enter)
+    frame_button.bind("<Leave>", on_leave)
+
     return frame_button
+
+
+def apply_tab_button_state(button: customtkinter.CTkButton, is_active: bool):
+    """Apply active/inactive styling to an existing sidebar button (theme-aware)."""
+    if is_active:
+        button.configure(
+            fg_color=("#EAEAEA", "#303030"),
+            border_width=2,
+        )
+    else:
+        button.configure(
+            fg_color="transparent",
+            border_width=0,
+        )
+
 
 
 def create_grid(frame, row, column, plugins, color, sticky="nsew"):
