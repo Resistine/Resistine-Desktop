@@ -12,8 +12,6 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import os
-from pathlib import Path
-
 import customtkinter
 
 from plugins.base_plugin import BasePlugin
@@ -41,18 +39,6 @@ class Plugin(BasePlugin):
             ),
         )
         self.app = app
-
-    def _themes_dir(self) -> str:
-        project_root = os.path.dirname(
-            os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-        )
-        return os.path.join(project_root, "resources", "themes")
-
-    def _available_color_themes(self) -> list[str]:
-        themes_dir = Path(self._themes_dir())
-        if not themes_dir.exists():
-            return []
-        return sorted([p.stem for p in themes_dir.glob("*.json")])
 
     def _apply_theme_refresh(self):
         # Prefer a lightweight refresh (no plugin re-instantiation)
@@ -175,30 +161,6 @@ class Plugin(BasePlugin):
         )
         appearance_menu.grid(row=10, column=0, padx=20, pady=(0, 15), sticky="w")
 
-        theme_label = customtkinter.CTkLabel(
-            self.frame_5,
-            text="Color Theme:",
-            font=customtkinter.CTkFont(size=14),
-        )
-        theme_label.grid(row=11, column=0, padx=20, pady=(0, 5), sticky="w")
-
-        themes = self._available_color_themes()
-        if not themes:
-            themes = ["resistine_ctk"]
-
-        # Attempt to keep current default theme if possible
-        default_theme = "resistine_ctk" if "resistine_ctk" in themes else themes[0]
-        self.color_theme_var = customtkinter.StringVar(value=default_theme)
-
-        theme_menu = customtkinter.CTkOptionMenu(
-            self.frame_5,
-            values=themes,
-            variable=self.color_theme_var,
-            command=self.change_color_theme,
-            width=240,
-        )
-        theme_menu.grid(row=12, column=0, padx=20, pady=(0, 15), sticky="w")
-
         return self.frame_5
 
     def save_api_key(self):
@@ -236,13 +198,3 @@ class Plugin(BasePlugin):
         finally:
             self._apply_theme_refresh()
 
-    def change_color_theme(self, theme_name: str):
-        """Change CTk JSON color theme."""
-        themes_dir = self._themes_dir()
-        theme_file = f"{theme_name}.json" if not theme_name.endswith(".json") else theme_name
-        theme_path = os.path.join(themes_dir, theme_file)
-        if os.path.exists(theme_path):
-            customtkinter.set_default_color_theme(theme_path)
-            self._apply_theme_refresh()
-        else:
-            print(f"Theme not found: {theme_path}")
