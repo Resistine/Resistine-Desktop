@@ -244,6 +244,7 @@ class App(customtkinter.CTk):
         self._current_main_screen = main_screen
 
 
+
     def refresh_ui_theme(self):
         """Refresh sidebar colors and re-render the currently selected frame after theme changes."""
         try:
@@ -261,16 +262,19 @@ class App(customtkinter.CTk):
             for frame_name, frame in getattr(self, 'frames', {}).items():
                 btn = frame.get_button() if hasattr(frame, 'get_button') else None
                 if btn:
+                    # Update internal colors
                     functions.apply_tab_button_theme(btn)
-                    functions.apply_tab_button_state(btn, is_active=(frame_name == getattr(self, 'current_frame_name', None)))
+                    # Re-apply active/inactive styling
+                    is_active = (frame_name == getattr(self, 'current_frame_name', None))
+                    functions.apply_tab_button_state(btn, is_active=is_active)
         except Exception as e:
             print(f"⚠️ refresh_ui_theme error: {e}")
 
-        # Re-render the active frame to pick up theme-aware colors
+        # Re-render the active frame to pick up theme-aware colors in plugins
         try:
             name = getattr(self, 'current_frame_name', None)
-            if name and hasattr(self, 'frames') and name in self.frames:
-                # To prevent creating multiple instances, grid_forget the old one if it exists
+            if name:
+                # Force a complete re-render of the current frame
                 self.select_frame_by_name(name)
         except Exception as e:
             print(f"⚠️ refresh_ui_theme re-render error: {e}")

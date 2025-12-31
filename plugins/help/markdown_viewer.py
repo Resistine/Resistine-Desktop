@@ -27,7 +27,7 @@ class MarkdownViewer(customtkinter.CTkFrame):
     root_files = ["README.md", "LICENSE.md"]
 
     def __init__(self, master, docs_dir=None, **kwargs):
-        super().__init__(master, **kwargs)
+        super().__init__(master, fg_color=("#f0eff6", "#1a1a1a"), **kwargs)
 
         # Navigation history
         self.history = []
@@ -75,9 +75,31 @@ class MarkdownViewer(customtkinter.CTkFrame):
 
         if HtmlFrame is not None:
             try:
+                # Determine background color for HtmlFrame
+                mode = customtkinter.get_appearance_mode()
+                # On system, resolve to actual dark/light
+                if mode == "System":
+                    try:
+                        import sys
+                        if sys.platform == "darwin":
+                            import subprocess
+                            res = subprocess.run(['defaults', 'read', '-g', 'AppleInterfaceStyle'], capture_output=True, text=True)
+                            mode = "Dark" if res.returncode == 0 and "Dark" in res.stdout else "Light"
+                        else:
+                            mode = "Light"
+                    except: mode = "Light"
+                
+                bg_color = "#1a1a1a" if mode == "Dark" else "#f0eff6"
+                
                 self.html_frame = HtmlFrame(
                     self, messages_enabled=False, on_link_click=self.on_link_click
                 )
+                try:
+                    self.html_frame.configure(background=bg_color)
+                except:
+                    try: self.html_frame.config(bg=bg_color)
+                    except: pass
+                    
                 self.html_frame.pack(fill="both", expand=True, padx=10, pady=10)
                 self._use_html = True
             except Exception as e:
@@ -87,7 +109,8 @@ class MarkdownViewer(customtkinter.CTkFrame):
             self.fallback_text = customtkinter.CTkTextbox(
                 self,
                 wrap="word",
-                fg_color="transparent",
+                fg_color=("#f0eff6", "#1a1a1a"),
+                text_color=("#000000", "#ffffff"),
             )
             self.fallback_text.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -347,7 +370,8 @@ class MarkdownViewer(customtkinter.CTkFrame):
             self.fallback_text = customtkinter.CTkTextbox(
                 self,
                 wrap="word",
-                fg_color="transparent",
+                fg_color=("#f0eff6", "#1a1a1a"),
+                text_color=("#000000", "#ffffff"),
             )
             self.fallback_text.pack(fill="both", expand=True, padx=10, pady=10)
 

@@ -51,7 +51,7 @@ class Plugin(BasePlugin):
         Create the main screen for the Help plugin.
         """
         self.main_container = customtkinter.CTkFrame(
-            self.app, corner_radius=0, fg_color="transparent"
+            self.app, corner_radius=0, fg_color=("#f0eff6", "#1a1a1a")
         )
         self.main_container.grid_columnconfigure(0, weight=1)
         self.main_container.grid_rowconfigure(0, weight=1)

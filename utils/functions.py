@@ -8,7 +8,7 @@ import customtkinter
 SOC_THEME = {
     "colors": {
         "background": ("#f0eff6", "#1a1a1a"),
-        "card_bg": ("#ffffff", "#242424"),
+        "card_bg": ("#ffffff", "#141414"),
         "card_border": ("#dddddd", "#333333"),
         "accent_blue": "#3a7ebf",
         "accent_green": "#2ecc71",
@@ -77,7 +77,7 @@ def create_plugin_card(row, column, container_frame, plugin):
         border_width=1,
         border_color=border_color
     )
-    frame.grid(row=row, column=column, padx=15, pady=15, sticky="nsew")
+    frame.grid(row=row, column=column, padx=10, pady=10, sticky="nsew")
     frame.grid_columnconfigure(0, weight=1)
     
     # Center container for icon and labels
