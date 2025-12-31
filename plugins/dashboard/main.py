@@ -10,7 +10,7 @@ while preserving existing functionality (plugin list + navigation via App.select
 
 IMPORTANT:
 - UI only (no backend changes)
-- Includes Resistine logo top-left
+- Logo is in side menu only (not on dashboard)
 - Does NOT use Resistine shield / RSheild assets
 
 Author: Peres J. and the Resistine Team
@@ -21,7 +21,6 @@ Licensed under the GNU General Public License v2 or later
 import os
 
 import customtkinter
-from PIL import Image
 
 from plugins.base_plugin import BasePlugin
 from plugins.plugin_manager import PluginManager
@@ -67,10 +66,9 @@ class Plugin(BasePlugin):
             fg_color="transparent",
         )
         self.main_frame.grid_columnconfigure(0, weight=1)
-        self.main_frame.grid_rowconfigure(0, weight=0)  # header
-        self.main_frame.grid_rowconfigure(1, weight=0)  # protection panel
-        self.main_frame.grid_rowconfigure(2, weight=1)  # grid
-
+        self.main_frame.grid_rowconfigure(0, weight=0)  # protection panel
+        self.main_frame.grid_rowconfigure(1, weight=1)  # grid
+        
         appearance_mode = self._effective_appearance_mode()
         is_dark = appearance_mode == "Dark"
 
@@ -78,53 +76,14 @@ class Plugin(BasePlugin):
         panel_bg = "#1A1A1A" if is_dark else "#ffffff"
         text_color = "#ffffff" if is_dark else "#000000"
 
-        # --- Header (logo top-left) ---
-        header = customtkinter.CTkFrame(self.main_frame, corner_radius=0, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
-        header.grid_columnconfigure(0, weight=0)
-        header.grid_columnconfigure(1, weight=1)
-
-        logo_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))),
-            "ResistineLogoWhiteText.png",
-        )
-        self._dashboard_logo_image = None
-        if os.path.exists(logo_path):
-            try:
-                logo_img = Image.open(logo_path)
-                max_width = 160
-                aspect_ratio = logo_img.height / logo_img.width if logo_img.width else 1
-                logo_height = int(max_width * aspect_ratio)
-                logo_img = logo_img.resize((max_width, logo_height), Image.Resampling.LANCZOS)
-                self._dashboard_logo_image = customtkinter.CTkImage(
-                    light_image=logo_img,
-                    dark_image=logo_img,
-                    size=(max_width, logo_height),
-                )
-            except Exception as e:
-                print(f"Dashboard: failed to load logo: {e}")
-                self._dashboard_logo_image = None
-
-        if self._dashboard_logo_image:
-            logo_label = customtkinter.CTkLabel(header, text="", image=self._dashboard_logo_image)
-        else:
-            logo_label = customtkinter.CTkLabel(
-                header,
-                text="Resistine",
-                font=customtkinter.CTkFont(size=20, weight="bold"),
-                text_color=text_color,
-            )
-        logo_label.grid(row=0, column=0, sticky="w")
-
         # --- Protection panel (UI_Dev-inspired, but no shield image) ---
         protection_panel = customtkinter.CTkFrame(
             self.main_frame,
             corner_radius=20,
             fg_color=panel_bg,
-            border_width=2,
-            border_color=resistine_blue,
+            border_width=0,
         )
-        protection_panel.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 15))
+        protection_panel.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 15))
         protection_panel.grid_columnconfigure(0, weight=1)
 
         protection_label = customtkinter.CTkLabel(
@@ -153,7 +112,7 @@ class Plugin(BasePlugin):
         rows, cols = myfunctions.calculate_rows_cols(len(plugins))
 
         content_frame = customtkinter.CTkFrame(self.main_frame, corner_radius=0, fg_color="transparent")
-        content_frame.grid(row=2, column=0, sticky="nsew", padx=15, pady=(0, 15))
+        content_frame.grid(row=1, column=0, sticky="nsew", padx=15, pady=(0, 15))
         content_frame.grid_columnconfigure(0, weight=1)
         content_frame.grid_rowconfigure(0, weight=1)
 
