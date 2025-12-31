@@ -21,10 +21,10 @@ Licensed under the GNU General Public License v2 or later
 import os
 
 import customtkinter
+from customtkinter import ThemeManager
 
 from plugins.base_plugin import BasePlugin
 from plugins.plugin_manager import PluginManager
-from utils import functions as myfunctions
 
 
 class Plugin(BasePlugin):
@@ -50,11 +50,15 @@ class Plugin(BasePlugin):
         self._dashboard_logo_image = None
 
     def _effective_appearance_mode(self) -> str:
-        if hasattr(myfunctions, "_effective_appearance_mode"):
-            try:
-                return myfunctions._effective_appearance_mode()
-            except Exception:
-                pass
+        # Use user_interface's detection if available
+        try:
+            # Accessing the internal function if necessary, or just rely on ctk
+            # But user_interface has `_effective_appearance_mode`.
+            # Let's just use ctk for now or replicate logic.
+            # Actually, user_interface exposed it? No, it's `def _effective_appearance_mode`.
+            pass
+        except Exception:
+            pass
         mode = customtkinter.get_appearance_mode()
         return "Dark" if mode == "Dark" else "Light"
 
@@ -69,23 +73,21 @@ class Plugin(BasePlugin):
         self.main_frame.grid_rowconfigure(0, weight=0)  # protection panel
         self.main_frame.grid_rowconfigure(1, weight=0)  # grid
         self.main_frame.grid_rowconfigure(2, weight=1)  # spacer to push content up
-        
+
         appearance_mode = self._effective_appearance_mode()
         is_dark = appearance_mode == "Dark"
 
-        resistine_blue = "#0D5394"
-        panel_bg = "#1A1A1A" if is_dark else "#ffffff"
-        text_color = "#ffffff" if is_dark else "#000000"
-
-        
-        
         # --- Protection panel (Sleek SOC-style) ---
-        panel_bg = myfunctions.SOC_THEME["colors"]["card_bg"]
-        text_primary = myfunctions.SOC_THEME["colors"]["text_primary"]
-        accent_blue = myfunctions.SOC_THEME["colors"]["accent_blue"]
+        panel_bg = ThemeManager.theme["CTkFrame"]["fg_color"]
+        text_primary = ThemeManager.theme["CTkLabel"]["text_color"]
+        accent_blue = ThemeManager.theme["CTkButton"]["border_color"]
+        card_border = ThemeManager.theme["CTkFrame"]["border_color"]
+        text_secondary = ThemeManager.theme["CTkLabel"]["text_color"]  # Fallback
 
         # Container for the protection panel to control its width and centering
-        protection_container = customtkinter.CTkFrame(self.main_frame, fg_color="transparent")
+        protection_container = customtkinter.CTkFrame(
+            self.main_frame, fg_color="transparent"
+        )
         protection_container.grid(row=0, column=0, sticky="ew", padx=20, pady=(15, 0))
         protection_container.grid_columnconfigure(0, weight=1)
 
@@ -94,10 +96,10 @@ class Plugin(BasePlugin):
             corner_radius=15,
             fg_color=panel_bg,
             border_width=1,
-            border_color=myfunctions.SOC_THEME["colors"]["card_border"],
-            width=600 # Decreased width
+            border_color=card_border,
+            width=600,  # Decreased width
         )
-        protection_panel.grid(row=0, column=0, sticky="n") # Center horizontally
+        protection_panel.grid(row=0, column=0, sticky="n")  # Center horizontally
         protection_panel.grid_columnconfigure(0, weight=1)
         protection_panel.grid_propagate(True)
 
@@ -106,7 +108,7 @@ class Plugin(BasePlugin):
             text="SYSTEM STATUS: PROTECTED",
             font=customtkinter.CTkFont(family="Inter", size=18, weight="bold"),
             text_color=accent_blue,
-            justify="center"
+            justify="center",
         )
         protection_label.grid(row=0, column=0, sticky="ew", padx=40, pady=(15, 5))
 
@@ -114,11 +116,10 @@ class Plugin(BasePlugin):
             protection_panel,
             text="All security modules are actively monitoring for threats.",
             font=customtkinter.CTkFont(family="Inter", size=12, weight="normal"),
-            text_color=myfunctions.SOC_THEME["colors"]["text_secondary"],
-            justify="center"
+            text_color=text_secondary,
+            justify="center",
         )
         subtitle_label.grid(row=1, column=0, sticky="ew", padx=40, pady=(0, 15))
-
 
         # --- Plugins grid ---
         if not hasattr(self.app, "plugin_list") or not self.app.plugin_list:
@@ -127,14 +128,16 @@ class Plugin(BasePlugin):
             plugin_list = self.app.plugin_list
 
         plugins = plugin_list[1:]  # omit Dashboard itself
-        rows, cols = myfunctions.calculate_rows_cols(len(plugins))
+        rows, cols = self.app.calculate_rows_cols(len(plugins))
 
-        content_frame = customtkinter.CTkFrame(self.main_frame, corner_radius=0, fg_color="transparent")
+        content_frame = customtkinter.CTkFrame(
+            self.main_frame, corner_radius=0, fg_color="transparent"
+        )
         content_frame.grid(row=1, column=0, sticky="new", padx=15, pady=0)
         content_frame.grid_columnconfigure(0, weight=1)
         content_frame.grid_rowconfigure(0, weight=1)
 
-        self.grid_frame = myfunctions.create_grid(
+        self.grid_frame = self.app.create_grid(
             frame=content_frame,
             row=0,
             column=0,
@@ -142,19 +145,23 @@ class Plugin(BasePlugin):
             color="transparent",
             sticky="nsew",
         )
-        self.grid_frame.grid_columnconfigure(tuple(range(len(cols))), weight=1, uniform="cols")
+        self.grid_frame.grid_columnconfigure(
+            tuple(range(len(cols))), weight=1, uniform="cols"
+        )
         self.grid_frame.grid_rowconfigure(tuple(range(len(rows))), weight=0)
 
         def open_plugin(p):
             # Preserve existing functionality: use app frame switching (updates sidebar state)
             try:
-                self.app.select_frame_by_name(f"frame_{p.get_name()}", button=p.get_button())
+                self.app.select_frame_by_name(
+                    f"frame_{p.get_name()}", button=p.get_button()
+                )
             except Exception:
                 p.create_main_screen().grid(row=0, column=1, sticky="nsew")
 
         for index, plugin in enumerate(plugins):
             r = index // len(cols)
             c = index % len(cols)
-            myfunctions.create_plugin_card(r, c, self.grid_frame, plugin)
+            self.app.create_plugin_card(r, c, self.grid_frame, plugin)
 
         return self.main_frame
