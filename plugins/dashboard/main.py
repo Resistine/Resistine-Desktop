@@ -67,7 +67,8 @@ class Plugin(BasePlugin):
         )
         self.main_frame.grid_columnconfigure(0, weight=1)
         self.main_frame.grid_rowconfigure(0, weight=0)  # protection panel
-        self.main_frame.grid_rowconfigure(1, weight=1)  # grid
+        self.main_frame.grid_rowconfigure(1, weight=0)  # grid
+        self.main_frame.grid_rowconfigure(2, weight=1)  # spacer to push content up
         
         appearance_mode = self._effective_appearance_mode()
         is_dark = appearance_mode == "Dark"
@@ -85,7 +86,7 @@ class Plugin(BasePlugin):
 
         # Container for the protection panel to control its width and centering
         protection_container = customtkinter.CTkFrame(self.main_frame, fg_color="transparent")
-        protection_container.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 5))
+        protection_container.grid(row=0, column=0, sticky="ew", padx=20, pady=(15, 0))
         protection_container.grid_columnconfigure(0, weight=1)
 
         protection_panel = customtkinter.CTkFrame(
@@ -129,7 +130,7 @@ class Plugin(BasePlugin):
         rows, cols = myfunctions.calculate_rows_cols(len(plugins))
 
         content_frame = customtkinter.CTkFrame(self.main_frame, corner_radius=0, fg_color="transparent")
-        content_frame.grid(row=1, column=0, sticky="nsew", padx=15, pady=(5, 15))
+        content_frame.grid(row=1, column=0, sticky="new", padx=15, pady=0)
         content_frame.grid_columnconfigure(0, weight=1)
         content_frame.grid_rowconfigure(0, weight=1)
 
@@ -142,7 +143,7 @@ class Plugin(BasePlugin):
             sticky="nsew",
         )
         self.grid_frame.grid_columnconfigure(tuple(range(len(cols))), weight=1, uniform="cols")
-        self.grid_frame.grid_rowconfigure(tuple(range(len(rows))), weight=1, uniform="rows")
+        self.grid_frame.grid_rowconfigure(tuple(range(len(rows))), weight=0)
 
         def open_plugin(p):
             # Preserve existing functionality: use app frame switching (updates sidebar state)

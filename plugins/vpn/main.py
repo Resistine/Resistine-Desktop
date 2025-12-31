@@ -205,18 +205,18 @@ class Plugin(BasePlugin):
         is_connected = my_vpn_status == "Running"
         
         status_text = "Connected" if is_connected else "Disconnected"
-        status_color = ("green", "#2CC985") if is_connected else ("red", "#FF474C")
+        status_color = ("#1E8E3E", "#2CC985") if is_connected else ("#C5221F", "#FF474C")
         warning_text = "Your connection is secure" if is_connected else "Your connection is not secure"
         warning_bg = ("#E6F4EA", "#1E3A2F") if is_connected else ("#FDEDEC", "#3E2B2C")
         warning_fg = ("#1E8E3E", "#2CC985") if is_connected else ("#C5221F", "#FF474C")
 
         # --- 1. Connection Status Bar ---
-        status_frame = customtkinter.CTkFrame(scroll_frame, corner_radius=10)
+        status_frame = customtkinter.CTkFrame(scroll_frame, corner_radius=15, fg_color=("#ffffff", "#141414"), border_width=1, border_color=("#dddddd", "#333333"))
         status_frame.grid(row=0, column=0, sticky="ew", pady=(10, 5))
         status_frame.grid_columnconfigure(0, weight=1)
         status_frame.grid_columnconfigure(1, weight=1)
 
-        disconnected_label = customtkinter.CTkLabel(status_frame, text=status_text, text_color=status_color, font=customtkinter.CTkFont(size=20, weight="bold"))
+        disconnected_label = customtkinter.CTkLabel(status_frame, text=status_text, text_color=status_color, font=customtkinter.CTkFont(family="Inter", size=20, weight="bold"))
         disconnected_label.grid(row=0, column=0, padx=20, pady=10, sticky="w")
         
         toggle_initial_value = 1 if is_connected else 0
@@ -251,20 +251,20 @@ class Plugin(BasePlugin):
         # --- 3. System Information ---
         sys_info_data = self.get_system_info(selected_conf_file)
         
-        sys_info_label = customtkinter.CTkLabel(scroll_frame, text="Current VPN Information", font=customtkinter.CTkFont(size=18, weight="bold"))
+        sys_info_label = customtkinter.CTkLabel(scroll_frame, text="CURRENT VPN STATUS", font=customtkinter.CTkFont(family="Inter", size=16, weight="bold"), text_color="#3a7ebf")
         sys_info_label.grid(row=2, column=0, sticky="w", pady=(15, 5))
         
-        info_frame = customtkinter.CTkFrame(scroll_frame, corner_radius=10)
+        info_frame = customtkinter.CTkFrame(scroll_frame, corner_radius=15, fg_color=("#ffffff", "#141414"), border_width=1, border_color=("#dddddd", "#333333"))
         info_frame.grid(row=3, column=0, sticky="ew", pady=(0, 10))
         info_frame.grid_columnconfigure(0, weight=1)
         info_frame.grid_columnconfigure(1, weight=1)
 
         row_num = 0
         for key, value in sys_info_data.items():
-            key_label = customtkinter.CTkLabel(info_frame, text=f"{key}:", justify="left", text_color="gray")
+            key_label = customtkinter.CTkLabel(info_frame, text=f"{key}:", justify="left", text_color=("#666666", "#aaaaaa"))
             key_label.grid(row=row_num, column=0, padx=15, pady=5, sticky="w")
             
-            value_label = customtkinter.CTkLabel(info_frame, text=value, justify="right", font=customtkinter.CTkFont(weight="bold"))
+            value_label = customtkinter.CTkLabel(info_frame, text=value, justify="right", font=customtkinter.CTkFont(family="Inter", size=13, weight="bold"), text_color=("#000000", "#ffffff"))
             value_label.grid(row=row_num, column=1, padx=15, pady=5, sticky="e")
             row_num += 1
 
