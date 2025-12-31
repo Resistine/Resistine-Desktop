@@ -363,3 +363,21 @@ class AppUI(customtkinter.CTk):
                 self.select_frame_by_name(name)
         except Exception:
             pass
+
+    def show_notification(self, message, type="info"):
+        """
+        Show a non-blocking toast notification.
+        :param message: The text to display.
+        :param type: 'info' (green), 'error' (red), 'warning' (orange).
+        """
+        colors = {
+            "info": "#00D100",  # Green
+            "error": "#FF3333",  # Red
+            "warning": "#FFA500",  # Orange
+        }
+        icon_col = colors.get(type, "#00D100")
+
+        toast = ToastNotification(self, text=message, icon_color=icon_col)
+        toast.show()
+
+    # --- UI Helpers (Moved from global scope) ---

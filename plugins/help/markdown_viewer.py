@@ -24,7 +24,7 @@ except Exception:  # pragma: no covDer
 class MarkdownViewer(customtkinter.CTkFrame):
 
     # Root files to add to the dropdown
-    root_filesXX = ["README.md", "LICENSE.md"]
+    root_files = ["README.md", "LICENSE.md"]
 
     def __init__(self, master, docs_dir=None, **kwargs):
         super().__init__(master, fg_color=("#f0eff6", "#1a1a1a"), **kwargs)
