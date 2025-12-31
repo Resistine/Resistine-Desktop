@@ -12,7 +12,13 @@ import webbrowser
 
 import customtkinter
 import markdown
-from tkinterweb import HtmlFrame
+import tkinter as tk
+
+# tkinterweb (Tkhtml) is optional on Tcl/Tk 9; it can fail at import-time or runtime.
+try:
+    from tkinterweb import HtmlFrame  # type: ignore
+except Exception:  # pragma: no cover
+    HtmlFrame = None
 
 
 class MarkdownViewer(customtkinter.CTkFrame):
@@ -62,12 +68,28 @@ class MarkdownViewer(customtkinter.CTkFrame):
                 width=150,
             )
             self.file_dropdown.pack(side="left", padx=5, pady=5)
+        # HTML frame with link click handler (fallback to plain text if Tkhtml unavailable)
+        self._use_html = False
+        self.html_frame = None
+        self.fallback_text = None
 
-        # HTML frame with link click handler
-        self.html_frame = HtmlFrame(
-            self, messages_enabled=False, on_link_click=self.on_link_click
-        )
-        self.html_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        if HtmlFrame is not None:
+            try:
+                self.html_frame = HtmlFrame(
+                    self, messages_enabled=False, on_link_click=self.on_link_click
+                )
+                self.html_frame.pack(fill="both", expand=True, padx=10, pady=10)
+                self._use_html = True
+            except Exception as e:
+                print(f"Help: HtmlFrame unavailable, using fallback viewer: {e}")
+
+        if not self._use_html:
+            self.fallback_text = customtkinter.CTkTextbox(
+                self,
+                wrap="word",
+                fg_color="transparent",
+            )
+            self.fallback_text.pack(fill="both", expand=True, padx=10, pady=10)
 
         self.home_file = None
 
@@ -142,9 +164,7 @@ class MarkdownViewer(customtkinter.CTkFrame):
             self.update_nav_buttons()
 
         if not os.path.exists(file_path):
-            self.html_frame.load_html(
-                f"<h1>Error</h1><p>File not found: {file_path}</p>"
-            )
+            self._render_fallback(f"Error\n\nFile not found:\n{file_path}\n")
             return
 
         # Update dropdown selection
@@ -194,9 +214,27 @@ class MarkdownViewer(customtkinter.CTkFrame):
 
             html_content = code_block_pattern.sub(replace_code_block, html_content)
 
-            self.html_frame.load_html(css + html_content, base_url=base_url)
+            if self._use_html and self.html_frame is not None:
+                try:
+                    self.html_frame.load_html(css + html_content, base_url=base_url)
+                except Exception as e:
+                    print(f"Help: HtmlFrame load failed, using fallback viewer: {e}")
+                    self._use_html = False
+                    self._render_fallback(md_content)
+            else:
+                self._render_fallback(md_content)
         elif file_path.endswith(".html") or file_path.endswith(".htm"):
-            self.html_frame.load_file(file_path)
+            if self._use_html and self.html_frame is not None:
+                try:
+                    self.html_frame.load_file(file_path)
+                except Exception as e:
+                    print(f"Help: HtmlFrame load failed, using fallback viewer: {e}")
+                    self._use_html = False
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        self._render_fallback(f.read())
+            else:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    self._render_fallback(f.read())
         else:
             # Handle plain text files (LICENSE, etc.)
             with open(file_path, "r", encoding="utf-8") as f:
@@ -223,7 +261,15 @@ class MarkdownViewer(customtkinter.CTkFrame):
             # Wrap in pre tag for preformatted text
             html_content = f"{css}<pre>{text_content}</pre>"
 
-            self.html_frame.load_html(html_content)
+            if self._use_html and self.html_frame is not None:
+                try:
+                    self.html_frame.load_html(html_content)
+                except Exception as e:
+                    print(f"Help: HtmlFrame load failed, using fallback viewer: {e}")
+                    self._use_html = False
+                    self._render_fallback(text_content)
+            else:
+                self._render_fallback(text_content)
 
     def _linkify_text(self, text, is_escaped=False):
         """Convert URLs in text to anchor tags."""
@@ -293,3 +339,22 @@ class MarkdownViewer(customtkinter.CTkFrame):
         # External link - open in browser
         print(f"Opening external link: {url}")
         webbrowser.open(url)
+
+
+    def _render_fallback(self, text: str):
+        """Render plain text/markdown into fallback text widget."""
+        if self.fallback_text is None:
+            self.fallback_text = customtkinter.CTkTextbox(
+                self,
+                wrap="word",
+                fg_color="transparent",
+            )
+            self.fallback_text.pack(fill="both", expand=True, padx=10, pady=10)
+
+        try:
+            self.fallback_text.configure(state="normal")
+            self.fallback_text.delete("1.0", tk.END)
+            self.fallback_text.insert("1.0", text)
+            self.fallback_text.configure(state="disabled")
+        except Exception:
+            pass
