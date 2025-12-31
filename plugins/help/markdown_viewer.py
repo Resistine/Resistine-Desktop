@@ -17,7 +17,7 @@ import tkinter as tk
 # tkinterweb (Tkhtml) is optional on Tcl/Tk 9; it can fail at import-time or runtime.
 try:
     from tkinterweb import HtmlFrame  # type: ignore
-except Exception:  # pragma: no cover
+except Exception:  # pragma: no covDer
     HtmlFrame = None
 
 
