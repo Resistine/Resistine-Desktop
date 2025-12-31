@@ -62,197 +62,155 @@ class Plugin(BasePlugin):
             self.login_frame.destroy()
             del self.login_frame
 
+
     def create_main_screen(self):
         """
-        Initial login screen with centered "Login" button, "Resistine" name, and logo.
+        Create the login screen matching the provided mockup.
         """
-        logger.debug("Login plugin: Creating main screen...")
+        logger.debug("Login plugin: Creating modern main screen...")
         self.login_frame = customtkinter.CTkFrame(
             self.app, corner_radius=0, fg_color=self.app.cget("fg_color")
         )
         self.login_frame.grid(row=0, column=0, sticky="nsew")
-        logger.debug("Login plugin: Main screen created")
 
-        # Grid config for centering the sub-frame
-        self.login_frame.grid_rowconfigure(0, weight=1)  # Top spacer
-        self.login_frame.grid_rowconfigure(1, weight=0)  # Center row for sub-frame
-        self.login_frame.grid_rowconfigure(2, weight=1)  # Bottom spacer
+        # Main centering grid
+        self.login_frame.grid_rowconfigure(0, weight=1)
+        self.login_frame.grid_rowconfigure(1, weight=0)
+        self.login_frame.grid_rowconfigure(2, weight=1)
         self.login_frame.grid_columnconfigure(0, weight=1)
 
-        # Sub-frame for centering logo/name and button together
-        self.center_frame = customtkinter.CTkFrame(
-            self.login_frame,
-            corner_radius=0,
-            fg_color=self.login_frame.cget("fg_color"),
+        # Content container
+        self.content_frame = customtkinter.CTkFrame(
+            self.login_frame, corner_radius=0, fg_color="transparent"
         )
-        self.center_frame.grid(
-            row=1, column=0, sticky="n"
-        )  # Center horizontally, top of row
+        self.content_frame.grid(row=1, column=0, sticky="n")
+        self.content_frame.grid_columnconfigure(0, weight=1)
 
-        # Grid inside sub-frame: logo/name on top, button below
-        self.center_frame.grid_rowconfigure(0, weight=0)
-        self.center_frame.grid_rowconfigure(1, weight=0)
-        self.center_frame.grid_columnconfigure(0, weight=1)
-
-        # Load logo
-        logo_path = os.path.join(
-            os.path.dirname(
-                os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-            ),
-            "resources",
-            "icons",
-            "icon.ico",
+        # 1. Shield Logo
+        shield_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))),
+            "ResistineSheild.png"
         )
         try:
-            logo_image = Image.open(logo_path)
-            logo_image = logo_image.resize((60, 60))
-            logo = customtkinter.CTkImage(logo_image, size=(60, 60))
+            shield_img = Image.open(shield_path)
+            shield_ctk = customtkinter.CTkImage(shield_img, size=(120, 120))
+            self.shield_label = customtkinter.CTkLabel(
+                self.content_frame, text="", image=shield_ctk
+            )
+            self.shield_label.grid(row=0, column=0, pady=(0, 30))
         except Exception as e:
-            logger.warning(f"Logo load failed: {e}")
-            logo = None
+            logger.warning(f"Shield logo load failed: {e}")
 
-        # Resistine label with logo (top of sub-frame)
-        self.resistine_label = customtkinter.CTkLabel(
-            self.center_frame,
-            text=" Resistine",
-            image=logo,
-            compound="left",
-            font=("Arial", 32),
+        # 2. Main Title
+        self.title_label = customtkinter.CTkLabel(
+            self.content_frame,
+            text="Sign in with your Resistine account to get started.",
+            font=customtkinter.CTkFont(family="Inter", size=16),
+            text_color=("#333333", "#FFFFFF")
         )
-        self.resistine_label.grid(row=0, column=0, padx=20, pady=10, sticky="n")
+        self.title_label.grid(row=1, column=0, pady=(0, 25))
 
-        # Centered login button (below logo in sub-frame)
-        self.login_button = customtkinter.CTkButton(
-            self.center_frame,
-            text="Login",
-            command=self.show_registration_screen,
-            font=("Arial", 20),
+        # 3. Email Entry
+        self.email_entry = customtkinter.CTkEntry(
+            self.content_frame,
+            placeholder_text="Enter your email address",
+            width=400,
+            height=45,
+            corner_radius=4,
+            border_width=1,
+            font=customtkinter.CTkFont(family="Inter", size=14)
         )
-        self.login_button.grid(row=1, column=1, padx=10, pady=20, sticky="n")
+        self.email_entry.grid(row=2, column=0, pady=(0, 20))
+        self.active_input_entry = self.email_entry
 
-        # Skip button (left of Login button)
+        # 4. Sign in Button
+        self.signin_button = customtkinter.CTkButton(
+            self.content_frame,
+            text="Sign in",
+            command=self.handle_signin_click,
+            width=400,
+            height=45,
+            corner_radius=22, # Fully rounded
+            fg_color="#0D5394", # Professional blue
+            hover_color="#0A4275",
+            font=customtkinter.CTkFont(family="Inter", size=16, weight="bold")
+        )
+        self.signin_button.grid(row=3, column=0, pady=(0, 20))
+
+        # 5. Create new account link
+        self.create_account_btn = customtkinter.CTkButton(
+            self.content_frame,
+            text="Create new account",
+            fg_color="transparent",
+            hover_color=None,
+            text_color=("#0D5394", "#3a7ebf"),
+            font=customtkinter.CTkFont(family="Inter", size=15, weight="bold"),
+            command=lambda: None
+        )
+        self.create_account_btn.grid(row=4, column=0, pady=(0, 40))
+
+        # 6. Status/Error Label (Hidden by default)
+        self.status_label = customtkinter.CTkLabel(
+            self.content_frame,
+            text="",
+            font=customtkinter.CTkFont(family="Inter", size=12),
+            text_color="red"
+        )
+        self.status_label.grid(row=5, column=0)
+
+        # 7. Footer
+        footer_frame = customtkinter.CTkFrame(self.login_frame, fg_color="transparent")
+        footer_frame.grid(row=2, column=0, sticky="s", pady=20)
+        
+        self.privacy_label = customtkinter.CTkLabel(
+            footer_frame,
+            text="Privacy and Cookies",
+            font=customtkinter.CTkFont(family="Inter", size=12),
+            text_color=("#0D5394", "#3a7ebf"),
+            cursor="hand2"
+        )
+        self.privacy_label.pack(side="top")
+        
+        self.terms_label = customtkinter.CTkLabel(
+            footer_frame,
+            text="By signing in you agree to the Terms of Use",
+            font=customtkinter.CTkFont(family="Inter", size=12),
+            text_color=("#666666", "#AAAAAA")
+        )
+        self.terms_label.pack(side="top", pady=(5, 0))
+
+
+        # 8. Skip Button (Bottom Right)
         self.skip_button = customtkinter.CTkButton(
-            self.center_frame,
+            self.login_frame,
             text="Skip",
             command=self.skip_login,
-            font=("Arial", 20),
+            width=80,
+            height=30,
+            corner_radius=15,
             fg_color="transparent",
-            border_width=2,
-            text_color=("gray10", "gray90"),
+            border_width=1,
+            border_color=("#CCCCCC", "#444444"),
+            text_color=("#666666", "#AAAAAA"),
+            font=customtkinter.CTkFont(family="Inter", size=12)
         )
-        self.skip_button.grid(row=1, column=0, padx=10, pady=20, sticky="n")
+        self.skip_button.place(relx=0.98, rely=0.98, anchor="se")
 
         return self.login_frame
 
+
     def skip_login(self):
-        """
-        Skip the login process and go directly to the dashboard.
-        """
+        """Skip login and go to dashboard."""
         logger.info("User skipped login")
-        self.destroy()
+        if hasattr(self, 'login_frame'):
+            self.login_frame.destroy()
         self.app.create_dashboard()
 
-    def show_registration_screen(self):
-        """
-        Show the email entry screen after clicking Login.
-        """
-        self.login_frame.destroy()  # Remove the login button
-        self.create_registration_screen()
-
-    def create_registration_screen(self):
-        """
-        Create the registration screen where the user can enter their email and register.
-        """
-        self.registration_frame = customtkinter.CTkFrame(
-            self.app, corner_radius=0, fg_color=self.app.cget("fg_color")
-        )
-        self.registration_frame.grid(row=0, column=0, sticky="nsew")
-
-        for i in range(self.REGISTRATION_GRID_ROWS):
-            self.registration_frame.grid_rowconfigure(i, weight=1)
-        for i in range(self.REGISTRATION_GRID_COLS):
-            self.registration_frame.grid_columnconfigure(i, weight=1)
-
-        # Back button (top left)
-        self.back_button = customtkinter.CTkButton(
-            self.registration_frame,
-            text="← Back",
-            command=self.go_back,
-            width=80,
-            height=30,
-            fg_color="transparent",
-            text_color=("gray10", "gray90"),
-            anchor="w",
-        )
-        self.back_button.grid(row=0, column=0, padx=20, pady=20, sticky="nw")
-
-        self.welcome_label = customtkinter.CTkLabel(
-            self.registration_frame, text="Welcome to Resistine", font=("Arial", 24)
-        )
-        self.welcome_label.grid(row=1, column=1, padx=20, pady=20, sticky="nsew")
-        self.subtitle_label = customtkinter.CTkLabel(
-            self.registration_frame,
-            text="Please enter your email to receive an OTP",
-            font=("Arial", 16),
-        )
-        self.subtitle_label.grid(row=2, column=1, padx=20, pady=10, sticky="ew")
-
-        # Initial Email Input Field
-        self.email_entry = customtkinter.CTkEntry(
-            self.registration_frame, placeholder_text="Enter your email"
-        )
-        self.email_entry.grid(row=3, column=1, padx=20, pady=20, sticky="ew")
-
-        # Set the active input to the email entry initially
-        self.active_input_entry = self.email_entry
-
-        # Single button that transforms from Send OTP to Verify OTP
-        self.action_button = customtkinter.CTkButton(
-            self.registration_frame, text="Send OTP", command=self.send_otp
-        )
-        self.action_button.grid(row=4, column=1, padx=20, pady=20, sticky="nsew")
-
-        # Status Label
-        self.status_label = customtkinter.CTkLabel(
-            self.registration_frame, text="", font=("Arial", 12)
-        )
-        self.status_label.grid(row=7, column=1, padx=20, pady=10)
-
-    def go_back(self):
-        """
-        Handle back button click.
-        If in OTP mode, go back to email entry.
-        If in Email mode, go back to main login screen.
-        """
-        if hasattr(self, "otp_entry") and self.otp_entry.winfo_exists():
-            # In OTP mode, go back to email entry
-            self.otp_entry.destroy()
-            self.subtitle_label.configure(
-                text="Please enter your email to receive an OTP"
-            )
-
-            # Recreate email entry
-            self.email_entry = customtkinter.CTkEntry(
-                self.registration_frame, placeholder_text="Enter your email"
-            )
-            self.email_entry.grid(row=3, column=1, padx=20, pady=20, sticky="ew")
-            if self.email:
-                self.email_entry.insert(0, self.email)
-
-            self.active_input_entry = self.email_entry
-            self.action_button.configure(text="Send OTP", command=self.send_otp)
-            self.status_label.configure(text="")
-        else:
-            # In Email mode, go back to main login screen
-            self.registration_frame.destroy()
-            self.create_main_screen()
-
-    def send_otp(self):
-        """Send OTP to customer email via Resistine API"""
+    def handle_signin_click(self):
+        """Handle the sign-in button click."""
         email = self.email_entry.get().strip()
-
-        # Validate email format
         email_regex = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+        
         if not email:
             self.update_status("Please enter an email address", "red")
             return
@@ -260,159 +218,66 @@ class Plugin(BasePlugin):
             self.update_status("Please enter a valid email address", "red")
             return
 
-        # Store email
         self.email = email
-
-        # Send OTP via API - API handles all validation
         self.send_otp_api(email)
 
-    def send_otp_api(self, email):
-        """Send OTP via Resistine API (server generates and validates the OTP)"""
-        self.update_status("Sending OTP...", "blue")
-
-        success, message, result = self.api.send_otp(email)
-
-        if success:
-            self.update_status(message, "green")
-            self.transform_to_otp_input()
-        else:
-            self.update_status(f"Error: {message}", "red")
-
-    def verify_otp(self):
-        """Verify the entered OTP with Resistine API"""
-        entered_otp = self.active_input_entry.get().strip()
-
-        if not entered_otp:
-            self.update_status("Please enter the OTP", "red")
-            return
-
-        self.update_status("Verifying OTP with server...", "blue")
-
-        try:
-            import sys
-
-            # Dynamic import based on platform
-            if sys.platform == "darwin":
-                from plugins.vpn.wireguard.vpn_functions_darwin import (
-                    save_vpn_configuration,
-                    setup_vpn_keys,
-                )
-            elif sys.platform == "linux":
-                from plugins.vpn.wireguard.vpn_functions_linux import (
-                    save_vpn_configuration,
-                    setup_vpn_keys,
-                )
-            else:
-                self.update_status(f"Unsupported platform: {sys.platform}", "red")
-                return
-
-            # Step 1: Setup VPN keys (Generate/Save/Get Public Key)
-            public_key = setup_vpn_keys()
-            if not public_key:
-                self.update_status("Failed to setup VPN keys", "red")
-                return
-
-            # Log key validation without exposing sensitive data
-            logger.debug(
-                f"WireGuard Public Key Validated: Length={len(public_key)} characters"
-            )
-
-            # Step 2: Verify OTP with API
-            success, message, result = self.api.verify_otp(
-                self.email, entered_otp, public_key
-            )
-
-            if success:
-                self.update_status(message, "green")
-
-                # Log API response status
-                safe_result = {
-                    "status": result.get("status", ""),
-                    "message": result.get("message", ""),
-                    "vpn_config_received": bool(result.get("vpn_config", "")),
-                }
-                logger.info(f"API Response Status: {json.dumps(safe_result)}")
-
-                # Step 3: Save VPN Configuration
-                vpn_config_json = result.get("vpn_config", "")
-                if vpn_config_json:
-                    config_path = save_vpn_configuration(vpn_config_json)
-                    if config_path:
-                        logger.info(f"VPN configuration saved to {config_path}")
-                    else:
-                        logger.warning("Failed to save VPN configuration")
-
-                # Save login state
-                settings.set("auth", "logged_in", True)
-                settings.set("auth", "email", self.email)
-
-                # Small delay to show success message, then transition
-                def transition_to_dashboard():
-                    self.destroy()
-                    self.app.create_dashboard()
-
-                self.app.after(500, transition_to_dashboard)
-            else:
-                self.update_status(f"Error: {message}", "red")
-                self.active_input_entry.delete(0, "end")
-
-        except Exception as e:
-            logger.exception("Verification error")
-            self.update_status(f"Verification error: {str(e)}", "red")
-
-    def on_otp_key_press(self, event):
-        """Only allow digits in the OTP field"""
-        # Allow digits, backspace, delete, and navigation keys
-        allowed_keys = ["BackSpace", "Delete", "Left", "Right", "Home", "End", "Tab"]
-        if event.char and not event.char.isdigit() and event.keysym not in allowed_keys:
-            return "break"
-
-    def update_status(self, message, color="white"):
-        """Update status label with message and color"""
-        self.status_label.configure(text=message, text_color=color)
-        self.status_label.update()
-
-    def get_name(self):
-        return self.name
-
-    def get_icon(self):
-        return self.icon
-
-    def get_button(self):
-        return self.button
-
-    def set_button(self, button):
-        self.button = button
-
     def transform_to_otp_input(self):
-        """Destroy the email entry and create a fresh OTP entry field."""
+        """Transform the existing screen to show OTP entry."""
+        # Hide email entry and sign-in button
+        if hasattr(self, 'email_entry') and self.email_entry.winfo_exists():
+            self.email_entry.destroy()
+        if hasattr(self, 'signin_button') and self.signin_button.winfo_exists():
+            self.signin_button.destroy()
+        if hasattr(self, 'create_account_btn') and self.create_account_btn.winfo_exists():
+            self.create_account_btn.destroy()
 
-        # 1. Destroy the old email entry
-        self.email_entry.destroy()
-
-        # 2. Update the subtitle
-        self.subtitle_label.configure(
+        # Update title
+        self.title_label.configure(
             text=f"Enter the 6-digit code sent to {self.email}"
         )
 
-        # 3. Create the new OTP input field
+        # Create OTP entry in same spot
         self.otp_entry = customtkinter.CTkEntry(
-            self.registration_frame,
+            self.content_frame,
             placeholder_text="Enter OTP",
-            show="*",  # Crucial for masking input
+            width=400,
+            height=45,
+            corner_radius=4,
+            show="*",
+            font=customtkinter.CTkFont(family="Inter", size=14)
         )
-
-        # 4. Grid the new entry in the same spot
-        self.otp_entry.grid(row=3, column=1, padx=20, pady=20, sticky="ew")
-
-        # 5. Update the active input reference
+        self.otp_entry.grid(row=2, column=0, pady=(0, 20))
         self.active_input_entry = self.otp_entry
-
-        # 6. Bind the key press event for validation
         self.otp_entry.bind("<KeyPress>", self.on_otp_key_press)
-
-        # 7. Focus on the new input field
         self.otp_entry.focus_set()
 
-        # 8. Update the button
-        self.action_button.configure(text="Verify OTP", command=self.verify_otp)
+        # Create Verify button
+        self.verify_button = customtkinter.CTkButton(
+            self.content_frame,
+            text="Verify OTP",
+            command=self.verify_otp,
+            width=400,
+            height=45,
+            corner_radius=22,
+            fg_color="#0D5394",
+            font=customtkinter.CTkFont(family="Inter", size=16, weight="bold")
+        )
+        self.verify_button.grid(row=3, column=0, pady=(0, 20))
+
+    def update_status(self, message, color="white"):
+        """Update status label with message and color"""
+        if hasattr(self, 'status_label') and self.status_label.winfo_exists():
+            self.status_label.configure(text=message, text_color=color)
+            self.status_label.update()
+
+    def get_name(self):
+        return "Login"
+
+    def get_icon(self):
+        return None
+
+    def get_button(self):
+        return getattr(self, 'button', None)
+
+    def set_button(self, button):
+        self.button = button
