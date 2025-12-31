@@ -14,6 +14,7 @@ import sys
 import tkinter as tk
 
 import customtkinter
+from PIL import Image
 
 from plugins.plugin_manager import PluginManager
 from utils import functions as functions
@@ -142,16 +143,34 @@ class App(customtkinter.CTk):
         self.grid_columnconfigure(0, minsize=220)
         self.navigation_frame.grid_rowconfigure(number_plugins, weight=1)
         self.navigation_frame.grid_columnconfigure(0, weight=1)
+        # Load Resistine logo image (UI_Dev-style)
+        logo_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "ResistineLogoWhiteText.png")
+        logo_image = None
+        if os.path.exists(logo_path):
+            try:
+                logo_img = Image.open(logo_path)
+                max_width = 180
+                aspect_ratio = logo_img.height / logo_img.width if logo_img.width else 1
+                logo_height = int(max_width * aspect_ratio)
+                logo_img = logo_img.resize((max_width, logo_height), Image.Resampling.LANCZOS)
+                logo_image = customtkinter.CTkImage(
+                    light_image=logo_img,
+                    dark_image=logo_img,
+                    size=(max_width, logo_height),
+                )
+            except Exception as e:
+                print(f"Error loading logo: {e}")
+                logo_image = None
 
         self.navigation_frame_label = customtkinter.CTkLabel(
             self.navigation_frame,
-            text="Resistine",
-            image=None,
+            text="" if logo_image else "Resistine",
+            image=logo_image,
             compound="left",
-            font=customtkinter.CTkFont(size=15, weight="bold"),
-            text_color=sidebar_text_color,
+            font=customtkinter.CTkFont(size=18, weight="bold") if not logo_image else None,
+            text_color=sidebar_text_color if not logo_image else None,
         )
-        self.navigation_frame_label.grid(row=0, column=0, padx=20, pady=20)
+        self.navigation_frame_label.grid(row=0, column=0, padx=20, pady=(25, 10), sticky="ew")
 
         self.frames = {}
         row = 1
@@ -247,6 +266,8 @@ class App(customtkinter.CTk):
             try:
                 for frame_name, frame in getattr(self, 'frames', {}).items():
                     btn = frame.get_button() if hasattr(frame, 'get_button') else None
+                    if btn:
+                        functions.apply_tab_button_theme(btn)
                     if not btn:
                         continue
                     functions.apply_tab_button_state(btn, is_active=(frame_name == getattr(self, 'current_frame_name', None)))

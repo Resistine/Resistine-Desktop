@@ -5,6 +5,33 @@ import sys
 import customtkinter
 
 
+
+def _effective_appearance_mode() -> str:
+    """
+    Return effective appearance: 'Light' or 'Dark' (resolves System on macOS).
+    Mirrors UI_Dev behavior so colors can be updated on appearance switches.
+    """
+    mode = customtkinter.get_appearance_mode()
+    if mode != "System":
+        return mode
+
+    if sys.platform == "darwin":
+        try:
+            import subprocess
+
+            result = subprocess.run(
+                ["defaults", "read", "-g", "AppleInterfaceStyle"],
+                capture_output=True,
+                text=True,
+            )
+            return "Dark" if result.returncode == 0 and "Dark" in result.stdout else "Light"
+        except Exception:
+            return "Light"
+
+    return "Light"
+
+
+
 def create_plugin_card(row, column, container_frame, plugin):
     """
     Create a plugin card frame with an icon, title, status, and status icon, and make it clickable to open the plugin's main screen.
@@ -77,21 +104,12 @@ def create_plugin_card(row, column, container_frame, plugin):
 
 
 def create_tab_button(frame, name, icon, command=None, row=0, col=0):
-    """
-    Create a modern button for a tab with the specified name, icon, and command.
-    Uses theme-aware colors so switching System/Light/Dark updates correctly.
-
-    :param frame: The parent frame to contain this button.
-    :param name: The name to display on the button.
-    :param icon: The icon to display on the button.
-    :param command: The command to execute when the button is clicked.
-    :param row: The row position in the grid.
-    :param col: The column position in the grid.
-    :return: The created button.
-    """
+    """Create a modern tab button matching UI_Dev styling."""
     resistine_blue = "#0D5394"
-    hover_bg_light = "#F5F5F5"
-    hover_bg_dark = "#2A2A2A"
+    mode = _effective_appearance_mode()
+
+    text_color = "#ffffff" if mode == "Dark" else "#000000"
+    hover_bg = "#2A2A2A" if mode == "Dark" else "#F5F5F5"
 
     frame_button = customtkinter.CTkButton(
         frame,
@@ -100,43 +118,51 @@ def create_tab_button(frame, name, icon, command=None, row=0, col=0):
         border_spacing=15,
         text=name,
         fg_color="transparent",
-        # tuple order is (light, dark)
-        text_color=("#000000", "#ffffff"),
-        hover_color=(hover_bg_light, hover_bg_dark),
+        text_color=text_color,
+        hover_color=hover_bg,
         border_width=0,
         border_color=resistine_blue,
         image=icon,
         anchor="w",
+        font=customtkinter.CTkFont(size=14, weight="normal"),
         command=command,
     )
-    frame_button.grid(row=row, column=col, sticky="ew")
 
-    # Add Resistine blue accent on hover via border
     def on_enter(_e):
-        frame_button.configure(border_width=2)
+        frame_button.configure(border_width=2, border_color=resistine_blue)
 
     def on_leave(_e):
         frame_button.configure(border_width=0)
+        frame_button.update_idletasks()
 
     frame_button.bind("<Enter>", on_enter)
     frame_button.bind("<Leave>", on_leave)
 
+    frame_button.grid(row=row, column=col, sticky="ew", padx=10, pady=2)
+
     return frame_button
 
 
+def apply_tab_button_theme(button: customtkinter.CTkButton):
+    """Update theme-dependent colors (text/hover) after appearance switches."""
+    mode = _effective_appearance_mode()
+    text_color = "#ffffff" if mode == "Dark" else "#000000"
+    hover_bg = "#2A2A2A" if mode == "Dark" else "#F5F5F5"
+    button.configure(text_color=text_color, hover_color=hover_bg)
+
+
 def apply_tab_button_state(button: customtkinter.CTkButton, is_active: bool):
-    """Apply active/inactive styling to an existing sidebar button (theme-aware)."""
+    """Apply active/inactive styling (UI_Dev-style)."""
     if is_active:
         button.configure(
-            fg_color=("#EAEAEA", "#303030"),
-            border_width=2,
+            fg_color=("gray75", "gray25"),
+            hover_color=("gray70", "gray30"),
         )
     else:
         button.configure(
             fg_color="transparent",
-            border_width=0,
+            hover_color=("gray80", "gray20"),
         )
-
 
 
 def create_grid(frame, row, column, plugins, color, sticky="nsew"):
