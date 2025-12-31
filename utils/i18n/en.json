@@ -39,5 +39,10 @@
   "settings.apikey.placeholder": "sk-...",
   "settings.apikey.save": "Save Key",
   "settings.apikey.saved_success": "✅ API Key saved successfully!",
-  "settings.apikey.saved_error": "❌ Failed to save API Key"
+  "settings.apikey.saved_error": "❌ Failed to save API Key",
+  "dialog.password.title": "Password Required",
+  "dialog.password.text": "Enter password:",
+  "dialog.password.button.ok": "OK",
+  "dialog.password.button.cancel": "Cancel",
+  "vpn.linux.privileges_required": "Privileges required for: {command}\nEnter sudo password:"
 }

@@ -3,32 +3,34 @@
 ## @namespace dashboard_plugin
 ## @class dashboard_plugin::Plugin
 
-"""
-This script is used to display the dashboard plugin in a grid format.
+"""Dashboard plugin UI.
+
+This implementation ports the UI_Dev dashboard layout ideas (protection panel + grid cards)
+while preserving existing functionality (plugin list + navigation via App.select_frame_by_name).
+
+IMPORTANT:
+- UI only (no backend changes)
+- Logo is in side menu only (not on dashboard)
+- Does NOT use Resistine shield / RSheild assets
+
 Author: Peres J. and the Resistine Team
 Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
 
+import os
+
+import customtkinter
 
 from plugins.base_plugin import BasePlugin
-import customtkinter
-from PIL import Image
-import os
 from plugins.plugin_manager import PluginManager
-from utils import functions as myfunctions 
+from utils import functions as myfunctions
+
 
 class Plugin(BasePlugin):
-    """
-    @brief Plugin class for the Dashboard plugin.
-    Plugin class for the Dashboard plugin, that allows users to view the plugins in a grid format
-    """
+    """Dashboard plugin."""
+
     def __init__(self, app):
-        """
-        @brief Initialize the Dashboard plugin.
-        Initialize the Dashboard plugin with the specified parameters.
-        :param app: Main application object.
-        """
         super().__init__(
             id="001",
             order=1,
@@ -37,95 +39,122 @@ class Plugin(BasePlugin):
             description="This plugin allows you to view the dashboard.",
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Dashboard", "ES": "Panel", "FR": "Tableau de bord"},
-            icon_light_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "home_light.png"),
-            icon_dark_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "home_dark.png"),
+            icon_light_path=os.path.join(
+                os.path.dirname(os.path.realpath(__file__)), "home_light.png"
+            ),
+            icon_dark_path=os.path.join(
+                os.path.dirname(os.path.realpath(__file__)), "home_dark.png"
+            ),
         )
         self.app = app
-    
+        self._dashboard_logo_image = None
+
+    def _effective_appearance_mode(self) -> str:
+        if hasattr(myfunctions, "_effective_appearance_mode"):
+            try:
+                return myfunctions._effective_appearance_mode()
+            except Exception:
+                pass
+        mode = customtkinter.get_appearance_mode()
+        return "Dark" if mode == "Dark" else "Light"
 
     def create_main_screen(self):
-        """
-        @brief Create the main screen for the Dashboard plugin.
-        Create the main screen for the Dashboard plugin.
-        """
-        
-        self.main_frame = customtkinter.CTkFrame(self.app, corner_radius=0, fg_color="transparent")
-        self.main_frame.grid_columnconfigure(0, weight=1)
-        self.main_frame.grid_rowconfigure(0, weight=1)
-        self.main_frame.grid_rowconfigure(1, weight=3)
-
-        # Title frame (20% of the total height)
-        self.title_frame = customtkinter.CTkFrame(self.main_frame, corner_radius=0, fg_color="transparent")
-        self.title_frame.grid(row=0, column=0, sticky="nsew")
-        self.title_frame.grid_columnconfigure(0, weight=1)
-        self.title_frame.grid_rowconfigure(0, weight=1)
-
-        self.title_label = customtkinter.CTkLabel(
-            self.title_frame,
-            text="You are protected",
-            font=customtkinter.CTkFont(size=30, weight="bold")
+        # Modern main frame with proper spacing
+        self.main_frame = customtkinter.CTkFrame(
+            self.app,
+            corner_radius=0,
+            fg_color="transparent",
         )
-        self.title_label.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
+        self.main_frame.grid_columnconfigure(0, weight=1)
+        self.main_frame.grid_rowconfigure(0, weight=0)  # protection panel
+        self.main_frame.grid_rowconfigure(1, weight=0)  # grid
+        self.main_frame.grid_rowconfigure(2, weight=1)  # spacer to push content up
+        
+        appearance_mode = self._effective_appearance_mode()
+        is_dark = appearance_mode == "Dark"
 
-        # Load plugins
-        if not hasattr(self.app, 'plugin_list') or not self.app.plugin_list:
-            self.plugin_list = PluginManager(self.app).plugins
+        resistine_blue = "#0D5394"
+        panel_bg = "#1A1A1A" if is_dark else "#ffffff"
+        text_color = "#ffffff" if is_dark else "#000000"
+
+        
+        
+        # --- Protection panel (Sleek SOC-style) ---
+        panel_bg = myfunctions.SOC_THEME["colors"]["card_bg"]
+        text_primary = myfunctions.SOC_THEME["colors"]["text_primary"]
+        accent_blue = myfunctions.SOC_THEME["colors"]["accent_blue"]
+
+        # Container for the protection panel to control its width and centering
+        protection_container = customtkinter.CTkFrame(self.main_frame, fg_color="transparent")
+        protection_container.grid(row=0, column=0, sticky="ew", padx=20, pady=(15, 0))
+        protection_container.grid_columnconfigure(0, weight=1)
+
+        protection_panel = customtkinter.CTkFrame(
+            protection_container,
+            corner_radius=15,
+            fg_color=panel_bg,
+            border_width=1,
+            border_color=myfunctions.SOC_THEME["colors"]["card_border"],
+            width=600 # Decreased width
+        )
+        protection_panel.grid(row=0, column=0, sticky="n") # Center horizontally
+        protection_panel.grid_columnconfigure(0, weight=1)
+        protection_panel.grid_propagate(True)
+
+        protection_label = customtkinter.CTkLabel(
+            protection_panel,
+            text="SYSTEM STATUS: PROTECTED",
+            font=customtkinter.CTkFont(family="Inter", size=18, weight="bold"),
+            text_color=accent_blue,
+            justify="center"
+        )
+        protection_label.grid(row=0, column=0, sticky="ew", padx=40, pady=(15, 5))
+
+        subtitle_label = customtkinter.CTkLabel(
+            protection_panel,
+            text="All security modules are actively monitoring for threats.",
+            font=customtkinter.CTkFont(family="Inter", size=12, weight="normal"),
+            text_color=myfunctions.SOC_THEME["colors"]["text_secondary"],
+            justify="center"
+        )
+        subtitle_label.grid(row=1, column=0, sticky="ew", padx=40, pady=(0, 15))
+
+
+        # --- Plugins grid ---
+        if not hasattr(self.app, "plugin_list") or not self.app.plugin_list:
+            plugin_list = PluginManager(self.app).plugins
         else:
-            self.plugin_list = self.app.plugin_list
-        self.plugins = self.plugin_list[1:]
-        #self.plugins = PluginManager(self.app).plugins[1:]
-        #gettings rows and columns
-        rows, cols = myfunctions.calculate_rows_cols(len(self.plugins))
+            plugin_list = self.app.plugin_list
 
-        # Add scroll if more than 2 rows
-        if len(rows) > 2:
-            self.canvas = customtkinter.CTkCanvas(self.main_frame)
-            self.scrollbar = customtkinter.CTkScrollbar(self.main_frame, command=self.canvas.yview)
-            parent_bg = self.main_frame.master.cget("background")
-            self.canvas.configure(yscrollcommand=self.scrollbar.set, background=parent_bg, highlightthickness=0)
+        plugins = plugin_list[1:]  # omit Dashboard itself
+        rows, cols = myfunctions.calculate_rows_cols(len(plugins))
 
-            # Set the background color for the scrollable_frame
-            self.scrollable_frame = customtkinter.CTkFrame(self.canvas, fg_color="transparent")
-            self.scrollable_frame.bind(
-                "<Configure>",
-                lambda e: self.canvas.configure(
-                    scrollregion=self.canvas.bbox("all")
-                )
-            )
+        content_frame = customtkinter.CTkFrame(self.main_frame, corner_radius=0, fg_color="transparent")
+        content_frame.grid(row=1, column=0, sticky="new", padx=15, pady=0)
+        content_frame.grid_columnconfigure(0, weight=1)
+        content_frame.grid_rowconfigure(0, weight=1)
 
-            self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
-            self.canvas.grid(row=1, column=0, sticky="nsew")
-            #self.scrollbar.configure(background=parent_bg, highlightthickness=0)
-            self.scrollbar.grid(row=1, column=1, sticky="ns")
+        self.grid_frame = myfunctions.create_grid(
+            frame=content_frame,
+            row=0,
+            column=0,
+            plugins=plugins,
+            color="transparent",
+            sticky="nsew",
+        )
+        self.grid_frame.grid_columnconfigure(tuple(range(len(cols))), weight=1, uniform="cols")
+        self.grid_frame.grid_rowconfigure(tuple(range(len(rows))), weight=0)
 
-            # Ensure the main_frame expands to fill the available space
-            self.main_frame.grid_rowconfigure(1, weight=1)
-            self.main_frame.grid_columnconfigure(0, weight=1)
+        def open_plugin(p):
+            # Preserve existing functionality: use app frame switching (updates sidebar state)
+            try:
+                self.app.select_frame_by_name(f"frame_{p.get_name()}", button=p.get_button())
+            except Exception:
+                p.create_main_screen().grid(row=0, column=1, sticky="nsew")
 
-            # Ensure the scrollable_frame expands to fill the canvas
-            self.scrollable_frame.grid_columnconfigure(0, weight=1)
-            self.scrollable_frame.grid_rowconfigure(0, weight=1)
-
-            # Ensure the canvas expands to fill the available space
-            self.canvas.bind(
-                "<Configure>",
-                lambda e: self.canvas.itemconfig(
-                    self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw", width=e.width)
-                )
-            )
-
-            self.grid_frame = myfunctions.create_grid(self.scrollable_frame, 0, 0, self.plugins, "transparent", "nsew")
-
-        else:
-            # Grid frame dynamically created for the plugins
-            self.grid_frame = myfunctions.create_grid(self.main_frame, 1, 0, self.plugins, "transparent", "nsew")
-            
-        # Ex: 5 plugins, 2 rows (0, 1), 3 columns (0, 1, 2), first plugin should be located in position 0,0, then 0,1, 0,2, 1,0, 1,1
-
-        # Place plugins in the grid
-        for index, plugin in enumerate(self.plugins):
-            row = index // len(cols)
-            col = index % len(cols)
-            myfunctions.create_plugin_card(row, col, self.grid_frame, plugin)      
+        for index, plugin in enumerate(plugins):
+            r = index // len(cols)
+            c = index % len(cols)
+            myfunctions.create_plugin_card(r, c, self.grid_frame, plugin)
 
         return self.main_frame

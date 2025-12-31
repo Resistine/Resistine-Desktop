@@ -1,14 +1,33 @@
+## @file markdown_viewer.py
+## @namespace plugins.help
+"""
+Markdown viewer for the Help plugin, that provides help documentation.
+Author: Petr and the Resistine Team
+Copyright (c) Resistine 2025
+Licensed under the GNU General Public License v2 or later
+"""
+
 import os
 import webbrowser
 
 import customtkinter
 import markdown
-from tkinterweb import HtmlFrame
+import tkinter as tk
+
+# tkinterweb (Tkhtml) is optional on Tcl/Tk 9; it can fail at import-time or runtime.
+try:
+    from tkinterweb import HtmlFrame  # type: ignore
+except Exception:  # pragma: no covDer
+    HtmlFrame = None
 
 
 class MarkdownViewer(customtkinter.CTkFrame):
+
+    # Root files to add to the dropdown
+    root_files = ["README.md", "LICENSE.md"]
+
     def __init__(self, master, docs_dir=None, **kwargs):
-        super().__init__(master, **kwargs)
+        super().__init__(master, fg_color=("#f0eff6", "#1a1a1a"), **kwargs)
 
         # Navigation history
         self.history = []
@@ -49,12 +68,51 @@ class MarkdownViewer(customtkinter.CTkFrame):
                 width=150,
             )
             self.file_dropdown.pack(side="left", padx=5, pady=5)
+        # HTML frame with link click handler (fallback to plain text if Tkhtml unavailable)
+        self._use_html = False
+        self.html_frame = None
+        self.fallback_text = None
 
-        # HTML frame with link click handler
-        self.html_frame = HtmlFrame(
-            self, messages_enabled=False, on_link_click=self.on_link_click
-        )
-        self.html_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        if HtmlFrame is not None:
+            try:
+                # Determine background color for HtmlFrame
+                mode = customtkinter.get_appearance_mode()
+                # On system, resolve to actual dark/light
+                if mode == "System":
+                    try:
+                        import sys
+                        if sys.platform == "darwin":
+                            import subprocess
+                            res = subprocess.run(['defaults', 'read', '-g', 'AppleInterfaceStyle'], capture_output=True, text=True)
+                            mode = "Dark" if res.returncode == 0 and "Dark" in res.stdout else "Light"
+                        else:
+                            mode = "Light"
+                    except: mode = "Light"
+                
+                bg_color = "#1a1a1a" if mode == "Dark" else "#f0eff6"
+                
+                self.html_frame = HtmlFrame(
+                    self, messages_enabled=False, on_link_click=self.on_link_click
+                )
+                try:
+                    self.html_frame.configure(background=bg_color)
+                except:
+                    try: self.html_frame.config(bg=bg_color)
+                    except: pass
+                    
+                self.html_frame.pack(fill="both", expand=True, padx=10, pady=10)
+                self._use_html = True
+            except Exception as e:
+                print(f"Help: HtmlFrame unavailable, using fallback viewer: {e}")
+
+        if not self._use_html:
+            self.fallback_text = customtkinter.CTkTextbox(
+                self,
+                wrap="word",
+                fg_color=("#f0eff6", "#1a1a1a"),
+                text_color=("#000000", "#ffffff"),
+            )
+            self.fallback_text.pack(fill="both", expand=True, padx=10, pady=10)
 
         self.home_file = None
 
@@ -65,8 +123,7 @@ class MarkdownViewer(customtkinter.CTkFrame):
         # Add root files
         if self.docs_dir:
             project_root = os.path.dirname(self.docs_dir)
-            root_files = ["README.md", "LICENSE"]
-            for f in root_files:
+            for f in self.root_files:
                 if os.path.exists(os.path.join(project_root, f)):
                     files.append(f)
 
@@ -130,9 +187,7 @@ class MarkdownViewer(customtkinter.CTkFrame):
             self.update_nav_buttons()
 
         if not os.path.exists(file_path):
-            self.html_frame.load_html(
-                f"<h1>Error</h1><p>File not found: {file_path}</p>"
-            )
+            self._render_fallback(f"Error\n\nFile not found:\n{file_path}\n")
             return
 
         # Update dropdown selection
@@ -163,65 +218,53 @@ class MarkdownViewer(customtkinter.CTkFrame):
 
             # Set base_url for relative links
             base_url = "file://" + os.path.abspath(self.current_dir) + "/"
-            self.html_frame.load_html(css + html_content, base_url=base_url)
+
+            # Post-process HTML to linkify URLs in code blocks
+            # Find <pre><code>...</code></pre> blocks
+            import re
+
+            code_block_pattern = re.compile(
+                r"(<pre><code>)(.*?)(</code></pre>)", re.DOTALL
+            )
+
+            def replace_code_block(match):
+                prefix = match.group(1)
+                content = match.group(2)
+                suffix = match.group(3)
+                # Content is already HTML escaped by markdown
+                linked_content = self._linkify_text(content, is_escaped=True)
+                return f"{prefix}{linked_content}{suffix}"
+
+            html_content = code_block_pattern.sub(replace_code_block, html_content)
+
+            if self._use_html and self.html_frame is not None:
+                try:
+                    self.html_frame.load_html(css + html_content, base_url=base_url)
+                except Exception as e:
+                    print(f"Help: HtmlFrame load failed, using fallback viewer: {e}")
+                    self._use_html = False
+                    self._render_fallback(md_content)
+            else:
+                self._render_fallback(md_content)
         elif file_path.endswith(".html") or file_path.endswith(".htm"):
-            self.html_frame.load_file(file_path)
+            if self._use_html and self.html_frame is not None:
+                try:
+                    self.html_frame.load_file(file_path)
+                except Exception as e:
+                    print(f"Help: HtmlFrame load failed, using fallback viewer: {e}")
+                    self._use_html = False
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        self._render_fallback(f.read())
+            else:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    self._render_fallback(f.read())
         else:
             # Handle plain text files (LICENSE, etc.)
             with open(file_path, "r", encoding="utf-8") as f:
                 text_content = f.read()
 
-            # # Escape HTML special characters
-            # text_content = (
-            #     text_content.replace("&", "&amp;")
-            #     .replace("<", "&lt;")
-            #     .replace(">", "&gt;")
-            # )
-
-            # Linkify URLs
-            import re
-
-            # Regex to match URLs, excluding < and > and escaped &lt; &gt;
-            # We look for http/https URLs
-            # This regex stops at whitespace, <, >, or &lt; or &gt;
-            url_pattern = re.compile(r"(https?://(?:(?!&lt;|[<>]).)+)")
-
-            parts = url_pattern.split(text_content)
-            final_content = []
-
-            for i, part in enumerate(parts):
-                if i % 2 == 0:
-                    # This is text, escape it
-                    escaped_part = (
-                        part.replace("&", "&amp;")
-                        .replace("<", "&lt;")
-                        .replace(">", "&gt;")
-                    )
-                    final_content.append(escaped_part)
-                else:
-                    # This is a URL, make it a link
-                    # Check if the URL ends with punctuation that should be stripped
-                    url = part
-                    trailing_punct = ""
-
-                    # Handle trailing &gt; if it somehow got included (though regex should prevent it)
-                    if url.endswith("&gt;"):
-                        url = url[:-4]
-                        trailing_punct = "&gt;" + trailing_punct
-
-                    # Common trailing punctuation
-                    if (
-                        url.endswith(".")
-                        or url.endswith(",")
-                        or url.endswith(";")
-                        or url.endswith(")")
-                    ):
-                        trailing_punct = url[-1] + trailing_punct
-                        url = url[:-1]
-
-                    final_content.append(f'<a href="{url}">{url}</a>{trailing_punct}')
-
-            text_content = "".join(final_content)
+            # Linkify URLs (text is not escaped yet)
+            text_content = self._linkify_text(text_content, is_escaped=False)
 
             # Get current appearance mode
             appearance_mode = customtkinter.get_appearance_mode()
@@ -241,34 +284,101 @@ class MarkdownViewer(customtkinter.CTkFrame):
             # Wrap in pre tag for preformatted text
             html_content = f"{css}<pre>{text_content}</pre>"
 
-            self.html_frame.load_html(html_content)
+            if self._use_html and self.html_frame is not None:
+                try:
+                    self.html_frame.load_html(html_content)
+                except Exception as e:
+                    print(f"Help: HtmlFrame load failed, using fallback viewer: {e}")
+                    self._use_html = False
+                    self._render_fallback(text_content)
+            else:
+                self._render_fallback(text_content)
+
+    def _linkify_text(self, text, is_escaped=False):
+        """Convert URLs in text to anchor tags."""
+        import re
+
+        # Regex to match URLs, excluding < and > and escaped &lt; &gt;
+        # We look for http/https URLs
+        # This regex stops at whitespace, <, >, or &lt; or &gt;
+        url_pattern = re.compile(r"(https?://(?:(?!&lt;|&gt;|[<>]).)+)")
+
+        parts = url_pattern.split(text)
+        final_content = []
+
+        for i, part in enumerate(parts):
+            if i % 2 == 0:
+                # This is text
+                if not is_escaped:
+                    # Escape it if not already escaped
+                    part = (
+                        part.replace("&", "&amp;")
+                        .replace("<", "&lt;")
+                        .replace(">", "&gt;")
+                    )
+                final_content.append(part)
+            else:
+                # This is a URL, make it a link
+                # Check if the URL ends with punctuation that should be stripped
+                url = part
+                trailing_punct = ""
+
+                # Handle trailing &gt; if it somehow got included
+                if url.endswith("&gt;"):
+                    url = url[:-4]
+                    trailing_punct = "&gt;" + trailing_punct
+
+                # Common trailing punctuation
+                if (
+                    url.endswith(".")
+                    or url.endswith(",")
+                    or url.endswith(";")
+                    or url.endswith(")")
+                ):
+                    trailing_punct = url[-1] + trailing_punct
+                    url = url[:-1]
+
+                final_content.append(f'<a href="{url}">{url}</a>{trailing_punct}')
+
+        return "".join(final_content)
 
     def on_link_click(self, url):
         print(f"Link clicked: {url}")
-        # TODO: this is an example for debug/verbose output
         # print(f"Current dir: {self.current_dir}")
 
         # Check if it's a local file
         if "://" not in url:
             # Relative path
             target_path = os.path.join(self.current_dir, url)
-            # TODO: this is an example for debug/verbose output
-            # print(f"Checking relative path: {target_path}")
             if os.path.exists(target_path):
-                # print(f"Loading file: {target_path}")
                 self.load_file(target_path)
                 return  # Don't call default handler
         elif url.startswith("file://"):
             target_path = url[7:]
-            # TODO: this is an example for debug/verbose output
-            # print(f"Checking file:// path: {target_path}")
             if os.path.exists(target_path):
-                # print(f"Loading file: {target_path}")
                 self.load_file(target_path)
                 return  # Don't call default handler
 
-        # TODO: In case we would like to open something safe, let's do it here
-        # For example, we could open a local file or a web page
         # External link - open in browser
         print(f"Opening external link: {url}")
         webbrowser.open(url)
+
+
+    def _render_fallback(self, text: str):
+        """Render plain text/markdown into fallback text widget."""
+        if self.fallback_text is None:
+            self.fallback_text = customtkinter.CTkTextbox(
+                self,
+                wrap="word",
+                fg_color=("#f0eff6", "#1a1a1a"),
+                text_color=("#000000", "#ffffff"),
+            )
+            self.fallback_text.pack(fill="both", expand=True, padx=10, pady=10)
+
+        try:
+            self.fallback_text.configure(state="normal")
+            self.fallback_text.delete("1.0", tk.END)
+            self.fallback_text.insert("1.0", text)
+            self.fallback_text.configure(state="disabled")
+        except Exception:
+            pass

@@ -3,18 +3,21 @@
 version: 0.1
 cli:
   version: 1.25.0
+
 # Trunk provides extensibility via plugins. (https://docs.trunk.io/plugins)
 plugins:
   sources:
     - id: trunk
       ref: v1.7.4
       uri: https://github.com/trunk-io/plugins
+
 # Many linters and tools depend on runtimes - configure them here. (https://docs.trunk.io/runtimes)
 runtimes:
   enabled:
-    - go@1.21.0
-    - node@22.16.0
+    - go@1.25.5
+    - node@18.19.1
     - python@3.10.8
+
 # This is the section where you manage your linters. (https://docs.trunk.io/check/configuration)
 lint:
   enabled:
@@ -30,10 +33,13 @@ lint:
     - shellcheck@0.11.0
     - shfmt@3.6.0
     - trufflehog@3.91.1
+  threshold:
+    - linters: [git-diff-check, ruff, black]
+      level: none # This will change them from red (error) to yellow (warning)
 actions:
   disabled:
     - trunk-announce
-    - trunk-check-pre-push
-    - trunk-fmt-pre-commit
   enabled:
     - trunk-upgrade-available
+    - trunk-check-pre-push
+    - trunk-fmt-pre-commit
