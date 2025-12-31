@@ -76,31 +76,48 @@ class Plugin(BasePlugin):
         panel_bg = "#1A1A1A" if is_dark else "#ffffff"
         text_color = "#ffffff" if is_dark else "#000000"
 
-        # --- Protection panel (UI_Dev-inspired, but no shield image) ---
+        
+        
+        # --- Protection panel (Sleek SOC-style) ---
+        panel_bg = myfunctions.SOC_THEME["colors"]["card_bg"]
+        text_primary = myfunctions.SOC_THEME["colors"]["text_primary"]
+        accent_blue = myfunctions.SOC_THEME["colors"]["accent_blue"]
+
+        # Container for the protection panel to control its width and centering
+        protection_container = customtkinter.CTkFrame(self.main_frame, fg_color="transparent")
+        protection_container.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 5))
+        protection_container.grid_columnconfigure(0, weight=1)
+
         protection_panel = customtkinter.CTkFrame(
-            self.main_frame,
-            corner_radius=20,
+            protection_container,
+            corner_radius=15,
             fg_color=panel_bg,
-            border_width=0,
+            border_width=1,
+            border_color=myfunctions.SOC_THEME["colors"]["card_border"],
+            width=600 # Decreased width
         )
-        protection_panel.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 15))
+        protection_panel.grid(row=0, column=0, sticky="n") # Center horizontally
         protection_panel.grid_columnconfigure(0, weight=1)
+        protection_panel.grid_propagate(True)
 
         protection_label = customtkinter.CTkLabel(
             protection_panel,
-            text="You are protected!",
-            font=customtkinter.CTkFont(size=25, weight="bold"),
-            text_color=text_color,
+            text="SYSTEM STATUS: PROTECTED",
+            font=customtkinter.CTkFont(family="Inter", size=18, weight="bold"),
+            text_color=accent_blue,
+            justify="center"
         )
-        protection_label.grid(row=0, column=0, sticky="w", padx=20, pady=(18, 6))
+        protection_label.grid(row=0, column=0, sticky="ew", padx=40, pady=(15, 5))
 
         subtitle_label = customtkinter.CTkLabel(
             protection_panel,
-            text="Resistine will alert you of any threats",
-            font=customtkinter.CTkFont(size=16, weight="normal"),
-            text_color=text_color,
+            text="All security modules are actively monitoring for threats.",
+            font=customtkinter.CTkFont(family="Inter", size=12, weight="normal"),
+            text_color=myfunctions.SOC_THEME["colors"]["text_secondary"],
+            justify="center"
         )
-        subtitle_label.grid(row=1, column=0, sticky="w", padx=20, pady=(0, 18))
+        subtitle_label.grid(row=1, column=0, sticky="ew", padx=40, pady=(0, 15))
+
 
         # --- Plugins grid ---
         if not hasattr(self.app, "plugin_list") or not self.app.plugin_list:
@@ -112,7 +129,7 @@ class Plugin(BasePlugin):
         rows, cols = myfunctions.calculate_rows_cols(len(plugins))
 
         content_frame = customtkinter.CTkFrame(self.main_frame, corner_radius=0, fg_color="transparent")
-        content_frame.grid(row=1, column=0, sticky="nsew", padx=15, pady=(0, 15))
+        content_frame.grid(row=1, column=0, sticky="nsew", padx=15, pady=(5, 15))
         content_frame.grid_columnconfigure(0, weight=1)
         content_frame.grid_rowconfigure(0, weight=1)
 
@@ -137,56 +154,6 @@ class Plugin(BasePlugin):
         for index, plugin in enumerate(plugins):
             r = index // len(cols)
             c = index % len(cols)
-
-            card = customtkinter.CTkFrame(
-                self.grid_frame,
-                corner_radius=20,
-                fg_color=panel_bg,
-                border_width=0,
-                border_color=resistine_blue,
-            )
-            card.grid(row=r, column=c, padx=6, pady=6, sticky="nsew")
-            card.grid_columnconfigure(0, weight=1)
-
-            def _on_enter(_e, frame=card):
-                frame.configure(border_width=2, border_color=resistine_blue)
-
-            def _on_leave(_e, frame=card):
-                frame.configure(border_width=0)
-
-            card.bind("<Enter>", _on_enter)
-            card.bind("<Leave>", _on_leave)
-
-            # Icon (high-quality if plugin supports create_icon)
-            icon_img = None
-            try:
-                if hasattr(plugin, "create_icon"):
-                    icon_img = plugin.create_icon(size=(64, 64))
-                else:
-                    icon_img = plugin.get_icon()
-            except Exception:
-                icon_img = plugin.get_icon()
-
-            icon_label = customtkinter.CTkLabel(card, text="", image=icon_img)
-            icon_label.grid(row=0, column=0, pady=(14, 8))
-
-            title_label = customtkinter.CTkLabel(
-                card,
-                text=plugin.get_name(),
-                font=customtkinter.CTkFont(size=13, weight="bold"),
-                text_color=text_color,
-            )
-            title_label.grid(row=1, column=0, pady=(0, 6))
-
-            status_label = customtkinter.CTkLabel(
-                card,
-                text=str(plugin.get_status()),
-                font=customtkinter.CTkFont(size=11),
-                text_color=text_color,
-            )
-            status_label.grid(row=2, column=0, pady=(0, 14))
-
-            for w in (card, icon_label, title_label, status_label):
-                w.bind("<Button-1>", lambda _e, p=plugin: open_plugin(p))
+            myfunctions.create_plugin_card(r, c, self.grid_frame, plugin)
 
         return self.main_frame

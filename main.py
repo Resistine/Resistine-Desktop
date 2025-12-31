@@ -135,12 +135,12 @@ class App(customtkinter.CTk):
         number_plugins = len(self.plugin_list) + 1
         # Theme-aware navigation sidebar (matches UI_Dev color placement)
         appearance_mode = self._effective_appearance_mode()
-        sidebar_bg = "#1c1c1e" if appearance_mode == "Dark" else "#f0eff6"
-        sidebar_text_color = "#ffffff" if appearance_mode == "Dark" else "#000000"
+        sidebar_bg = ("#f0eff6", "#141414")
+        sidebar_text_color = ("#000000", "#ffffff")
 
         self.navigation_frame = customtkinter.CTkFrame(self, corner_radius=0, fg_color=sidebar_bg)
         self.navigation_frame.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
-        self.grid_columnconfigure(0, minsize=220)
+        self.grid_columnconfigure(0, minsize=200)
         self.navigation_frame.grid_rowconfigure(number_plugins, weight=1)
         self.navigation_frame.grid_columnconfigure(0, weight=1)
         # Load Resistine logo image (UI_Dev-style)
@@ -243,36 +243,26 @@ class App(customtkinter.CTk):
         main_screen.grid_rowconfigure(0, weight=1)
         self._current_main_screen = main_screen
 
+
     def refresh_ui_theme(self):
         """Refresh sidebar colors and re-render the currently selected frame after theme changes."""
         try:
-            appearance_mode = self._effective_appearance_mode()
-            sidebar_bg = "#1c1c1e" if appearance_mode == "Dark" else "#f0eff6"
-            sidebar_text_color = "#ffffff" if appearance_mode == "Dark" else "#000000"
+            # Consistent with SOC_THEME tuples
+            sidebar_bg = ("#f0eff6", "#141414")
+            sidebar_text_color = ("#000000", "#ffffff")
 
             if hasattr(self, 'navigation_frame') and self.navigation_frame is not None:
-                try:
-                    self.navigation_frame.configure(fg_color=sidebar_bg)
-                except Exception:
-                    pass
+                self.navigation_frame.configure(fg_color=sidebar_bg)
 
             if hasattr(self, 'navigation_frame_label') and self.navigation_frame_label is not None:
-                try:
-                    self.navigation_frame_label.configure(text_color=sidebar_text_color)
-                except Exception:
-                    pass
+                self.navigation_frame_label.configure(text_color=sidebar_text_color)
 
             # Ensure sidebar buttons update colors after appearance changes
-            try:
-                for frame_name, frame in getattr(self, 'frames', {}).items():
-                    btn = frame.get_button() if hasattr(frame, 'get_button') else None
-                    if btn:
-                        functions.apply_tab_button_theme(btn)
-                    if not btn:
-                        continue
+            for frame_name, frame in getattr(self, 'frames', {}).items():
+                btn = frame.get_button() if hasattr(frame, 'get_button') else None
+                if btn:
+                    functions.apply_tab_button_theme(btn)
                     functions.apply_tab_button_state(btn, is_active=(frame_name == getattr(self, 'current_frame_name', None)))
-            except Exception:
-                pass
         except Exception as e:
             print(f"⚠️ refresh_ui_theme error: {e}")
 
@@ -280,9 +270,8 @@ class App(customtkinter.CTk):
         try:
             name = getattr(self, 'current_frame_name', None)
             if name and hasattr(self, 'frames') and name in self.frames:
-                frame = self.frames[name]
-                btn = frame.get_button() if hasattr(frame, 'get_button') else None
-                self.select_frame_by_name(name, button=btn)
+                # To prevent creating multiple instances, grid_forget the old one if it exists
+                self.select_frame_by_name(name)
         except Exception as e:
             print(f"⚠️ refresh_ui_theme re-render error: {e}")
 
