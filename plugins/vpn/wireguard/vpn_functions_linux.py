@@ -17,7 +17,7 @@ import shutil
 import subprocess
 import sys
 
-from utils.dialogs import CTkPasswordDialog
+from gui.dialogs import CTkPasswordDialog
 from utils.i18n import get_text
 
 # Set up logger
