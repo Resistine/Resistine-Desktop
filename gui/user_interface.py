@@ -6,6 +6,7 @@ import customtkinter
 from customtkinter import ThemeManager
 from PIL import Image
 
+from gui.notifications import ToastNotification
 from plugins.plugin_manager import PluginManager
 
 

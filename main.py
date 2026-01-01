@@ -11,18 +11,15 @@ import argparse
 import logging
 import os
 import sys
-import tkinter as tk
 
 import customtkinter
-from PIL import Image
 
 from gui import user_interface as user_interface
-from plugins.plugin_manager import PluginManager
-from utils import functions as functions
-from utils import settings
 
 # Debug Window - controlled by command-line arguments
-from utils.debug_window import DebugWindow
+from gui.debug_window import DebugWindow
+from utils import functions as functions
+from utils import settings
 from utils.inspector import RuntimeInspector
 
 DEBUG_WINDOW = False
