@@ -16,9 +16,6 @@ class AppUI(customtkinter.CTk):
     Inherits from CTk to serve as the main window base.
     """
 
-    # --- UI Helpers (Moved from global scope) ---
-
-    @staticmethod
     def create_tab_button(frame, name, icon, command=None, row=0, col=0):
         """Create a sleek, theme-aware sidebar button."""
         text_color = AppUI._get_theme_color("CTkButton", "text_color")
@@ -60,7 +57,6 @@ class AppUI(customtkinter.CTk):
         btn.grid(row=row, column=col, sticky="ew", padx=10, pady=2)
         return btn
 
-    @staticmethod
     def update_tab_button_active_state(
         button: customtkinter.CTkButton, is_active: bool
     ):
@@ -75,9 +71,10 @@ class AppUI(customtkinter.CTk):
         else:
             button.configure(fg_color="transparent", border_width=0)
 
-    @staticmethod
     def create_plugin_card(row, column, container_frame, plugin):
-        """Create a plugin card with theme-aware colors."""
+        """
+        Create a plugin card with theme-aware colors.
+        """
         card_bg = AppUI._get_theme_color("CTkFrame", "fg_color")
         border_color = AppUI._get_theme_color("CTkFrame", "border_color")
         accent_green = AppUI._get_theme_color("CTkCheckBox", "fg_color")
@@ -169,7 +166,6 @@ class AppUI(customtkinter.CTk):
 
         return frame
 
-    @staticmethod
     def get_font(key="CTkFont"):
         """Resolves the font family from ThemeManager."""
         try:
@@ -189,7 +185,6 @@ class AppUI(customtkinter.CTk):
             # If we want to be safe, we just use the name "Inter" if available or leave it to CTk default.
             return "Inter"
 
-    @staticmethod
     def _get_theme_color(widget_type, attribute):
         """Helper to safely get color tuple from ThemeManager."""
         try:
@@ -197,14 +192,14 @@ class AppUI(customtkinter.CTk):
         except KeyError:
             return None
 
-    @staticmethod
     def calculate_rows_cols(num_plugins):
+        """Calculate rows and columns for a grid layout."""
         cols = math.ceil(math.sqrt(num_plugins))
         rows = math.ceil(num_plugins / cols)
         return tuple(range(rows)), tuple(range(cols))
 
-    @staticmethod
     def create_grid(frame, row, column, plugins, color, sticky="nsew"):
+        """Create a grid layout for plugins."""
         rows_tuple, cols_tuple = AppUI.calculate_rows_cols(len(plugins))
 
         container = customtkinter.CTkFrame(frame, corner_radius=0, fg_color=color)
@@ -373,12 +368,10 @@ class AppUI(customtkinter.CTk):
         """
         colors = {
             "info": "#00D100",  # Green
-            "error": "#FF3333",  # Red
             "warning": "#FFA500",  # Orange
+            "error": "#FF3333",  # Red
         }
         icon_col = colors.get(type, "#00D100")
 
         toast = ToastNotification(self, text=message, icon_color=icon_col)
         toast.show()
-
-    # --- UI Helpers (Moved from global scope) ---
