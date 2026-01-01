@@ -19,7 +19,7 @@ def is_running_in_ide():
 
     # 2. Check for VS Code
     if (
-        os.environ.get("TERM_PROGRAM") == "VSCode"
+        os.environ.get("TERM_PROGRAM") == "vscode"
         or "VSCODE_PID" in os.environ
         or "VSCODE_CWD" in os.environ
     ):

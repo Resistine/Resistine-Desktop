@@ -14,19 +14,18 @@ import sys
 
 import customtkinter
 
-from gui import user_interface as user_interface
-
-# Debug Window - controlled by command-line arguments
+# DEPRECATED: Debug Window - controlled by command-line arguments
 from gui.debug_window import DebugWindow
+from gui.inspector import RuntimeInspector
+from gui.user_interface import AppUI
 from utils import functions as functions
 from utils import settings
-from utils.inspector import RuntimeInspector
 
 DEBUG_WINDOW = False
 DEBUG = False
 
 
-class App(user_interface.AppUI):
+class App(AppUI):
     """
     @brief Main application class for Resistine.
     Main application class for Resistine.
@@ -83,6 +82,9 @@ class App(user_interface.AppUI):
 
         # Ensure the window is visible
         self.update()
+
+
+# class App
 
 
 if __name__ == "__main__":
