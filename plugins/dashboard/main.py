@@ -13,7 +13,7 @@ IMPORTANT:
 - Logo is in side menu only (not on dashboard)
 - Does NOT use Resistine shield / RSheild assets
 
-Author: Peres J. and the Resistine Team
+Author: P3, Peres J. and the Resistine Team
 Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
@@ -60,7 +60,7 @@ class Plugin(BasePlugin):
         except Exception:
             pass
         mode = customtkinter.get_appearance_mode()
-        return "Dark" if mode == "Dark" else "Light"
+        return mode
 
     def create_main_screen(self):
         # Modern main frame with proper spacing
@@ -78,10 +78,8 @@ class Plugin(BasePlugin):
         is_dark = appearance_mode == "Dark"
 
         # --- Protection panel (Sleek SOC-style) ---
-        panel_bg = ThemeManager.theme["CTkFrame"]["fg_color"]
         text_primary = ThemeManager.theme["CTkLabel"]["text_color"]
         accent_blue = ThemeManager.theme["CTkButton"]["border_color"]
-        card_border = ThemeManager.theme["CTkFrame"]["border_color"]
         text_secondary = ThemeManager.theme["CTkLabel"]["text_color"]  # Fallback
 
         # Container for the protection panel to control its width and centering
@@ -94,9 +92,8 @@ class Plugin(BasePlugin):
         protection_panel = customtkinter.CTkFrame(
             protection_container,
             corner_radius=15,
-            fg_color=panel_bg,
-            border_width=1,
-            border_color=card_border,
+            fg_color="transparent",
+            border_width=0,
             width=600,  # Decreased width
         )
         protection_panel.grid(row=0, column=0, sticky="n")  # Center horizontally
@@ -105,21 +102,12 @@ class Plugin(BasePlugin):
 
         protection_label = customtkinter.CTkLabel(
             protection_panel,
-            text="SYSTEM STATUS: PROTECTED",
-            font=customtkinter.CTkFont(family="Inter", size=18, weight="bold"),
+            text="You are protected!",
+            font=customtkinter.CTkFont(family="Inter", size=22, weight="bold"),
             text_color=accent_blue,
             justify="center",
         )
         protection_label.grid(row=0, column=0, sticky="ew", padx=40, pady=(15, 5))
-
-        subtitle_label = customtkinter.CTkLabel(
-            protection_panel,
-            text="All security modules are actively monitoring for threats.",
-            font=customtkinter.CTkFont(family="Inter", size=12, weight="normal"),
-            text_color=text_secondary,
-            justify="center",
-        )
-        subtitle_label.grid(row=1, column=0, sticky="ew", padx=40, pady=(0, 15))
 
         # --- Plugins grid ---
         if not hasattr(self.app, "plugin_list") or not self.app.plugin_list:
