@@ -8,8 +8,7 @@
 # Licensed under the GNU General Public License v2 or later
 
 
-import json
-import logging
+# Removed unused json import
 import os
 import re
 
@@ -17,12 +16,14 @@ import customtkinter
 from PIL import Image
 
 from plugins.base_plugin import BasePlugin
-from plugins.login import config
-from plugins.login.api import LoginAPI
-from utils import settings
 
-# Set up logger for this module
-logger = logging.getLogger(__name__)
+# Removed unused config import
+from plugins.login.api import LoginAPI
+
+# Removed unused settings import
+from utils.logger import logger
+
+# Removed standard logging setup
 
 
 class Plugin(BasePlugin):
@@ -62,7 +63,6 @@ class Plugin(BasePlugin):
             self.login_frame.destroy()
             del self.login_frame
 
-
     def create_main_screen(self):
         """
         Create the login screen matching the provided mockup.
@@ -88,8 +88,10 @@ class Plugin(BasePlugin):
 
         # 1. Shield Logo
         shield_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))),
-            "ResistineSheild.png"
+            os.path.dirname(
+                os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+            ),
+            "ResistineSheild.png",
         )
         try:
             shield_img = Image.open(shield_path)
@@ -106,7 +108,7 @@ class Plugin(BasePlugin):
             self.content_frame,
             text="Sign in with your Resistine account to get started.",
             font=customtkinter.CTkFont(family="Inter", size=16),
-            text_color=("#333333", "#FFFFFF")
+            text_color=("#333333", "#FFFFFF"),
         )
         self.title_label.grid(row=1, column=0, pady=(0, 25))
 
@@ -118,7 +120,7 @@ class Plugin(BasePlugin):
             height=45,
             corner_radius=4,
             border_width=1,
-            font=customtkinter.CTkFont(family="Inter", size=14)
+            font=customtkinter.CTkFont(family="Inter", size=14),
         )
         self.email_entry.grid(row=2, column=0, pady=(0, 20))
         self.active_input_entry = self.email_entry
@@ -130,10 +132,10 @@ class Plugin(BasePlugin):
             command=self.handle_signin_click,
             width=400,
             height=45,
-            corner_radius=22, # Fully rounded
-            fg_color="#0D5394", # Professional blue
+            corner_radius=22,  # Fully rounded
+            fg_color="#0D5394",  # Professional blue
             hover_color="#0A4275",
-            font=customtkinter.CTkFont(family="Inter", size=16, weight="bold")
+            font=customtkinter.CTkFont(family="Inter", size=16, weight="bold"),
         )
         self.signin_button.grid(row=3, column=0, pady=(0, 20))
 
@@ -145,7 +147,7 @@ class Plugin(BasePlugin):
             hover_color=None,
             text_color=("#0D5394", "#3a7ebf"),
             font=customtkinter.CTkFont(family="Inter", size=15, weight="bold"),
-            command=lambda: None
+            command=lambda: None,
         )
         self.create_account_btn.grid(row=4, column=0, pady=(0, 40))
 
@@ -154,31 +156,30 @@ class Plugin(BasePlugin):
             self.content_frame,
             text="",
             font=customtkinter.CTkFont(family="Inter", size=12),
-            text_color="red"
+            text_color="red",
         )
         self.status_label.grid(row=5, column=0)
 
         # 7. Footer
         footer_frame = customtkinter.CTkFrame(self.login_frame, fg_color="transparent")
         footer_frame.grid(row=2, column=0, sticky="s", pady=20)
-        
+
         self.privacy_label = customtkinter.CTkLabel(
             footer_frame,
             text="Privacy and Cookies",
             font=customtkinter.CTkFont(family="Inter", size=12),
             text_color=("#0D5394", "#3a7ebf"),
-            cursor="hand2"
+            cursor="hand2",
         )
         self.privacy_label.pack(side="top")
-        
+
         self.terms_label = customtkinter.CTkLabel(
             footer_frame,
             text="By signing in you agree to the Terms of Use",
             font=customtkinter.CTkFont(family="Inter", size=12),
-            text_color=("#666666", "#AAAAAA")
+            text_color=("#666666", "#AAAAAA"),
         )
         self.terms_label.pack(side="top", pady=(5, 0))
-
 
         # 8. Skip Button (Bottom Right)
         self.skip_button = customtkinter.CTkButton(
@@ -192,17 +193,16 @@ class Plugin(BasePlugin):
             border_width=1,
             border_color=("#CCCCCC", "#444444"),
             text_color=("#666666", "#AAAAAA"),
-            font=customtkinter.CTkFont(family="Inter", size=12)
+            font=customtkinter.CTkFont(family="Inter", size=12),
         )
         self.skip_button.place(relx=0.98, rely=0.98, anchor="se")
 
         return self.login_frame
 
-
     def skip_login(self):
         """Skip login and go to dashboard."""
         logger.info("User skipped login")
-        if hasattr(self, 'login_frame'):
+        if hasattr(self, "login_frame"):
             self.login_frame.destroy()
         self.app.create_dashboard()
 
@@ -210,7 +210,7 @@ class Plugin(BasePlugin):
         """Handle the sign-in button click."""
         email = self.email_entry.get().strip()
         email_regex = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
-        
+
         if not email:
             self.update_status("Please enter an email address", "red")
             return
@@ -224,17 +224,18 @@ class Plugin(BasePlugin):
     def transform_to_otp_input(self):
         """Transform the existing screen to show OTP entry."""
         # Hide email entry and sign-in button
-        if hasattr(self, 'email_entry') and self.email_entry.winfo_exists():
+        if hasattr(self, "email_entry") and self.email_entry.winfo_exists():
             self.email_entry.destroy()
-        if hasattr(self, 'signin_button') and self.signin_button.winfo_exists():
+        if hasattr(self, "signin_button") and self.signin_button.winfo_exists():
             self.signin_button.destroy()
-        if hasattr(self, 'create_account_btn') and self.create_account_btn.winfo_exists():
+        if (
+            hasattr(self, "create_account_btn")
+            and self.create_account_btn.winfo_exists()
+        ):
             self.create_account_btn.destroy()
 
         # Update title
-        self.title_label.configure(
-            text=f"Enter the 6-digit code sent to {self.email}"
-        )
+        self.title_label.configure(text=f"Enter the 6-digit code sent to {self.email}")
 
         # Create OTP entry in same spot
         self.otp_entry = customtkinter.CTkEntry(
@@ -244,7 +245,7 @@ class Plugin(BasePlugin):
             height=45,
             corner_radius=4,
             show="*",
-            font=customtkinter.CTkFont(family="Inter", size=14)
+            font=customtkinter.CTkFont(family="Inter", size=14),
         )
         self.otp_entry.grid(row=2, column=0, pady=(0, 20))
         self.active_input_entry = self.otp_entry
@@ -260,13 +261,13 @@ class Plugin(BasePlugin):
             height=45,
             corner_radius=22,
             fg_color="#0D5394",
-            font=customtkinter.CTkFont(family="Inter", size=16, weight="bold")
+            font=customtkinter.CTkFont(family="Inter", size=16, weight="bold"),
         )
         self.verify_button.grid(row=3, column=0, pady=(0, 20))
 
     def update_status(self, message, color="white"):
         """Update status label with message and color"""
-        if hasattr(self, 'status_label') and self.status_label.winfo_exists():
+        if hasattr(self, "status_label") and self.status_label.winfo_exists():
             self.status_label.configure(text=message, text_color=color)
             self.status_label.update()
 
@@ -277,7 +278,7 @@ class Plugin(BasePlugin):
         return None
 
     def get_button(self):
-        return getattr(self, 'button', None)
+        return getattr(self, "button", None)
 
     def set_button(self, button):
         self.button = button

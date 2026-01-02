@@ -1,12 +1,13 @@
+import ctypes
 import os
 import subprocess
-import ctypes
 import time
-import logging
+
+from utils.logger import logger
 from utils.settings import get_config_dir
 
-# Configure logging
-logger = logging.getLogger(__name__)
+# Removed standard logging setup
+
 
 def get_writable_wireguard_dir():
     """Get the directory where WireGuard configs are stored."""
@@ -15,9 +16,11 @@ def get_writable_wireguard_dir():
     os.makedirs(wg_dir, exist_ok=True)
     return wg_dir
 
+
 def get_config_path(tunnel_name):
     """Get the full path to a tunnel configuration file."""
     return os.path.join(get_writable_wireguard_dir(), f"{tunnel_name}.conf")
+
 
 def find_wireguard_exe():
     """Find the WireGuard executable."""
@@ -27,9 +30,11 @@ def find_wireguard_exe():
         return wg_exe
     return None
 
+
 def ensure_wireguard_app_installed():
     """Check if WireGuard is installed."""
     return find_wireguard_exe() is not None
+
 
 def can_manage_tunnels_without_admin():
     """
@@ -38,6 +43,7 @@ def can_manage_tunnels_without_admin():
     we'll assume admin/UAC is needed for service control unless configured otherwise.
     """
     return False
+
 
 def _check_service_access(service_name):
     """Check if we can access the service handle."""
@@ -49,11 +55,15 @@ def _check_service_access(service_name):
     desired_access = SERVICE_STOP | SERVICE_START | SERVICE_QUERY_STATUS
 
     try:
-        scm_handle = ctypes.windll.advapi32.OpenSCManagerW(None, None, 0x0001)  # SC_MANAGER_CONNECT
+        scm_handle = ctypes.windll.advapi32.OpenSCManagerW(
+            None, None, 0x0001
+        )  # SC_MANAGER_CONNECT
         if not scm_handle:
             return False
 
-        service_handle = ctypes.windll.advapi32.OpenServiceW(scm_handle, service_name, desired_access)
+        service_handle = ctypes.windll.advapi32.OpenServiceW(
+            scm_handle, service_name, desired_access
+        )
         if not service_handle:
             return False
         return True
@@ -65,6 +75,7 @@ def _check_service_access(service_name):
         if scm_handle:
             ctypes.windll.advapi32.CloseServiceHandle(scm_handle)
 
+
 def start_vpn(tunnel_name):
     """Start the VPN tunnel."""
     wg_exe = find_wireguard_exe()
@@ -74,20 +85,24 @@ def start_vpn(tunnel_name):
         wg_exe = find_wireguard_exe()
         if not wg_exe:
             return False
-    
+
     manage_without_admin = can_manage_tunnels_without_admin()
     config_path = get_config_path(tunnel_name)
-    
+
     # Logging for debug
     log_path = os.path.join(get_config_dir(), "vpn_debug.log")
     with open(log_path, "a") as f:
-        f.write(f"start_vpn: can_manage = {manage_without_admin}, config_path_exists = {os.path.exists(config_path)}\n")
+        f.write(
+            f"start_vpn: can_manage = {manage_without_admin}, config_path_exists = {os.path.exists(config_path)}\n"
+        )
 
     service_name = f"WireGuardTunnel${tunnel_name}"
-    
+
     if not _check_service_access(service_name):
         with open(log_path, "a") as f:
-            f.write("start_vpn: service access denied (QueryServiceStatusEx failed), will attempt operation anyway\n")
+            f.write(
+                "start_vpn: service access denied (QueryServiceStatusEx failed), will attempt operation anyway\n"
+            )
         try:
             diag = subprocess.run(
                 ["sc", "query", service_name],
@@ -98,10 +113,10 @@ def start_vpn(tunnel_name):
             diag_output = (diag.stdout or "") + (diag.stderr or "")
         except Exception as diag_error:
             diag_output = f"sc query diagnostic failed: {diag_error}"
-        
+
         with open(log_path, "a") as f:
             f.write(f"start_vpn: sc query diagnostic -> {diag_output.strip()}\n")
-            
+
         if "1060" in diag_output:
             with open(log_path, "a") as f:
                 f.write("start_vpn: service missing, cannot proceed\n")
@@ -110,17 +125,19 @@ def start_vpn(tunnel_name):
     try:
         # Use ShellExecute to properly trigger UAC prompts for admin elevation
         with open(log_path, "a") as f:
-            f.write("start_vpn: attempting to start service with potential UAC prompt\n")
+            f.write(
+                "start_vpn: attempting to start service with potential UAC prompt\n"
+            )
 
         # Use ShellExecuteW to run sc start with admin privileges if needed
-        sc_command = f"sc start \"{service_name}\""
+        sc_command = f'sc start "{service_name}"'
         result = ctypes.windll.shell32.ShellExecuteW(
-            None,           # hwnd
-            "runas",        # lpOperation - "runas" triggers UAC
-            "cmd.exe",      # lpFile
+            None,  # hwnd
+            "runas",  # lpOperation - "runas" triggers UAC
+            "cmd.exe",  # lpFile
             f"/c {sc_command}",  # lpParameters
-            None,           # lpDirectory
-            0               # nShowCmd - SW_HIDE
+            None,  # lpDirectory
+            0,  # nShowCmd - SW_HIDE
         )
 
         with open(log_path, "a") as f:
@@ -145,7 +162,9 @@ def start_vpn(tunnel_name):
                 return True
             else:
                 with open(log_path, "a") as f:
-                    f.write(f"start_vpn: service status check failed: {check_output.strip()}\n")
+                    f.write(
+                        f"start_vpn: service status check failed: {check_output.strip()}\n"
+                    )
         else:
             with open(log_path, "a") as f:
                 f.write(f"start_vpn: ShellExecute failed with code {result}\n")
@@ -161,24 +180,29 @@ def start_vpn(tunnel_name):
         f.write("start_vpn: failed to start tunnel via service control\n")
     return False
 
+
 def stop_vpn(tunnel_name):
     """Stop VPN using WireGuard app."""
     wg_exe = find_wireguard_exe()
     if not wg_exe:
         return False
-    
+
     manage_without_admin = can_manage_tunnels_without_admin()
     config_path = get_config_path(tunnel_name)
-    
+
     log_path = os.path.join(get_config_dir(), "vpn_debug.log")
     with open(log_path, "a") as f:
-        f.write(f"stop_vpn: can_manage = {manage_without_admin}, config_path_exists = {os.path.exists(config_path)}\n")
+        f.write(
+            f"stop_vpn: can_manage = {manage_without_admin}, config_path_exists = {os.path.exists(config_path)}\n"
+        )
 
     service_name = f"WireGuardTunnel${tunnel_name}"
-    
+
     if not _check_service_access(service_name):
         with open(log_path, "a") as f:
-            f.write("stop_vpn: service access denied (QueryServiceStatusEx failed), will attempt operation anyway\n")
+            f.write(
+                "stop_vpn: service access denied (QueryServiceStatusEx failed), will attempt operation anyway\n"
+            )
         try:
             diag = subprocess.run(
                 ["sc", "query", service_name],
@@ -202,14 +226,14 @@ def stop_vpn(tunnel_name):
             f.write("stop_vpn: attempting to stop service with potential UAC prompt\n")
 
         # Use ShellExecuteW to run sc stop with admin privileges if needed
-        sc_command = f"sc stop \"{service_name}\""
+        sc_command = f'sc stop "{service_name}"'
         result = ctypes.windll.shell32.ShellExecuteW(
-            None,           # hwnd
-            "runas",        # lpOperation - "runas" triggers UAC
-            "cmd.exe",      # lpFile
+            None,  # hwnd
+            "runas",  # lpOperation - "runas" triggers UAC
+            "cmd.exe",  # lpFile
             f"/c {sc_command}",  # lpParameters
-            None,           # lpDirectory
-            0               # nShowCmd - SW_HIDE
+            None,  # lpDirectory
+            0,  # nShowCmd - SW_HIDE
         )
 
         with open(log_path, "a") as f:
@@ -228,13 +252,18 @@ def stop_vpn(tunnel_name):
                 timeout=5,
             )
             check_output = (check_result.stdout or "") + (check_result.stderr or "")
-            if "STOPPED" in check_output.upper() or "NOT STARTED" in check_output.upper():
+            if (
+                "STOPPED" in check_output.upper()
+                or "NOT STARTED" in check_output.upper()
+            ):
                 with open(log_path, "a") as f:
                     f.write("stop_vpn: service successfully stopped\n")
                 return True
             else:
                 with open(log_path, "a") as f:
-                    f.write(f"stop_vpn: service status check failed: {check_output.strip()}\n")
+                    f.write(
+                        f"stop_vpn: service status check failed: {check_output.strip()}\n"
+                    )
         else:
             with open(log_path, "a") as f:
                 f.write(f"stop_vpn: ShellExecute failed with code {result}\n")
@@ -249,6 +278,7 @@ def stop_vpn(tunnel_name):
     with open(log_path, "a") as f:
         f.write("stop_vpn: failed to stop tunnel via service control\n")
     return False
+
 
 def check_service_status(tunnel_name, test_ip=None):
     if not tunnel_name:
@@ -289,7 +319,10 @@ def check_service_status(tunnel_name, test_ip=None):
         if result.returncode == 0:
             for line in stdout.splitlines():
                 if tunnel_name.lower() in line.lower():
-                    if any(word in line.lower() for word in ("active", "connected", "running")):
+                    if any(
+                        word in line.lower()
+                        for word in ("active", "connected", "running")
+                    ):
                         return "Running"
                     return "Stopped"
     except Exception:
@@ -305,30 +338,26 @@ def run_elevated_powershell(script_path, arguments=""):
     """
     try:
         import ctypes
-        from ctypes import wintypes
 
         # ShellExecuteW parameters
-        SEE_MASK_NOCLOSEPROCESS = 0x00000040
         SW_HIDE = 0
-
-        # Build the command
-        command = f'powershell.exe -ExecutionPolicy Bypass -File "{script_path}" {arguments}'
 
         # Use ShellExecuteW to run with elevated privileges
         result = ctypes.windll.shell32.ShellExecuteW(
-            None,           # hwnd
-            "runas",        # lpOperation - "runas" for admin
-            "powershell.exe", # lpFile
-            f'-ExecutionPolicy Bypass -File "{script_path}" {arguments}', # lpParameters
-            None,           # lpDirectory
-            SW_HIDE         # nShowCmd
+            None,  # hwnd
+            "runas",  # lpOperation - "runas" for admin
+            "powershell.exe",  # lpFile
+            f'-ExecutionPolicy Bypass -File "{script_path}" {arguments}',  # lpParameters
+            None,  # lpDirectory
+            SW_HIDE,  # nShowCmd
         )
 
         # ShellExecuteW returns > 32 on success
         return result > 32
 
     except Exception as e:
-        print(f"Error running elevated PowerShell: {e}")
+        logger.error(f"Error running elevated PowerShell: {e}")
         return False
 
-print("✅ WireGuard app integration loaded")
+
+logger.debug("WireGuard app integration loaded")

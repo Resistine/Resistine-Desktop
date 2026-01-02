@@ -9,16 +9,17 @@ It uses a hybrid approach:
 """
 
 import json
-import logging
 import os
 import platform
 from threading import Lock
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 import keyring
 from cryptography.fernet import Fernet
 
-logger = logging.getLogger(__name__)
+from utils.logger import logger
+
+# Removed standard logging logger
 
 # Constants
 APP_NAME = "Resistine"
@@ -88,7 +89,7 @@ def _save_master_key_fallback(key: bytes):
         logger.info(f"Master key saved to fallback file: {key_file}")
     except Exception as e:
         logger.critical(f"Failed to save master key fallback: {e}")
-        raise RuntimeError("Could not save master key to keyring or file.")
+        raise RuntimeError("Could not save master key to keyring or file.") from e
 
 
 def _get_master_key_fallback() -> Optional[bytes]:
