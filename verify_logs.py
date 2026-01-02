@@ -14,12 +14,11 @@ def test_logging():
     logger.info("Starting logging test")
     logger.debug("This is a debug message")
     logger.warning("This is a warning message")
-    logger.error("This is an error message")
 
     try:
         1 / 0
     except Exception:
-        logger.exception("Caught an expected division by zero")
+        logger.exception("This is an error: division by zero")
 
     logger.info(
         "Logging test completed. Check console and utils/logger.py log directory."
