@@ -8,7 +8,6 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import argparse
-import logging
 import os
 import sys
 
@@ -20,6 +19,7 @@ from gui.inspector import RuntimeInspector
 from gui.user_interface import AppUI
 from utils import functions as functions
 from utils import settings
+from utils.logger import logger, setup_logging
 
 DEBUG_WINDOW = False
 DEBUG = False
@@ -109,32 +109,26 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Configure logging based on configuration and flags
-    log_level = getattr(logging, args.log_level)
-
     # Determine if we should be in DEBUG mode
     if args.debug or functions.is_running_in_ide():
         DEBUG = True
 
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    # Configure logging based on configuration and flags
+    setup_logging(level=args.log_level)
 
     # DEPRECATED: Debug window flag can be set from code only
     if DEBUG_WINDOW:
-        logging.info("Debug window enabled")
+        logger.info("Debug window enabled")
 
     # Start the application
     app = App()
 
     if DEBUG:
-        logging.info("Debug mode enabled")
-        logging.info("Platform: %s", sys.platform)
-        logging.info("Python version: %s", sys.version)
-        logging.info("Working directory: %s", os.getcwd())
-        logging.info("Running in IDE: %s", functions.is_running_in_ide())
+        logger.info("Debug mode enabled")
+        logger.info(f"Platform: {sys.platform}")
+        logger.info(f"Python version: {sys.version}")
+        logger.info(f"Working directory: {os.getcwd()}")
+        logger.info(f"Running in IDE: {functions.is_running_in_ide()}")
 
         # Attach Inspector
         app.inspector = RuntimeInspector(app)

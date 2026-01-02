@@ -11,7 +11,6 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import json
-import logging
 import os
 import shutil
 import subprocess
@@ -19,9 +18,9 @@ import sys
 
 from gui.dialogs import CTkPasswordDialog
 from utils.i18n import get_text
+from utils.logger import logger
 
-# Set up logger
-logger = logging.getLogger(__name__)
+# Removed standard logging setup
 
 # Keychain Constants
 KEYS_FILE_PATH = os.path.expanduser("~/.config/resistine/keys.json")
@@ -116,16 +115,16 @@ def run_as_admin(file_path):
     :return: True if elevation is successful, False otherwise.
     """
     if is_admin():
-        print("Already running as root.")
+        logger.info("Already running as root.")
         return True
     else:
-        print("Attempting to elevate to root...")
+        logger.info("Attempting to elevate to root...")
         result = run_privileged_command([sys.executable, file_path])
         if result and result.returncode == 0:
-            print("Elevation request accepted.")
+            logger.info("Elevation request accepted.")
             return True
         else:
-            print("Elevation request denied or failed.")
+            logger.info("Elevation request denied or failed.")
             return False
 
 
@@ -137,18 +136,18 @@ def run_installer_as_admin(file_path):
     :return: True if successful, False otherwise.
     """
     try:
-        print(f"Running installer as admin: {file_path}...")
+        logger.info(f"Running installer as admin: {file_path}...")
         # Note: apt might be interactive, but for now we try basic install
         # Ideally we'd use a proper packagekit client, but this is a quick fix
         result = run_privileged_command(["apt", "install", "-y", "wireguard"])
         if result and result.returncode == 0:
-            print("WireGuard installation command executed.")
+            logger.info("WireGuard installation command executed.")
             return True
         else:
-            print("Failed to install WireGuard.")
+            logger.info("Failed to install WireGuard.")
             return False
     except Exception as e:
-        print(f"Error during installation: {e}")
+        logger.error(f"Error during installation: {e}")
         return False
 
 

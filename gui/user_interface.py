@@ -8,6 +8,7 @@ from PIL import Image
 
 from gui.notifications import ToastNotification
 from plugins.plugin_manager import PluginManager
+from utils.logger import logger
 
 
 class AppUI(customtkinter.CTk):
@@ -273,7 +274,7 @@ class AppUI(customtkinter.CTk):
                     size=(max_width, logo_height),
                 )
             except Exception as e:
-                print(f"Error loading logo: {e}")
+                logger.error(f"Error loading logo: {e}")
 
         self.navigation_frame_label = customtkinter.CTkLabel(
             self.navigation_frame,
@@ -311,7 +312,7 @@ class AppUI(customtkinter.CTk):
                 )
                 plugin.set_button(btn)
             except Exception as e:
-                print(f"Error loading plugin button {plugin.get_name()}: {e}")
+                logger.error(f"Error loading plugin button {plugin.get_name()}: {e}")
             row += 1
 
         self.select_frame_by_name("frame_Dashboard")
