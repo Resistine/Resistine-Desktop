@@ -1,3 +1,4 @@
+import logging
 import math
 import os
 import tkinter as tk
@@ -17,11 +18,12 @@ class AppUI(customtkinter.CTk):
     Inherits from CTk to serve as the main window base.
     """
 
-    def create_tab_button(self, frame, name, icon, command=None, row=0, col=0):
+    @classmethod
+    def create_tab_button(cls, frame, name, icon, command=None, row=0, col=0):
         """Create a sleek, theme-aware sidebar button."""
-        text_color = self._get_theme_color("CTkButton", "text_color")
-        hover_color = self._get_theme_color("CTkButton", "hover_color")
-        border_color = self._get_theme_color("CTkButton", "border_color")
+        text_color = cls._get_theme_color("CTkButton", "text_color")
+        hover_color = cls._get_theme_color("CTkButton", "hover_color")
+        border_color = cls._get_theme_color("CTkButton", "border_color")
         # font_family = AppUI.get_font()
 
         # Using the color tuples directly allows CTk to handle theme switching
@@ -58,12 +60,13 @@ class AppUI(customtkinter.CTk):
         btn.grid(row=row, column=col, sticky="ew", padx=10, pady=2)
         return btn
 
+    @classmethod
     def update_tab_button_active_state(
-        self, button: customtkinter.CTkButton, is_active: bool
+        cls, button: customtkinter.CTkButton, is_active: bool
     ):
         """Apply active/inactive styling."""
-        hover_color = self._get_theme_color("CTkButton", "hover_color")
-        border_color = self._get_theme_color("CTkButton", "border_color")
+        hover_color = cls._get_theme_color("CTkButton", "hover_color")
+        border_color = cls._get_theme_color("CTkButton", "border_color")
 
         if is_active:
             button.configure(
@@ -72,16 +75,17 @@ class AppUI(customtkinter.CTk):
         else:
             button.configure(fg_color="transparent", border_width=0)
 
-    def create_plugin_card(self, row, column, container_frame, plugin):
+    @classmethod
+    def create_plugin_card(cls, row, column, container_frame, plugin):
         """
         Create a plugin card with theme-aware colors.
         """
-        card_bg = self._get_theme_color("CTkFrame", "fg_color")
-        border_color = self._get_theme_color("CTkFrame", "border_color")
-        accent_green = self._get_theme_color("CTkCheckBox", "fg_color")
-        text_primary = self._get_theme_color("CTkLabel", "text_color")
-        hover_bg = self._get_theme_color("CTkButton", "hover_color")
-        accent_blue = self._get_theme_color("CTkButton", "border_color")
+        card_bg = cls._get_theme_color("CTkFrame", "fg_color")
+        border_color = cls._get_theme_color("CTkFrame", "border_color")
+        accent_green = cls._get_theme_color("CTkCheckBox", "fg_color")
+        text_primary = cls._get_theme_color("CTkLabel", "text_color")
+        hover_bg = cls._get_theme_color("CTkButton", "hover_color")
+        accent_blue = cls._get_theme_color("CTkButton", "border_color")
 
         frame = customtkinter.CTkFrame(
             container_frame,
@@ -120,12 +124,15 @@ class AppUI(customtkinter.CTk):
         )
         status_container.grid(row=2, column=0)
 
+        status_dot_color = (
+            accent_green if plugin.get_status().lower() == "ok" else "#FF3333"
+        )
         status_dot = customtkinter.CTkFrame(
             status_container,
             width=10,
             height=10,
             corner_radius=5,
-            fg_color=accent_green,
+            fg_color=status_dot_color,
         )
         status_dot.pack(side="left", padx=(0, 5))
 
@@ -167,7 +174,8 @@ class AppUI(customtkinter.CTk):
 
         return frame
 
-    def get_font(self, key="CTkFont"):
+    @classmethod
+    def get_font(cls, key="CTkFont"):
         """Resolves the font family from ThemeManager."""
         try:
             return ThemeManager.theme[key]["family"]
@@ -186,24 +194,25 @@ class AppUI(customtkinter.CTk):
             # If we want to be safe, we just use the name "Inter" if available or leave it to CTk default.
             return "Inter"
 
-    @staticmethod
-    def _get_theme_color(widget_type, attribute):
+    @classmethod
+    def _get_theme_color(cls, widget_type, attribute):
         """Helper to safely get color tuple from ThemeManager."""
         try:
             return ThemeManager.theme[widget_type][attribute]
         except KeyError:
             return None
 
-    @staticmethod
-    def calculate_rows_cols(num_plugins):
+    @classmethod
+    def calculate_rows_cols(cls, num_plugins):
         """Calculate rows and columns for a grid layout."""
         cols = math.ceil(math.sqrt(num_plugins))
         rows = math.ceil(num_plugins / cols)
         return tuple(range(rows)), tuple(range(cols))
 
-    def create_grid(self, frame, row, column, plugins, color, sticky="nsew"):
+    @classmethod
+    def create_grid(cls, frame, row, column, plugins, color, sticky="nsew"):
         """Create a grid layout for plugins."""
-        rows_tuple, cols_tuple = self.calculate_rows_cols(len(plugins))
+        rows_tuple, cols_tuple = cls.calculate_rows_cols(len(plugins))
 
         container = customtkinter.CTkFrame(frame, corner_radius=0, fg_color=color)
         container.grid(row=row, column=column, sticky=sticky)
@@ -346,11 +355,37 @@ class AppUI(customtkinter.CTk):
         if not frame:
             return
 
-        main_screen = frame.create_main_screen()
-        main_screen.grid(row=0, column=1, sticky="nsew")
-        main_screen.grid_columnconfigure(0, weight=1)
-        main_screen.grid_rowconfigure(0, weight=1)
-        self._current_main_screen = main_screen
+        try:
+            main_screen = frame.create_main_screen()
+            main_screen.grid(row=0, column=1, sticky="nsew")
+            main_screen.grid_columnconfigure(0, weight=1)
+            main_screen.grid_rowconfigure(0, weight=1)
+            self._current_main_screen = main_screen
+        except Exception as e:
+            logging.error(f"Error loading plugin frame {name}: {e}")
+            self.show_notification(
+                f"Error loading plugin {name.replace('frame_', '')}: {e}", type="error"
+            )
+
+            # Update status to error so it shows on the dashboard
+            if hasattr(frame, "set_status"):
+                frame.set_status("Error")
+
+            # Show error message in place of the plugin content
+            error_frame = customtkinter.CTkFrame(self)
+            error_frame.grid(row=0, column=1, sticky="nsew")
+            error_frame.grid_columnconfigure(0, weight=1)
+            error_frame.grid_rowconfigure(0, weight=1)
+
+            error_label = customtkinter.CTkLabel(
+                error_frame,
+                text=f"Error loading plugin:\n{e}",
+                text_color="#FF3333",
+                wraplength=400,
+                font=customtkinter.CTkFont(size=14, weight="bold"),
+            )
+            error_label.pack(expand=True, padx=20, pady=20)
+            self._current_main_screen = error_frame
 
     def refresh_ui_theme(self):
         """Refresh sidebar colors (if needed beyond automatic CTk updates)."""
