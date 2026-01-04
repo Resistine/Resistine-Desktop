@@ -11,6 +11,7 @@ import tkinter as tk
 import ctypes
 import customtkinter as ctk
 import os
+from utils.logger import logger
 
 #class to detect system theme and update UI (it doesn't work)
 class ThemeManager:
@@ -23,8 +24,8 @@ class ThemeManager:
         
         # Start periodically checking for theme changes
         flag = self.check_theme_periodically()
-        print("System theme:", self.system_theme)
-        print("Theme check started:", flag)
+        logger.info(f"System theme: {self.system_theme}")
+        logger.info(f"Theme check started: {flag}")
 
     def get_system_theme(self):
         """Detect system theme (dark or light)."""
@@ -36,7 +37,7 @@ class ThemeManager:
             else:
                 return "light"
         except Exception as e:
-            print("Error detecting system theme:", e)
+            logger.error(f"Error detecting system theme: {e}")
             return "light"
 
     def set_custom_theme(self, theme):

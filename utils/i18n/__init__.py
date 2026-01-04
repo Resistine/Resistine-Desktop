@@ -9,6 +9,7 @@ Licensed under the GNU General Public License v2 or later
 
 import json
 from pathlib import Path
+from utils.logger import logger
 
 # Translation storage - loaded from JSON files
 TEXTS = {}
@@ -25,7 +26,7 @@ def load_language_files():
     i18n_dir = Path(__file__).parent  # This is already in utils/i18n/ directory
     
     if not i18n_dir.exists():
-        print(f"Warning: i18n directory not found at {i18n_dir}")
+        logger.warning(f"i18n directory not found at {i18n_dir}")
         return
     
     for json_file in i18n_dir.glob('*.json'):
@@ -38,9 +39,9 @@ def load_language_files():
             with open(json_file, 'r', encoding='utf-8') as f:
                 TEXTS[lang] = json.load(f)
         except json.JSONDecodeError as e:
-            print(f"Error loading {json_file}: {e}")
+            logger.error(f"Error loading {json_file}: {e}")
         except Exception as e:
-            print(f"Unexpected error loading {json_file}: {e}")
+            logger.error(f"Unexpected error loading {json_file}: {e}")
 
 
 def register_plugin_texts(plugin_name, texts_dict):
@@ -100,7 +101,7 @@ def load_plugin_i18n_dir(plugin_path, plugin_name):
             # Register with plugin namespace
             register_plugin_texts(plugin_name, {lang: texts})
         except Exception as e:
-            print(f"Error loading plugin i18n from {json_file}: {e}")
+            logger.error(f"Error loading plugin i18n from {json_file}: {e}")
 
 
 def get_text(key, lang=None, **kwargs):

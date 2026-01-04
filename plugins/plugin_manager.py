@@ -11,6 +11,7 @@ import requests
 import zipfile
 import io
 import sys
+from utils.logger import logger
 
 class PluginManager:
     """
@@ -66,7 +67,7 @@ class PluginManager:
                 plugins.append(plugin_instance)
                 plugin_instance.set_status("Ok")  # Set the status of the plugin to "Ok"
             except Exception as e:
-                print(f"Failed to load plugin {module_name}: {e}")
+                logger.error(f"Failed to load plugin {module_name}: {e}")
                 # We cannot set status on plugin_instance if it wasn't created
         return plugins
 

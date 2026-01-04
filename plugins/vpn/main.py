@@ -11,6 +11,7 @@ Licensed under the GNU General Public License v2 or later
 """
 
 from plugins.base_plugin import BasePlugin
+from utils.logger import logger
 import customtkinter
 import os 
 import tkinter as tk
@@ -67,7 +68,7 @@ def initialize_vpn_status():
             break
 
     my_vpn_status = check_service_status(active_client_name, DNS_SERVER) if active_client_name else "Stopped"
-    print(f"VPN Status in Init: {my_vpn_status}")
+    logger.info(f"VPN Status in Init: {my_vpn_status}")
 
 # --- Helper Functions ---
 
@@ -162,7 +163,7 @@ class Plugin(BasePlugin):
         selected_conf_file = self.get_selected_conf_file_name()
 
         if not selected_conf_file:
-            print("❌ Cannot toggle: No VPN config found in wireguard directory.")
+            logger.error("❌ Cannot toggle: No VPN config found in wireguard directory.")
             # Reset switch to off if no config available
             if hasattr(self, 'vpn_toggle_switch'):
                 self.vpn_toggle_switch.deselect()
@@ -174,18 +175,18 @@ class Plugin(BasePlugin):
         # Logic: 1 = ON Request, 0 = OFF Request
         if switch_value == 1 and not is_running:
             # User wants to turn VPN ON and it's currently OFF
-            print(f"🔄 Toggle ON: Starting VPN tunnel: {selected_conf_file}")
+            logger.info(f"🔄 Toggle ON: Starting VPN tunnel: {selected_conf_file}")
             self.activate_tunnel(selected_conf_file)
         
         elif switch_value == 0 and is_running:
             # User wants to turn VPN OFF and it's currently ON
-            print(f"🔄 Toggle OFF: Stopping VPN tunnel: {selected_conf_file}")
+            logger.info(f"🔄 Toggle OFF: Stopping VPN tunnel: {selected_conf_file}")
             self.activate_tunnel(selected_conf_file)
         
         else:
             # Edge case: Switch state doesn't match VPN state
             # This can happen if UI is out of sync - refresh to correct it
-            print(f"⚠️ Switch state ({switch_value}) doesn't match VPN state (Running: {is_running}). Refreshing UI...")
+            logger.warning(f"⚠️ Switch state ({switch_value}) doesn't match VPN state (Running: {is_running}). Refreshing UI...")
             self.update_plugin(self.id)
 
     def display_toggle_screen(self):
@@ -309,7 +310,8 @@ class Plugin(BasePlugin):
         global my_vpn_status, active_client_name
         
         if not tunnel_name:
-            print("❌ No tunnel name provided")
+            logger.error("❌ No tunnel name provided")
+            self.app.show_notification("No tunnel name provided", type="error")
             return
             
         
@@ -317,30 +319,34 @@ class Plugin(BasePlugin):
         
         # --- MacOS Implementation ---
         if platform.system() == "Darwin":
-            print(f"MacOS: Toggling {tunnel_name}")
+            logger.info(f"MacOS: Toggling {tunnel_name}")
             
             
             if not check_wireguard_installed():
-                print("WireGuard tools not found.")
+                logger.error("WireGuard tools not found.")
+                self.app.show_notification("WireGuard tools not found", type="error")
                 return
 
             if my_vpn_status == "Running":
                 # STOP
-                success = stop_vpn(config_path)
                 if success:
                     my_vpn_status = "Stopped"
                     active_client_name = None
+                    self.app.show_notification("VPN stopped", type="info")
                 else:
-                    print("Failed to stop VPN")
+                    logger.error("Failed to stop VPN")
+                    self.app.show_notification("Failed to stop VPN", type="error")
             else:
                 # START
                 success = start_vpn(config_path)
                 if success:
                     my_vpn_status = "Running"
                     active_client_name = tunnel_name
-                    print("✅ VPN started successfully")
+                    logger.info("✅ VPN started successfully")
+                    self.app.show_notification("VPN started successfully", type="info")
                 else:
-                    print("Failed to start VPN")
+                    logger.error("Failed to start VPN")
+                    self.app.show_notification("Failed to start VPN", type="error")
             
             # Refresh UI
             self.update_plugin(self.id)
@@ -351,10 +357,11 @@ class Plugin(BasePlugin):
 
         # --- Linux Implementation ---
         elif platform.system() == "Linux":
-            print(f"Linux: Toggling {tunnel_name}")
+            logger.info(f"Linux: Toggling {tunnel_name}")
             
             if not check_wireguard_installed():
-                print("WireGuard tools not found.")
+                logger.error("WireGuard tools not found.")
+                self.app.show_notification("WireGuard tools not found", type="error")
                 return
 
             if my_vpn_status == "Running":
@@ -363,17 +370,21 @@ class Plugin(BasePlugin):
                 if success:
                     my_vpn_status = "Stopped"
                     active_client_name = None
+                    self.app.show_notification("VPN stopped", type="info")
                 else:
-                    print("Failed to stop VPN")
+                    logger.error("Failed to stop VPN")
+                    self.app.show_notification("Failed to stop VPN", type="error")
             else:
                 # START
                 success = start_vpn(config_path)
                 if success:
                     my_vpn_status = "Running"
                     active_client_name = tunnel_name
-                    print("✅ VPN started successfully")
+                    logger.info("✅ VPN started successfully")
+                    self.app.show_notification("VPN started successfully", type="info")
                 else:
-                    print("Failed to start VPN")
+                    logger.error("Failed to start VPN")
+                    self.app.show_notification("Failed to start VPN", type="error")
             
             # Refresh UI
             self.update_plugin(self.id)

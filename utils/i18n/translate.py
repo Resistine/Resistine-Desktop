@@ -20,12 +20,15 @@ import sys
 import os
 
 # Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from utils.logger import logger
 
 try:
     from openai import OpenAI
 except ImportError:
-    print("Error: openai package not installed. Install with: pip install openai")
+    logger.error("Error: openai package not installed. Install with: pip install openai")
     sys.exit(1)
 
 
@@ -84,7 +87,7 @@ def translate_text(text, target_lang, source_lang='en'):
         return response.choices[0].message.content.strip()
     
     except Exception as e:
-        print(f"Translation error: {e}")
+        logger.error(f"Translation error: {e}")
         return None
 
 
@@ -122,45 +125,45 @@ def translate_file(source_lang, target_lang, base_dir, dry_run=False, force=Fals
     target_file = base_dir / f"{target_lang}.json"
     
     if not source_file.exists():
-        print(f"Error: Source file {source_file} not found")
+        logger.error(f"Error: Source file {source_file} not found")
         return
     
     missing_keys, source_data, target_data = get_missing_keys(source_file, target_file)
     
     if force:
         missing_keys = set(source_data.keys())
-        print(f"Force mode: translating all {len(missing_keys)} keys")
+        logger.info(f"Force mode: translating all {len(missing_keys)} keys")
     
     if not missing_keys:
-        print(f"✓ No missing translations for {target_lang}")
+        logger.info(f"✓ No missing translations for {target_lang}")
         return
-    
-    print(f"Found {len(missing_keys)} keys to translate from {source_lang} to {target_lang}")
-    
+
+    logger.info(f"Found {len(missing_keys)} keys to translate from {source_lang} to {target_lang}")
+
     if dry_run:
-        print("\nMissing keys:")
+        logger.info("\nMissing keys:")
         for key in sorted(missing_keys):
-            print(f"  - {key}")
+            logger.info(f"  - {key}")
         return
     
     # Translate missing keys
     for i, key in enumerate(sorted(missing_keys), 1):
         source_text = source_data[key]
-        print(f"[{i}/{len(missing_keys)}] Translating: {key}")
+        logger.info(f"[{i}/{len(missing_keys)}] Translating: {key}")
         
         translated = translate_text(source_text, target_lang, source_lang)
         
         if translated:
             target_data[key] = translated
-            print(f"  ✓ {translated[:60]}{'...' if len(translated) > 60 else ''}")
+            logger.info(f"  ✓ {translated[:60]}{'...' if len(translated) > 60 else ''}")
         else:
-            print(f"  ✗ Translation failed")
+            logger.error(f"  ✗ Translation failed")
     
     # Save updated target file
     with open(target_file, 'w', encoding='utf-8') as f:
         json.dump(target_data, f, ensure_ascii=False, indent=2)
     
-    print(f"\n✓ Saved translations to {target_file}")
+    logger.info(f"\\n✓ Saved translations to {target_file}")
 
 
 def list_languages(base_dir):
@@ -168,15 +171,15 @@ def list_languages(base_dir):
     lang_files = list(base_dir.glob('*.json'))
     
     if not lang_files:
-        print(f"No language files found in {base_dir}")
+        logger.warning(f"No language files found in {base_dir}")
         return
     
-    print("Available languages:")
+    logger.info("Available languages:")
     for lang_file in sorted(lang_files):
         with open(lang_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
         
-        print(f"  {lang_file.stem}: {len(data)} keys")
+        logger.info(f"  {lang_file.stem}: {len(data)} keys")
 
 
 def main():
@@ -227,10 +230,10 @@ def main():
     if args.plugin_name:
         base_dir = Path(__file__).parent.parent / 'plugins' / args.plugin_name / 'i18n'
     else:
-        base_dir = Path(__file__).parent.parent / 'utils' / 'i18n'
+        base_dir = Path(__file__).parent
     
     if not base_dir.exists():
-        print(f"Error: Directory {base_dir} does not exist")
+        logger.error(f"Error: Directory {base_dir} does not exist")
         sys.exit(1)
     
     # List languages
@@ -240,7 +243,7 @@ def main():
     
     # Validate target language
     if not args.target_lang:
-        print("Error: --to <language> is required")
+        logger.error("Error: --to <language> is required")
         parser.print_help()
         sys.exit(1)
     
