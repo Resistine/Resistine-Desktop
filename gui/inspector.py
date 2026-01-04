@@ -2,8 +2,8 @@ import inspect
 import os
 import pprint
 import tkinter as tk
-
 import customtkinter as ctk
+from utils.logger import logger
 
 # --- Monkey Patching for Source Tracking ---
 # We patch tk.Widget.__init__ to capture where widgets are created.
@@ -90,7 +90,7 @@ class RuntimeInspector:
         return last_valid
 
     def inspect_widget(self, widget):
-        print(f"\n--- Inspecting Widget: {widget} ---")
+        logger.info(f"--- Inspecting Widget: {widget} ---")
         self.highlight_widget(widget)
         self.log_properties(widget)
         self.show_inspector_ui(widget)
@@ -117,7 +117,7 @@ class RuntimeInspector:
             # Auto-hide after 1 second
             self.highlighter.after(1000, self.highlighter.destroy)
         except Exception as e:
-            print(f"Could not highlight widget: {e}")
+            logger.error(f"Could not highlight widget: {e}")
 
     def get_widget_name(self, widget):
         """Try to find the variable name of the widget in its master."""
@@ -190,7 +190,7 @@ class RuntimeInspector:
         except:
             pass
 
-        pprint.pprint(props)
+        logger.debug(pprint.pformat(props))
         return props
 
     def show_inspector_ui(self, widget):

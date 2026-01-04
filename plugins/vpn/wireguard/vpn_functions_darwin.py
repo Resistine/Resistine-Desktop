@@ -15,6 +15,7 @@ from typing import Optional, Tuple
 
 from utils import settings
 from utils.settings import get_config_dir
+from utils.logger import logger
 
 
 def get_writable_wireguard_dir():
@@ -37,8 +38,8 @@ class HelperToolManager:
     def __init__(self):
         self.cli_path = self._find_cli_path()
         self.is_available = self.cli_path is not None
-        print(f"🔍 [HELPER] CLI Path: {self.cli_path}")
-        print(
+        logger.info(f"🔍 [HELPER] CLI Path: {self.cli_path}")
+        logger.info(
             f"🔍 [HELPER] CLI Exists: {self.cli_path and os.path.exists(self.cli_path) if self.cli_path else False}"
         )
 
@@ -114,7 +115,7 @@ class VPNHelper:
     ) -> Tuple[bool, str]:
         """Check VPN status"""
         if not helper.cli_path:
-            print("⚠️ [HELPER] CLI path not available")
+            logger.warning("⚠️ [HELPER] CLI path not available")
             return (False, "Stopped")
 
         try:
@@ -122,10 +123,10 @@ class VPNHelper:
             if test_ip:
                 cmd.append(test_ip)
 
-            print(f"🔍 [HELPER] Running command: {' '.join(cmd)}")
+            logger.info(f"🔍 [HELPER] Running command: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             output = result.stdout.strip()
-            print(
+            logger.info(
                 f"📊 [HELPER] Command result: returncode={result.returncode}, output='{output}'"
             )
 
@@ -137,13 +138,13 @@ class VPNHelper:
             return (is_running, output)
 
         except subprocess.TimeoutExpired:
-            print(f"⏰ [HELPER] Command timed out after 30 seconds")
+            logger.error(f"⏰ [HELPER] Command timed out after 30 seconds")
             return (False, "Command timed out")
         except FileNotFoundError:
-            print(f"❌ [HELPER] CLI executable not found: {helper.cli_path}")
+            logger.error(f"❌ [HELPER] CLI executable not found: {helper.cli_path}")
             return (False, "Helper not available")
         except Exception as e:
-            print(f"❌ [HELPER] Command error: {e}")
+            logger.error(f"❌ [HELPER] Command error: {e}")
             return (False, str(e))
 
 
@@ -227,10 +228,10 @@ def generate_wireguard_keys():
         }
 
     except subprocess.CalledProcessError as e:
-        print(f"❌ Key generation command failed: {e}")
+        logger.error(f"❌ Key generation command failed: {e}")
         return None
     except Exception as e:
-        print(f"❌ Key generation failed: {e}")
+        logger.error(f"❌ Key generation failed: {e}")
         return None
 
 
@@ -239,7 +240,7 @@ def start_vpn(config_path):
 
     success, output = vpn_helper.start_vpn(config_path)
     if success or "Interface for" in output:
-        print(f"✅ VPN started: {output}")
+        logger.info(f"✅ VPN started: {output}")
 
         # Extract and cache the actual utun interface
         config_name = os.path.basename(config_path).replace(".conf", "")
@@ -250,7 +251,7 @@ def start_vpn(config_path):
 
         return True
     else:
-        print(f"❌ VPN start failed: {output}")
+        logger.error(f"❌ VPN start failed: {output}")
         return False
 
 
@@ -259,16 +260,16 @@ def stop_vpn(config_path):
 
     success, output = vpn_helper.stop_vpn(config_path)
     if success or "stopped" in output.lower():
-        print(f"✅ VPN stopped: {output}")
+        logger.info(f"✅ VPN stopped: {output}")
 
         # Clear the cached interface mapping
         config_name = os.path.basename(config_path).replace(".conf", "")
         if config_name in _interface_cache:
             del _interface_cache[config_name]
-        print(f"🔍 [CACHE] Cleared mapping for {config_name}")
+        logger.info(f"🔍 [CACHE] Cleared mapping for {config_name}")
         return True
     else:
-        print(f"❌ VPN stop failed: {output}")
+        logger.error(f"❌ VPN stop failed: {output}")
         return False
 
 
@@ -287,30 +288,30 @@ def check_service_status(interface_name, test_ip=None):
     if interface_name.startswith("utun"):
         actual_interface = interface_name
 
-    print(
+    logger.info(
         f"🔍 [STATUS] Checking status for interface: {interface_name} -> {actual_interface}"
     )
     try:
         # ✅ Don't pass test_ip to avoid ping tests
         is_running, status = vpn_helper.check_status(actual_interface, None)
 
-        print(
+        logger.info(
             f"📊 [STATUS] Helper returned: is_running={is_running}, status='{status}'"
         )
 
         return "Running" if is_running else "Stopped"
 
     except Exception as e:
-        print(f"❌ [STATUS] Exception in check_service_status: {e}")
+        logger.error(f"❌ [STATUS] Exception in check_service_status: {e}")
         import traceback
 
-        traceback.print_exc()
+        logger.error(traceback.format_exc())
         return "Stopped"
 
 
 def check_wireguard_installed():
     """Check if WireGuard is available on the system"""
-    print("🔍 [WIREGUARD] Checking WireGuard installation...")
+    logger.info("🔍 [WIREGUARD] Checking WireGuard installation...")
 
     # Check for wg binary in system locations (same as Swift helper)
     wg_paths = [
@@ -323,16 +324,16 @@ def check_wireguard_installed():
     wg_path = None
     for path in wg_paths:
         if os.path.exists(path):
-            print(f"✅ WireGuard (wg) found at: {path}")
+            logger.info(f"✅ WireGuard (wg) found at: {path}")
             wg_found = True
             wg_path = path
             break
 
     if not wg_found:
-        print("❌ WireGuard (wg) not found in system locations")
-        print("💡 Please install WireGuard:")
-        print("   - Via Homebrew: brew install wireguard-tools")
-        print("   - Or download from: https://www.wireguard.com/install/")
+        logger.error("❌ WireGuard (wg) not found in system locations")
+        logger.info("💡 Please install WireGuard:")
+        logger.info("   - Via Homebrew: brew install wireguard-tools")
+        logger.info("   - Or download from: https://www.wireguard.com/install/")
         return False
 
     # Check for wg-quick in system locations (same as Swift helper)
@@ -346,19 +347,19 @@ def check_wireguard_installed():
     wg_quick_path = None
     for path in wg_quick_paths:
         if os.path.exists(path):
-            print(f"✅ WireGuard (wg-quick) found at: {path}")
+            logger.info(f"✅ WireGuard (wg-quick) found at: {path}")
             wg_quick_found = True
             wg_quick_path = path
             break
 
     if not wg_quick_found:
-        print("❌ WireGuard (wg-quick) not found in system locations")
-        print("💡 Please install WireGuard:")
-        print("   - Via Homebrew: brew install wireguard-tools")
-        print("   - Or download from: https://www.wireguard.com/install/")
+        logger.error("❌ WireGuard (wg-quick) not found in system locations")
+        logger.info("💡 Please install WireGuard:")
+        logger.info("   - Via Homebrew: brew install wireguard-tools")
+        logger.info("   - Or download from: https://www.wireguard.com/install/")
         return False
 
-    print("✅ WireGuard is properly installed and working on the system")
+    logger.info("✅ WireGuard is properly installed and working on the system")
     return True
 
 
@@ -405,7 +406,7 @@ def parse_and_create_vpn_config(vpn_config_json_string, config_name="wg0"):
         # Get private key from keychain (local function)
         private_key = get_wireguard_private_key()
         if not private_key:
-            print("❌ Error: Private key not found in keychain")
+            logger.error("❌ Error: Private key not found in keychain")
             return None
 
         # Convert AllowedIPs array to comma-separated string
@@ -448,24 +449,24 @@ Endpoint = {endpoint}
         # Set strict permissions (600) to avoid "world accessible" warning
         os.chmod(config_path, 0o600)
 
-        print(f"✅ WireGuard config created at: {config_path}")
-        print(f"   Server: {endpoint}")
-        print(f"   Client IP: {client_address}")
-        print(f"   DNS: {dns_str}")
+        logger.info(f"✅ WireGuard config created at: {config_path}")
+        logger.info(f"   Server: {endpoint}")
+        logger.info(f"   Client IP: {client_address}")
+        logger.info(f"   DNS: {dns_str}")
 
         return config_path
 
     except json.JSONDecodeError as e:
-        print(f"❌ Error parsing VPN config JSON: {e}")
+        logger.error(f"❌ Error parsing VPN config JSON: {e}")
         return None
     except KeyError as e:
-        print(f"❌ Error: Missing required field in VPN config: {e}")
+        logger.error(f"❌ Error: Missing required field in VPN config: {e}")
         return None
     except Exception as e:
-        print(f"❌ Error creating VPN config: {e}")
+        logger.error(f"❌ Error creating VPN config: {e}")
         import traceback
 
-        traceback.print_exc()
+        logger.error(traceback.format_exc())
         return None
 
 
@@ -477,32 +478,32 @@ def setup_vpn_keys():
     try:
         # Step 1: Regenerate fresh keys for this sign-in session
         # Delete old keys (if they exist) to ensure fresh key pair
-        print("Regenerating WireGuard keys for new login session")
+        logger.info("Regenerating WireGuard keys for new login session")
         delete_wireguard_keys()
 
         # Generate new key pair
         keys = generate_wireguard_keys()
         if not keys:
-            print("❌ Failed to generate keys")
+            logger.error("❌ Failed to generate keys")
             return None
 
         # Save both private and public keys to Keychain with iOS-compatible service names
         if not save_wireguard_keys(keys["private_key"], keys["public_key"]):
-            print("❌ Failed to save keys securely")
+            logger.error("❌ Failed to save keys securely")
             return None
 
         # Get public key for API transmission
         public_key = keys["public_key"]
 
         if not public_key:
-            print("❌ Failed to get public key")
+            logger.error("❌ Failed to get public key")
             return None
 
-        print(f"✅ WireGuard Public Key Validated: Length={len(public_key)} characters")
+        logger.info(f"✅ WireGuard Public Key Validated: Length={len(public_key)} characters")
         return public_key
 
     except Exception as e:
-        print(f"❌ Error setting up VPN keys: {e}")
+        logger.error(f"❌ Error setting up VPN keys: {e}")
         return None
 
 
@@ -515,7 +516,7 @@ def save_vpn_configuration(vpn_config_json):
         if not vpn_config_json:
             return None
 
-        print("WireGuard config received from API")
+        logger.info("WireGuard config received from API")
 
         # Log redacted config for debugging
         try:
@@ -543,22 +544,22 @@ def save_vpn_configuration(vpn_config_json):
                     "AllowedIPs": vpn_config["Peer"].get("AllowedIPs", []),
                     "Endpoint": vpn_config["Peer"].get("Endpoint", ""),
                 }
-            print(f"VPN Config (redacted): {json.dumps(safe_config)}")
+            logger.debug(f"VPN Config (redacted): {json.dumps(safe_config)}")
         except Exception as e:
-            print(f"Error parsing VPN config for logging: {e}")
+            logger.error(f"Error parsing VPN config for logging: {e}")
 
         # Create config file
         config_path = parse_and_create_vpn_config(vpn_config_json, config_name="wg0")
 
         if config_path:
-            print("✅ VPN configuration saved successfully")
+            logger.info("✅ VPN configuration saved successfully")
             return config_path
         else:
-            print("❌ Failed to create VPN config")
+            logger.error("❌ Failed to create VPN config")
             return None
 
     except Exception as e:
-        print(f"❌ Error creating VPN config: {e}")
+        logger.error(f"❌ Error creating VPN config: {e}")
         return None
 
 
@@ -576,7 +577,7 @@ def ensure_helper_registered():
             try:
                 service = SMAppService.daemonWithPlistName_(plist_name)
             except:
-                print("⚠️ Could not create SMAppService for helper")
+                logger.warning("⚠️ Could not create SMAppService for helper")
                 return
 
         # Check current status
@@ -590,31 +591,31 @@ def ensure_helper_registered():
         status_str = status_map.get(status, "unknown")
 
         if status == 1:  # Already enabled
-            print("✅ Helper already enabled")
+            logger.info("✅ Helper already enabled")
             return
 
         if status == 2:  # Requires approval
-            print("⚠️ Helper registered but requires user approval")
+            logger.warning("⚠️ Helper registered but requires user approval")
             prompt_helper_approval(service)
             return
 
         # Not registered yet (0 or 3), try to register
-        print("🔧 Registering privileged helper...")
+        logger.info("🔧 Registering privileged helper...")
         error = service.registerAndReturnError_(None)
 
         if error:
-            print(f"⚠️ Helper registration error: {error}")
+            logger.error(f"⚠️ Helper registration error: {error}")
             # Check status again after registration attempt
             new_status = int(service.status())
             if new_status == 2:  # Now requires approval
                 prompt_helper_approval(service)
         else:
-            print("✅ Helper registered successfully")
+            logger.info("✅ Helper registered successfully")
 
     except ImportError:
-        print("⚠️ ServiceManagement framework not available")
+        logger.warning("⚠️ ServiceManagement framework not available")
     except Exception as e:
-        print(f"⚠️ Helper registration error: {e}")
+        logger.error(f"⚠️ Helper registration error: {e}")
 
 
 def prompt_helper_approval(service):
@@ -632,6 +633,6 @@ def prompt_helper_approval(service):
         if response:
             # Open System Settings → Login Items
             service.openSystemSettingsLoginItems()
-            print("📱 Opened System Settings → Login Items")
+            logger.info("📱 Opened System Settings → Login Items")
     except Exception as e:
-        print(f"⚠️ Could not prompt for approval: {e}")
+        logger.error(f"⚠️ Could not prompt for approval: {e}")

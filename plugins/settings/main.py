@@ -19,6 +19,7 @@ import customtkinter
 from plugins.base_plugin import BasePlugin
 from utils import settings
 from utils.i18n import get_text
+from utils.logger import logger
 
 
 class Plugin(BasePlugin):
@@ -69,7 +70,8 @@ class Plugin(BasePlugin):
                 self.app.refresh_ui_theme()
                 return
             except Exception as e:
-                print(f"Theme refresh failed: {e}")
+                logger.error(f"Theme refresh failed: {e}")
+                self.app.show_notification(f"Theme refresh failed: {e}", type="error")
 
         try:
             self.app.update_idletasks()

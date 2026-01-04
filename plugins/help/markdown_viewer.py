@@ -13,6 +13,7 @@ import webbrowser
 
 import customtkinter
 import markdown
+from utils.logger import logger
 
 # tkinterweb (Tkhtml) is optional on Tcl/Tk 9; it can fail at import-time or runtime.
 try:
@@ -116,7 +117,7 @@ class MarkdownViewer(customtkinter.CTkFrame):
                 self.html_frame.pack(fill="both", expand=True, padx=10, pady=10)
                 self._use_html = True
             except Exception as e:
-                print(f"Help: HtmlFrame unavailable, using fallback viewer: {e}")
+                logger.warning(f"Help: HtmlFrame unavailable, using fallback viewer: {e}")
 
         if not self._use_html:
             self.fallback_text = customtkinter.CTkTextbox(
@@ -254,7 +255,7 @@ class MarkdownViewer(customtkinter.CTkFrame):
                 try:
                     self.html_frame.load_html(css + html_content, base_url=base_url)
                 except Exception as e:
-                    print(f"Help: HtmlFrame load failed, using fallback viewer: {e}")
+                    logger.warning(f"Help: HtmlFrame load failed, using fallback viewer: {e}")
                     self._use_html = False
                     self._render_fallback(md_content)
             else:
@@ -264,7 +265,7 @@ class MarkdownViewer(customtkinter.CTkFrame):
                 try:
                     self.html_frame.load_file(file_path)
                 except Exception as e:
-                    print(f"Help: HtmlFrame load failed, using fallback viewer: {e}")
+                    logger.warning(f"Help: HtmlFrame load failed, using fallback viewer: {e}")
                     self._use_html = False
                     with open(file_path, "r", encoding="utf-8") as f:
                         self._render_fallback(f.read())
@@ -301,7 +302,7 @@ class MarkdownViewer(customtkinter.CTkFrame):
                 try:
                     self.html_frame.load_html(html_content)
                 except Exception as e:
-                    print(f"Help: HtmlFrame load failed, using fallback viewer: {e}")
+                    logger.warning(f"Help: HtmlFrame load failed, using fallback viewer: {e}")
                     self._use_html = False
                     self._render_fallback(text_content)
             else:
@@ -356,8 +357,8 @@ class MarkdownViewer(customtkinter.CTkFrame):
         return "".join(final_content)
 
     def on_link_click(self, url):
-        print(f"Link clicked: {url}")
-        # print(f"Current dir: {self.current_dir}")
+        logger.info(f"Link clicked: {url}")
+        # logger.debug(f"Current dir: {self.current_dir}")
 
         # Check if it's a local file
         if "://" not in url:
@@ -373,7 +374,7 @@ class MarkdownViewer(customtkinter.CTkFrame):
                 return  # Don't call default handler
 
         # External link - open in browser
-        print(f"Opening external link: {url}")
+        logger.info(f"Opening external link: {url}")
         webbrowser.open(url)
 
     def _render_fallback(self, text: str):

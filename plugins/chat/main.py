@@ -20,6 +20,7 @@ from openai import OpenAI
 from plugins.base_plugin import BasePlugin
 from plugins.chat.animated_text import AnimatedText
 from utils import settings
+from utils.logger import logger
 
 
 class Plugin(BasePlugin):
@@ -60,13 +61,13 @@ class Plugin(BasePlugin):
         if api_key:
             try:
                 self.client = OpenAI(api_key=api_key)
-                print("Chat plugin: OpenAI client initialized successfully")
+                logger.info("Chat plugin: OpenAI client initialized successfully")
             except Exception as e:
-                print(f"Chat plugin: Failed to initialize OpenAI client: {e}")
+                logger.error(f"Chat plugin: Failed to initialize OpenAI client: {e}")
                 self.client = None
         else:
             self.client = None
-            print("Chat plugin: No OpenAI API key found. Chat functionality disabled.")
+            logger.warning("Chat plugin: No OpenAI API key found. Chat functionality disabled.")
 
     def send_message_to_chatgpt(self, message: str) -> str:
         """Send a message to the ChatGPT model and return the response."""

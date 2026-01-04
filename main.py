@@ -69,16 +69,16 @@ class App(AppUI):
 
         # Check if already logged in
         if settings.get("auth", "logged_in", False):
-            print("✅ User already logged in.")
+            logger.info("✅ User already logged in.")
             self.create_dashboard()
         else:
             # Always show login screen since we're using Odoo authentication
-            print("🔐 Creating login screen...")
+            logger.info("🔐 Creating login screen...")
             from plugins.login.main import Plugin as LoginPlugin
 
             login_plugin = LoginPlugin(self)
             login_plugin.show()
-            print("✅ Login screen created")
+            logger.info("✅ Login screen created")
 
         # Ensure the window is visible
         self.update()
