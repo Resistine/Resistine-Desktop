@@ -68,6 +68,7 @@ class PluginManager:
                 plugin_instance.set_status("Ok")  # Set the status of the plugin to "Ok"
             except Exception as e:
                 logger.error(f"Failed to load plugin {module_name}: {e}")
+                self.app.show_notification(f"Failed to load plugin {module_name}", type="error")
                 # We cannot set status on plugin_instance if it wasn't created
         return plugins
 

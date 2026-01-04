@@ -26,6 +26,17 @@ from utils.logger import logger
 # Removed standard logging setup
 
 
+# Platform Specific Imports
+import platform
+import sys
+if platform.system() == "Windows":
+    from plugins.vpn.wireguard.vpn_functions_windows import setup_vpn_keys, save_vpn_configuration
+elif platform.system() == "Linux":
+    from plugins.vpn.wireguard.vpn_functions_linux import setup_vpn_keys, save_vpn_configuration
+elif platform.system() == "Darwin":
+    from plugins.vpn.wireguard.vpn_functions_darwin import setup_vpn_keys, save_vpn_configuration
+
+
 class Plugin(BasePlugin):
     REGISTRATION_GRID_ROWS = 8
     REGISTRATION_GRID_COLS = 3
@@ -204,6 +215,7 @@ class Plugin(BasePlugin):
         logger.info("User skipped login")
         if hasattr(self, "login_frame"):
             self.login_frame.destroy()
+        self.app.show_notification("Login skipped - some features may be unavailable", type="warning")
         self.app.create_dashboard()
 
     def handle_signin_click(self):
@@ -282,3 +294,69 @@ class Plugin(BasePlugin):
 
     def set_button(self, button):
         self.button = button
+
+    def send_otp_api(self, email):
+        """Send OTP via API."""
+        try:
+            success, message, _ = self.api.send_otp(email)
+            if success:
+                self.app.show_notification(message, type="info")
+                self.transform_to_otp_input()
+            else:
+                self.update_status(message, "red")
+                self.app.show_notification(message, type="error")
+        except Exception as e:
+            msg = f"Error sending OTP: {e}"
+            logger.error(msg)
+            self.update_status(msg, "red")
+            self.app.show_notification(msg, type="error")
+
+    def verify_otp(self):
+        """Verify OTP via API."""
+        otp = self.otp_entry.get().strip()
+        if not otp:
+            self.update_status("Please enter OTP", "red")
+            return
+
+        try:
+            # Generate/Get keys
+            public_key = setup_vpn_keys()
+            if not public_key:
+                msg = "Failed to generate encryption keys"
+                self.update_status(msg, "red")
+                self.app.show_notification(msg, type="error")
+                return
+
+            success, message, result = self.api.verify_otp(
+                email=self.email,
+                otp=otp,
+                public_key=public_key,
+                host_url="rfr1.resisti.net", # TODO: Move to config
+                vpn_name="testVPNapi"        # TODO: Move to config
+            )
+
+            if success:
+                logger.info("Login successful")
+                self.app.show_notification("Login successful!", type="info")
+                
+                # Save VPN config if provided
+                if result.get("data"):
+                     save_vpn_configuration(result.get("data"))
+
+                self.destroy()
+                self.app.create_dashboard()
+            else:
+                logger.error(f"Login failed: {message}")
+                self.update_status(message, "red")
+                self.app.show_notification(message, type="error")
+
+        except Exception as e:
+            msg = f"Error verifying OTP: {e}"
+            logger.error(msg)
+            self.update_status(msg, "red")
+            self.app.show_notification(msg, type="error")
+
+    def on_otp_key_press(self, event):
+        """Handle key press in OTP entry."""
+        if event.keysym == "Return":
+            self.verify_otp()

@@ -64,10 +64,12 @@ class Plugin(BasePlugin):
                 logger.info("Chat plugin: OpenAI client initialized successfully")
             except Exception as e:
                 logger.error(f"Chat plugin: Failed to initialize OpenAI client: {e}")
+                self.app.show_notification(f"Chat Init Error: {e}", type="error")
                 self.client = None
         else:
             self.client = None
             logger.warning("Chat plugin: No OpenAI API key found. Chat functionality disabled.")
+            self.app.show_notification("Chat disabled: No API key found", type="warning")
 
     def send_message_to_chatgpt(self, message: str) -> str:
         """Send a message to the ChatGPT model and return the response."""
