@@ -1,12 +1,8 @@
-## @file plugins/chat/main.py
-## @package chat_plugin
-## @namespace chat_plugin
-## @class chat_plugin::Plugin
-
+# @file plugins/chat/main.py
 """
 This module contains the main functionality for the Chat plugin.
 The plugin allows users to chat with the AI assistant.
-Author: Peres J. and the Resistine Team
+Author: Peres J., P3 and the Resistine Team
 Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
@@ -37,9 +33,10 @@ class Plugin(BasePlugin):
         """
         super().__init__(
             id="002",
+            version="2025.01.01",
             order=2,
             name="Chat",
-            status="OK",
+            status=None,
             description="This plugin allows you to chat with the AI assistant.",
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Chat", "ES": "Chat", "FR": "Chat"},
@@ -54,6 +51,13 @@ class Plugin(BasePlugin):
         self.client: OpenAI | None = None
         self.animated_text: AnimatedText | None = None
         self.reinitialize_client()
+        self.status = self.get_status()
+
+    def check_status(self):
+        """Check if the Chat plugin is ready to use."""
+        if self.client:
+            return "OK"
+        return "Warning"
 
     def reinitialize_client(self):
         """Reinitialize the OpenAI client with the current API key."""

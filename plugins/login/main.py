@@ -42,8 +42,25 @@ class Plugin(BasePlugin):
     REGISTRATION_GRID_COLS = 3
 
     def __init__(self, app):
+        super().__init__(
+            id="007",
+            version="2025.01.01",
+            order=0,
+            name="Login",
+            status=None,
+            description="Login to the Resistine application.",
+            supported_systems=["Windows", "Linux", "Mac"],
+            translations={"US": "Login", "ES": "Acceso", "FR": "Connexion"},
+            icon_light_path=os.path.join(
+                os.path.dirname(os.path.realpath(__file__)), "login_light.png"
+            ),
+            icon_dark_path=os.path.join(
+                os.path.dirname(os.path.realpath(__file__)), "login_dark.png"
+            ),
+        )
         self.app = app
         self.email = None
+        self.status = self.get_status()
 
         # API endpoint
         self.api_base_url = "https://validate.resistine.work"

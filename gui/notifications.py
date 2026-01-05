@@ -1,5 +1,6 @@
 import customtkinter
 from customtkinter import ThemeManager
+from utils.logger import logger
 
 
 class ToastNotification(customtkinter.CTkFrame):
@@ -26,7 +27,8 @@ class ToastNotification(customtkinter.CTkFrame):
         # Text
         text_color = ThemeManager.theme["CTkLabel"]["text_color"]
         self.label = customtkinter.CTkLabel(
-            self, text=text, font=customtkinter.CTkFont(size=14), text_color=text_color
+            self, text=text, font=customtkinter.CTkFont(size=14), text_color=text_color,
+            wraplength=400
         )
         self.label.pack(side="left", padx=(0, 20), pady=10)
 
@@ -38,25 +40,34 @@ class ToastNotification(customtkinter.CTkFrame):
 
     def show(self):
         # Place relative to the top of the master window
+        self.master.update_idletasks()
+        
+        # Force a width for centering if content is small
+        self.configure(width=400)
+        
         self.place(relx=0.5, rely=self.y_pos, anchor="n")
-        # Lift above other widgets
+        
+        # Lift above everything
         self.lift()
+        self.attributes('-topmost', True) if isinstance(self, customtkinter.CTkToplevel) else None
+        
+        logger.info(f"Showing notification: '{self.label.cget('text')[:20]}...' at relx=0.5, rely={self.y_pos}")
         self.animate_in()
 
     def animate_in(self):
         if self.is_destroying:
             return
         if self.y_pos < self.target_y:
-            self.y_pos += 0.005
+            self.y_pos += 0.01 # Faster animation
             self.place(relx=0.5, rely=self.y_pos, anchor="n")
             self.master.after(10, self.animate_in)
         else:
-            self.master.after(2000, self.animate_out)
+            self.master.after(3000, self.animate_out) # Show for 3 seconds
 
     def animate_out(self):
         self.is_destroying = True
-        if self.y_pos > -0.1:
-            self.y_pos -= 0.005
+        if self.y_pos > -0.2:
+            self.y_pos -= 0.01
             self.place(relx=0.5, rely=self.y_pos, anchor="n")
             self.master.after(10, self.animate_out)
         else:

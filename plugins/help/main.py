@@ -30,9 +30,10 @@ class Plugin(BasePlugin):
         """
         super().__init__(
             id="009",
-            order=9,
+            version="2025.01.01",
+            order=101,
             name="Help",
-            status="OK",
+            status=None,
             description="This plugin provides help documentation.",
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Help", "ES": "Ayuda", "FR": "Aide"},
@@ -42,8 +43,10 @@ class Plugin(BasePlugin):
             icon_dark_path=os.path.join(
                 os.path.dirname(os.path.realpath(__file__)), "help_dark.png"
             ),
+            uninstall_enabled=False,
         )
         self.app = app
+        self.status = self.get_status()
 
     def create_main_screen(self):
         """

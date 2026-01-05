@@ -25,7 +25,7 @@ except Exception:  # pragma: no covDer
 class MarkdownViewer(customtkinter.CTkFrame):
 
     # Root files to add to the dropdown
-    root_filesXX = ["README.md", "LICENSE.md"]
+    root_files = ["README.md", "LICENSE.md"]
 
     def __init__(self, master, docs_dir=None, **kwargs):
         super().__init__(master, fg_color=("#f0eff6", "#1a1a1a"), **kwargs)
@@ -134,29 +134,29 @@ class MarkdownViewer(customtkinter.CTkFrame):
         """Get list of help files from docs directory and root."""
         files = []
 
-        # Add root files
+        # Add root files (README, LICENSE) from the parent of docs_dir
         if self.docs_dir:
-            project_root = os.path.dirname(self.docs_dir)
+            project_root = os.path.dirname(os.path.abspath(self.docs_dir))
             for f in self.root_files:
                 if os.path.exists(os.path.join(project_root, f)):
                     files.append(f)
 
-        # Add docs files
+        # Add markdown files from docs_dir
         if self.docs_dir and os.path.exists(self.docs_dir):
             for file in os.listdir(self.docs_dir):
                 if file.endswith(".md"):
                     files.append(file)
 
-        return sorted(files)
+        return sorted(list(set(files)))
 
     def navigate_to_file(self, filename):
         """Navigate to a help file from dropdown."""
         if self.docs_dir:
-            # Check if it's a root file
-            project_root = os.path.dirname(self.docs_dir)
+            # Check if it's a root file (parent of docs_dir)
+            project_root = os.path.dirname(os.path.abspath(self.docs_dir))
             root_path = os.path.join(project_root, filename)
 
-            if os.path.exists(root_path):
+            if os.path.exists(root_path) and filename in self.root_files:
                 self.load_file(root_path)
             else:
                 # Check docs dir
