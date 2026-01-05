@@ -8,13 +8,13 @@ Welcome to the Resistine documentation. Here you'll find detailed information ab
 
 - [Coding Guide](https://docs.google.com/presentation/d/1nxVcQw6U2n2m1ieALWLTvuhE9nThKXKCQc7BuTd5AFk/edit?usp=sharing) - Learn about the coding in the age of AI
 - [Gitting Started](https://docs.google.com/presentation/d/1tVpSq1XpaU05tjnE9qEfQ64FdElmz9FPgAwkMAuWf5A/edit?usp=sharing) - Learn about the git system and best practices
-- [Plugin Development]() - Learn about the plugin development
+- [Plugin Development](https://github.com/Resistine/Resistine-Desktop-Plugins) - Learn about the plugin development
 
 ### Utils and Settings
 
 - [Settings](Settings.md) - Configuration and settings documentation
 - [Encryption]() - Learn about the encryption system
-- [Internationalization (i18n)](i18n.md) - Learn about the internationalization system
+- [Translations (i18n)](Translations.md) - Learn about the internationalization system
 - [Logging](Logging.md) - Learn about the logging system
 - [VPN](VPN.md) - Learn about the VPN system
 
