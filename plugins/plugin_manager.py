@@ -11,12 +11,21 @@ import requests
 import zipfile
 import io
 import sys
+import re
+import json
 from utils.logger import logger
+from utils.settings import get_config_dir
 
 class PluginManager:
     """
     A class to manage the loading and downloading of plugins.
     """
+
+    # URLs for default and optional plugins
+    DEFAULT_PLUGINS_URL = "https://raw.githubusercontent.com/Resistine/Resistine-Desktop/main/plugins/default_plugins.json"
+    OPTIONAL_PLUGINS_URL = "https://raw.githubusercontent.com/Resistine/Resistine-Desktop-Plugins/main/plugins/optional_plugins.json"
+
+
     def __init__(self, app):
         """
         Initialize the PluginManager with the given application instance.
@@ -24,64 +33,214 @@ class PluginManager:
         :param app: The application instance to which the plugins will be attached.
         """
         self.app = app
+        self.state_file = os.path.join(get_config_dir(), "plugin_state.json")
+        self.user_plugins_path = os.path.join(get_config_dir(), "plugins")
+        
+        if not os.path.exists(self.user_plugins_path):
+            os.makedirs(self.user_plugins_path, exist_ok=True)
+            
         self.plugins = sorted(self.load_plugins(), key=lambda x: x.order)
 
-    def download_plugin(self, url):
+    def get_available_plugins(self):
         """
-        Download a plugin from the specified URL and extract it to the plugins directory.
-        
-        :param url: The URL from which to download the plugin.
-        :return: A message indicating the success or failure of the download and extraction process.
+        Fetch the list of optional plugins from the remote repository.
         """
-        plugins_path = os.path.join(os.path.dirname(os.path.realpath(__file__)))
         try:
-            response = requests.get(url, allow_redirects=True)
+            response = requests.get(self.OPTIONAL_PLUGINS_URL)
             response.raise_for_status()
-            with zipfile.ZipFile(io.BytesIO(response.content)) as zip_ref:
-                zip_ref.extractall(os.path.join(plugins_path))
-            self.plugins = self.load_plugins()
+            data = response.json()
+            return data.get("plugins", [])
+        except Exception as e:
+            logger.error(f"Failed to fetch optional plugins: {e}")
+            return []
+
+    def _load_state(self):
+        """Load persistent plugin state (e.g., uninstalled plugins)."""
+        if os.path.exists(self.state_file):
+            try:
+                with open(self.state_file, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"Failed to load plugin state: {e}")
+        return {"uninstalled": []}
+
+    def _save_state(self, state):
+        """Save persistent plugin state."""
+        try:
+            with open(self.state_file, 'w') as f:
+                json.dump(state, f, indent=4)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save plugin state: {e}")
+            return False
+
+    def uninstall_plugin(self, plugin):
+        """
+        Mark a plugin as uninstalled and attempt to remove it if it's in the user directory.
+        """
+        state = self._load_state()
+        if plugin.id not in state["uninstalled"]:
+            state["uninstalled"].append(plugin.id)
+            self._save_state(state)
+        
+        # If the plugin is in the user directory, try to delete it
+        user_plugin_dir = os.path.join(self.user_plugins_path, os.path.basename(os.path.dirname(plugin.__class__.__module__.replace('.', '/'))))
+        if os.path.exists(user_plugin_dir):
+            try:
+                import shutil
+                shutil.rmtree(user_plugin_dir)
+                logger.info(f"Deleted user plugin directory: {user_plugin_dir}")
+            except Exception as e:
+                logger.warning(f"Could not delete plugin directory {user_plugin_dir}: {e}")
+        
+        # Refresh plugins list and UI
+        self.plugins = self.load_plugins()
+        if hasattr(self.app, "create_dashboard"):
             self.app.create_dashboard()
-            return "Plugin downloaded and extracted successfully."
+        return True, "Plugin uninstalled successfully."
+
+    def download_plugin(self, url, plugin_id=None, plugin_name=None):
+        """
+        Download a plugin and extract it to the USER'S plugins directory.
+        """
+        try:
+            logger.info(f"Downloading plugin from: {url}")
+            response = requests.get(url, allow_redirects=True, timeout=30)
+            response.raise_for_status()
+            
+            # Determine target directory
+            if plugin_name:
+                # Slugify the name for folder usage
+                folder_name = re.sub(r'[^a-z0-9]+', '_', plugin_name.lower()).strip('_')
+            elif plugin_id:
+                folder_name = plugin_id
+            else:
+                folder_name = os.path.splitext(os.path.basename(url))[0]
+                
+            target_path = os.path.join(self.user_plugins_path, folder_name)
+            
+            if not os.path.exists(target_path):
+                os.makedirs(target_path, exist_ok=True)
+            
+            with zipfile.ZipFile(io.BytesIO(response.content)) as zip_ref:
+                # Check if all files in the zip are already inside a single top-level folder
+                # with the same name. If so, we extract to self.user_plugins_path directly.
+                first_file = zip_ref.namelist()[0]
+                top_level_folder = first_file.split('/')[0] if '/' in first_file else ""
+                
+                # If the zip has a single root folder that matches our target
+                # (or we just want to be safe and avoid double nesting)
+                is_nested = all(f.startswith(top_level_folder + '/') for f in zip_ref.namelist()) if top_level_folder else False
+                
+                if is_nested:
+                    logger.info(f"Zip contains top-level folder '{top_level_folder}', extracting directly to user_plugins_path")
+                    zip_ref.extractall(self.user_plugins_path)
+                else:
+                    logger.info(f"Extracting to: {target_path}")
+                    zip_ref.extractall(target_path)
+            
+            # If we know the ID, make sure it's not marked as uninstalled
+            if plugin_id:
+                state = self._load_state()
+                if plugin_id in state.get("uninstalled", []):
+                    state["uninstalled"].remove(plugin_id)
+                    self._save_state(state)
+            
+            self.plugins = self.load_plugins()
+            if hasattr(self.app, "create_dashboard"):
+                self.app.create_dashboard()
+            return True, "Plugin downloaded and extracted successfully."
         except requests.RequestException as e:
-            return f"Failed to download plugin from {url}: {e}"
+            error_msg = f"Download failed: {str(e)}"
+            if hasattr(e, 'response') and e.response is not None:
+                error_msg += f" (Status: {e.response.status_code})"
+            logger.error(error_msg)
+            return False, error_msg
         except zipfile.BadZipFile as e:
-            return f"Failed to extract plugin: {e}"
+            logger.error(f"Extraction failed: {e}")
+            return False, f"Failed to extract plugin: {e}"
+        except Exception as e:
+            logger.error(f"Unexpected error during plugin install: {e}")
+            return False, f"Installation error: {str(e)}"
 
     def load_plugins(self):
         """
-        Load all plugins from the plugins directory.
-        
-        :return: A list of loaded plugin instances.
+        Load all plugins from both system and user directories.
         """
-        plugins_path = self.get_plugins_path()
+        state = self._load_state()
+        uninstalled_ids = state.get("uninstalled", [])
         
-        plugin_dirs = [d for d in os.listdir(plugins_path) if os.path.isdir(os.path.join(plugins_path, d)) and not d.startswith('_') and d != 'login']
-        plugins = []
+        system_plugins_path = self.get_plugins_path()
+        user_plugins_path = self.user_plugins_path
         
-        for plugin_dir in plugin_dirs:
-            module_name = f"plugins.{plugin_dir}.main"
+        # Priority: User plugins override system plugins if folder names collide
+        # (Though ID check would be better, we'll start with path-based discovery)
+        
+        plugins_to_load = {} # path -> module_prefix
+        
+        # Scan system plugins
+        if os.path.exists(system_plugins_path):
+            for d in os.listdir(system_plugins_path):
+                if os.path.isdir(os.path.join(system_plugins_path, d)):
+                    if d.startswith('_') or d == 'login' or d == '__pycache__':
+                        continue
+                    plugins_to_load[d] = "plugins"
+
+        # Scan user plugins (overrides)
+        if os.path.exists(user_plugins_path):
+            # We need to add user_plugins_path to sys.path to import from it
+            if user_plugins_path not in sys.path:
+                sys.path.append(user_plugins_path)
+                
+            for d in os.listdir(user_plugins_path):
+                if os.path.isdir(os.path.join(user_plugins_path, d)):
+                    if d.startswith('_') or d == '__pycache__':
+                        continue
+                    plugins_to_load[d] = None # No prefix, it's a top-level in user_plugins_path
+
+        loaded_plugins = []
+        seen_ids = set()
+
+        # Load them
+        for plugin_dir, prefix in plugins_to_load.items():
+            if prefix:
+                module_name = f"{prefix}.{plugin_dir}.main"
+            else:
+                module_name = f"{plugin_dir}.main"
+                
             try:
+                # Force reload if it was already in sys.modules (relevant for updates/downloads)
+                if module_name in sys.modules:
+                    importlib.reload(sys.modules[module_name])
+                
                 module = importlib.import_module(module_name)
-                plugin_class = getattr(module, "Plugin")  # Adjust this if your plugin class names are different
+                plugin_class = getattr(module, "Plugin")
                 plugin_instance = plugin_class(self.app)
-                plugins.append(plugin_instance)
-                plugin_instance.set_status("Ok")  # Set the status of the plugin to "Ok"
+                
+                if plugin_instance.id in uninstalled_ids:
+                    logger.info(f"Skipping uninstalled plugin: {plugin_instance.name} ({plugin_instance.id})")
+                    continue
+                
+                # Deduplicate by ID
+                if plugin_instance.id in seen_ids:
+                    # If we encounter the same ID, the priority logic above (merging dicts)
+                    # already handled directory collision, BUT ID collision across different
+                    # folder names could still happen. 
+                    continue
+                    
+                loaded_plugins.append(plugin_instance)
+                seen_ids.add(plugin_instance.id)
+                plugin_instance.status = plugin_instance.get_status()
             except Exception as e:
                 logger.error(f"Failed to load plugin {module_name}: {e}")
-                self.app.show_notification(f"Failed to load plugin {module_name}", type="error")
-                # We cannot set status on plugin_instance if it wasn't created
-        return plugins
+                
+        return loaded_plugins
 
     def get_plugins_path(self):
         """
-        Get the path to the plugins directory.
-        
-        :return: The path to the plugins directory.
+        Get the path to the SYSTEM plugins directory.
         """
         if getattr(sys, 'frozen', False):
-            # If the application is run as a bundle, the PyInstaller bootloader
-            # sets the sys._MEIPASS attribute to the path of the temporary directory
             return os.path.join(sys._MEIPASS, 'plugins')
         else:
-            # If the application is run normally, use the original path
-            return os.path.join(os.path.dirname(os.path.realpath(__file__)))
+            return os.path.dirname(os.path.realpath(__file__))

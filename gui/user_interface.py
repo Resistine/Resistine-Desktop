@@ -1,6 +1,6 @@
-import logging
-import math
 import os
+import sys
+import math
 import tkinter as tk
 
 import customtkinter
@@ -17,6 +17,16 @@ class AppUI(customtkinter.CTk):
     Base application class handling UI creation and management.
     Inherits from CTk to serve as the main window base.
     """
+
+    # Status colors for plugin status indicators.
+    # TODO: Use theme colors instead of hex values.
+    status_colors = {
+        "ok": "#00FF00",      # Green
+        "info": "#3B8ED0",      # Blue
+        "warning": "#FFA500",   # Orange
+        "error": "#FF0000",     # Red
+        "critical": "#8B0000"   # Dark Red
+    }    
 
     @classmethod
     def create_tab_button(cls, frame, name, icon, command=None, row=0, col=0):
@@ -76,7 +86,7 @@ class AppUI(customtkinter.CTk):
             button.configure(fg_color="transparent", border_width=0)
 
     @classmethod
-    def create_plugin_card(cls, row, column, container_frame, plugin):
+    def create_plugin_card(cls, row, column, container_frame, plugin, show_description=False, extra_buttons_func=None, truncate=False):
         """
         Create a plugin card with theme-aware colors.
         """
@@ -100,6 +110,9 @@ class AppUI(customtkinter.CTk):
         content_container = customtkinter.CTkFrame(frame, fg_color="transparent")
         content_container.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
         content_container.grid_columnconfigure(0, weight=1)
+        
+        # Layout config: Row 2 (Description) expands to push buttons to bottom
+        content_container.grid_rowconfigure(2, weight=1)
 
         # Icon
         icon_image = plugin.get_icon()
@@ -118,34 +131,63 @@ class AppUI(customtkinter.CTk):
         )
         title_label.grid(row=1, column=0, pady=(0, 5))
 
+        # Description (Optional)
+        if show_description:
+            description = plugin.get_description()
+            if truncate and len(description) > 60:
+                description = description[:57] + "..."
+                
+            desc_label = customtkinter.CTkLabel(
+                content_container,
+                text=description,
+                font=customtkinter.CTkFont(size=12),
+                text_color=text_primary,
+                wraplength=280, # Wider wraplength
+                justify="center"
+            )
+            desc_label.grid(row=2, column=0, pady=(0, 10))
+
         # Status
+        current_status = plugin.get_status()
+        
+        # Placeholder for status to ensure consistent height
         status_container = customtkinter.CTkFrame(
-            content_container, fg_color="transparent"
+            content_container, fg_color="transparent", height=25
         )
-        status_container.grid(row=2, column=0)
+        status_container.grid(row=3, column=0, pady=(0, 10))
+        status_container.grid_propagate(False) # Keep fixed height even if empty
+        status_container.grid_columnconfigure(0, weight=1)
 
-        status_dot_color = (
-            accent_green if plugin.get_status().lower() == "ok" else "#FF3333"
-        )
-        status_dot = customtkinter.CTkFrame(
-            status_container,
-            width=10,
-            height=10,
-            corner_radius=5,
-            fg_color=status_dot_color,
-        )
-        status_dot.pack(side="left", padx=(0, 5))
+        if current_status is not None:
+            # Inner frame for centering content
+            status_inner = customtkinter.CTkFrame(status_container, fg_color="transparent")
+            status_inner.pack(expand=True)
 
-        status_text = (
-            "Protected" if plugin.get_status().lower() == "ok" else plugin.get_status()
-        )
-        status_label = customtkinter.CTkLabel(
-            status_container,
-            text=status_text,
-            font=customtkinter.CTkFont(size=11),
-            text_color=text_primary,
-        )
-        status_label.pack(side="left")
+            status_dot_color = cls.status_colors.get(current_status.lower(), "#808080")
+            
+            status_dot = customtkinter.CTkFrame(
+                status_inner,
+                width=10,
+                height=10,
+                corner_radius=5,
+                fg_color=status_dot_color,
+            )
+            status_dot.pack(side="left", padx=(0, 5))
+
+            status_text = current_status.title()
+            status_label = customtkinter.CTkLabel(
+                status_inner,
+                text=status_text,
+                font=customtkinter.CTkFont(size=11),
+                text_color=text_primary,
+            )
+            status_label.pack(side="left")
+
+        # Extra Buttons (Uninstall, Info, etc.)
+        if extra_buttons_func:
+            buttons_frame = customtkinter.CTkFrame(content_container, fg_color="transparent")
+            buttons_frame.grid(row=4, column=0, sticky="ew")
+            extra_buttons_func(buttons_frame, plugin)
 
         # Click Interaction
         def on_click(_event=None):
@@ -164,6 +206,10 @@ class AppUI(customtkinter.CTk):
 
         # Bind events
         def bind_recursive(widget):
+            # Don't bind on_click to interactive elements
+            if isinstance(widget, customtkinter.CTkButton):
+                return
+                
             widget.bind("<Button-1>", on_click)
             widget.bind("<Enter>", on_enter)
             widget.bind("<Leave>", on_leave)
@@ -173,6 +219,40 @@ class AppUI(customtkinter.CTk):
         bind_recursive(frame)
 
         return frame
+
+    def show_readme(self, plugin):
+        """
+        Open a new window to show the plugin's README.md file.
+        """
+        import sys
+        from plugins.help.markdown_viewer import MarkdownViewer
+        
+        # Determine the README path
+        plugin_module = plugin.__class__.__module__
+        # Assuming plugin modules are in plugins.name.main or name.main
+        # We can try to get the file path from the module
+        module = sys.modules.get(plugin_module)
+        if not module or not hasattr(module, "__file__"):
+            self.show_notification("Could not find plugin source for README", type="error")
+            return
+            
+        plugin_dir = os.path.dirname(module.__file__)
+        readme_path = os.path.join(plugin_dir, "README.md")
+        
+        if not os.path.exists(readme_path):
+            self.show_notification(f"README.md not found for {plugin.get_name()}", type="warning")
+            return
+
+        # Create Toplevel window
+        window = customtkinter.CTkToplevel(self)
+        window.title(f"{plugin.get_name()} - Documentation")
+        window.geometry("800x600")
+        window.attributes("-topmost", True) # Keep on top for visibility
+        window.after(100, lambda: window.attributes("-topmost", False)) # But allow moving behind
+
+        viewer = MarkdownViewer(window, docs_dir=plugin_dir)
+        viewer.pack(fill="both", expand=True, padx=20, pady=20)
+        viewer.load_file(readme_path)
 
     @classmethod
     def get_font(cls, key="CTkFont"):
@@ -242,14 +322,8 @@ class AppUI(customtkinter.CTk):
         self.grid_columnconfigure(0, weight=0)  # Navigation column
         self.grid_columnconfigure(1, weight=1)  # Content column
 
-        # Plugin List Management (Circular import avoidance)
-        if not hasattr(self.__class__, "plugin_list"):
-            self.__class__.plugin_list = PluginManager(self).plugins
-        else:
-            # Refresh if needed (simple count check)
-            if len(self.__class__.plugin_list) < len(PluginManager(self).plugins):
-                self.__class__.plugin_list = PluginManager(self).plugins
-        self.plugin_list = self.__class__.plugin_list
+        # Plugin List Management
+        self.plugin_list = self.get_plugin_manager().plugins
         number_plugins = len(self.plugin_list) + 1
 
         # Theme-aware sidebar colors
@@ -306,6 +380,15 @@ class AppUI(customtkinter.CTk):
         self.frames = {}
         row = 1
         for plugin in self.plugin_list:
+            # Skip plugins with negative or zero order (e.g. Login at 0, hidden at -1)
+            # Order 0: Shows in Dashboard but not Sidebar
+            # Order -1: Hidden everywhere
+            if plugin.order <= 0:
+                # Still register the frame so it can be navigated to if needed (e.g. from Dashboard)
+                frame_name = f"frame_{plugin.get_name()}"
+                self.frames[frame_name] = plugin
+                continue
+
             frame_name = f"frame_{plugin.get_name()}"
             self.frames[frame_name] = plugin
 
@@ -362,7 +445,7 @@ class AppUI(customtkinter.CTk):
             main_screen.grid_rowconfigure(0, weight=1)
             self._current_main_screen = main_screen
         except Exception as e:
-            logging.error(f"Error loading plugin frame {name}: {e}")
+            logger.error(f"Error loading plugin frame {name}: {e}")
             self.show_notification(
                 f"Error loading plugin {name.replace('frame_', '')}: {e}", type="error"
             )
@@ -398,6 +481,15 @@ class AppUI(customtkinter.CTk):
         except Exception:
             pass
 
+    def get_plugin_manager(self):
+        """
+        Get the PluginManager instance.
+        """
+        if not hasattr(self.__class__, "plugin_manager"):
+             from plugins.plugin_manager import PluginManager
+             self.__class__.plugin_manager = PluginManager(self)
+        return self.__class__.plugin_manager
+
     def show_notification(self, message, type="info"):
         """
         Show a non-blocking toast notification.
@@ -407,9 +499,11 @@ class AppUI(customtkinter.CTk):
         colors = {
             "info": "#00D100",  # Green
             "warning": "#FFA500",  # Orange
-            "error": "#FF3333",  # Red
+            "error": "#FF0000",  # Red
         }
         icon_col = colors.get(type, "#00D100")
-
-        toast = ToastNotification(self, text=message, icon_color=icon_col)
+        
+        # Ensure we use the root window for placement
+        root = self.winfo_toplevel()
+        toast = ToastNotification(root, text=message, icon_color=icon_col)
         toast.show()

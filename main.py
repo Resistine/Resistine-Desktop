@@ -74,11 +74,18 @@ class App(AppUI):
         else:
             # Always show login screen since we're using Odoo authentication
             logger.info("🔐 Creating login screen...")
-            from plugins.login.main import Plugin as LoginPlugin
+            try:
+                from plugins.login.main import Plugin as LoginPlugin
 
-            login_plugin = LoginPlugin(self)
-            login_plugin.show()
-            logger.info("✅ Login screen created")
+                login_plugin = LoginPlugin(self)
+                login_plugin.show()
+                logger.info("✅ Login screen created")
+            except (ImportError, ModuleNotFoundError):
+                logger.warning("⚠️ Login plugin not found. Skipping login screen.")
+                self.create_dashboard()
+            except Exception as e:
+                logger.error(f"❌ Failed to load login plugin: {e}")
+                self.create_dashboard()
 
         # Ensure the window is visible
         self.update()

@@ -28,9 +28,10 @@ class Plugin(BasePlugin):
         """
         super().__init__(
             id="003",
+            version="2025.01.01",
             order=3,
             name="Endpoint",
-            status="OK",
+            status=None,
             description="This plugin allows you to view the endpoints.",
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Endpoint", "ES": "Endpoint", "FR": "Endpoint"},
@@ -38,6 +39,7 @@ class Plugin(BasePlugin):
             icon_dark_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "add_user_dark.png"),
         )
         self.app = app
+        self.status = self.get_status()
 
     def create_main_screen(self):
         """

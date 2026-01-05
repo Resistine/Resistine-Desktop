@@ -15,11 +15,21 @@ class BasePlugin:
     Base class for plugins, providing common functionality and attributes.
     """
 
-    def __init__(self, id, order, name, status, description, supported_systems, translations, icon_light_path, icon_dark_path):
+    # Status map for standardizing status strings
+    status_map = {
+        "ok": "OK",
+        "info": "Info",
+        "warning": "Warning",
+        "error": "Error",
+        "critical": "Critical"
+    }    
+
+    def __init__(self, id, version, order, name, status, description, supported_systems, translations, icon_light_path, icon_dark_path, uninstall_enabled=True):
         """
         Initialize the BasePlugin with the given attributes.
 
         :param id: The unique identifier for the plugin.
+        :param version: The version of the plugin.
         :param order: The order in which the plugin should be displayed.
         :param name: The name of the plugin.
         :param status: The current status of the plugin.
@@ -28,8 +38,10 @@ class BasePlugin:
         :param translations: A dictionary of translations for the plugin.
         :param icon_light_path: Path to the light mode icon.
         :param icon_dark_path: Path to the dark mode icon.
+        :param uninstall_enabled: Whether the plugin can be uninstalled.
         """
         self.id = id
+        self.version = version
         self.order = order
         self.name = name
         self.status = status
@@ -38,9 +50,22 @@ class BasePlugin:
         self.translations = translations
         self.icon_light = icon_light_path
         self.icon_dark = icon_dark_path
+        self.uninstall_enabled = uninstall_enabled
         self.icon = self.create_icon(size=(20, 20))
         self.icon_alert = None
         self.button = None
+        self.app = None # Will be set by subclasses or manager
+
+    def uninstall(self):
+        """
+        Uninstall the plugin via the application's PluginManager.
+        """
+        if not self.uninstall_enabled:
+            return "Uninstall is not enabled for this plugin."
+        
+        if hasattr(self, "app") and self.app:
+            return self.app.get_plugin_manager().uninstall_plugin(self)
+        return "Application instance not found; cannot uninstall."
 
     def create_main_screen(self):
         """
@@ -89,13 +114,29 @@ class BasePlugin:
         """
         self.status = status
 
-    def get_status(self):
+    def check_status(self):
         """
-        Get the status of the plugin.
-
-        :return: The status of the plugin.
+        Operational check for the plugin. 
+        Subclasses should override this to provide real-time status.
+        :return: Standard status string (OK, Info, Warning, Error, Critical)
         """
         return self.status
+
+    def get_status(self):
+        """
+        Get the current status of the plugin, with error handling.
+        :return: Standard status string.
+        """
+        try:
+            status = self.check_status()
+            if status is None:
+                return None
+            # Normalize status to standard capitalization
+            return self.status_map.get(status.lower(), status)
+        except Exception as e:
+            from utils.logger import logger
+            logger.error(f"Status check failed for plugin {self.name}: {e}")
+            return "Warning"
 
     def set_translations(self, translations):
         """
@@ -138,15 +179,16 @@ class BasePlugin:
 
         :return: The alert icon.
         """
+        current_status = self.get_status()
         icon_map = {
-            "Ok": "check.png",
+            "OK": "check.png",
             "Critical": "critical.png",
             "Error": "error.png",
             "Info": "info.png",
             "Warning": "warning.png"
         }
         symbols_img_paths = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "resources", "icons")
-        icon_filename = icon_map.get(self.status)
+        icon_filename = icon_map.get(current_status, "warning.png")
         self.icon_light = f"{symbols_img_paths}/{icon_filename}"
         self.icon_dark = f"{symbols_img_paths}/{icon_filename}"
         self.icon_alert = self.create_icon(size=(16, 16))

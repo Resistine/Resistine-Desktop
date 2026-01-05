@@ -33,10 +33,11 @@ class Plugin(BasePlugin):
     def __init__(self, app):
         super().__init__(
             id="001",
+            version="2025.01.01",
             order=1,
             name="Dashboard",
-            status="OK",
-            description="This plugin allows you to view the dashboard.",
+            status=None,
+            description="See your protection status at a glance.",
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Dashboard", "ES": "Panel", "FR": "Tableau de bord"},
             icon_light_path=os.path.join(
@@ -45,9 +46,11 @@ class Plugin(BasePlugin):
             icon_dark_path=os.path.join(
                 os.path.dirname(os.path.realpath(__file__)), "home_dark.png"
             ),
+            uninstall_enabled=False,
         )
         self.app = app
         self._dashboard_logo_image = None
+        self.status = self.get_status()
 
     def _effective_appearance_mode(self) -> str:
         # Use user_interface's detection if available
@@ -115,7 +118,15 @@ class Plugin(BasePlugin):
         else:
             plugin_list = self.app.plugin_list
 
-        plugins = plugin_list[1:]  # omit Dashboard itself
+        # Filter plugins for the grid:
+        # Exclude current plugin (Dashboard)
+        # Exclude hidden plugins using order -1
+        # Order 0 is allowed (e.g. Login)
+        plugins = [
+            p for p in plugin_list 
+            if p.get_name() != "Dashboard" and p.order != -1
+        ]
+        
         rows, cols = self.app.calculate_rows_cols(len(plugins))
 
         content_frame = customtkinter.CTkFrame(
@@ -150,6 +161,10 @@ class Plugin(BasePlugin):
         for index, plugin in enumerate(plugins):
             r = index // len(cols)
             c = index % len(cols)
-            self.app.create_plugin_card(r, c, self.grid_frame, plugin)
+            self.app.create_plugin_card(
+                r, c, self.grid_frame, plugin, 
+                show_description=True,
+                truncate=True
+            )
 
         return self.main_frame

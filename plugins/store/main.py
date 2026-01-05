@@ -1,11 +1,8 @@
-## @file plugins/store/main.py
-## @package store_plugin
-## @namespace store_plugin
-##@class store_plugin::Plugin
+# @file plugins/store/main.py
 """ "
 Store plugin for the Resistine application.
 This plugin allows users to download and install new plugins from the store.
-Author: Peres J. and the Resistine Team
+Author: Peres J., P3 and the Resistine Team
 Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
@@ -37,9 +34,10 @@ class Plugin(BasePlugin):
         """
         super().__init__(
             id="004",
-            order=4,
+            version="2025.01.01",
+            order=100,
             name="Store",
-            status="OK",
+            status=None,
             description="This plugin allows you to download and install new plugins.",
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Store", "ES": "Tienda", "FR": "Magasin"},
@@ -49,22 +47,23 @@ class Plugin(BasePlugin):
             icon_dark_path=os.path.join(
                 os.path.dirname(os.path.realpath(__file__)), "store_dark.png"
             ),
+            uninstall_enabled=False,
         )
         self.app = app
+        self.status = self.get_status()
 
     def create_main_screen(self):
         """
         @brief Create the main screen for the Store plugin.
-        Create the main screen for the Store plugin.
         """
         self.main_frame = customtkinter.CTkFrame(
             self.app, corner_radius=0, fg_color="transparent"
         )
         self.main_frame.grid_columnconfigure(0, weight=1)
         self.main_frame.grid_rowconfigure(0, weight=1)
-        self.main_frame.grid_rowconfigure(1, weight=4)
+        self.main_frame.grid_rowconfigure(1, weight=10)
 
-        # Title frame (20% of the total height)
+        # Title frame
         self.title_frame = customtkinter.CTkFrame(
             self.main_frame, corner_radius=0, fg_color="transparent"
         )
@@ -76,164 +75,148 @@ class Plugin(BasePlugin):
             text="Store",
             font=customtkinter.CTkFont(size=30, weight="bold"),
         )
-        self.title_label.grid(row=0, column=0, padx=20, pady=20)
+        self.title_label.grid(row=0, column=0, padx=20, pady=(20, 10))
 
-        # Grid frame (80% of the total height)
-        self.grid_frame = customtkinter.CTkFrame(
+        # --- Plugins grid ---
+        manager = self.app.get_plugin_manager()
+        installed_plugins = manager.plugins
+        available_remote = manager.get_available_plugins()
+        
+        # Wrap remote plugins that aren't installed yet
+        installed_ids = {p.id for p in installed_plugins}
+        
+        plugins = list(installed_plugins)
+        for rp in available_remote:
+            if rp["id"] not in installed_ids:
+                plugins.append(RemotePluginWrapper(self.app, rp))
+        
+        # Sort by name for the store
+        plugins = sorted(plugins, key=lambda x: x.get_name())
+        
+        rows, cols = self.app.calculate_rows_cols(len(plugins))
+
+        content_frame = customtkinter.CTkScrollableFrame(
             self.main_frame, corner_radius=0, fg_color="transparent"
         )
-        self.grid_frame.grid(row=1, column=0, sticky="nsew")
-        self.grid_frame.grid_columnconfigure((0, 1, 2), weight=1)
-        self.grid_frame.grid_rowconfigure((0, 1, 2), weight=1)
+        content_frame.grid(row=1, column=0, sticky="nsew", padx=15, pady=0)
+        content_frame.grid_columnconfigure(0, weight=1)
 
-        def resize_image(image_path, size):
-            """
-            Resize an image to the specified size.
-
-            :param image_path: Path to the image file.
-            :param size: Tuple specifying the new size (width, height).
-            :return: Resized image.
-            """
-            image = Image.open(image_path)
-            resized_image = image.resize(size, Image.Resampling.LANCZOS)
-            return resized_image
-
-        def create_option(
-            row, column, main_icon_light_path, main_icon_dark_path, title, main_event
-        ):
-            """
-            Create an option in the grid with an icon and title.
-
-            :param row: Row position in the grid.
-            :param column: Column position in the grid.
-            :param main_icon_light_path: Path to the light mode icon.
-            :param main_icon_dark_path: Path to the dark mode icon.
-            :param title: Title of the option.
-            :param main_event: Event to be triggered on click.
-            """
-            # Create a frame for the option
-            frame = customtkinter.CTkFrame(
-                self.grid_frame, corner_radius=10, fg_color=("gray75", "gray25")
+        self.grid_frame = self.app.create_grid(
+            frame=content_frame,
+            row=0,
+            column=0,
+            plugins=plugins,
+            color="transparent",
+            sticky="nsew",
+        )
+        
+        # Helper for extra buttons
+        def inject_store_buttons(container, p):
+            # Info Button
+            info_btn = customtkinter.CTkButton(
+                container,
+                text="Info",
+                height=26,
+                width=80,
+                command=lambda p=p: self.app.show_readme(p) if not isinstance(p, RemotePluginWrapper) else self.show_remote_info(p),
+                fg_color=("#3B8ED0", "#1F6AA5"),
+                hover_color=("#367EBB", "#144870"),
+                font=customtkinter.CTkFont(size=12)
             )
-            frame.grid(row=row, column=column, padx=20, pady=20, sticky="nsew")
-            frame.grid_columnconfigure(0, weight=1)
-            frame.grid_rowconfigure((1, 1), weight=10)
+            info_btn.grid(row=0, column=0, padx=5, pady=5)
 
-            # Create a container frame for the main icon and title
-            icon_title_frame = customtkinter.CTkFrame(frame, fg_color="transparent")
+            if isinstance(p, RemotePluginWrapper):
+                # Install Button
+                install_btn = customtkinter.CTkButton(
+                    container,
+                    text="Install",
+                    height=26,
+                    width=80,
+                    command=lambda p=p: self.handle_install(p),
+                    fg_color=("#2ECC71", "#27AE60"),
+                    hover_color=("#27AE60", "#219150"),
+                    font=customtkinter.CTkFont(size=12)
+                )
+                install_btn.grid(row=0, column=1, padx=5, pady=5)
+            else:
+                # Uninstall Button (if enabled)
+                if getattr(p, "uninstall_enabled", True):
+                    uninstall_btn = customtkinter.CTkButton(
+                        container,
+                        text="Uninstall",
+                        height=26,
+                        width=80,
+                        command=lambda p=p: self.handle_uninstall(p),
+                        fg_color="transparent",
+                        text_color="#FF4444",
+                        hover_color=("#ffebee", "#2b1b1b"),
+                        font=customtkinter.CTkFont(size=12)
+                    )
+                    uninstall_btn.grid(row=0, column=1, padx=5, pady=5)
 
-            # Center the icon_title_frame vertically and horizontally
-            icon_title_frame.grid(
-                row=0, column=0, padx=10, pady=(20, 20), sticky="nsew"
+        for index, plugin in enumerate(plugins):
+            r = index // len(cols)
+            c = index % len(cols)
+            self.app.create_plugin_card(
+                r, c, self.grid_frame, plugin, 
+                show_description=True, 
+                extra_buttons_func=inject_store_buttons
             )
-            icon_title_frame.grid_columnconfigure(0, weight=1)
-            icon_title_frame.grid_rowconfigure(0, weight=1)
-            icon_title_frame.grid_rowconfigure(1, weight=1)
-
-            # Resize the main icon
-            resized_main_icon_light = resize_image(main_icon_light_path, (90, 90))
-            resized_main_icon_dark = resize_image(main_icon_dark_path, (90, 90))
-
-            # Main icon
-            main_icon_image = customtkinter.CTkImage(
-                light_image=Image.open(main_icon_light_path),
-                dark_image=Image.open(main_icon_dark_path),
-                size=(30, 30),
-            )
-            main_icon_label = customtkinter.CTkLabel(
-                icon_title_frame, image=main_icon_image, text=""
-            )
-            main_icon_label.grid(row=0, column=0, padx=(10, 10), pady=(30, 10))
-
-            # Title label
-            title_label = customtkinter.CTkLabel(
-                icon_title_frame,
-                text=title,
-                font=customtkinter.CTkFont(size=14, weight="bold"),
-            )
-            title_label.grid(row=1, column=0, padx=0, pady=5)
-
-            # Make the entire frame clickable to open the URL
-            frame.bind("<Button-1>", lambda event: main_event())
-            main_icon_label.bind("<Button-1>", lambda event: main_event())
-            title_label.bind("<Button-1>", lambda event: main_event())
-
-        # For testing purposes
-        web_url = "https://www.resistine.com/"
-        file_id = "1PjHT9rgXSenzT7lBTy6CijPMn0kqNpAG"
-        direct_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-
-        def event_redirect(url):
-            """
-            Redirect to the specified URL in a new browser tab.
-
-            :param url: URL to redirect to.
-            """
-            webbrowser.open_new_tab(url)
-
-        def event_download(url):
-            """
-            Download a plugin from the specified URL.
-
-            :param url: URL to download the plugin from.
-            """
-            PluginManager(self.app).download_plugin(url)
-
-        product_image_light_path = os.path.join(
-            os.path.dirname(os.path.realpath(__file__)), "store_dark.png"
-        )
-        product_image_dark_path = os.path.join(
-            os.path.dirname(os.path.realpath(__file__)), "store_light.png"
-        )
-
-        # Create options
-        create_option(
-            0,
-            0,
-            product_image_light_path,
-            product_image_dark_path,
-            "Odoo",
-            lambda: event_redirect(web_url),
-        )
-        create_option(
-            0,
-            1,
-            product_image_light_path,
-            product_image_dark_path,
-            "ClamAV",
-            lambda: event_redirect(web_url),
-        )
-        create_option(
-            0,
-            2,
-            product_image_light_path,
-            product_image_dark_path,
-            "Wazuh",
-            lambda: event_redirect(f"https://{DNS_SERVER}/"),
-        )
-        create_option(
-            1,
-            0,
-            product_image_light_path,
-            product_image_dark_path,
-            "VPN",
-            lambda: event_redirect(web_url),
-        )
-        create_option(
-            1,
-            1,
-            product_image_light_path,
-            product_image_dark_path,
-            "Calculator",
-            lambda: event_download(direct_url),
-        )
-        create_option(
-            1,
-            2,
-            product_image_light_path,
-            product_image_dark_path,
-            "Plugin 2",
-            lambda: event_download(direct_url),
-        )
 
         return self.main_frame
+
+    def handle_install(self, remote_plugin):
+        """Handle plugin installation."""
+        from utils.logger import logger
+        logger.info(f"Store: Initiating installation for {remote_plugin.get_name()} ({remote_plugin.id})")
+        
+        success, message = self.app.get_plugin_manager().download_plugin(remote_plugin.url, remote_plugin.id, remote_plugin.get_name())
+        logger.info(f"Store: Installation result for {remote_plugin.get_name()}: success={success}, msg={message}")
+        
+        if success:
+            self.app.show_notification(message, type="info")
+            # Refresh screen
+            self.app.select_frame_by_name("frame_Store")
+        else:
+            self.app.show_notification(message, type="error")
+
+    def show_remote_info(self, remote_plugin):
+        """Show info for a remote plugin."""
+        import tkinter.messagebox
+        tkinter.messagebox.showinfo(remote_plugin.get_name(), remote_plugin.get_description())
+
+    def handle_uninstall(self, plugin):
+        """Handle plugin uninstallation with confirmation."""
+        import tkinter.messagebox
+        if tkinter.messagebox.askyesno("Uninstall Plugin", f"Are you sure you want to uninstall {plugin.get_name()}?"):
+             success, res = self.app.get_plugin_manager().uninstall_plugin(plugin)
+             if success:
+                 self.app.show_notification(res, type="info")
+                 # Refresh screen
+                 self.app.select_frame_by_name("frame_Store")
+             else:
+                 self.app.show_notification(res, type="error")
+
+class RemotePluginWrapper:
+    """Wrapper to make remote plugin dicts compatible with AppUI.create_plugin_card."""
+    def __init__(self, app, data):
+        self.app = app
+        self.id = data["id"]
+        self.name = data["name"]
+        self.description = data["description"]
+        self.url = data["url"]
+        self.order = data.get("order", 99)
+        self.status = "Available"
+        
+    def get_name(self): return self.name
+    def get_description(self): return self.description
+    def get_status(self): return self.status
+
+    def get_icon(self):
+        # Return default store icon for remote plugins since we can't reliably load remote icons yet
+        icons_path = os.path.dirname(os.path.realpath(__file__))
+        return customtkinter.CTkImage(
+            light_image=Image.open(os.path.join(icons_path, "store_light.png")),
+            dark_image=Image.open(os.path.join(icons_path, "store_dark.png")),
+            size=(50, 50)
+        )

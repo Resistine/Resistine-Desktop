@@ -92,17 +92,29 @@ class Plugin(BasePlugin):
     def __init__(self, app):
         super().__init__(
             id="008",
+            version="2025.01.01",
             order=8,
             name="VPN",
+            status=None, # Default status
             description="VPN Management",
             supported_systems=["Windows", "Darwin", "Linux"],
-            status="OK",
             translations={"US": "VPN", "ES": "VPN", "FR": "VPN"},
             icon_light_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "vpn_light.png"),
             icon_dark_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "vpn_dark.png"),
         )
         self.app = app
-        self.current_selected_conf = None # Track selection
+        self.config_dir = wireguard_folder
+        self.active_interface = None
+        # Set status dynamically after super().__init__
+        self.status = self.get_status()   
+
+    def check_status(self):
+        """Dynamic check of the VPN status."""
+        if my_vpn_status == "Running":
+            return "OK"
+        elif my_vpn_status == "Connecting":
+            return "Info"
+        return "Warning"
 
     def get_selected_conf_file_name(self):
         """

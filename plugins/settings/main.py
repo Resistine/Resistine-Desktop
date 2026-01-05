@@ -28,9 +28,10 @@ class Plugin(BasePlugin):
     def __init__(self, app):
         super().__init__(
             id="010",
-            order=10,
+            version="2025.01.01",
+            order=102,
             name="Settings",
-            status="OK",
+            status=None,
             description="This plugin allows you to configure your account settings.",
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Settings", "ES": "Configuracion", "FR": "Paramètres"},
@@ -40,8 +41,10 @@ class Plugin(BasePlugin):
             icon_dark_path=os.path.join(
                 os.path.dirname(os.path.realpath(__file__)), "settings_dark.png"
             ),
+            uninstall_enabled=False,
         )
         self.app = app
+        self.status = self.get_status()
 
     def _effective_appearance_mode(self) -> str:
         mode = customtkinter.get_appearance_mode()
