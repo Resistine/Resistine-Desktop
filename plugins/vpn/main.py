@@ -296,6 +296,7 @@ class Plugin(BasePlugin):
     def get_configuration_values(self, tunnel_name):
         
         conf_file_path = os.path.join(wireguard_folder, f"{tunnel_name}.conf")
+        logger.info(f"Reading configuration from: {conf_file_path}")    
         data = {}
 
         if os.path.exists(conf_file_path):
@@ -312,6 +313,10 @@ class Plugin(BasePlugin):
                         elif key == 'endpoint': 
                             data['endpoint'] = value
                             if ':' in value: data['port'] = value.split(':')[-1]
+        elif not os.path.exists(wireguard_folder):
+            logger.error(f"WireGuard configuration directory does not exist: {wireguard_folder}")
+        else:
+            logger.error(f"Configuration file not found: {conf_file_path}") 
         return data
 
     def activate_tunnel(self, tunnel_name):
@@ -319,6 +324,7 @@ class Plugin(BasePlugin):
         Activates/Deactivates VPN tunnel.
         Handles MacOS specifically via helper functions.
         """
+        logger.info(f"Toggling VPN tunnel: {tunnel_name}")
         global my_vpn_status, active_client_name
         
         if not tunnel_name:
@@ -365,7 +371,30 @@ class Plugin(BasePlugin):
 
         # --- Windows Implementation ---
         elif platform.system() == "Windows":
-            pass
+            #pass
+            
+            logger.info(f"Windows: Toggling {tunnel_name}")
+
+            if my_vpn_status == "Running":
+                success = stop_vpn(tunnel_name)
+                if success:
+                    my_vpn_status = "Stopped"
+                    active_client_name = None
+                    self.app.show_notification("VPN stopped", type="info")
+                else:
+                    self.app.show_notification("Failed to stop VPN", type="error")
+                    logger.error("Failed to stop VPN")
+            else:
+                success = start_vpn(tunnel_name)
+                if success:
+                    my_vpn_status = "Running"
+                    active_client_name = tunnel_name
+                    self.app.show_notification("VPN started", type="info")
+                else:
+                    self.app.show_notification("Failed to start VPN", type="error")
+                    logger.error("Failed to start VPN")
+
+            self.update_plugin(self.id)
 
         # --- Linux Implementation ---
         elif platform.system() == "Linux":
