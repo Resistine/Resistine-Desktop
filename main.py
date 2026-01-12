@@ -121,7 +121,14 @@ if __name__ == "__main__":
         DEBUG = True
 
     # Configure logging based on configuration and flags
-    setup_logging(level=args.log_level)
+    # Default to DEBUG level if we are in DEBUG/IDE mode and no explicit level was provided
+    log_level = args.log_level
+    if DEBUG and log_level == "INFO":
+        # Check if the user explicitly requested INFO via command line
+        if not any(arg in sys.argv for arg in ["-l", "--log-level"]):
+            log_level = "DEBUG"
+
+    setup_logging(level=log_level)
 
     # DEPRECATED: Debug window flag can be set from code only
     if DEBUG_WINDOW:
