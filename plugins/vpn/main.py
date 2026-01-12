@@ -223,8 +223,12 @@ class Plugin(BasePlugin):
         warning_bg = ("#E6F4EA", "#1E3A2F") if is_connected else ("#FDEDEC", "#3E2B2C")
         warning_fg = ("#1E8E3E", "#2CC985") if is_connected else ("#C5221F", "#FF474C")
 
+        # Get theme corner radius
+        from customtkinter import ThemeManager
+        corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
+        
         # --- 1. Connection Status Bar ---
-        status_frame = customtkinter.CTkFrame(scroll_frame, corner_radius=15, fg_color=("#ffffff", "#141414"), border_width=1, border_color=("#dddddd", "#333333"))
+        status_frame = customtkinter.CTkFrame(scroll_frame, corner_radius=corner_radius, fg_color=("#ffffff", "#141414"), border_width=1, border_color=("#dddddd", "#333333"))
         status_frame.grid(row=0, column=0, sticky="ew", pady=(10, 5))
         status_frame.grid_columnconfigure(0, weight=1)
         status_frame.grid_columnconfigure(1, weight=1)
@@ -250,7 +254,7 @@ class Plugin(BasePlugin):
         self.vpn_toggle_switch.grid(row=1, column=0, padx=20, pady=(0, 10), sticky="w")
         
         # --- 2. Warning / Info Box ---
-        warning_box = customtkinter.CTkFrame(scroll_frame, corner_radius=10, fg_color=warning_bg)
+        warning_box = customtkinter.CTkFrame(scroll_frame, corner_radius=corner_radius, fg_color=warning_bg)
         warning_box.grid(row=1, column=0, sticky="ew", pady=5)
         
         warning_label = customtkinter.CTkLabel(
@@ -267,7 +271,7 @@ class Plugin(BasePlugin):
         sys_info_label = customtkinter.CTkLabel(scroll_frame, text="CURRENT VPN STATUS", font=customtkinter.CTkFont(family="Inter", size=16, weight="bold"), text_color="#3a7ebf")
         sys_info_label.grid(row=2, column=0, sticky="w", pady=(15, 5))
         
-        info_frame = customtkinter.CTkFrame(scroll_frame, corner_radius=15, fg_color=("#ffffff", "#141414"), border_width=1, border_color=("#dddddd", "#333333"))
+        info_frame = customtkinter.CTkFrame(scroll_frame, corner_radius=corner_radius, fg_color=("#ffffff", "#141414"), border_width=1, border_color=("#dddddd", "#333333"))
         info_frame.grid(row=3, column=0, sticky="ew", pady=(0, 10))
         info_frame.grid_columnconfigure(0, weight=1)
         info_frame.grid_columnconfigure(1, weight=1)
@@ -296,6 +300,7 @@ class Plugin(BasePlugin):
     def get_configuration_values(self, tunnel_name):
         
         conf_file_path = os.path.join(wireguard_folder, f"{tunnel_name}.conf")
+        logger.info(f"Reading configuration from: {conf_file_path}")    
         data = {}
 
         if os.path.exists(conf_file_path):
@@ -312,6 +317,10 @@ class Plugin(BasePlugin):
                         elif key == 'endpoint': 
                             data['endpoint'] = value
                             if ':' in value: data['port'] = value.split(':')[-1]
+        elif not os.path.exists(wireguard_folder):
+            logger.error(f"WireGuard configuration directory does not exist: {wireguard_folder}")
+        else:
+            logger.error(f"Configuration file not found: {conf_file_path}") 
         return data
 
     def activate_tunnel(self, tunnel_name):
@@ -319,6 +328,7 @@ class Plugin(BasePlugin):
         Activates/Deactivates VPN tunnel.
         Handles MacOS specifically via helper functions.
         """
+        logger.info(f"Toggling VPN tunnel: {tunnel_name}")
         global my_vpn_status, active_client_name
         
         if not tunnel_name:
@@ -365,7 +375,30 @@ class Plugin(BasePlugin):
 
         # --- Windows Implementation ---
         elif platform.system() == "Windows":
-            pass
+            #pass
+            
+            logger.info(f"Windows: Toggling {tunnel_name}")
+
+            if my_vpn_status == "Running":
+                success = stop_vpn(tunnel_name)
+                if success:
+                    my_vpn_status = "Stopped"
+                    active_client_name = None
+                    self.app.show_notification("VPN stopped", type="info")
+                else:
+                    self.app.show_notification("Failed to stop VPN", type="error")
+                    logger.error("Failed to stop VPN")
+            else:
+                success = start_vpn(tunnel_name)
+                if success:
+                    my_vpn_status = "Running"
+                    active_client_name = tunnel_name
+                    self.app.show_notification("VPN started", type="info")
+                else:
+                    self.app.show_notification("Failed to start VPN", type="error")
+                    logger.error("Failed to start VPN")
+
+            self.update_plugin(self.id)
 
         # --- Linux Implementation ---
         elif platform.system() == "Linux":
