@@ -135,7 +135,7 @@ class Plugin(BasePlugin):
         )
         content_frame.grid(row=1, column=0, sticky="new", padx=15, pady=0)
         content_frame.grid_columnconfigure(0, weight=1)
-        content_frame.grid_rowconfigure(0, weight=1)
+        content_frame.grid_rowconfigure(0, weight=0)
 
         self.grid_frame = self.app.create_grid(
             frame=content_frame,
