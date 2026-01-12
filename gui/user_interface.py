@@ -119,9 +119,9 @@ class AppUI(customtkinter.CTk):
 
         frame = customtkinter.CTkFrame(
             container_frame,
-            corner_radius=corner_radius,
+            corner_radius=20,
             fg_color=card_bg,
-            border_width=0,
+            border_width=1,
             border_color=border_color,
         )
         # Let the card size naturally (fixed heights caused clipping on some layouts),
@@ -130,7 +130,10 @@ class AppUI(customtkinter.CTk):
         frame.grid_columnconfigure(0, weight=1)
         frame.grid_rowconfigure(0, weight=7, minsize=85)  # top content (~70%)
         frame.grid_rowconfigure(1, weight=0)  # divider line
-        frame.grid_rowconfigure(2, weight=3, minsize=45)  # bottom status (~30%)
+        frame.grid_rowconfigure(2, weight=3, minsize=45)  # status row
+        if extra_buttons_func:
+            frame.grid_rowconfigure(3, weight=0)  # divider line (for buttons)
+            frame.grid_rowconfigure(4, weight=0, minsize=40)  # buttons row
 
         # --- Top content row (HStack): icon panel | text panel ---
         top_row = customtkinter.CTkFrame(frame, fg_color="transparent")
@@ -144,9 +147,6 @@ class AppUI(customtkinter.CTk):
         icon_panel.grid(row=0, column=0, sticky="nsew", padx=(12, 0), pady=(10, 10))
         icon_panel.grid_rowconfigure(0, weight=1)
         icon_panel.grid_columnconfigure(0, weight=1)
-
-        v_div = customtkinter.CTkFrame(top_row, fg_color=divider_color, width=1, corner_radius=0)
-        v_div.grid(row=0, column=1, sticky="ns")
 
         text_panel = customtkinter.CTkFrame(top_row, fg_color="transparent")
         text_panel.grid(row=0, column=2, sticky="nsew", padx=(12, 12), pady=(8, 8))
@@ -163,15 +163,12 @@ class AppUI(customtkinter.CTk):
         title_label = customtkinter.CTkLabel(
             text_panel,
             text=plugin.get_name(),
-            font=customtkinter.CTkFont(size=14, weight="bold"),
+            font=customtkinter.CTkFont(size=17, weight="bold"),
             text_color=text_primary,
-            anchor="w",
-            justify="left",
+            anchor="center",
+            justify="center",
         )
         title_label.grid(row=0, column=0, sticky="ew", pady=(0, 6))
-
-        title_div = customtkinter.CTkFrame(text_panel, fg_color=divider_color, height=1, corner_radius=0)
-        title_div.grid(row=1, column=0, sticky="ew")
 
         # Description area (optional)
         if show_description:
@@ -182,12 +179,12 @@ class AppUI(customtkinter.CTk):
             desc_label = customtkinter.CTkLabel(
                 text_panel,
                 text=description,
-                font=customtkinter.CTkFont(size=12),
+                font=customtkinter.CTkFont(size=15),
                 text_color=text_primary,
-                justify="left",
-                anchor="w",
+                justify="center",
+                anchor="center",
             )
-            desc_label.grid(row=2, column=0, sticky="nw", pady=(10, 0))
+            desc_label.grid(row=2, column=0, sticky="ew", pady=(10, 0))
             
             # Update wraplength to match text_panel width dynamically
             # This works for both regular frames (dashboard) and scrollable frames (store)
@@ -214,21 +211,13 @@ class AppUI(customtkinter.CTk):
             except (tk.TclError, AttributeError, RuntimeError):
                 pass
 
-        # Divider between top content and bottom status row
-        h_div = customtkinter.CTkFrame(frame, fg_color=divider_color, height=1, corner_radius=0)
-        h_div.grid(row=1, column=0, sticky="ew")
-
         # --- Bottom status row (full width) ---
         status_row = customtkinter.CTkFrame(frame, fg_color="transparent")
         status_row.grid(row=2, column=0, sticky="nsew")
         status_row.grid_columnconfigure(0, weight=1)
-        status_row.grid_columnconfigure(1, weight=0)
 
         status_left = customtkinter.CTkFrame(status_row, fg_color="transparent")
-        status_left.grid(row=0, column=0, sticky="w", padx=12, pady=8)
-
-        status_right = customtkinter.CTkFrame(status_row, fg_color="transparent")
-        status_right.grid(row=0, column=1, sticky="e", padx=12, pady=6)
+        status_left.grid(row=0, column=0, padx=12, pady=8)
 
         current_status = plugin.get_status()
         if current_status is not None:
@@ -246,7 +235,7 @@ class AppUI(customtkinter.CTk):
             status_label = customtkinter.CTkLabel(
                 status_left,
                 text=f"Status: {str(current_status).title()}",
-                font=customtkinter.CTkFont(size=12, weight="normal"),
+                font=customtkinter.CTkFont(size=15, weight="normal"),
                 text_color=text_primary,
             )
             status_label.pack(side="left")
@@ -265,14 +254,22 @@ class AppUI(customtkinter.CTk):
                 last_check_label = customtkinter.CTkLabel(
                     status_left,
                     text=f"  •  Last check: {last_check}",
-                    font=customtkinter.CTkFont(size=12, weight="normal"),
+                    font=customtkinter.CTkFont(size=15, weight="normal"),
                     text_color=text_primary,
                 )
                 last_check_label.pack(side="left")
 
-        # Extra Buttons (Store actions, etc.) live in the bottom bar (right side)
+        # Extra Buttons (Store actions, etc.) on a separate row
         if extra_buttons_func:
-            extra_buttons_func(status_right, plugin)
+            # Buttons row
+            buttons_row = customtkinter.CTkFrame(frame, fg_color="transparent")
+            buttons_row.grid(row=4, column=0, sticky="ew")
+            buttons_row.grid_columnconfigure(0, weight=1)
+            
+            buttons_container = customtkinter.CTkFrame(buttons_row, fg_color="transparent")
+            buttons_container.grid(row=0, column=0, padx=12, pady=8)
+            
+            extra_buttons_func(buttons_container, plugin)
 
         # Click Interaction
         def on_click(_event=None):
