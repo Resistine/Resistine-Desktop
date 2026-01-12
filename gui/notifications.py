@@ -9,9 +9,11 @@ class ToastNotification(customtkinter.CTkFrame):
     """
 
     def __init__(self, master, text, icon_color="green", **kwargs):
+        # Get theme corner radius
+        corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
         super().__init__(
             master,
-            corner_radius=20,
+            corner_radius=corner_radius,
             fg_color=("gray90", "gray20"),
             border_width=1,
             border_color=("gray80", "gray30"),

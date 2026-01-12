@@ -167,11 +167,19 @@ class BasePlugin:
 
     def get_icon(self):
         """
-        Get the icon of the plugin.
+        Get the icon of the plugin (20x20 for sidebar).
 
         :return: The icon of the plugin.
         """
         return self.icon
+
+    def get_icon_large(self):
+        """
+        Get a larger icon of the plugin (50x50 for dashboard/store cards).
+
+        :return: A larger icon of the plugin.
+        """
+        return self.create_icon(size=(50, 50))
 
     def get_icon_alert(self):
         """
@@ -191,7 +199,7 @@ class BasePlugin:
         icon_filename = icon_map.get(current_status, "warning.png")
         self.icon_light = f"{symbols_img_paths}/{icon_filename}"
         self.icon_dark = f"{symbols_img_paths}/{icon_filename}"
-        self.icon_alert = self.create_icon(size=(16, 16))
+        self.icon_alert = self.create_icon(size=(50, 50))
         return self.icon_alert
 
     def set_button(self, button):

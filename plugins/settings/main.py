@@ -93,9 +93,13 @@ class Plugin(BasePlugin):
 
         appearance_mode = self._effective_appearance_mode()
         text_color = "#ffffff" if appearance_mode == "Dark" else "#000000"
+        
+        # Get theme corner radius
+        from customtkinter import ThemeManager
+        corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
 
         # --- Profile card ---
-        profile_card = customtkinter.CTkFrame(self.frame_5, corner_radius=12)
+        profile_card = customtkinter.CTkFrame(self.frame_5, corner_radius=corner_radius)
         profile_card.grid(row=0, column=0, padx=20, pady=(16, 10), sticky="ew")
         profile_card.grid_columnconfigure(0, weight=1)
 
@@ -128,7 +132,7 @@ class Plugin(BasePlugin):
         ).grid(row=1, column=0, padx=16, pady=(0, 14), sticky="w")
 
         # --- API key card ---
-        api_card = customtkinter.CTkFrame(self.frame_5, corner_radius=12)
+        api_card = customtkinter.CTkFrame(self.frame_5, corner_radius=corner_radius)
         api_card.grid(row=1, column=0, padx=20, pady=10, sticky="ew")
         api_card.grid_columnconfigure(0, weight=1)
 
@@ -174,7 +178,7 @@ class Plugin(BasePlugin):
         self.status_label.grid(row=0, column=1, padx=(12, 0), sticky="w")
 
         # --- Appearance card (System/Light/Dark only) ---
-        appearance_card = customtkinter.CTkFrame(self.frame_5, corner_radius=12)
+        appearance_card = customtkinter.CTkFrame(self.frame_5, corner_radius=corner_radius)
         appearance_card.grid(row=2, column=0, padx=20, pady=(10, 16), sticky="ew")
         appearance_card.grid_columnconfigure(0, weight=1)
 

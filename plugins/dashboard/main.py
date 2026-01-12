@@ -84,6 +84,7 @@ class Plugin(BasePlugin):
         text_primary = ThemeManager.theme["CTkLabel"]["text_color"]
         accent_blue = ThemeManager.theme["CTkButton"]["border_color"]
         text_secondary = ThemeManager.theme["CTkLabel"]["text_color"]  # Fallback
+        corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
 
         # Container for the protection panel to control its width and centering
         protection_container = customtkinter.CTkFrame(
@@ -94,7 +95,7 @@ class Plugin(BasePlugin):
 
         protection_panel = customtkinter.CTkFrame(
             protection_container,
-            corner_radius=15,
+            corner_radius=corner_radius,
             fg_color="transparent",
             border_width=0,
             width=600,  # Decreased width

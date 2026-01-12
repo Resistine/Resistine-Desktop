@@ -223,8 +223,12 @@ class Plugin(BasePlugin):
         warning_bg = ("#E6F4EA", "#1E3A2F") if is_connected else ("#FDEDEC", "#3E2B2C")
         warning_fg = ("#1E8E3E", "#2CC985") if is_connected else ("#C5221F", "#FF474C")
 
+        # Get theme corner radius
+        from customtkinter import ThemeManager
+        corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
+        
         # --- 1. Connection Status Bar ---
-        status_frame = customtkinter.CTkFrame(scroll_frame, corner_radius=15, fg_color=("#ffffff", "#141414"), border_width=1, border_color=("#dddddd", "#333333"))
+        status_frame = customtkinter.CTkFrame(scroll_frame, corner_radius=corner_radius, fg_color=("#ffffff", "#141414"), border_width=1, border_color=("#dddddd", "#333333"))
         status_frame.grid(row=0, column=0, sticky="ew", pady=(10, 5))
         status_frame.grid_columnconfigure(0, weight=1)
         status_frame.grid_columnconfigure(1, weight=1)
@@ -250,7 +254,7 @@ class Plugin(BasePlugin):
         self.vpn_toggle_switch.grid(row=1, column=0, padx=20, pady=(0, 10), sticky="w")
         
         # --- 2. Warning / Info Box ---
-        warning_box = customtkinter.CTkFrame(scroll_frame, corner_radius=10, fg_color=warning_bg)
+        warning_box = customtkinter.CTkFrame(scroll_frame, corner_radius=corner_radius, fg_color=warning_bg)
         warning_box.grid(row=1, column=0, sticky="ew", pady=5)
         
         warning_label = customtkinter.CTkLabel(
@@ -267,7 +271,7 @@ class Plugin(BasePlugin):
         sys_info_label = customtkinter.CTkLabel(scroll_frame, text="CURRENT VPN STATUS", font=customtkinter.CTkFont(family="Inter", size=16, weight="bold"), text_color="#3a7ebf")
         sys_info_label.grid(row=2, column=0, sticky="w", pady=(15, 5))
         
-        info_frame = customtkinter.CTkFrame(scroll_frame, corner_radius=15, fg_color=("#ffffff", "#141414"), border_width=1, border_color=("#dddddd", "#333333"))
+        info_frame = customtkinter.CTkFrame(scroll_frame, corner_radius=corner_radius, fg_color=("#ffffff", "#141414"), border_width=1, border_color=("#dddddd", "#333333"))
         info_frame.grid(row=3, column=0, sticky="ew", pady=(0, 10))
         info_frame.grid_columnconfigure(0, weight=1)
         info_frame.grid_columnconfigure(1, weight=1)
