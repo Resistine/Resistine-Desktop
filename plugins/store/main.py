@@ -214,9 +214,14 @@ class RemotePluginWrapper:
 
     def get_icon(self):
         # Return default store icon for remote plugins since we can't reliably load remote icons yet
+        # Note: icon_light.png contains dark icon (for light backgrounds)
+        #       icon_dark.png contains light/white icon (for dark backgrounds)
+        # So we need to swap them for CTkImage (same as base_plugin.py does)
         icons_path = os.path.dirname(os.path.realpath(__file__))
+        light_image = Image.open(os.path.join(icons_path, "store_light.png"))
+        dark_image = Image.open(os.path.join(icons_path, "store_dark.png"))
         return customtkinter.CTkImage(
-            light_image=Image.open(os.path.join(icons_path, "store_light.png")),
-            dark_image=Image.open(os.path.join(icons_path, "store_dark.png")),
+            light_image=dark_image,  # Use dark icon (white) for light mode
+            dark_image=light_image,  # Use light icon (dark) for dark mode
             size=(50, 50)
         )
