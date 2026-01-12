@@ -126,22 +126,22 @@ class AppUI(customtkinter.CTk):
         )
         # Let the card size naturally (fixed heights caused clipping on some layouts),
         # but keep the intended 70/30 split via weights + minimum sizes.
-        frame.grid(row=row, column=column, padx=15, pady=15, sticky="nsew")
+        frame.grid(row=row, column=column, padx=10, pady=10, sticky="nsew")
         frame.grid_columnconfigure(0, weight=1)
-        frame.grid_rowconfigure(0, weight=7, minsize=110)  # top content (~70%)
+        frame.grid_rowconfigure(0, weight=7, minsize=85)  # top content (~70%)
         frame.grid_rowconfigure(1, weight=0)  # divider line
-        frame.grid_rowconfigure(2, weight=3, minsize=55)  # bottom status (~30%)
+        frame.grid_rowconfigure(2, weight=3, minsize=45)  # bottom status (~30%)
 
         # --- Top content row (HStack): icon panel | text panel ---
         top_row = customtkinter.CTkFrame(frame, fg_color="transparent")
         top_row.grid(row=0, column=0, sticky="nsew")
         top_row.grid_rowconfigure(0, weight=1)
-        top_row.grid_columnconfigure(0, weight=32, uniform="top")  # icon panel (~32%)
+        top_row.grid_columnconfigure(0, weight=3, uniform="top")  # icon panel (~32%)
         top_row.grid_columnconfigure(1, weight=0, minsize=1)       # divider
-        top_row.grid_columnconfigure(2, weight=68, uniform="top")  # text panel (~68%)
+        top_row.grid_columnconfigure(2, weight=7, uniform="top")  # text panel (~68%)
 
         icon_panel = customtkinter.CTkFrame(top_row, fg_color="transparent")
-        icon_panel.grid(row=0, column=0, sticky="nsew", padx=(16, 0), pady=(14, 14))
+        icon_panel.grid(row=0, column=0, sticky="nsew", padx=(12, 0), pady=(10, 10))
         icon_panel.grid_rowconfigure(0, weight=1)
         icon_panel.grid_columnconfigure(0, weight=1)
 
@@ -149,9 +149,9 @@ class AppUI(customtkinter.CTk):
         v_div.grid(row=0, column=1, sticky="ns")
 
         text_panel = customtkinter.CTkFrame(top_row, fg_color="transparent")
-        text_panel.grid(row=0, column=2, sticky="nsew", padx=(16, 16), pady=(12, 12))
+        text_panel.grid(row=0, column=2, sticky="nsew", padx=(12, 12), pady=(8, 8))
         text_panel.grid_columnconfigure(0, weight=1)
-        text_panel.grid_rowconfigure(2, weight=1)  # description expands if present
+        text_panel.grid_rowconfigure(2, weight=0)  # description doesn't expand - only takes needed space
 
         # Icon (centered)
         icon_image = plugin.get_icon_large() if hasattr(plugin, "get_icon_large") else plugin.get_icon()
@@ -163,12 +163,12 @@ class AppUI(customtkinter.CTk):
         title_label = customtkinter.CTkLabel(
             text_panel,
             text=plugin.get_name(),
-            font=customtkinter.CTkFont(size=16, weight="bold"),
+            font=customtkinter.CTkFont(size=14, weight="bold"),
             text_color=text_primary,
             anchor="w",
             justify="left",
         )
-        title_label.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        title_label.grid(row=0, column=0, sticky="ew", pady=(0, 6))
 
         title_div = customtkinter.CTkFrame(text_panel, fg_color=divider_color, height=1, corner_radius=0)
         title_div.grid(row=1, column=0, sticky="ew")
@@ -184,11 +184,35 @@ class AppUI(customtkinter.CTk):
                 text=description,
                 font=customtkinter.CTkFont(size=12),
                 text_color=text_primary,
-                wraplength=260,
                 justify="left",
                 anchor="w",
             )
             desc_label.grid(row=2, column=0, sticky="nw", pady=(10, 0))
+            
+            # Update wraplength to match text_panel width dynamically
+            # This works for both regular frames (dashboard) and scrollable frames (store)
+            def update_wraplength(event=None):
+                try:
+                    # Get the actual width of the text_panel
+                    panel_width = text_panel.winfo_width()
+                    if panel_width > 1:  # Only update if panel has been rendered
+                        # Account for padding: 16px left + 16px right = 32px total
+                        available_width = max(100, panel_width - 32)  # Minimum 100px width
+                        desc_label.configure(wraplength=available_width)
+                except (tk.TclError, AttributeError, RuntimeError):
+                    # Widget may have been destroyed or not yet created - ignore
+                    pass
+            
+            # Bind to text_panel for updates when it resizes
+            # Also bind to frame to catch initial layout and parent container changes
+            try:
+                text_panel.bind("<Configure>", update_wraplength)
+                frame.bind("<Configure>", update_wraplength)
+                # Set initial wraplength after widgets are rendered
+                # Use after_idle to ensure it runs after layout is complete
+                frame.after_idle(update_wraplength)
+            except (tk.TclError, AttributeError, RuntimeError):
+                pass
 
         # Divider between top content and bottom status row
         h_div = customtkinter.CTkFrame(frame, fg_color=divider_color, height=1, corner_radius=0)
@@ -201,10 +225,10 @@ class AppUI(customtkinter.CTk):
         status_row.grid_columnconfigure(1, weight=0)
 
         status_left = customtkinter.CTkFrame(status_row, fg_color="transparent")
-        status_left.grid(row=0, column=0, sticky="w", padx=16, pady=12)
+        status_left.grid(row=0, column=0, sticky="w", padx=12, pady=8)
 
         status_right = customtkinter.CTkFrame(status_row, fg_color="transparent")
-        status_right.grid(row=0, column=1, sticky="e", padx=16, pady=8)
+        status_right.grid(row=0, column=1, sticky="e", padx=12, pady=6)
 
         current_status = plugin.get_status()
         if current_status is not None:
@@ -424,8 +448,8 @@ class AppUI(customtkinter.CTk):
                     (max_width, logo_height), Image.Resampling.LANCZOS
                 )
                 
-                # Add rounded corners to the image
-                logo_img = self._add_rounded_corners(logo_img, 16)
+                # Add rounded corners to the Resistine Logo
+                logo_img = self._add_rounded_corners(logo_img, 15)
                 
                 logo_image = customtkinter.CTkImage(
                     light_image=logo_img,
