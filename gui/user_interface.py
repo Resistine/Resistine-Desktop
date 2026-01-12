@@ -131,8 +131,8 @@ class AppUI(customtkinter.CTk):
         # Layout config: Row 2 (Description) expands to push buttons to bottom
         content_container.grid_rowconfigure(2, weight=1)
 
-        # Icon
-        icon_image = plugin.get_icon()
+        # Icon - use larger icon for cards (50x50), fallback to regular icon (20x20)
+        icon_image = plugin.get_icon_large() if hasattr(plugin, 'get_icon_large') else plugin.get_icon()
         if icon_image:
             icon_label = customtkinter.CTkLabel(
                 content_container, image=icon_image, text=""
