@@ -109,6 +109,9 @@ class Plugin(BasePlugin):
             color="transparent",
             sticky="nsew",
         )
+        self.grid_frame.grid_columnconfigure(
+            tuple(range(len(cols))), weight=1, uniform="cols"
+        )
         
         # Helper for extra buttons
         def inject_store_buttons(container, p):
