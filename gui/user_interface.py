@@ -113,6 +113,9 @@ class AppUI(customtkinter.CTk):
         hover_bg = cls._get_theme_color("CTkButton", "hover_color")
         accent_blue = cls._get_theme_color("CTkButton", "border_color")
         corner_radius = cls._get_theme_corner_radius()
+        divider_color = ThemeManager.theme.get("Theme", {}).get(
+            "divider_color", ("#E5E7EB", "#2A2A2A")
+        )
 
         frame = customtkinter.CTkFrame(
             container_frame,
@@ -121,90 +124,131 @@ class AppUI(customtkinter.CTk):
             border_width=0,
             border_color=border_color,
         )
-        frame.grid(row=row, column=column, padx=10, pady=10, sticky="nsew")
+        # Let the card size naturally (fixed heights caused clipping on some layouts),
+        # but keep the intended 70/30 split via weights + minimum sizes.
+        frame.grid(row=row, column=column, padx=15, pady=15, sticky="nsew")
         frame.grid_columnconfigure(0, weight=1)
+        frame.grid_rowconfigure(0, weight=7, minsize=110)  # top content (~70%)
+        frame.grid_rowconfigure(1, weight=0)  # divider line
+        frame.grid_rowconfigure(2, weight=3, minsize=55)  # bottom status (~30%)
 
-        content_container = customtkinter.CTkFrame(frame, fg_color="transparent")
-        content_container.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
-        content_container.grid_columnconfigure(0, weight=1)
-        
-        # Layout config: Row 2 (Description) expands to push buttons to bottom
-        content_container.grid_rowconfigure(2, weight=1)
+        # --- Top content row (HStack): icon panel | text panel ---
+        top_row = customtkinter.CTkFrame(frame, fg_color="transparent")
+        top_row.grid(row=0, column=0, sticky="nsew")
+        top_row.grid_rowconfigure(0, weight=1)
+        top_row.grid_columnconfigure(0, weight=32, uniform="top")  # icon panel (~32%)
+        top_row.grid_columnconfigure(1, weight=0, minsize=1)       # divider
+        top_row.grid_columnconfigure(2, weight=68, uniform="top")  # text panel (~68%)
 
-        # Icon - use larger icon for cards (50x50), fallback to regular icon (20x20)
-        icon_image = plugin.get_icon_large() if hasattr(plugin, 'get_icon_large') else plugin.get_icon()
+        icon_panel = customtkinter.CTkFrame(top_row, fg_color="transparent")
+        icon_panel.grid(row=0, column=0, sticky="nsew", padx=(16, 0), pady=(14, 14))
+        icon_panel.grid_rowconfigure(0, weight=1)
+        icon_panel.grid_columnconfigure(0, weight=1)
+
+        v_div = customtkinter.CTkFrame(top_row, fg_color=divider_color, width=1, corner_radius=0)
+        v_div.grid(row=0, column=1, sticky="ns")
+
+        text_panel = customtkinter.CTkFrame(top_row, fg_color="transparent")
+        text_panel.grid(row=0, column=2, sticky="nsew", padx=(16, 16), pady=(12, 12))
+        text_panel.grid_columnconfigure(0, weight=1)
+        text_panel.grid_rowconfigure(2, weight=1)  # description expands if present
+
+        # Icon (centered)
+        icon_image = plugin.get_icon_large() if hasattr(plugin, "get_icon_large") else plugin.get_icon()
         if icon_image:
-            icon_label = customtkinter.CTkLabel(
-                content_container, image=icon_image, text=""
-            )
-            icon_label.grid(row=0, column=0, pady=(0, 10))
+            icon_label = customtkinter.CTkLabel(icon_panel, image=icon_image, text="")
+            icon_label.grid(row=0, column=0, sticky="nsew")
 
-        # Title
+        # Title strip
         title_label = customtkinter.CTkLabel(
-            content_container,
+            text_panel,
             text=plugin.get_name(),
             font=customtkinter.CTkFont(size=16, weight="bold"),
             text_color=text_primary,
+            anchor="w",
+            justify="left",
         )
-        title_label.grid(row=1, column=0, pady=(0, 5))
+        title_label.grid(row=0, column=0, sticky="ew", pady=(0, 8))
 
-        # Description (Optional)
+        title_div = customtkinter.CTkFrame(text_panel, fg_color=divider_color, height=1, corner_radius=0)
+        title_div.grid(row=1, column=0, sticky="ew")
+
+        # Description area (optional)
         if show_description:
             description = plugin.get_description()
             if truncate and len(description) > 60:
                 description = description[:57] + "..."
-                
+
             desc_label = customtkinter.CTkLabel(
-                content_container,
+                text_panel,
                 text=description,
                 font=customtkinter.CTkFont(size=12),
                 text_color=text_primary,
-                wraplength=280, # Wider wraplength
-                justify="center"
+                wraplength=260,
+                justify="left",
+                anchor="w",
             )
-            desc_label.grid(row=2, column=0, pady=(0, 10))
+            desc_label.grid(row=2, column=0, sticky="nw", pady=(10, 0))
 
-        # Status
+        # Divider between top content and bottom status row
+        h_div = customtkinter.CTkFrame(frame, fg_color=divider_color, height=1, corner_radius=0)
+        h_div.grid(row=1, column=0, sticky="ew")
+
+        # --- Bottom status row (full width) ---
+        status_row = customtkinter.CTkFrame(frame, fg_color="transparent")
+        status_row.grid(row=2, column=0, sticky="nsew")
+        status_row.grid_columnconfigure(0, weight=1)
+        status_row.grid_columnconfigure(1, weight=0)
+
+        status_left = customtkinter.CTkFrame(status_row, fg_color="transparent")
+        status_left.grid(row=0, column=0, sticky="w", padx=16, pady=12)
+
+        status_right = customtkinter.CTkFrame(status_row, fg_color="transparent")
+        status_right.grid(row=0, column=1, sticky="e", padx=16, pady=8)
+
         current_status = plugin.get_status()
-        
-        # Placeholder for status to ensure consistent height
-        status_container = customtkinter.CTkFrame(
-            content_container, fg_color="transparent", height=25
-        )
-        status_container.grid(row=3, column=0, pady=(0, 10))
-        status_container.grid_propagate(False) # Keep fixed height even if empty
-        status_container.grid_columnconfigure(0, weight=1)
-
         if current_status is not None:
-            # Inner frame for centering content
-            status_inner = customtkinter.CTkFrame(status_container, fg_color="transparent")
-            status_inner.pack(expand=True)
+            status_dot_color = cls.status_colors.get(str(current_status).lower(), "#808080")
 
-            status_dot_color = cls.status_colors.get(current_status.lower(), "#808080")
-            
             status_dot = customtkinter.CTkFrame(
-                status_inner,
+                status_left,
                 width=10,
                 height=10,
                 corner_radius=5,
                 fg_color=status_dot_color,
             )
-            status_dot.pack(side="left", padx=(0, 5))
+            status_dot.pack(side="left", padx=(0, 8))
 
-            status_text = current_status.title()
             status_label = customtkinter.CTkLabel(
-                status_inner,
-                text=status_text,
-                font=customtkinter.CTkFont(size=11),
+                status_left,
+                text=f"Status: {str(current_status).title()}",
+                font=customtkinter.CTkFont(size=12, weight="normal"),
                 text_color=text_primary,
             )
             status_label.pack(side="left")
 
-        # Extra Buttons (Uninstall, Info, etc.)
+            # Optional secondary info (best-effort)
+            last_check = None
+            if hasattr(plugin, "get_last_check"):
+                try:
+                    last_check = plugin.get_last_check()
+                except Exception:
+                    last_check = None
+            elif hasattr(plugin, "last_check"):
+                last_check = getattr(plugin, "last_check", None)
+
+            if last_check:
+                last_check_label = customtkinter.CTkLabel(
+                    status_left,
+                    text=f"  •  Last check: {last_check}",
+                    font=customtkinter.CTkFont(size=12, weight="normal"),
+                    text_color=text_primary,
+                )
+                last_check_label.pack(side="left")
+
+        # Extra Buttons (Store actions, etc.) live in the bottom bar (right side)
         if extra_buttons_func:
-            buttons_frame = customtkinter.CTkFrame(content_container, fg_color="transparent")
-            buttons_frame.grid(row=4, column=0, sticky="ew")
-            extra_buttons_func(buttons_frame, plugin)
+            extra_buttons_func(status_right, plugin)
 
         # Click Interaction
         def on_click(_event=None):
@@ -321,8 +365,9 @@ class AppUI(customtkinter.CTk):
 
         container = customtkinter.CTkFrame(frame, corner_radius=0, fg_color=color)
         container.grid(row=row, column=column, sticky=sticky)
-        container.grid_columnconfigure(rows_tuple, weight=1)
-        container.grid_rowconfigure(cols_tuple, weight=1)
+        # Configure grid dimensions correctly (columns -> cols_tuple, rows -> rows_tuple)
+        container.grid_columnconfigure(cols_tuple, weight=1)
+        container.grid_rowconfigure(rows_tuple, weight=1)
 
         # Fill grid (logic from old function, just establishing grid cells)
         for r in rows_tuple:
