@@ -5,7 +5,7 @@ import tkinter as tk
 
 import customtkinter
 from customtkinter import ThemeManager
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from gui.notifications import ToastNotification
 from plugins.plugin_manager import PluginManager
@@ -28,6 +28,21 @@ class AppUI(customtkinter.CTk):
         "critical": "#8B0000"   # Dark Red
     }    
 
+    @staticmethod
+    def _add_rounded_corners(image, radius):
+        """Add rounded corners to a PIL Image."""
+        # Create a mask with rounded corners
+        mask = Image.new('L', image.size, 0)
+        draw = ImageDraw.Draw(mask)
+        draw.rounded_rectangle([(0, 0), image.size], radius=radius, fill=255)
+        
+        # Apply the mask to the image
+        output = Image.new('RGBA', image.size, (0, 0, 0, 0))
+        output.paste(image, (0, 0))
+        output.putalpha(mask)
+        
+        return output
+
     @classmethod
     def create_tab_button(cls, frame, name, icon, command=None, row=0, col=0):
         """Create a sleek, theme-aware sidebar button."""
@@ -37,9 +52,10 @@ class AppUI(customtkinter.CTk):
         # font_family = AppUI.get_font()
 
         # Using the color tuples directly allows CTk to handle theme switching
+        corner_radius = cls._get_theme_corner_radius()
         btn = customtkinter.CTkButton(
             frame,
-            corner_radius=10,
+            corner_radius=corner_radius,
             height=45,
             border_spacing=12,
             text=name,
@@ -96,12 +112,13 @@ class AppUI(customtkinter.CTk):
         text_primary = cls._get_theme_color("CTkLabel", "text_color")
         hover_bg = cls._get_theme_color("CTkButton", "hover_color")
         accent_blue = cls._get_theme_color("CTkButton", "border_color")
+        corner_radius = cls._get_theme_corner_radius()
 
         frame = customtkinter.CTkFrame(
             container_frame,
-            corner_radius=15,
+            corner_radius=corner_radius,
             fg_color=card_bg,
-            border_width=1,
+            border_width=0,
             border_color=border_color,
         )
         frame.grid(row=row, column=column, padx=10, pady=10, sticky="nsew")
@@ -114,8 +131,8 @@ class AppUI(customtkinter.CTk):
         # Layout config: Row 2 (Description) expands to push buttons to bottom
         content_container.grid_rowconfigure(2, weight=1)
 
-        # Icon
-        icon_image = plugin.get_icon()
+        # Icon - use larger icon for cards (50x50), fallback to regular icon (20x20)
+        icon_image = plugin.get_icon_large() if hasattr(plugin, 'get_icon_large') else plugin.get_icon()
         if icon_image:
             icon_label = customtkinter.CTkLabel(
                 content_container, image=icon_image, text=""
@@ -199,10 +216,10 @@ class AppUI(customtkinter.CTk):
                 curr.select_frame_by_name(f"frame_{plugin.get_name()}")
 
         def on_enter(_e):
-            frame.configure(border_color=accent_blue, fg_color=hover_bg)
+            frame.configure(border_width=1, border_color=accent_blue, fg_color=hover_bg)
 
         def on_leave(_e):
-            frame.configure(border_color=border_color, fg_color=card_bg)
+            frame.configure(border_width=0, border_color=border_color, fg_color=card_bg)
 
         # Bind events
         def bind_recursive(widget):
@@ -283,6 +300,14 @@ class AppUI(customtkinter.CTk):
             return None
 
     @classmethod
+    def _get_theme_corner_radius(cls):
+        """Helper to get the global corner radius from theme."""
+        try:
+            return ThemeManager.theme["Theme"]["corner_radius"]
+        except KeyError:
+            return 15  # Default fallback
+
+    @classmethod
     def calculate_rows_cols(cls, num_plugins):
         """Calculate rows and columns for a grid layout."""
         cols = math.ceil(math.sqrt(num_plugins))
@@ -353,6 +378,10 @@ class AppUI(customtkinter.CTk):
                 logo_img = logo_img.resize(
                     (max_width, logo_height), Image.Resampling.LANCZOS
                 )
+                
+                # Add rounded corners to the image
+                logo_img = self._add_rounded_corners(logo_img, 16)
+                
                 logo_image = customtkinter.CTkImage(
                     light_image=logo_img,
                     dark_image=logo_img,
