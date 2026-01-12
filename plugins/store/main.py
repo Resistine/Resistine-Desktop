@@ -213,10 +213,26 @@ class RemotePluginWrapper:
     def get_status(self): return self.status
 
     def get_icon(self):
-        # Return default store icon for remote plugins since we can't reliably load remote icons yet
+        # Return default store icon for remote plugins (20x20 for sidebar)
+        # Note: icon_light.png contains dark icon (for light backgrounds)
+        #       icon_dark.png contains light/white icon (for dark backgrounds)
+        # So we need to swap them for CTkImage (same as base_plugin.py does)
         icons_path = os.path.dirname(os.path.realpath(__file__))
+        light_image = Image.open(os.path.join(icons_path, "store_light.png"))
+        dark_image = Image.open(os.path.join(icons_path, "store_dark.png"))
         return customtkinter.CTkImage(
-            light_image=Image.open(os.path.join(icons_path, "store_light.png")),
-            dark_image=Image.open(os.path.join(icons_path, "store_dark.png")),
-            size=(50, 50)
+            light_image=dark_image,  # Use dark icon (white) for light mode
+            dark_image=light_image,  # Use light icon (dark) for dark mode
+            size=(20, 20)  # Sidebar icon size
+        )
+    
+    def get_icon_large(self):
+        # Return larger icon for dashboard/store cards (50x50)
+        icons_path = os.path.dirname(os.path.realpath(__file__))
+        light_image = Image.open(os.path.join(icons_path, "store_light.png"))
+        dark_image = Image.open(os.path.join(icons_path, "store_dark.png"))
+        return customtkinter.CTkImage(
+            light_image=dark_image,  # Use dark icon (white) for light mode
+            dark_image=light_image,  # Use light icon (dark) for dark mode
+            size=(50, 50)  # Card icon size
         )

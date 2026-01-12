@@ -140,13 +140,17 @@ class Plugin(BasePlugin):
         )
         self.title_label.grid(row=1, column=0, pady=(0, 25))
 
+        # Get theme corner radius
+        from customtkinter import ThemeManager
+        corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
+        
         # 3. Email Entry
         self.email_entry = customtkinter.CTkEntry(
             self.content_frame,
             placeholder_text="Enter your email address",
             width=400,
             height=45,
-            corner_radius=4,
+            corner_radius=corner_radius,
             border_width=1,
             font=customtkinter.CTkFont(family="Inter", size=14),
         )
@@ -216,7 +220,7 @@ class Plugin(BasePlugin):
             command=self.skip_login,
             width=80,
             height=30,
-            corner_radius=15,
+            corner_radius=corner_radius,
             fg_color="transparent",
             border_width=1,
             border_color=("#CCCCCC", "#444444"),
@@ -272,7 +276,7 @@ class Plugin(BasePlugin):
             placeholder_text="Enter OTP",
             width=400,
             height=45,
-            corner_radius=4,
+            corner_radius=corner_radius,
             show="*",
             font=customtkinter.CTkFont(family="Inter", size=14),
         )
