@@ -52,9 +52,10 @@ class AppUI(customtkinter.CTk):
         # font_family = AppUI.get_font()
 
         # Using the color tuples directly allows CTk to handle theme switching
+        corner_radius = cls._get_theme_corner_radius()
         btn = customtkinter.CTkButton(
             frame,
-            corner_radius=10,
+            corner_radius=corner_radius,
             height=45,
             border_spacing=12,
             text=name,
@@ -111,10 +112,11 @@ class AppUI(customtkinter.CTk):
         text_primary = cls._get_theme_color("CTkLabel", "text_color")
         hover_bg = cls._get_theme_color("CTkButton", "hover_color")
         accent_blue = cls._get_theme_color("CTkButton", "border_color")
+        corner_radius = cls._get_theme_corner_radius()
 
         frame = customtkinter.CTkFrame(
             container_frame,
-            corner_radius=15,
+            corner_radius=corner_radius,
             fg_color=card_bg,
             border_width=0,
             border_color=border_color,
@@ -296,6 +298,14 @@ class AppUI(customtkinter.CTk):
             return ThemeManager.theme[widget_type][attribute]
         except KeyError:
             return None
+
+    @classmethod
+    def _get_theme_corner_radius(cls):
+        """Helper to get the global corner radius from theme."""
+        try:
+            return ThemeManager.theme["Theme"]["corner_radius"]
+        except KeyError:
+            return 15  # Default fallback
 
     @classmethod
     def calculate_rows_cols(cls, num_plugins):
