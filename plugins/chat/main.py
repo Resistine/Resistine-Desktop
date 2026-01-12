@@ -103,6 +103,10 @@ class Plugin(BasePlugin):
 
     def create_main_screen(self):
         """Create the main screen for the Chat plugin (bubbles + animated typing)."""
+        # Get theme corner radius
+        from customtkinter import ThemeManager
+        corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
+        
         self.second_frame = customtkinter.CTkFrame(
             self.app,
             corner_radius=0,
@@ -145,7 +149,7 @@ class Plugin(BasePlugin):
             font=customtkinter.CTkFont(size=15, weight="normal"),
             fg_color="transparent",
             text_color=fg_color,
-            corner_radius=20,
+            corner_radius=corner_radius,
             border_width=0,
         )
         self.chat_box.grid(row=0, column=0, padx=20, pady=(30, 10), sticky="nsew")
@@ -187,7 +191,7 @@ class Plugin(BasePlugin):
         # Input container
         container = customtkinter.CTkFrame(
             self.second_frame,
-            corner_radius=12,
+            corner_radius=corner_radius,
             fg_color="transparent",
         )
         container.grid(row=1, column=0, padx=20, pady=(0, 20), sticky="ew")
@@ -197,7 +201,7 @@ class Plugin(BasePlugin):
         self.chat_entry = customtkinter.CTkEntry(
             container,
             placeholder_text="Message Resistine AI...",
-            corner_radius=12,
+            corner_radius=corner_radius,
             border_width=0,
             height=40,
             font=customtkinter.CTkFont(size=14),
@@ -211,7 +215,7 @@ class Plugin(BasePlugin):
             container,
             text="Send",
             command=self.send_message,
-            corner_radius=12,
+            corner_radius=corner_radius,
             height=40,
             width=80,
             font=customtkinter.CTkFont(size=14, weight="bold"),
@@ -261,7 +265,7 @@ class Plugin(BasePlugin):
         bubble_frame = customtkinter.CTkFrame(
             self.chat_box,
             fg_color=bubble_color,
-            corner_radius=15,
+            corner_radius=corner_radius,
         )
         bubble_text = customtkinter.CTkLabel(
             bubble_frame,
