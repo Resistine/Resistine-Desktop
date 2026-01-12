@@ -116,7 +116,7 @@ class AppUI(customtkinter.CTk):
             container_frame,
             corner_radius=15,
             fg_color=card_bg,
-            border_width=1,
+            border_width=0,
             border_color=border_color,
         )
         frame.grid(row=row, column=column, padx=10, pady=10, sticky="nsew")
@@ -214,10 +214,10 @@ class AppUI(customtkinter.CTk):
                 curr.select_frame_by_name(f"frame_{plugin.get_name()}")
 
         def on_enter(_e):
-            frame.configure(border_color=accent_blue, fg_color=hover_bg)
+            frame.configure(border_width=1, border_color=accent_blue, fg_color=hover_bg)
 
         def on_leave(_e):
-            frame.configure(border_color=border_color, fg_color=card_bg)
+            frame.configure(border_width=0, border_color=border_color, fg_color=card_bg)
 
         # Bind events
         def bind_recursive(widget):
