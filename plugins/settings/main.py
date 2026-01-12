@@ -60,7 +60,11 @@ class Plugin(BasePlugin):
                     capture_output=True,
                     text=True,
                 )
-                return "Dark" if result.returncode == 0 and "Dark" in result.stdout else "Light"
+                return (
+                    "Dark"
+                    if result.returncode == 0 and "Dark" in result.stdout
+                    else "Light"
+                )
             except Exception:
                 return "Light"
 
@@ -107,18 +111,7 @@ class Plugin(BasePlugin):
         )
         profile_title.grid(row=0, column=0, padx=16, pady=(14, 8), sticky="w")
 
-        email_file_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))),
-            "utils",
-            "email-settings.txt",
-        )
-        email = "Authenticated via API"
-        if os.path.exists(email_file_path):
-            try:
-                with open(email_file_path, "r") as file:
-                    email = file.read().strip() or email
-            except Exception:
-                pass
+        email = settings.get("auth", "email", "None")
 
         customtkinter.CTkLabel(
             profile_card,
@@ -148,12 +141,46 @@ class Plugin(BasePlugin):
         )
         self.api_key_entry.grid(row=1, column=0, padx=16, pady=(0, 10), sticky="ew")
 
+        customtkinter.CTkLabel(
+            api_card,
+            text=get_text("settings.apibase.label"),
+            font=customtkinter.CTkFont(size=14),
+            text_color=text_color,
+        ).grid(row=2, column=0, padx=16, pady=(10, 5), sticky="w")
+
+        self.api_base_entry = customtkinter.CTkEntry(
+            api_card,
+            placeholder_text=get_text("settings.apibase.placeholder"),
+            height=38,
+        )
+        self.api_base_entry.grid(row=3, column=0, padx=16, pady=(0, 10), sticky="ew")
+
         existing_key = settings.get_secret("chat", "openai_api_key")
         if existing_key:
             self.api_key_entry.insert(0, existing_key)
 
+        existing_base = settings.get("chat", "openai_base_url")
+        if existing_base:
+            self.api_base_entry.insert(0, existing_base)
+
+        # Disable Typing Animation Checkbox
+        self.disable_animation_var = customtkinter.BooleanVar(
+            value=settings.get("chat", "disable_animation", False)
+        )
+        self.disable_animation_checkbox = customtkinter.CTkCheckBox(
+            api_card,
+            text=get_text("settings.chat.disable_animation"),
+            variable=self.disable_animation_var,
+            onvalue=True,
+            offvalue=False,
+            command=self.save_animation_setting,
+        )
+        self.disable_animation_checkbox.grid(
+            row=4, column=0, padx=16, pady=(0, 10), sticky="w"
+        )
+
         btn_row = customtkinter.CTkFrame(api_card, fg_color="transparent")
-        btn_row.grid(row=2, column=0, padx=16, pady=(0, 14), sticky="ew")
+        btn_row.grid(row=5, column=0, padx=16, pady=(0, 14), sticky="ew")
         btn_row.grid_columnconfigure(0, weight=0)
         btn_row.grid_columnconfigure(1, weight=1)
 
@@ -193,7 +220,9 @@ class Plugin(BasePlugin):
             text_color=text_color,
         ).grid(row=1, column=0, padx=16, pady=(0, 6), sticky="w")
 
-        self.appearance_mode_var = customtkinter.StringVar(value=customtkinter.get_appearance_mode())
+        self.appearance_mode_var = customtkinter.StringVar(
+            value=customtkinter.get_appearance_mode()
+        )
         appearance_menu = customtkinter.CTkOptionMenu(
             appearance_card,
             values=["System", "Light", "Dark"],
@@ -205,25 +234,43 @@ class Plugin(BasePlugin):
 
         return self.frame_5
 
+    def save_animation_setting(self):
+        """Save the disable animation setting."""
+        disable = self.disable_animation_var.get()
+        settings.set("chat", "disable_animation", disable)
+
     def save_api_key(self):
         api_key = self.api_key_entry.get().strip()
+        api_base = self.api_base_entry.get().strip()
+
         if not api_key:
             return
 
-        success = settings.set_secret("chat", "openai_api_key", api_key)
-        if success:
-            self.status_label.configure(text=get_text("settings.apikey.saved_success"), text_color="green")
+        success_key = settings.set_secret("chat", "openai_api_key", api_key)
+        # Always set/update base_url, even if empty (to allow clearing it)
+        success_base = settings.set(
+            "chat", "openai_base_url", api_base if api_base else None
+        )
+
+        if success_key and success_base:
+            self.status_label.configure(
+                text=get_text("settings.apikey.saved_success"), text_color="green"
+            )
 
             # Reinitialize the chat plugin's OpenAI client if it's loaded
             if hasattr(self.app, "plugin_list"):
                 for plugin in self.app.plugin_list:
-                    if plugin.get_name() == "Chat" and hasattr(plugin, "reinitialize_client"):
+                    if plugin.get_name() == "Chat" and hasattr(
+                        plugin, "reinitialize_client"
+                    ):
                         plugin.reinitialize_client()
                         break
 
             self.app.after(2500, lambda: self.status_label.configure(text=""))
         else:
-            self.status_label.configure(text=get_text("settings.apikey.saved_error"), text_color="red")
+            self.status_label.configure(
+                text=get_text("settings.apikey.saved_error"), text_color="red"
+            )
 
     def change_appearance_mode(self, new_appearance_mode: str):
         try:
