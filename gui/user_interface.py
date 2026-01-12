@@ -5,7 +5,7 @@ import tkinter as tk
 
 import customtkinter
 from customtkinter import ThemeManager
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from gui.notifications import ToastNotification
 from plugins.plugin_manager import PluginManager
@@ -27,6 +27,21 @@ class AppUI(customtkinter.CTk):
         "error": "#FF0000",     # Red
         "critical": "#8B0000"   # Dark Red
     }    
+
+    @staticmethod
+    def _add_rounded_corners(image, radius):
+        """Add rounded corners to a PIL Image."""
+        # Create a mask with rounded corners
+        mask = Image.new('L', image.size, 0)
+        draw = ImageDraw.Draw(mask)
+        draw.rounded_rectangle([(0, 0), image.size], radius=radius, fill=255)
+        
+        # Apply the mask to the image
+        output = Image.new('RGBA', image.size, (0, 0, 0, 0))
+        output.paste(image, (0, 0))
+        output.putalpha(mask)
+        
+        return output
 
     @classmethod
     def create_tab_button(cls, frame, name, icon, command=None, row=0, col=0):
@@ -353,6 +368,10 @@ class AppUI(customtkinter.CTk):
                 logo_img = logo_img.resize(
                     (max_width, logo_height), Image.Resampling.LANCZOS
                 )
+                
+                # Add rounded corners to the image
+                logo_img = self._add_rounded_corners(logo_img, 16)
+                
                 logo_image = customtkinter.CTkImage(
                     light_image=logo_img,
                     dark_image=logo_img,
