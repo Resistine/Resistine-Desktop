@@ -66,52 +66,39 @@ class Plugin(BasePlugin):
         return mode
 
     def create_main_screen(self):
-        # Modern main frame with proper spacing
-        self.main_frame = customtkinter.CTkFrame(
+        # Use a ScrollableFrame for the dashboard to prevent clipping on smaller screens
+        self.main_frame = customtkinter.CTkScrollableFrame(
             self.app,
             corner_radius=0,
             fg_color="transparent",
         )
         self.main_frame.grid_columnconfigure(0, weight=1)
-        self.main_frame.grid_rowconfigure(0, weight=0)  # protection panel
-        self.main_frame.grid_rowconfigure(1, weight=0)  # grid
-        self.main_frame.grid_rowconfigure(2, weight=1)  # spacer to push content up
-
+        
+        # We don't need fixed row weights in a scrollable frame as much, 
+        # but we'll ensure the grid is clean.
+        
         appearance_mode = self._effective_appearance_mode()
         is_dark = appearance_mode == "Dark"
 
         # --- Protection panel (Sleek SOC-style) ---
-        text_primary = ThemeManager.theme["CTkLabel"]["text_color"]
         accent_blue = ThemeManager.theme["CTkButton"]["border_color"]
-        text_secondary = ThemeManager.theme["CTkLabel"]["text_color"]  # Fallback
-        corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
 
-        # Container for the protection panel to control its width and centering
-        protection_container = customtkinter.CTkFrame(
-            self.main_frame, fg_color="transparent"
-        )
-        protection_container.grid(row=0, column=0, sticky="ew", padx=20, pady=(15, 0))
-        protection_container.grid_columnconfigure(0, weight=1)
+        # Add a top spacer to move content down and away from the window title bar/header
+        top_margin_spacer = customtkinter.CTkLabel(self.main_frame, text="", height=30)
+        top_margin_spacer.grid(row=0, column=0, sticky="ew")
 
-        protection_panel = customtkinter.CTkFrame(
-            protection_container,
-            corner_radius=corner_radius,
-            fg_color="transparent",
-            border_width=0,
-            width=600,  # Decreased width
-        )
-        protection_panel.grid(row=0, column=0, sticky="n")  # Center horizontally
-        protection_panel.grid_columnconfigure(0, weight=1)
-        protection_panel.grid_propagate(True)
-
+        # Simplified protection panel - directly in main_frame
         protection_label = customtkinter.CTkLabel(
-            protection_panel,
+            self.main_frame,
             text="You are protected!",
-            font=customtkinter.CTkFont(family="Inter", size=22, weight="bold"),
+            font=customtkinter.CTkFont(family="Inter", size=26, weight="bold"),
             text_color=accent_blue,
+            height=80, # Explicit height to prevent text clipping
             justify="center",
+            anchor="center",
         )
-        protection_label.grid(row=0, column=0, sticky="ew", padx=40, pady=(15, 5))
+        # Place at row 1 (below spacer)
+        protection_label.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 20))
 
         # --- Plugins grid ---
         if not hasattr(self.app, "plugin_list") or not self.app.plugin_list:
@@ -133,9 +120,9 @@ class Plugin(BasePlugin):
         content_frame = customtkinter.CTkFrame(
             self.main_frame, corner_radius=0, fg_color="transparent"
         )
-        content_frame.grid(row=1, column=0, sticky="new", padx=15, pady=0)
+        # Place grid at row 2
+        content_frame.grid(row=2, column=0, sticky="new", padx=15, pady=0)
         content_frame.grid_columnconfigure(0, weight=1)
-        content_frame.grid_rowconfigure(0, weight=0)
 
         self.grid_frame = self.app.create_grid(
             frame=content_frame,
@@ -145,10 +132,6 @@ class Plugin(BasePlugin):
             color="transparent",
             sticky="nsew",
         )
-        self.grid_frame.grid_columnconfigure(
-            tuple(range(len(cols))), weight=1, uniform="cols"
-        )
-        self.grid_frame.grid_rowconfigure(tuple(range(len(rows))), weight=0)
 
         def open_plugin(p):
             # Preserve existing functionality: use app frame switching (updates sidebar state)
