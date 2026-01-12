@@ -1,6 +1,6 @@
 # @file plugins/chat/main.py
 """
-This module contains the main functionality for the Chat plugin.
+Chat Plugin
 The plugin allows users to chat with the AI assistant.
 Author: Peres J., P3 and the Resistine Team
 Copyright (c) Resistine 2025

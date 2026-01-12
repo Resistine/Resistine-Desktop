@@ -1,3 +1,12 @@
+##@file plugins/chat/markdown_bubble.py
+"""
+Markdown Bubble
+This file contains the MarkdownBubble class, which is used to display markdown content in a bubble.
+Author: P3 and the Resistine Team
+Copyright (c) Resistine 2025
+Licensed under the GNU General Public License v2 or later
+"""
+
 import os
 import sys
 import tkinter as tk
@@ -42,7 +51,7 @@ class MarkdownBubble(customtkinter.CTkFrame):
                         if res.returncode == 0 and "Dark" in res.stdout
                         else "Light"
                     )
-                except:
+                except Exception:
                     appearance_mode = "Light"
             else:
                 appearance_mode = "Light"  # Default fallback
