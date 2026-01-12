@@ -101,14 +101,14 @@ class AppUI(customtkinter.CTk):
         else:
             button.configure(fg_color="transparent", border_width=0)
 
+
     @classmethod
     def create_plugin_card(cls, row, column, container_frame, plugin, show_description=False, extra_buttons_func=None, truncate=False):
         """
-        Create a plugin card with theme-aware colors.
+        Create a plugin card with theme-aware colors and a clean split layout.
         """
         card_bg = cls._get_theme_color("CTkFrame", "fg_color")
         border_color = cls._get_theme_color("CTkFrame", "border_color")
-        accent_green = cls._get_theme_color("CTkCheckBox", "fg_color")
         text_primary = cls._get_theme_color("CTkLabel", "text_color")
         hover_bg = cls._get_theme_color("CTkButton", "hover_color")
         accent_blue = cls._get_theme_color("CTkButton", "border_color")
@@ -119,187 +119,193 @@ class AppUI(customtkinter.CTk):
 
         frame = customtkinter.CTkFrame(
             container_frame,
-            corner_radius=20,
+            corner_radius=corner_radius,
             fg_color=card_bg,
-            border_width=1,
+            border_width=0,  # Start with no border, show on hover
             border_color=border_color,
         )
-        # Let the card size naturally (fixed heights caused clipping on some layouts),
-        # but keep the intended 70/30 split via weights + minimum sizes.
         frame.grid(row=row, column=column, padx=10, pady=10, sticky="nsew")
         frame.grid_columnconfigure(0, weight=1)
-        frame.grid_rowconfigure(0, weight=7, minsize=85)  # top content (~70%)
-        frame.grid_rowconfigure(1, weight=0)  # divider line
-        frame.grid_rowconfigure(2, weight=3, minsize=45)  # status row
+        
+        # Structure rows: Content (~70%), Divider, Status (~30%), [Buttons]
+        frame.grid_rowconfigure(0, weight=7, minsize=90)
+        frame.grid_rowconfigure(1, weight=0) # h_div
+        frame.grid_rowconfigure(2, weight=3, minsize=40)
         if extra_buttons_func:
-            frame.grid_rowconfigure(3, weight=0)  # divider line (for buttons)
-            frame.grid_rowconfigure(4, weight=0, minsize=40)  # buttons row
+            frame.grid_rowconfigure(3, weight=0)
 
-        # --- Top content row (HStack): icon panel | text panel ---
+        # --- Top content row: icon panel | divider | text panel ---
+        # Add top padding to respect rounded corners (prevents child frames from covering rounded top corners)
+        # Use corner_radius + border_width to ensure rounded border is fully visible
+        top_padding = max(corner_radius + 2, 15)  # At least corner_radius + border_width, minimum 15px
         top_row = customtkinter.CTkFrame(frame, fg_color="transparent")
-        top_row.grid(row=0, column=0, sticky="nsew")
+        top_row.grid(row=0, column=0, sticky="nsew", padx=2, pady=(top_padding, 0))
         top_row.grid_rowconfigure(0, weight=1)
-        top_row.grid_columnconfigure(0, weight=3, uniform="top")  # icon panel (~32%)
-        top_row.grid_columnconfigure(1, weight=0, minsize=1)       # divider
-        top_row.grid_columnconfigure(2, weight=7, uniform="top")  # text panel (~68%)
+        top_row.grid_columnconfigure(0, weight=32, uniform="top")
+        top_row.grid_columnconfigure(1, weight=0, minsize=1)
+        top_row.grid_columnconfigure(2, weight=68, uniform="top")
 
+        # Icon Panel
         icon_panel = customtkinter.CTkFrame(top_row, fg_color="transparent")
-        icon_panel.grid(row=0, column=0, sticky="nsew", padx=(12, 0), pady=(10, 10))
+        icon_panel.grid(row=0, column=0, sticky="nsew", padx=(12, 0), pady=10)
         icon_panel.grid_rowconfigure(0, weight=1)
         icon_panel.grid_columnconfigure(0, weight=1)
 
-        text_panel = customtkinter.CTkFrame(top_row, fg_color="transparent")
-        text_panel.grid(row=0, column=2, sticky="nsew", padx=(12, 12), pady=(8, 8))
-        text_panel.grid_columnconfigure(0, weight=1)
-        text_panel.grid_rowconfigure(2, weight=0)  # description doesn't expand - only takes needed space
-
-        # Icon (centered)
-        icon_image = plugin.get_icon_large() if hasattr(plugin, "get_icon_large") else plugin.get_icon()
+        icon_image = plugin.get_icon_large() if hasattr(plugin, 'get_icon_large') else plugin.get_icon()
         if icon_image:
             icon_label = customtkinter.CTkLabel(icon_panel, image=icon_image, text="")
             icon_label.grid(row=0, column=0, sticky="nsew")
 
-        # Title strip
+        # Vertical Divider
+        v_div = customtkinter.CTkFrame(top_row, fg_color=divider_color, width=1, corner_radius=0)
+        v_div.grid(row=0, column=1, sticky="ns")
+
+        # Text Panel (Title + Desc)
+        text_panel = customtkinter.CTkFrame(top_row, fg_color="transparent")
+        text_panel.grid(row=0, column=2, sticky="nsew", padx=12, pady=10)
+        text_panel.grid_columnconfigure(0, weight=1)
+        text_panel.grid_rowconfigure(2, weight=1) # spacer/expand
+
         title_label = customtkinter.CTkLabel(
             text_panel,
             text=plugin.get_name(),
             font=customtkinter.CTkFont(size=17, weight="bold"),
             text_color=text_primary,
-            anchor="center",
-            justify="center",
+            anchor="w"
         )
-        title_label.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        title_label.grid(row=0, column=0, sticky="ew", pady=(0, 4))
 
-        # Description area (optional)
+        title_div = customtkinter.CTkFrame(text_panel, fg_color=divider_color, height=1, corner_radius=0)
+        title_div.grid(row=1, column=0, sticky="ew")
+
         if show_description:
             description = plugin.get_description()
             if truncate and len(description) > 60:
                 description = description[:57] + "..."
-
+            
             desc_label = customtkinter.CTkLabel(
                 text_panel,
                 text=description,
-                font=customtkinter.CTkFont(size=15),
+                font=customtkinter.CTkFont(size=13),
                 text_color=text_primary,
-                justify="center",
-                anchor="center",
+                wraplength=200,
+                justify="left",
+                anchor="nw"
             )
-            desc_label.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+            desc_label.grid(row=2, column=0, sticky="nsew", pady=(8, 0))
+
+            # Debounced wraplength update to prevent crashes during continuous resizing
+            _wraplength_update_id = [None]  # Use list to allow modification in nested function
             
-            # Update wraplength to match text_panel width dynamically
-            # This works for both regular frames (dashboard) and scrollable frames (store)
             def update_wraplength(event=None):
-                try:
-                    # Get the actual width of the text_panel
-                    panel_width = text_panel.winfo_width()
-                    if panel_width > 1:  # Only update if panel has been rendered
-                        # Account for padding: 16px left + 16px right = 32px total
-                        available_width = max(100, panel_width - 32)  # Minimum 100px width
-                        desc_label.configure(wraplength=available_width)
-                except (tk.TclError, AttributeError, RuntimeError):
-                    # Widget may have been destroyed or not yet created - ignore
-                    pass
+                # Cancel any pending update
+                if _wraplength_update_id[0] is not None:
+                    try:
+                        frame.after_cancel(_wraplength_update_id[0])
+                    except:
+                        pass
+                
+                # Schedule update after a short delay (debouncing)
+                def do_update():
+                    try:
+                        # Check if widgets still exist
+                        if not desc_label.winfo_exists() or not text_panel.winfo_exists():
+                            return
+                        w = text_panel.winfo_width()
+                        if w > 1:
+                            desc_label.configure(wraplength=max(100, w - 20))
+                    except (tk.TclError, AttributeError, RuntimeError):
+                        # Widget destroyed or error - ignore
+                        pass
+                    finally:
+                        _wraplength_update_id[0] = None
+                
+                _wraplength_update_id[0] = frame.after(50, do_update)  # 50ms debounce
             
-            # Bind to text_panel for updates when it resizes
-            # Also bind to frame to catch initial layout and parent container changes
-            try:
-                text_panel.bind("<Configure>", update_wraplength)
-                frame.bind("<Configure>", update_wraplength)
-                # Set initial wraplength after widgets are rendered
-                # Use after_idle to ensure it runs after layout is complete
-                frame.after_idle(update_wraplength)
-            except (tk.TclError, AttributeError, RuntimeError):
-                pass
+            text_panel.bind("<Configure>", update_wraplength)
 
-        # --- Bottom status row (full width) ---
+        # --- Middle Divider ---
+        h_div = customtkinter.CTkFrame(frame, fg_color=divider_color, height=1, corner_radius=0)
+        h_div.grid(row=1, column=0, sticky="ew")
+
+        # --- Bottom Status Bar ---
+        # Add bottom padding to respect rounded corners
+        # Use corner_radius + border_width to ensure rounded border is fully visible
+        bottom_padding = max(corner_radius + 2, 15)  # At least corner_radius + border_width, minimum 15px
         status_row = customtkinter.CTkFrame(frame, fg_color="transparent")
-        status_row.grid(row=2, column=0, sticky="nsew")
+        status_row.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, bottom_padding))
         status_row.grid_columnconfigure(0, weight=1)
-
-        status_left = customtkinter.CTkFrame(status_row, fg_color="transparent")
-        status_left.grid(row=0, column=0, padx=12, pady=8)
 
         current_status = plugin.get_status()
         if current_status is not None:
-            status_dot_color = cls.status_colors.get(str(current_status).lower(), "#808080")
+            status_container = customtkinter.CTkFrame(status_row, fg_color="transparent")
+            status_container.pack(side="left", fill="y")
 
-            status_dot = customtkinter.CTkFrame(
-                status_left,
-                width=10,
-                height=10,
-                corner_radius=5,
-                fg_color=status_dot_color,
-            )
+            status_dot_color = cls.status_colors.get(str(current_status).lower(), "#808080")
+            status_dot = customtkinter.CTkFrame(status_container, width=10, height=10, corner_radius=5, fg_color=status_dot_color)
             status_dot.pack(side="left", padx=(0, 8))
 
             status_label = customtkinter.CTkLabel(
-                status_left,
+                status_container,
                 text=f"Status: {str(current_status).title()}",
-                font=customtkinter.CTkFont(size=15, weight="normal"),
-                text_color=text_primary,
+                font=customtkinter.CTkFont(size=13),
+                text_color=text_primary
             )
             status_label.pack(side="left")
 
-            # Optional secondary info (best-effort)
-            last_check = None
-            if hasattr(plugin, "get_last_check"):
-                try:
-                    last_check = plugin.get_last_check()
-                except Exception:
-                    last_check = None
-            elif hasattr(plugin, "last_check"):
-                last_check = getattr(plugin, "last_check", None)
-
-            if last_check:
-                last_check_label = customtkinter.CTkLabel(
-                    status_left,
-                    text=f"  •  Last check: {last_check}",
-                    font=customtkinter.CTkFont(size=15, weight="normal"),
-                    text_color=text_primary,
-                )
-                last_check_label.pack(side="left")
-
-        # Extra Buttons (Store actions, etc.) on a separate row
+        # --- Extra row for buttons (Store only) ---
         if extra_buttons_func:
-            # Buttons row
             buttons_row = customtkinter.CTkFrame(frame, fg_color="transparent")
-            buttons_row.grid(row=4, column=0, sticky="ew")
-            buttons_row.grid_columnconfigure(0, weight=1)
-            
-            buttons_container = customtkinter.CTkFrame(buttons_row, fg_color="transparent")
-            buttons_container.grid(row=0, column=0, padx=12, pady=8)
-            
-            extra_buttons_func(buttons_container, plugin)
+            buttons_row.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 8))
+            extra_buttons_func(buttons_row, plugin)
 
-        # Click Interaction
-        def on_click(_event=None):
-            # Find App instance
+        # Interaction
+        def on_click(_e=None):
             curr = container_frame
             while curr and not hasattr(curr, "select_frame_by_name"):
                 curr = curr.master
-            if curr:
-                curr.select_frame_by_name(f"frame_{plugin.get_name()}")
+            if curr: curr.select_frame_by_name(f"frame_{plugin.get_name()}")
 
-        def on_enter(_e):
-            frame.configure(border_width=1, border_color=accent_blue, fg_color=hover_bg)
+        def on_enter(_e): 
+            try:
+                if frame.winfo_exists():
+                    # Preserve corner_radius when applying border
+                    frame.configure(
+                        border_width=2, 
+                        border_color=accent_blue, 
+                        fg_color=hover_bg,
+                        corner_radius=corner_radius  # Explicitly maintain rounded corners
+                    )
+            except (tk.TclError, AttributeError, RuntimeError):
+                pass
+        def on_leave(_e): 
+            try:
+                if frame.winfo_exists():
+                    # Preserve corner_radius when removing border
+                    frame.configure(
+                        border_width=0, 
+                        border_color=border_color, 
+                        fg_color=card_bg,
+                        corner_radius=corner_radius  # Explicitly maintain rounded corners
+                    )
+            except (tk.TclError, AttributeError, RuntimeError):
+                pass
 
-        def on_leave(_e):
-            frame.configure(border_width=0, border_color=border_color, fg_color=card_bg)
-
-        # Bind events
         def bind_recursive(widget):
-            # Don't bind on_click to interactive elements
-            if isinstance(widget, customtkinter.CTkButton):
-                return
-                
-            widget.bind("<Button-1>", on_click)
-            widget.bind("<Enter>", on_enter)
-            widget.bind("<Leave>", on_leave)
-            for child in widget.winfo_children():
-                bind_recursive(child)
-
+            try:
+                if isinstance(widget, customtkinter.CTkButton): return
+                if not widget.winfo_exists():
+                    return
+                widget.bind("<Button-1>", on_click)
+                widget.bind("<Enter>", on_enter)
+                widget.bind("<Leave>", on_leave)
+                for child in widget.winfo_children(): 
+                    bind_recursive(child)
+            except (tk.TclError, AttributeError, RuntimeError):
+                # Widget destroyed or error - skip
+                pass
+        
         bind_recursive(frame)
-
         return frame
 
     def show_readme(self, plugin):
@@ -379,23 +385,18 @@ class AppUI(customtkinter.CTk):
         rows = math.ceil(num_plugins / cols)
         return tuple(range(rows)), tuple(range(cols))
 
+
     @classmethod
     def create_grid(cls, frame, row, column, plugins, color, sticky="nsew"):
-        """Create a grid layout for plugins."""
+        """Create a mathematically uniform grid layout for plugins."""
         rows_tuple, cols_tuple = cls.calculate_rows_cols(len(plugins))
 
         container = customtkinter.CTkFrame(frame, corner_radius=0, fg_color=color)
         container.grid(row=row, column=column, sticky=sticky)
-        # Configure grid dimensions correctly (columns -> cols_tuple, rows -> rows_tuple)
-        container.grid_columnconfigure(cols_tuple, weight=1)
-        container.grid_rowconfigure(rows_tuple, weight=1)
-
-        # Fill grid (logic from old function, just establishing grid cells)
-        for r in rows_tuple:
-            for c in cols_tuple:
-                # Just configure weights, we don't strictly need empty frames unless for spacing
-                container.grid_columnconfigure(c, weight=1)
-                container.grid_rowconfigure(r, weight=1)
+        
+        # Force uniform sizing for all rows and columns
+        container.grid_columnconfigure(cols_tuple, weight=1, uniform="plugin_grid")
+        container.grid_rowconfigure(rows_tuple, weight=1, uniform="plugin_grid")
 
         return container
 
