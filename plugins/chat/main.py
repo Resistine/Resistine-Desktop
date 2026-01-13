@@ -164,18 +164,114 @@ class Plugin(BasePlugin):
                 f"Chat plugin: Sending request to OpenAI API (Model: {self.model}, Stream: True): {self.conversation_history}"
             )
 
-        response = self.client.chat.completions.create(
-            model="gpt-4o", messages=messages, temperature=0.5, max_tokens=150
+            # Send request with full history and stream=True
+            stream = self.client.chat.completions.create(
+                model=self.model,
+                messages=self.conversation_history,
+                stream=True,
+            )
+
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    content = chunk.choices[0].delta.content
+                    full_response += content
+                    yield content
+
+            logger.debug(
+                f"Chat plugin: Received full response from OpenAI API: {full_response}"
+            )
+
+        # Append assistant response to history
+        self.conversation_history.append(
+            {"role": "assistant", "content": full_response}
         )
 
-        return response.choices[0].message.content
+    def render_user_bubble(self, user_message):
+        """Render the user's message bubble."""
+        # Helper: determine effective dark mode (supports System on macOS)
+        appearance_mode = customtkinter.get_appearance_mode()
+        bubble_color = "#E5E5EA"
+        bubble_text_color = "#000000"
+
+        if appearance_mode == "Dark":
+            bubble_color = "#3A3A3C"
+            bubble_text_color = "#ffffff"
+        elif appearance_mode == "Light":
+            bubble_color = "#E5E5EA"
+            bubble_text_color = "#000000"
+        else:
+            if sys.platform == "darwin":
+                try:
+                    import subprocess
+
+                    result = subprocess.run(
+                        ["defaults", "read", "-g", "AppleInterfaceStyle"],
+                        capture_output=True,
+                        text=True,
+                    )
+                    if result.returncode == 0 and "Dark" in result.stdout:
+                        bubble_color = "#3A3A3C"
+                        bubble_text_color = "#ffffff"
+                except Exception:
+                    pass
+
+        # USER bubble as an embedded window
+        bubble_frame = customtkinter.CTkFrame(
+            self.chat_box,
+            fg_color=bubble_color,
+            corner_radius=getattr(self, "corner_radius", 15),
+        )
+        bubble_text = customtkinter.CTkLabel(
+            bubble_frame,
+            text=user_message,
+            fg_color="transparent",
+            text_color=bubble_text_color,
+            wraplength=400,
+            font=customtkinter.CTkFont(size=15),
+            justify="left",
+            anchor="w",
+        )
+        bubble_text.pack(padx=12, pady=9)
+
+        self.chat_box._textbox.window_create(
+            "end", window=bubble_frame, padx=10, pady=10
+        )
+        self.chat_box._textbox.insert("end", "\n\n\n")
+
+        # Right-align the bubble line
+        self.chat_box._textbox.tag_add("user_align", "end-4l", "end-3l")
+        self.chat_box._textbox.tag_config("user_align", justify="right")
+
+    def render_assistant_bubble_markdown(self, message):
+        """Render the assistant's response using MarkdownBubble."""
+        bubble = MarkdownBubble(self.chat_box, message)
+
+        # Ensure we insert at the end
+        self.chat_box._textbox.mark_set("insert", "end")
+        insert_index = self.chat_box._textbox.index("insert")
+
+        # Insert into text box
+        self.chat_box._textbox.window_create(
+            "end", window=bubble, padx=0, pady=10, stretch=1
+        )
+        self.chat_box._textbox.insert("end", "\n\n\n")
+
+        # Use index range for tag
+        line_start = insert_index.split(".")[0] + ".0"
+        line_end = insert_index.split(".")[0] + ".end"
+
+        # Apply strict left justify
+        self.chat_box._textbox.tag_add("assistant_align", line_start, line_end)
+        self.chat_box._textbox.tag_config("assistant_align", justify="left")
 
     def create_main_screen(self):
         """Create the main screen for the Chat plugin (bubbles + animated typing)."""
         # Get theme corner radius
         from customtkinter import ThemeManager
 
-        corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
+        self.corner_radius = ThemeManager.theme.get("Theme", {}).get(
+            "corner_radius", 15
+        )
 
         self.second_frame = customtkinter.CTkFrame(
             self.app,
@@ -219,7 +315,7 @@ class Plugin(BasePlugin):
             font=customtkinter.CTkFont(size=15, weight="normal"),
             fg_color="transparent",
             text_color=fg_color,
-            corner_radius=corner_radius,
+            corner_radius=self.corner_radius,
             border_width=0,
         )
         self.chat_box.grid(row=0, column=0, padx=20, pady=(30, 10), sticky="nsew")
@@ -283,7 +379,7 @@ class Plugin(BasePlugin):
         # Input container
         container = customtkinter.CTkFrame(
             self.second_frame,
-            corner_radius=corner_radius,
+            corner_radius=self.corner_radius,
             fg_color="transparent",
         )
         container.grid(row=1, column=0, padx=20, pady=(0, 20), sticky="ew")
@@ -293,7 +389,7 @@ class Plugin(BasePlugin):
         self.chat_entry = customtkinter.CTkEntry(
             container,
             placeholder_text="Message Resistine AI...",
-            corner_radius=corner_radius,
+            corner_radius=self.corner_radius,
             border_width=0,
             height=40,
             font=customtkinter.CTkFont(size=14),
@@ -307,7 +403,7 @@ class Plugin(BasePlugin):
             container,
             text="Send",
             command=self.send_message,
-            corner_radius=corner_radius,
+            corner_radius=self.corner_radius,
             height=40,
             width=80,
             font=customtkinter.CTkFont(size=14, weight="bold"),
@@ -332,34 +428,6 @@ class Plugin(BasePlugin):
 
         # Render User Bubble
         self.render_user_bubble(user_message)
-
-        # Scroll to bottom
-        # USER bubble as an embedded window
-        bubble_frame = customtkinter.CTkFrame(
-            self.chat_box,
-            fg_color=bubble_color,
-            corner_radius=corner_radius,
-        )
-        bubble_text = customtkinter.CTkLabel(
-            bubble_frame,
-            text=user_message,
-            fg_color="transparent",
-            text_color=bubble_text_color,
-            wraplength=400,
-            font=customtkinter.CTkFont(size=15),
-            justify="left",
-            anchor="w",
-        )
-        bubble_text.pack(padx=12, pady=9)
-
-        self.chat_box._textbox.window_create(
-            "end", window=bubble_frame, padx=10, pady=10
-        )
-        self.chat_box._textbox.insert("end", "\n\n\n")
-
-        # Right-align the bubble line
-        self.chat_box._textbox.tag_add("user_align", "end-4l", "end-3l")
-        self.chat_box._textbox.tag_config("user_align", justify="right")
 
         self.chat_box.update_idletasks()
         self.chat_box._textbox.see("end")
