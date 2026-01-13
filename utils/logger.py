@@ -159,6 +159,7 @@ def setup_logging(level="INFO", log_to_file=True):
     # Silence some noisy loggers
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("PIL").setLevel(logging.WARNING)
 
 
 # Export the logger for convenience
