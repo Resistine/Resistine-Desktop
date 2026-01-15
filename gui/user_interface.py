@@ -617,6 +617,11 @@ class AppUI(customtkinter.CTk):
             main_screen.grid_columnconfigure(0, weight=1)
             main_screen.grid_rowconfigure(0, weight=1)
             self._current_main_screen = main_screen
+            # Attach smooth scrolling + auto-hide scrollbars for any CTkScrollableFrames in this screen
+            try:
+                self._install_scroll_behaviors(main_screen)
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"Error loading plugin frame {name}: {e}")
             self.show_notification(
@@ -651,6 +656,183 @@ class AppUI(customtkinter.CTk):
             name = getattr(self, "current_frame_name", None)
             if name:
                 self.select_frame_by_name(name)
+        except Exception:
+            pass
+
+    # ----------------------------
+    # Scroll behavior improvements
+    # ----------------------------
+    def _install_scroll_behaviors(self, root_widget):
+        """Recursively attach smooth scroll + auto-hide scrollbar to any CTkScrollableFrame widgets."""
+        try:
+            if isinstance(root_widget, customtkinter.CTkScrollableFrame):
+                self._enable_smooth_scroll_and_autohide(root_widget)
+        except Exception:
+            pass
+
+        try:
+            for child in root_widget.winfo_children():
+                self._install_scroll_behaviors(child)
+        except Exception:
+            pass
+
+    def _enable_smooth_scroll_and_autohide(self, scrollable: customtkinter.CTkScrollableFrame):
+        """
+        Make scrolling feel smoother and hide the scrollbar when the content fits.
+        Works by targeting CTkScrollableFrame internals when available.
+        """
+        # Avoid double-install
+        if getattr(scrollable, "_resistine_scroll_installed", False):
+            return
+        scrollable._resistine_scroll_installed = True
+
+        canvas = getattr(scrollable, "_parent_canvas", None)
+        scrollbar = getattr(scrollable, "_scrollbar", None)
+        if canvas is None:
+            return
+
+        # ---- Smooth scrolling (mouse wheel) ----
+        state = {"vel": 0.0, "job": None}
+
+        def _normalized_delta(event) -> float:
+            # Windows/Linux: event.delta is usually 120/-120 per notch
+            # macOS: can be much smaller, especially for trackpads
+            d = getattr(event, "delta", 0) or 0
+            if d == 0:
+                return 0.0
+            if abs(d) >= 120:
+                return float(d) / 120.0
+            # trackpad-ish deltas
+            return float(d) / 40.0
+
+        def _step():
+            try:
+                if not canvas.winfo_exists():
+                    return
+                v = state["vel"]
+                if abs(v) < 0.01:
+                    state["vel"] = 0.0
+                    state["job"] = None
+                    return
+
+                # Scroll by a fraction of the canvas height for smoothness
+                cur_top, _ = canvas.yview()
+                # 0.06 is a "feel" constant (smaller = smoother/slower)
+                new_top = cur_top - (v * 0.06)
+                new_top = max(0.0, min(1.0, new_top))
+                canvas.yview_moveto(new_top)
+
+                # Decay velocity (inertia)
+                state["vel"] *= 0.82
+                state["job"] = canvas.after(12, _step)
+            except Exception:
+                state["job"] = None
+
+        def _on_mousewheel(event):
+            try:
+                # Negative delta scrolls down on many systems; invert to match natural expectation
+                d = _normalized_delta(event)
+                if d == 0:
+                    return "break"
+
+                state["vel"] += d
+                # Clamp velocity so huge trackpad swipes don't go crazy
+                state["vel"] = max(-8.0, min(8.0, state["vel"]))
+
+                if state["job"] is None:
+                    state["job"] = canvas.after(1, _step)
+            except Exception:
+                pass
+            return "break"
+
+        def _on_linux_scroll_up(_e):
+            state["vel"] = max(-8.0, min(8.0, state["vel"] + 1.0))
+            if state["job"] is None:
+                state["job"] = canvas.after(1, _step)
+            return "break"
+
+        def _on_linux_scroll_down(_e):
+            state["vel"] = max(-8.0, min(8.0, state["vel"] - 1.0))
+            if state["job"] is None:
+                state["job"] = canvas.after(1, _step)
+            return "break"
+
+        # Bind on the canvas + scrollable itself so it works regardless of focus
+        for w in (canvas, scrollable):
+            try:
+                w.bind("<MouseWheel>", _on_mousewheel, add="+")
+                w.bind("<Button-4>", _on_linux_scroll_up, add="+")
+                w.bind("<Button-5>", _on_linux_scroll_down, add="+")
+            except Exception:
+                pass
+
+        # ---- Auto-hide scrollbar when not needed ----
+        # Preserve original grid placement so we can restore it.
+        if scrollbar is not None and not hasattr(scrollable, "_resistine_scrollbar_grid_info"):
+            try:
+                scrollable._resistine_scrollbar_grid_info = scrollbar.grid_info()
+            except Exception:
+                scrollable._resistine_scrollbar_grid_info = None
+
+        hide_state = {"job": None, "hidden": False}
+
+        def _update_scrollbar_visibility():
+            try:
+                if scrollbar is None or not scrollbar.winfo_exists() or not canvas.winfo_exists():
+                    return
+
+                # Determine if content exceeds viewport height
+                bbox = canvas.bbox("all")
+                content_h = 0 if bbox is None else (bbox[3] - bbox[1])
+                viewport_h = canvas.winfo_height()
+
+                should_hide = content_h <= (viewport_h + 2)
+                if should_hide and not hide_state["hidden"]:
+                    hide_state["hidden"] = True
+                    try:
+                        scrollbar.grid_remove()
+                    except Exception:
+                        # some CTk layouts use pack/place internally; try those too
+                        try:
+                            scrollbar.pack_forget()
+                        except Exception:
+                            pass
+                elif (not should_hide) and hide_state["hidden"]:
+                    hide_state["hidden"] = False
+                    info = getattr(scrollable, "_resistine_scrollbar_grid_info", None)
+                    if info:
+                        try:
+                            scrollbar.grid(**info)
+                        except Exception:
+                            try:
+                                scrollbar.grid()
+                            except Exception:
+                                pass
+                    else:
+                        try:
+                            scrollbar.grid()
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+        def _schedule_visibility_check(_e=None):
+            if hide_state["job"] is not None:
+                try:
+                    canvas.after_cancel(hide_state["job"])
+                except Exception:
+                    pass
+            hide_state["job"] = canvas.after(60, _update_scrollbar_visibility)
+
+        try:
+            canvas.bind("<Configure>", _schedule_visibility_check, add="+")
+            scrollable.bind("<Configure>", _schedule_visibility_check, add="+")
+        except Exception:
+            pass
+
+        # Kick it once after layout
+        try:
+            canvas.after(120, _update_scrollbar_visibility)
         except Exception:
             pass
 
