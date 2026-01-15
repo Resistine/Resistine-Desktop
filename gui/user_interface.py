@@ -236,22 +236,33 @@ class AppUI(customtkinter.CTk):
         status_row.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, bottom_padding))
         status_row.grid_columnconfigure(0, weight=1)
 
+        # Always render a status slot so the bottom section stays consistent,
+        # even for plugins that return no status (None).
         current_status = plugin.get_status()
-        if current_status is not None:
-            status_container = customtkinter.CTkFrame(status_row, fg_color="transparent")
-            status_container.pack(side="left", fill="y")
+        status_container = customtkinter.CTkFrame(status_row, fg_color="transparent")
+        status_container.pack(side="left", fill="y")
 
+        if current_status is None or str(current_status).strip() == "":
+            status_dot_color = "#808080"
+            status_text = "Status: N/A"
+            status_text_color = ("#666666", "#aaaaaa")
+        else:
             status_dot_color = cls.status_colors.get(str(current_status).lower(), "#808080")
-            status_dot = customtkinter.CTkFrame(status_container, width=10, height=10, corner_radius=5, fg_color=status_dot_color)
-            status_dot.pack(side="left", padx=(0, 8))
+            status_text = f"Status: {str(current_status).title()}"
+            status_text_color = text_primary
 
-            status_label = customtkinter.CTkLabel(
-                status_container,
-                text=f"Status: {str(current_status).title()}",
-                font=customtkinter.CTkFont(size=13),
-                text_color=text_primary
-            )
-            status_label.pack(side="left")
+        status_dot = customtkinter.CTkFrame(
+            status_container, width=10, height=10, corner_radius=5, fg_color=status_dot_color
+        )
+        status_dot.pack(side="left", padx=(0, 8))
+
+        status_label = customtkinter.CTkLabel(
+            status_container,
+            text=status_text,
+            font=customtkinter.CTkFont(size=13),
+            text_color=status_text_color,
+        )
+        status_label.pack(side="left")
 
         # --- Optional extra buttons (Store only) ---
         # Keep buttons inside the status row so the card height stays consistent across pages.
