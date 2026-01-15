@@ -177,7 +177,7 @@ class BasePlugin:
                 svg_path = path[:-4] + '.svg'
                 if os.path.exists(svg_path) and HAS_SVG:
                     try:
-                        logger.info(f"📊 Loading SVG icon: {os.path.basename(svg_path)}")
+                        # logger.info(f"📊 Loading SVG icon: {os.path.basename(svg_path)}")
                         png_data = svg2png(url=svg_path, output_width=size[0], output_height=size[1])
                         logger.info(f"✅ Successfully loaded SVG: {os.path.basename(svg_path)}")
                         return Image.open(BytesIO(png_data))
@@ -192,7 +192,7 @@ class BasePlugin:
             elif path.lower().endswith('.svg'):
                 if HAS_SVG:
                     try:
-                        logger.info(f"📊 Loading SVG icon: {os.path.basename(path)}")
+                        # logger.info(f"📊 Loading SVG icon: {os.path.basename(path)}")
                         png_data = svg2png(url=path, output_width=size[0], output_height=size[1])
                         logger.info(f"✅ Successfully loaded SVG: {os.path.basename(path)}")
                         return Image.open(BytesIO(png_data))
