@@ -99,8 +99,8 @@ class Plugin(BasePlugin):
             description="VPN Management",
             supported_systems=["Windows", "Darwin", "Linux"],
             translations={"US": "VPN", "ES": "VPN", "FR": "VPN"},
-            icon_light_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "vpn_light.png"),
-            icon_dark_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "vpn_dark.png"),
+            icon_light_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "vpn_light.svg"),
+            icon_dark_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "vpn_dark.svg"),
         )
         self.app = app
         self.config_dir = wireguard_folder
@@ -259,7 +259,7 @@ class Plugin(BasePlugin):
         
         warning_label = customtkinter.CTkLabel(
             warning_box, 
-            text=f"{'🛡️' if is_connected else '⚠️'} {warning_text}", 
+            text=warning_text, 
             text_color=warning_fg,
             font=customtkinter.CTkFont(size=14, weight="bold")
         )

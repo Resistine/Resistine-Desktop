@@ -43,7 +43,7 @@ class MarkdownViewer(customtkinter.CTkFrame):
         # Back button
         self.back_button = customtkinter.CTkButton(
             self.nav_frame,
-            text="← Back",
+            text="Back",
             width=80,
             command=self.go_back,
             state="disabled",
@@ -52,7 +52,7 @@ class MarkdownViewer(customtkinter.CTkFrame):
 
         # Home button
         self.home_button = customtkinter.CTkButton(
-            self.nav_frame, text="🏠 Home", width=80, command=self.go_home
+            self.nav_frame, text="Home", width=80, command=self.go_home
         )
         self.home_button.pack(side="left", padx=5, pady=5)
 

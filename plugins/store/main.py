@@ -9,12 +9,28 @@ Licensed under the GNU General Public License v2 or later
 
 import os
 import webbrowser
+from io import BytesIO
 
 import customtkinter
 from PIL import Image
 
 from plugins.base_plugin import BasePlugin
 from plugins.plugin_manager import PluginManager
+
+# Try to import SVG support
+try:
+    from cairosvg import svg2png
+    HAS_SVG = True
+    # Test if cairosvg actually works (sometimes it's installed but broken)
+    try:
+        # Use bytestring instead of url for the test to avoid OSError
+        test_data = svg2png(bytestring='<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>', output_width=1, output_height=1)
+        if not test_data:
+            HAS_SVG = False
+    except Exception:
+        HAS_SVG = False
+except ImportError:
+    HAS_SVG = False
 
 # DNS Configuration - Change this value to update DNS across the application
 DNS_SERVER = "10.49.11.10"
@@ -42,10 +58,10 @@ class Plugin(BasePlugin):
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Store", "ES": "Tienda", "FR": "Magasin"},
             icon_light_path=os.path.join(
-                os.path.dirname(os.path.realpath(__file__)), "store_light.png"
+                os.path.dirname(os.path.realpath(__file__)), "store_light.svg"
             ),
             icon_dark_path=os.path.join(
-                os.path.dirname(os.path.realpath(__file__)), "store_dark.png"
+                os.path.dirname(os.path.realpath(__file__)), "store_dark.svg"
             ),
             uninstall_enabled=False,
         )
@@ -212,27 +228,155 @@ class RemotePluginWrapper:
     def get_description(self): return self.description
     def get_status(self): return self.status
 
+    def _load_icon_safe(self, path, size):
+        """
+        Safely load an icon, supporting both SVG and PNG formats.
+        Uses the same logic as BasePlugin.create_icon but with extra error handling.
+        """
+        from utils.logger import logger
+        
+        # Check if SVG version exists (even if path ends with .png)
+        if path.lower().endswith('.png'):
+            svg_path = path[:-4] + '.svg'
+            if os.path.exists(svg_path) and HAS_SVG:
+                try:
+                    # Validate size parameters to prevent crashes
+                    if size[0] <= 0 or size[1] <= 0:
+                        logger.warning(f"⚠️ Invalid size for SVG: {size}, using PNG")
+                        if os.path.exists(path):
+                            return Image.open(path)
+                        raise ValueError(f"Invalid size: {size}")
+                    png_data = svg2png(url=svg_path, output_width=size[0], output_height=size[1])
+                    if not png_data:
+                        raise ValueError("svg2png returned empty data")
+                    return Image.open(BytesIO(png_data))
+                except (OSError, ValueError, MemoryError, AttributeError) as e:
+                    logger.warning(f"⚠️ SVG loading failed for {os.path.basename(svg_path)}: {e}, using PNG")
+                    if os.path.exists(path):
+                        return Image.open(path)
+                    # If PNG doesn't exist either, try SVG path (will fail gracefully)
+                    if os.path.exists(svg_path):
+                        try:
+                            return Image.open(svg_path)
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logger.error(f"❌ Unexpected error loading SVG {os.path.basename(svg_path)}: {e}")
+                    if os.path.exists(path):
+                        return Image.open(path)
+                    # Return blank image as last resort
+                    return Image.new('RGBA', size, (255, 255, 255, 0))
+            else:
+                # No SVG found or no SVG support, use PNG
+                if os.path.exists(path):
+                    return Image.open(path)
+                # Try SVG as fallback only if supported
+                if os.path.exists(svg_path) and HAS_SVG:
+                    try:
+                        png_data = svg2png(url=svg_path, output_width=size[0], output_height=size[1])
+                        return Image.open(BytesIO(png_data))
+                    except:
+                        pass
+                
+                # Last resort
+                return Image.new('RGBA', size, (0, 0, 0, 0))
+        
+        # Path already ends with .svg
+        elif path.lower().endswith('.svg'):
+            if HAS_SVG:
+                try:
+                    # Validate size parameters to prevent crashes
+                    if size[0] <= 0 or size[1] <= 0:
+                        logger.warning(f"⚠️ Invalid size for SVG: {size}, trying PNG fallback")
+                        png_path = path[:-4] + '.png'
+                        if os.path.exists(png_path):
+                            return Image.open(png_path)
+                        raise ValueError(f"Invalid size: {size}")
+                    png_data = svg2png(url=path, output_width=size[0], output_height=size[1])
+                    if not png_data:
+                        raise ValueError("svg2png returned empty data")
+                    return Image.open(BytesIO(png_data))
+                except (OSError, ValueError, MemoryError, AttributeError) as e:
+                    logger.warning(f"⚠️ SVG loading failed for {os.path.basename(path)}: {e}")
+                    # Try PNG fallback
+                    png_path = path[:-4] + '.png'
+                    if os.path.exists(png_path):
+                        logger.info(f"📄 Using PNG fallback: {os.path.basename(png_path)}")
+                        return Image.open(png_path)
+                    # If PNG doesn't exist, try to return SVG as-is (will fail gracefully)
+                    try:
+                        return Image.open(path)
+                    except Exception:
+                        pass
+                except Exception as e:
+                    logger.error(f"❌ Unexpected error loading SVG {os.path.basename(path)}: {e}")
+                    # Try PNG fallback
+                    png_path = path[:-4] + '.png'
+                    if os.path.exists(png_path):
+                        return Image.open(png_path)
+            else:
+                # No SVG support, try PNG fallback
+                png_path = path[:-4] + '.png'
+                if os.path.exists(png_path):
+                    logger.info(f"📄 Using PNG fallback: {os.path.basename(png_path)}")
+                    return Image.open(png_path)
+                
+                # Cannot open SVG without cairosvg
+                logger.error(f"❌ Cannot open SVG without SVG support: {path}")
+                return Image.new('RGBA', size, (0, 0, 0, 0))
+        
+        # Default: try to open as-is
+        if os.path.exists(path):
+            try:
+                return Image.open(path)
+            except Exception as e:
+                logger.error(f"❌ Failed to open image {path}: {e}")
+        
+        # Last resort: return a blank image
+        logger.error(f"❌ Could not load icon: {path}")
+        return Image.new('RGBA', size, (255, 255, 255, 0))
+
     def get_icon(self):
         # Return default store icon for remote plugins (20x20 for sidebar)
-        # Note: icon_light.png contains dark icon (for light backgrounds)
-        #       icon_dark.png contains light/white icon (for dark backgrounds)
+        # Note: icon_light contains dark icon (for light backgrounds)
+        #       icon_dark contains light/white icon (for dark backgrounds)
         # So we need to swap them for CTkImage (same as base_plugin.py does)
         icons_path = os.path.dirname(os.path.realpath(__file__))
-        light_image = Image.open(os.path.join(icons_path, "store_light.png"))
-        dark_image = Image.open(os.path.join(icons_path, "store_dark.png"))
-        return customtkinter.CTkImage(
-            light_image=dark_image,  # Use dark icon (white) for light mode
-            dark_image=light_image,  # Use light icon (dark) for dark mode
-            size=(20, 20)  # Sidebar icon size
-        )
+        light_path = os.path.join(icons_path, "store_light.svg")
+        dark_path = os.path.join(icons_path, "store_dark.svg")
+        
+        try:
+            light_image = self._load_icon_safe(light_path, (20, 20))
+            dark_image = self._load_icon_safe(dark_path, (20, 20))
+            return customtkinter.CTkImage(
+                light_image=dark_image,  # Use dark icon (white) for light mode
+                dark_image=light_image,  # Use light icon (dark) for dark mode
+                size=(20, 20)  # Sidebar icon size
+            )
+        except Exception as e:
+            from utils.logger import logger
+            logger.error(f"Error loading store icon: {e}")
+            # Return a blank image as fallback
+            blank = Image.new('RGBA', (20, 20), (255, 255, 255, 0))
+            return customtkinter.CTkImage(light_image=blank, dark_image=blank, size=(20, 20))
     
     def get_icon_large(self):
         # Return larger icon for dashboard/store cards (50x50)
         icons_path = os.path.dirname(os.path.realpath(__file__))
-        light_image = Image.open(os.path.join(icons_path, "store_light.png"))
-        dark_image = Image.open(os.path.join(icons_path, "store_dark.png"))
-        return customtkinter.CTkImage(
-            light_image=dark_image,  # Use dark icon (white) for light mode
-            dark_image=light_image,  # Use light icon (dark) for dark mode
-            size=(50, 50)  # Card icon size
-        )
+        light_path = os.path.join(icons_path, "store_light.svg")
+        dark_path = os.path.join(icons_path, "store_dark.svg")
+        
+        try:
+            light_image = self._load_icon_safe(light_path, (50, 50))
+            dark_image = self._load_icon_safe(dark_path, (50, 50))
+            return customtkinter.CTkImage(
+                light_image=dark_image,  # Use dark icon (white) for light mode
+                dark_image=light_image,  # Use light icon (dark) for dark mode
+                size=(50, 50)  # Card icon size
+            )
+        except Exception as e:
+            from utils.logger import logger
+            logger.error(f"Error loading store icon (large): {e}")
+            # Return a blank image as fallback
+            blank = Image.new('RGBA', (50, 50), (255, 255, 255, 0))
+            return customtkinter.CTkImage(light_image=blank, dark_image=blank, size=(50, 50))

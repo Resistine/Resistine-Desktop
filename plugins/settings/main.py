@@ -36,10 +36,10 @@ class Plugin(BasePlugin):
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Settings", "ES": "Configuracion", "FR": "Paramètres"},
             icon_light_path=os.path.join(
-                os.path.dirname(os.path.realpath(__file__)), "settings_light.png"
+                os.path.dirname(os.path.realpath(__file__)), "settings_light.svg"
             ),
             icon_dark_path=os.path.join(
-                os.path.dirname(os.path.realpath(__file__)), "settings_dark.png"
+                os.path.dirname(os.path.realpath(__file__)), "settings_dark.svg"
             ),
             uninstall_enabled=False,
         )
