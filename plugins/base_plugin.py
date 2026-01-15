@@ -188,7 +188,7 @@ class BasePlugin:
                     # No SVG found or no SVG support, use PNG
                     return Image.open(path)
             
-            # Path already ends with .svg
+            # Path already ends with .svg I don't think this path will be accessed until the init is changed
             elif path.lower().endswith('.svg'):
                 if HAS_SVG:
                     try:
