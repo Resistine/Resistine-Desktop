@@ -124,15 +124,15 @@ class AppUI(customtkinter.CTk):
             border_width=0,  # Start with no border, show on hover
             border_color=border_color,
         )
+        # Mark so create_grid() can enforce consistent sizing/aspect ratio on resize
+        frame._resistine_plugin_card = True
         frame.grid(row=row, column=column, padx=10, pady=10, sticky="nsew")
         frame.grid_columnconfigure(0, weight=1)
         
-        # Structure rows: Content (~70%), Divider, Status (~30%), [Buttons]
+        # Structure rows: Content (~70%), Divider, Status (~30%)
         frame.grid_rowconfigure(0, weight=7, minsize=90)
         frame.grid_rowconfigure(1, weight=0) # h_div
         frame.grid_rowconfigure(2, weight=3, minsize=40)
-        if extra_buttons_func:
-            frame.grid_rowconfigure(3, weight=0)
 
         # --- Top content row: icon panel | divider | text panel ---
         # Add top padding to respect rounded corners (prevents child frames from covering rounded top corners)
@@ -253,11 +253,12 @@ class AppUI(customtkinter.CTk):
             )
             status_label.pack(side="left")
 
-        # --- Extra row for buttons (Store only) ---
+        # --- Optional extra buttons (Store only) ---
+        # Keep buttons inside the status row so the card height stays consistent across pages.
         if extra_buttons_func:
-            buttons_row = customtkinter.CTkFrame(frame, fg_color="transparent")
-            buttons_row.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 8))
-            extra_buttons_func(buttons_row, plugin)
+            buttons_container = customtkinter.CTkFrame(status_row, fg_color="transparent")
+            buttons_container.pack(side="right", anchor="e")
+            extra_buttons_func(buttons_container, plugin)
 
         # Interaction
         def on_click(_e=None):
@@ -306,6 +307,11 @@ class AppUI(customtkinter.CTk):
                 pass
         
         bind_recursive(frame)
+        # Trigger a layout pass so create_grid() can compute correct sizes ASAP
+        try:
+            container_frame.after(1, lambda: container_frame.event_generate("<Configure>"))
+        except Exception:
+            pass
         return frame
 
     def show_readme(self, plugin):
@@ -387,16 +393,76 @@ class AppUI(customtkinter.CTk):
 
 
     @classmethod
-    def create_grid(cls, frame, row, column, plugins, color, sticky="nsew"):
-        """Create a mathematically uniform grid layout for plugins."""
+    def create_grid(cls, frame, row, column, plugins, color, sticky="nsew", aspect_ratio=1.3):
+        """Create a mathematically uniform grid layout for plugins with a consistent aspect ratio."""
         rows_tuple, cols_tuple = cls.calculate_rows_cols(len(plugins))
 
         container = customtkinter.CTkFrame(frame, corner_radius=0, fg_color=color)
         container.grid(row=row, column=column, sticky=sticky)
         
-        # Force uniform sizing for all rows and columns
+        # Force uniform sizing for columns; rows get minsize computed from aspect ratio
         container.grid_columnconfigure(cols_tuple, weight=1, uniform="plugin_grid")
-        container.grid_rowconfigure(rows_tuple, weight=1, uniform="plugin_grid")
+        # Row weights are 0 by default, we'll set minsize instead to maintain ratio
+        container.grid_rowconfigure(rows_tuple, weight=0)
+
+        # Debounced aspect ratio update
+        _aspect_update_id = [None]
+
+        def update_aspect_ratio(event=None):
+            if _aspect_update_id[0] is not None:
+                try:
+                    container.after_cancel(_aspect_update_id[0])
+                except:
+                    pass
+
+            def do_update():
+                try:
+                    if not container.winfo_exists():
+                        return
+                    
+                    num_cols = len(cols_tuple)
+                    if num_cols == 0:
+                        return
+                    
+                    # Calculate column width (subtracting approximate padding)
+                    total_width = container.winfo_width()
+                    if total_width <= 1:
+                        # If width not yet calculated, try again shortly
+                        _aspect_update_id[0] = container.after(100, do_update)
+                        return
+                        
+                    col_width = total_width / num_cols
+                    
+                    # Height = Width / ratio
+                    # We subtract a bit for cell padding (10px on each side)
+                    card_width = max(1, col_width - 20)
+                    target_height = int(card_width / aspect_ratio) + 20 # add padding back
+                    
+                    # Ensure minimum height for content
+                    target_height = max(target_height, 160)
+                    
+                    for r in rows_tuple:
+                        container.grid_rowconfigure(r, minsize=target_height)
+
+                    # Enforce card frames to use the same size so content can't change the ratio.
+                    # (Some cards would otherwise request more height and break uniformity.)
+                    for child in container.winfo_children():
+                        try:
+                            if getattr(child, "_resistine_plugin_card", False):
+                                child.configure(width=int(card_width), height=int(target_height))
+                                child.grid_propagate(False)
+                        except Exception:
+                            pass
+                except (tk.TclError, AttributeError, RuntimeError):
+                    pass
+                finally:
+                    _aspect_update_id[0] = None
+
+            _aspect_update_id[0] = container.after(50, do_update)
+
+        container.bind("<Configure>", update_aspect_ratio)
+        # Initial trigger
+        update_aspect_ratio()
 
         return container
 
