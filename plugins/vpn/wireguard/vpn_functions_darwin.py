@@ -565,6 +565,15 @@ def save_vpn_configuration(vpn_config_json):
 
 def ensure_helper_registered():
     """Register the privileged helper on macOS (runs silently on startup)"""
+    import sys
+    import os
+
+    # Skip registration if running from source (SMAppService requires a bundle)
+    # We check for the presence of 'Contents/MacOS' in the executable path
+    if not (".app/Contents/MacOS" in sys.executable or ".app/Contents/MacOS" in os.path.abspath(sys.argv[0])):
+        logger.debug("ℹ️ Skipping helper registration (not running as an app bundle)")
+        return
+
     try:
         from ServiceManagement import SMAppService
 
