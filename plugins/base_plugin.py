@@ -8,7 +8,14 @@ Licensed under the GNU General Public License v2 or later
 
 from PIL import Image
 import customtkinter
-import os 
+import os
+from io import BytesIO
+
+try:
+    from cairosvg import svg2png
+    HAS_SVG = True
+except ImportError:
+    HAS_SVG = False 
 
 class BasePlugin:
     """
@@ -157,12 +164,57 @@ class BasePlugin:
     def create_icon(self, size):
         """
         Create an icon for the plugin using the provided size.
+        Supports both PNG and SVG formats.
 
         :param size: The size of the icon.
         :return: The created icon.
         """
-        light_image = Image.open(self.icon_light)
-        dark_image = Image.open(self.icon_dark)
+        def load_icon(path, size):
+            from utils.logger import logger
+            
+            # Check if SVG version exists (even if path ends with .png)
+            if path.lower().endswith('.png'):
+                svg_path = path[:-4] + '.svg'
+                if os.path.exists(svg_path) and HAS_SVG:
+                    try:
+                        logger.info(f"📊 Loading SVG icon: {os.path.basename(svg_path)}")
+                        png_data = svg2png(url=svg_path, output_width=size[0], output_height=size[1])
+                        logger.info(f"✅ Successfully loaded SVG: {os.path.basename(svg_path)}")
+                        return Image.open(BytesIO(png_data))
+                    except Exception as e:
+                        logger.warning(f"⚠️ SVG loading failed for {os.path.basename(svg_path)}: {e}, using PNG")
+                        return Image.open(path)
+                else:
+                    # No SVG found or no SVG support, use PNG
+                    return Image.open(path)
+            
+            # Path already ends with .svg
+            elif path.lower().endswith('.svg'):
+                if HAS_SVG:
+                    try:
+                        logger.info(f"📊 Loading SVG icon: {os.path.basename(path)}")
+                        png_data = svg2png(url=path, output_width=size[0], output_height=size[1])
+                        logger.info(f"✅ Successfully loaded SVG: {os.path.basename(path)}")
+                        return Image.open(BytesIO(png_data))
+                    except Exception as e:
+                        logger.warning(f"⚠️ SVG loading failed for {os.path.basename(path)}: {e}")
+                        # Try PNG fallback
+                        png_path = path[:-4] + '.png'
+                        if os.path.exists(png_path):
+                            logger.info(f"📄 Using PNG fallback: {os.path.basename(png_path)}")
+                            return Image.open(png_path)
+                else:
+                    logger.warning(f"⚠️ SVG support not available for {os.path.basename(path)}")
+                    png_path = path[:-4] + '.png'
+                    if os.path.exists(png_path):
+                        logger.info(f"📄 Using PNG fallback: {os.path.basename(png_path)}")
+                        return Image.open(png_path)
+            
+            # Default: try to open as-is
+            return Image.open(path)
+        
+        light_image = load_icon(self.icon_light, size)
+        dark_image = load_icon(self.icon_dark, size)
         return customtkinter.CTkImage(light_image=dark_image, dark_image=light_image, size=size)
 
     def get_icon(self):
