@@ -126,6 +126,13 @@ class AppUI(customtkinter.CTk):
         )
         # Mark so create_grid() can enforce consistent sizing/aspect ratio on resize
         frame._resistine_plugin_card = True
+        # Prevent content from resizing the card (reduces visible "jump" on initial render)
+        # This gets refined by create_grid() as soon as widths are known.
+        try:
+            frame.configure(width=260, height=200)
+            frame.grid_propagate(False)
+        except Exception:
+            pass
         frame.grid(row=row, column=column, padx=10, pady=10, sticky="nsew")
         frame.grid_columnconfigure(0, weight=1)
         
@@ -194,35 +201,15 @@ class AppUI(customtkinter.CTk):
             )
             desc_label.grid(row=2, column=0, sticky="nsew", pady=(8, 0))
 
-            # Debounced wraplength update to prevent crashes during continuous resizing
-            _wraplength_update_id = [None]  # Use list to allow modification in nested function
-            
-            def update_wraplength(event=None):
-                # Cancel any pending update
-                if _wraplength_update_id[0] is not None:
-                    try:
-                        frame.after_cancel(_wraplength_update_id[0])
-                    except:
-                        pass
-                
-                # Schedule update after a short delay (debouncing)
-                def do_update():
-                    try:
-                        # Check if widgets still exist
-                        if not desc_label.winfo_exists() or not text_panel.winfo_exists():
-                            return
-                        w = text_panel.winfo_width()
-                        if w > 1:
-                            desc_label.configure(wraplength=max(100, w - 20))
-                    except (tk.TclError, AttributeError, RuntimeError):
-                        # Widget destroyed or error - ignore
-                        pass
-                    finally:
-                        _wraplength_update_id[0] = None
-                
-                _wraplength_update_id[0] = frame.after(50, do_update)  # 50ms debounce
-            
-            text_panel.bind("<Configure>", update_wraplength)
+            # Register description label for centralized wraplength updates from create_grid
+            if hasattr(container_frame, "_resistine_desc_labels"):
+                container_frame._resistine_desc_labels.append(desc_label)
+                # Apply initial wraplength if possible
+                w = container_frame.winfo_width()
+                if w > 1:
+                    num_cols = getattr(container_frame, "_resistine_num_cols", 1)
+                    col_width = w / num_cols
+                    desc_label.configure(wraplength=max(100, int((col_width - 20) * 0.6) - 24))
 
         # --- Middle Divider ---
         h_div = customtkinter.CTkFrame(frame, fg_color=divider_color, height=1, corner_radius=0)
@@ -318,11 +305,6 @@ class AppUI(customtkinter.CTk):
                 pass
         
         bind_recursive(frame)
-        # Trigger a layout pass so create_grid() can compute correct sizes ASAP
-        try:
-            container_frame.after(1, lambda: container_frame.event_generate("<Configure>"))
-        except Exception:
-            pass
         return frame
 
     def show_readme(self, plugin):
@@ -411,69 +393,68 @@ class AppUI(customtkinter.CTk):
         container = customtkinter.CTkFrame(frame, corner_radius=0, fg_color=color)
         container.grid(row=row, column=column, sticky=sticky)
         
-        # Force uniform sizing for columns; rows get minsize computed from aspect ratio
+        # Force uniform sizing for columns; weight=1 makes them expand/shrink together
         container.grid_columnconfigure(cols_tuple, weight=1, uniform="plugin_grid")
-        # Row weights are 0 by default, we'll set minsize instead to maintain ratio
-        container.grid_rowconfigure(rows_tuple, weight=0)
 
-        # Debounced aspect ratio update
-        _aspect_update_id = [None]
+        # Optimization properties
+        container._resistine_last_w = -1
+        container._resistine_desc_labels = [] # Centralized wraplength updates
+        container._resistine_num_cols = len(cols_tuple)
 
         def update_aspect_ratio(event=None):
-            if _aspect_update_id[0] is not None:
-                try:
-                    container.after_cancel(_aspect_update_id[0])
-                except:
-                    pass
+            try:
+                if not container.winfo_exists():
+                    return
+                
+                # Calculate column width directly from event or winfo
+                total_width = event.width if event else container.winfo_width()
+                if total_width <= 1:
+                    return
+                
+                # RECURSION CHECK: Skip if width hasn't actually changed
+                # This prevents slowdowns and crashes durante continuous resizing
+                if total_width == container._resistine_last_w:
+                    return
+                container._resistine_last_w = total_width
+                
+                num_cols = container._resistine_num_cols
+                if num_cols == 0:
+                    return
+                    
+                col_width = total_width / num_cols
+                
+                # Height = Width / ratio
+                # Card width is col_width minus padding (10px on each side)
+                card_width = max(1, col_width - 20)
+                target_height = int(card_width / aspect_ratio) + 20 # add padding back
+                
+                # Ensure minimum height for content
+                target_height = max(target_height, 160)
 
-            def do_update():
-                try:
-                    if not container.winfo_exists():
-                        return
-                    
-                    num_cols = len(cols_tuple)
-                    if num_cols == 0:
-                        return
-                    
-                    # Calculate column width (subtracting approximate padding)
-                    total_width = container.winfo_width()
-                    if total_width <= 1:
-                        # If width not yet calculated, try again shortly
-                        _aspect_update_id[0] = container.after(100, do_update)
-                        return
-                        
-                    col_width = total_width / num_cols
-                    
-                    # Height = Width / ratio
-                    # We subtract a bit for cell padding (10px on each side)
-                    card_width = max(1, col_width - 20)
-                    target_height = int(card_width / aspect_ratio) + 20 # add padding back
-                    
-                    # Ensure minimum height for content
-                    target_height = max(target_height, 160)
-                    
-                    for r in rows_tuple:
-                        container.grid_rowconfigure(r, minsize=target_height)
+                # Update row minsize to maintain aspect ratio perfectly
+                for r in rows_tuple:
+                    container.grid_rowconfigure(r, minsize=target_height)
 
-                    # Enforce card frames to use the same size so content can't change the ratio.
-                    # (Some cards would otherwise request more height and break uniformity.)
-                    for child in container.winfo_children():
-                        try:
-                            if getattr(child, "_resistine_plugin_card", False):
-                                child.configure(width=int(card_width), height=int(target_height))
-                                child.grid_propagate(False)
-                        except Exception:
-                            pass
-                except (tk.TclError, AttributeError, RuntimeError):
-                    pass
-                finally:
-                    _aspect_update_id[0] = None
+                # Centralized wraplength update (efficiently loops through registered labels)
+                wrap_val = max(100, int(card_width * 0.6) - 24) # Approx description panel width
+                for label in container._resistine_desc_labels:
+                    try:
+                        if label.winfo_exists():
+                            label.configure(wraplength=wrap_val)
+                    except: pass
 
-            _aspect_update_id[0] = container.after(50, do_update)
+            except (tk.TclError, AttributeError, RuntimeError):
+                pass
 
         container.bind("<Configure>", update_aspect_ratio)
-        # Initial trigger
-        update_aspect_ratio()
+        
+        # NO BUFFERING: If width is already known, apply immediately
+        # (Usually happens when switching pages if the parent frame is already sized)
+        if container.winfo_width() > 1:
+            update_aspect_ratio()
+        else:
+            # Fallback for very first render
+            container.after(5, lambda: update_aspect_ratio())
 
         return container
 
@@ -767,12 +748,23 @@ class AppUI(customtkinter.CTk):
                 pass
 
         # ---- Auto-hide scrollbar when not needed ----
-        # Preserve original grid placement so we can restore it.
-        if scrollbar is not None and not hasattr(scrollable, "_resistine_scrollbar_grid_info"):
+        # IMPORTANT: never change layout width (that causes visible shifting).
+        # Instead, keep the scrollbar in place and make it fully transparent when "hidden".
+        sb_theme = ThemeManager.theme.get("CTkScrollbar", {}) if "ThemeManager" in globals() else {}
+        if scrollbar is not None and not hasattr(scrollable, "_resistine_scrollbar_colors"):
             try:
-                scrollable._resistine_scrollbar_grid_info = scrollbar.grid_info()
+                scrollable._resistine_scrollbar_colors = {
+                    "fg_color": scrollbar.cget("fg_color"),
+                    "button_color": scrollbar.cget("button_color"),
+                    "button_hover_color": scrollbar.cget("button_hover_color"),
+                }
             except Exception:
-                scrollable._resistine_scrollbar_grid_info = None
+                # fall back to theme defaults if cget isn't available
+                scrollable._resistine_scrollbar_colors = {
+                    "fg_color": sb_theme.get("fg_color", ("#F0F0F0", "#2B2B2B")),
+                    "button_color": sb_theme.get("button_color", ("#C7C7C7", "#5A5A5A")),
+                    "button_hover_color": sb_theme.get("button_hover_color", ("#B0B0B0", "#6A6A6A")),
+                }
 
         hide_state = {"job": None, "hidden": False}
 
@@ -786,33 +778,33 @@ class AppUI(customtkinter.CTk):
                 content_h = 0 if bbox is None else (bbox[3] - bbox[1])
                 viewport_h = canvas.winfo_height()
 
-                should_hide = content_h <= (viewport_h + 2)
+                # Hysteresis to avoid flicker during resize
+                if hide_state["hidden"]:
+                    should_hide = content_h <= (viewport_h + 16)
+                else:
+                    should_hide = content_h <= (viewport_h - 16)
+
                 if should_hide and not hide_state["hidden"]:
                     hide_state["hidden"] = True
                     try:
-                        scrollbar.grid_remove()
+                        scrollbar.configure(
+                            fg_color="transparent",
+                            button_color="transparent",
+                            button_hover_color="transparent",
+                        )
                     except Exception:
-                        # some CTk layouts use pack/place internally; try those too
-                        try:
-                            scrollbar.pack_forget()
-                        except Exception:
-                            pass
+                        pass
                 elif (not should_hide) and hide_state["hidden"]:
                     hide_state["hidden"] = False
-                    info = getattr(scrollable, "_resistine_scrollbar_grid_info", None)
-                    if info:
-                        try:
-                            scrollbar.grid(**info)
-                        except Exception:
-                            try:
-                                scrollbar.grid()
-                            except Exception:
-                                pass
-                    else:
-                        try:
-                            scrollbar.grid()
-                        except Exception:
-                            pass
+                    try:
+                        colors = getattr(scrollable, "_resistine_scrollbar_colors", None) or {}
+                        scrollbar.configure(
+                            fg_color=colors.get("fg_color", ("#F0F0F0", "#2B2B2B")),
+                            button_color=colors.get("button_color", ("#C7C7C7", "#5A5A5A")),
+                            button_hover_color=colors.get("button_hover_color", ("#B0B0B0", "#6A6A6A")),
+                        )
+                    except Exception:
+                        pass
             except Exception:
                 pass
 

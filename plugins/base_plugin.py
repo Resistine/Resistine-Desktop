@@ -67,6 +67,7 @@ class BasePlugin:
         self.icon_dark = icon_dark_path
         self.uninstall_enabled = uninstall_enabled
         self.icon = self.create_icon(size=(20, 20))
+        self._icon_large = None  # Cache for larger icon
         self.icon_alert = None
         self.button = None
         self.app = None # Will be set by subclasses or manager
@@ -294,7 +295,9 @@ class BasePlugin:
 
         :return: A larger icon of the plugin.
         """
-        return self.create_icon(size=(50, 50))
+        if self._icon_large is None:
+            self._icon_large = self.create_icon(size=(50, 50))
+        return self._icon_large
 
     def get_icon_alert(self):
         """
