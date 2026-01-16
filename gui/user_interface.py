@@ -126,10 +126,30 @@ class AppUI(customtkinter.CTk):
         )
         # Mark so create_grid() can enforce consistent sizing/aspect ratio on resize
         frame._resistine_plugin_card = True
-        # Prevent content from resizing the card (reduces visible "jump" on initial render)
-        # This gets refined by create_grid() as soon as widths are known.
+        
+        # PRE-ALLOCATION: If container already knows the target height, use it immediately
+        # to prevent the "clunky" iteration on load.
+        # Ratio of card width (usually 0.6 of col width in dashboard layout)
+        initial_h = getattr(container_frame, "_resistine_target_height", 200)
+        num_cols = getattr(container_frame, "_resistine_num_cols", 1)
+        
+        # Calculate approximate width based on container width or hint
+        cont_w = container_frame.winfo_width()
+        if cont_w <= 1:
+            # Try to get hint from AppUI
+            hint = None
+            parent = container_frame.master
+            while parent:
+                if hasattr(parent, "_content_width_hint") and parent._content_width_hint:
+                    hint = parent._content_width_hint
+                    break
+                parent = getattr(parent, "master", None)
+            cont_w = hint if hint else 800
+            
+        initial_w = int(cont_w / num_cols) - 20
+        
         try:
-            frame.configure(width=260, height=200)
+            frame.configure(width=initial_w, height=initial_h)
             frame.grid_propagate(False)
         except Exception:
             pass
@@ -401,19 +421,19 @@ class AppUI(customtkinter.CTk):
         container._resistine_desc_labels = [] # Centralized wraplength updates
         container._resistine_num_cols = len(cols_tuple)
 
-        def update_aspect_ratio(event=None):
+        def update_aspect_ratio(event=None, force_width=None):
             try:
                 if not container.winfo_exists():
                     return
                 
-                # Calculate column width directly from event or winfo
-                total_width = event.width if event else container.winfo_width()
+                # Calculate column width directly from event or winfo or force_width
+                total_width = force_width if force_width else (event.width if event else container.winfo_width())
                 if total_width <= 1:
                     return
                 
-                # RECURSION CHECK: Skip if width hasn't actually changed
-                # This prevents slowdowns and crashes durante continuous resizing
-                if total_width == container._resistine_last_w:
+                # RECURSION & NOISE CHECK: Skip if width hasn't changed meaningfully
+                # Small changes (1-3px) often happen as window settles or scrollbars appear.
+                if container._resistine_last_w != -1 and abs(total_width - container._resistine_last_w) < 4:
                     return
                 container._resistine_last_w = total_width
                 
@@ -430,6 +450,9 @@ class AppUI(customtkinter.CTk):
                 
                 # Ensure minimum height for content
                 target_height = max(target_height, 160)
+                
+                # Store for cards created later (pre-allocation)
+                container._resistine_target_height = target_height
 
                 # Update row minsize to maintain aspect ratio perfectly
                 for r in rows_tuple:
@@ -448,13 +471,24 @@ class AppUI(customtkinter.CTk):
 
         container.bind("<Configure>", update_aspect_ratio)
         
-        # NO BUFFERING: If width is already known, apply immediately
-        # (Usually happens when switching pages if the parent frame is already sized)
-        if container.winfo_width() > 1:
+        # INSTANT-READY LAYOUT:
+        # Check for width hint from AppUI to perform the VERY FIRST layout pass synchronously.
+        # This ensures row minsize and target_height are set before child cards are even created.
+        hint = None
+        parent = container.master
+        while parent:
+            if hasattr(parent, "_content_width_hint") and parent._content_width_hint:
+                hint = parent._content_width_hint
+                break
+            parent = getattr(parent, "master", None)
+            
+        if hint and hint > 1:
+            update_aspect_ratio(force_width=hint)
+        elif container.winfo_width() > 1:
             update_aspect_ratio()
         else:
-            # Fallback for very first render
-            container.after(5, lambda: update_aspect_ratio())
+            # Fallback for unexpected cases where hint is missing
+            container.after(10, lambda: update_aspect_ratio())
 
         return container
 
@@ -570,6 +604,20 @@ class AppUI(customtkinter.CTk):
         Select and display the specified frame.
         """
         self.current_frame_name = name
+
+        # Precompute content width hint for smooth initial plugin rendering.
+        try:
+            total_w = self.winfo_width()
+            if total_w > 1:
+                # Use actual navigation sidebar width if available, fallback to 200
+                nav_w = self.navigation_frame.winfo_width() if hasattr(self, "navigation_frame") else 200
+                if nav_w < 100: nav_w = 200 # Fallback for unmapped frame
+                
+                # Precise subtraction: window width - sidebar - margins/scrollbar padding
+                # (40px accounts for main frame padx(20)*2 + scrollbar allowance)
+                self._content_width_hint = total_w - nav_w - 40
+        except:
+            self._content_width_hint = None
 
         # Clear current screen
         try:
