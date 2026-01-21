@@ -172,7 +172,12 @@ class Plugin(BasePlugin):
         return self.main_frame
     
     def _bind_responsive_resize(self):
-        """Bind a resize handler to rebuild grid when crossing 60% threshold."""
+        """
+        Bind a resize handler to rebuild grid when crossing 60% threshold.
+        
+        Uses a feature called debounce that limits the frequency of rebuilds during resizing.
+        30ms debounce delay is used to ensure responsiveness without excessive rebuilds.
+        """
         def on_resize(event=None):
             if not hasattr(self, '_dashboard_plugins') or not hasattr(self, '_content_frame'):
                 return
