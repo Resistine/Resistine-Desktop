@@ -109,17 +109,27 @@ class Plugin(BasePlugin):
         # Sort by name for the store
         plugins = sorted(plugins, key=lambda x: x.get_name())
         
-        # Responsive layout: limit to 2 columns when window is <= 60% of screen width
+        # Store plugins for responsive rebuild
+        self._store_plugins = plugins
+        
+        # Responsive layout: determine max columns based on window width
         screen_width = self.app.winfo_screenwidth()
         window_width = self.app.winfo_width()
         max_cols = 2 if window_width <= screen_width * 0.6 else None
         rows, cols = self.app.calculate_rows_cols(len(plugins), max_cols=max_cols)
+        
+        # Store current column count to detect changes
+        self._current_cols = len(cols)
+        self._current_max_cols = max_cols
 
         content_frame = customtkinter.CTkScrollableFrame(
             self.main_frame, corner_radius=0, fg_color="transparent"
         )
         content_frame.grid(row=1, column=0, sticky="nsew", padx=15, pady=0)
         content_frame.grid_columnconfigure(0, weight=1)
+        
+        # Store reference for rebuilding
+        self._content_frame = content_frame
 
         self.grid_frame = self.app.create_grid(
             frame=content_frame,
@@ -128,6 +138,7 @@ class Plugin(BasePlugin):
             plugins=plugins,
             color="transparent",
             sticky="nsew",
+            max_cols=max_cols,
         )
         
         # Helper for extra buttons
@@ -182,8 +193,103 @@ class Plugin(BasePlugin):
                 show_description=True, 
                 extra_buttons_func=inject_store_buttons
             )
+        
+        # Bind resize handler to app window for responsive layout
+        self._bind_responsive_resize(inject_store_buttons)
 
         return self.main_frame
+    
+    def _bind_responsive_resize(self, inject_store_buttons):
+        """Bind a resize handler to rebuild grid when crossing 60% threshold."""
+        def on_resize(event=None):
+            if not hasattr(self, '_store_plugins') or not hasattr(self, '_content_frame'):
+                return
+            try:
+                if not self._content_frame.winfo_exists():
+                    return
+            except:
+                return
+                
+            screen_width = self.app.winfo_screenwidth()
+            window_width = self.app.winfo_width()
+            
+            # Determine target columns
+            target_cols = 2 if window_width <= screen_width * 0.6 else None
+            if target_cols is None:
+                # Use default calculation
+                target_cols = len(self.app.calculate_rows_cols(len(self._store_plugins))[1])
+            
+            # Only rebuild if column count changed
+            current = getattr(self, '_current_cols', None)
+            if current == target_cols:
+                return
+            
+            self._rebuild_grid(target_cols, inject_store_buttons)
+        
+        # Debounce: trigger quickly but avoid excessive rebuilds
+        self._resize_after_id = None
+        self._last_threshold_state = None
+        
+        def debounced_resize(event=None):
+            # Quick check if we crossed the threshold (no debounce for threshold crossing)
+            screen_width = self.app.winfo_screenwidth()
+            window_width = self.app.winfo_width()
+            is_narrow = window_width <= screen_width * 0.6
+            
+            # If threshold state changed, trigger immediately
+            if self._last_threshold_state is not None and self._last_threshold_state != is_narrow:
+                self._last_threshold_state = is_narrow
+                if self._resize_after_id:
+                    self.app.after_cancel(self._resize_after_id)
+                    self._resize_after_id = None
+                on_resize()
+                return
+            
+            self._last_threshold_state = is_narrow
+            
+            # For other resizes, use minimal debounce
+            if self._resize_after_id:
+                self.app.after_cancel(self._resize_after_id)
+            self._resize_after_id = self.app.after(30, on_resize)
+        
+        self.app.bind("<Configure>", debounced_resize, add="+")
+    
+    def _rebuild_grid(self, max_cols, inject_store_buttons):
+        """Rebuild the plugin grid with new column count."""
+        if not hasattr(self, '_store_plugins') or not hasattr(self, '_content_frame'):
+            return
+        
+        plugins = self._store_plugins
+        
+        # Destroy old grid
+        if hasattr(self, 'grid_frame') and self.grid_frame:
+            try:
+                self.grid_frame.destroy()
+            except:
+                pass
+        
+        rows, cols = self.app.calculate_rows_cols(len(plugins), max_cols=max_cols)
+        self._current_cols = len(cols)
+        self._current_max_cols = max_cols
+        
+        self.grid_frame = self.app.create_grid(
+            frame=self._content_frame,
+            row=0,
+            column=0,
+            plugins=plugins,
+            color="transparent",
+            sticky="nsew",
+            max_cols=max_cols,
+        )
+        
+        for index, plugin in enumerate(plugins):
+            r = index // len(cols)
+            c = index % len(cols)
+            self.app.create_plugin_card(
+                r, c, self.grid_frame, plugin, 
+                show_description=True,
+                extra_buttons_func=inject_store_buttons
+            )
 
     def handle_install(self, remote_plugin):
         """Handle plugin installation."""

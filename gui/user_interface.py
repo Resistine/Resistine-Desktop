@@ -401,19 +401,25 @@ class AppUI(customtkinter.CTk):
     def calculate_rows_cols(cls, num_plugins, max_cols=None):
         """Calculate rows and columns for a grid layout.
         
-        If max_cols is provided, limit the number of columns.
+        Args:
+            num_plugins: Number of plugins to display
+            max_cols: Optional maximum number of columns (for responsive layouts)
         """
         cols = math.ceil(math.sqrt(num_plugins))
         if max_cols is not None and cols > max_cols:
             cols = max_cols
-        rows = math.ceil(num_plugins / cols)
+        rows = math.ceil(num_plugins / cols) if cols > 0 else 1
         return tuple(range(rows)), tuple(range(cols))
 
 
     @classmethod
-    def create_grid(cls, frame, row, column, plugins, color, sticky="nsew", aspect_ratio=1.3):
-        """Create a mathematically uniform grid layout for plugins with a consistent aspect ratio."""
-        rows_tuple, cols_tuple = cls.calculate_rows_cols(len(plugins))
+    def create_grid(cls, frame, row, column, plugins, color, sticky="nsew", aspect_ratio=1.3, max_cols=None):
+        """Create a mathematically uniform grid layout for plugins with a consistent aspect ratio.
+        
+        Args:
+            max_cols: Optional maximum number of columns (for responsive layouts)
+        """
+        rows_tuple, cols_tuple = cls.calculate_rows_cols(len(plugins), max_cols=max_cols)
 
         container = customtkinter.CTkFrame(frame, corner_radius=0, fg_color=color)
         container.grid(row=row, column=column, sticky=sticky)
