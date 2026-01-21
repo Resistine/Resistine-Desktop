@@ -115,7 +115,11 @@ class Plugin(BasePlugin):
             if p.get_name() != "Dashboard" and p.order != -1
         ]
         
-        rows, cols = self.app.calculate_rows_cols(len(plugins))
+        # Responsive layout: limit to 2 columns when window is <= 60% of screen width
+        screen_width = self.app.winfo_screenwidth()
+        window_width = self.app.winfo_width()
+        max_cols = 2 if window_width <= screen_width * 0.6 else None
+        rows, cols = self.app.calculate_rows_cols(len(plugins), max_cols=max_cols)
 
         content_frame = customtkinter.CTkFrame(
             self.main_frame, corner_radius=0, fg_color="transparent"

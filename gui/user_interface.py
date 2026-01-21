@@ -398,9 +398,14 @@ class AppUI(customtkinter.CTk):
             return 15  # Default fallback
 
     @classmethod
-    def calculate_rows_cols(cls, num_plugins):
-        """Calculate rows and columns for a grid layout."""
+    def calculate_rows_cols(cls, num_plugins, max_cols=None):
+        """Calculate rows and columns for a grid layout.
+        
+        If max_cols is provided, limit the number of columns.
+        """
         cols = math.ceil(math.sqrt(num_plugins))
+        if max_cols is not None and cols > max_cols:
+            cols = max_cols
         rows = math.ceil(num_plugins / cols)
         return tuple(range(rows)), tuple(range(cols))
 
