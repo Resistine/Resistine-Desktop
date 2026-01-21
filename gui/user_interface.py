@@ -156,10 +156,11 @@ class AppUI(customtkinter.CTk):
         frame.grid(row=row, column=column, padx=10, pady=10, sticky="nsew")
         frame.grid_columnconfigure(0, weight=1)
         
-        # Structure rows: Content (~70%), Divider, Status (~30%)
+        # Structure rows: Content (~70%), Divider, Status/Buttons (~30%)
+        # Buttons are 26px height + padding, so minsize needs to be at least 50px
         frame.grid_rowconfigure(0, weight=7, minsize=90)
         frame.grid_rowconfigure(1, weight=0) # h_div
-        frame.grid_rowconfigure(2, weight=3, minsize=40)
+        frame.grid_rowconfigure(2, weight=3, minsize=55)
 
         # --- Top content row: icon panel | divider | text panel ---
         # Add top padding to respect rounded corners (prevents child frames from covering rounded top corners)
@@ -183,10 +184,6 @@ class AppUI(customtkinter.CTk):
             icon_label = customtkinter.CTkLabel(icon_panel, image=icon_image, text="")
             icon_label.grid(row=0, column=0, sticky="nsew")
 
-        # Vertical Divider
-        v_div = customtkinter.CTkFrame(top_row, fg_color=divider_color, width=1, corner_radius=0)
-        v_div.grid(row=0, column=1, sticky="ns")
-
         # Text Panel (Title + Desc)
         text_panel = customtkinter.CTkFrame(top_row, fg_color="transparent")
         text_panel.grid(row=0, column=2, sticky="nsew", padx=12, pady=10)
@@ -201,9 +198,6 @@ class AppUI(customtkinter.CTk):
             anchor="w"
         )
         title_label.grid(row=0, column=0, sticky="ew", pady=(0, 4))
-
-        title_div = customtkinter.CTkFrame(text_panel, fg_color=divider_color, height=1, corner_radius=0)
-        title_div.grid(row=1, column=0, sticky="ew")
 
         if show_description:
             description = plugin.get_description()
@@ -231,10 +225,6 @@ class AppUI(customtkinter.CTk):
                     col_width = w / num_cols
                     desc_label.configure(wraplength=max(100, int((col_width - 20) * 0.6) - 24))
 
-        # --- Middle Divider ---
-        h_div = customtkinter.CTkFrame(frame, fg_color=divider_color, height=1, corner_radius=0)
-        h_div.grid(row=1, column=0, sticky="ew")
-
         # --- Bottom Status Bar ---
         # Add bottom padding to respect rounded corners
         # Use corner_radius + border_width to ensure rounded border is fully visible
@@ -243,40 +233,41 @@ class AppUI(customtkinter.CTk):
         status_row.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, bottom_padding))
         status_row.grid_columnconfigure(0, weight=1)
 
-        # Always render a status slot so the bottom section stays consistent,
-        # even for plugins that return no status (None).
-        current_status = plugin.get_status()
-        status_container = customtkinter.CTkFrame(status_row, fg_color="transparent")
-        status_container.pack(side="left", fill="y")
-
-        if current_status is None or str(current_status).strip() == "":
-            status_dot_color = "#808080"
-            status_text = "Status: N/A"
-            status_text_color = ("#666666", "#aaaaaa")
-        else:
-            status_dot_color = cls.status_colors.get(str(current_status).lower(), "#808080")
-            status_text = f"Status: {str(current_status).title()}"
-            status_text_color = text_primary
-
-        status_dot = customtkinter.CTkFrame(
-            status_container, width=10, height=10, corner_radius=5, fg_color=status_dot_color
-        )
-        status_dot.pack(side="left", padx=(0, 8))
-
-        status_label = customtkinter.CTkLabel(
-            status_container,
-            text=status_text,
-            font=customtkinter.CTkFont(size=13),
-            text_color=status_text_color,
-        )
-        status_label.pack(side="left")
-
-        # --- Optional extra buttons (Store only) ---
-        # Keep buttons inside the status row so the card height stays consistent across pages.
+        # --- Optional extra buttons (Store only) - replaces status ---
         if extra_buttons_func:
+            # Center the buttons, no status indicator
             buttons_container = customtkinter.CTkFrame(status_row, fg_color="transparent")
-            buttons_container.pack(side="right", anchor="e")
+            buttons_container.pack(expand=True, anchor="center")
             extra_buttons_func(buttons_container, plugin)
+        else:
+            # Dashboard/other pages: show status indicator (centered)
+            # Always render a status slot so the bottom section stays consistent,
+            # even for plugins that return no status (None).
+            current_status = plugin.get_status()
+            status_container = customtkinter.CTkFrame(status_row, fg_color="transparent")
+            status_container.pack(expand=True, anchor="center")
+
+            if current_status is None or str(current_status).strip() == "":
+                status_dot_color = "#808080"
+                status_text = "Status: N/A"
+                status_text_color = ("#666666", "#aaaaaa")
+            else:
+                status_dot_color = cls.status_colors.get(str(current_status).lower(), "#808080")
+                status_text = f"Status: {str(current_status).title()}"
+                status_text_color = text_primary
+
+            status_dot = customtkinter.CTkFrame(
+                status_container, width=10, height=10, corner_radius=5, fg_color=status_dot_color
+            )
+            status_dot.pack(side="left", padx=(0, 8))
+
+            status_label = customtkinter.CTkLabel(
+                status_container,
+                text=status_text,
+                font=customtkinter.CTkFont(size=13),
+                text_color=status_text_color,
+            )
+            status_label.pack(side="left")
 
         # Interaction
         def on_click(_e=None):

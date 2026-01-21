@@ -150,6 +150,7 @@ class Plugin(BasePlugin):
                 height=26,
                 width=80,
                 command=lambda p=p: self.app.show_readme(p) if not isinstance(p, RemotePluginWrapper) else self.show_remote_info(p),
+                border_width=0,
                 fg_color=("#3B8ED0", "#1F6AA5"),
                 hover_color=("#367EBB", "#144870"),
                 font=customtkinter.CTkFont(size=12)
@@ -164,6 +165,7 @@ class Plugin(BasePlugin):
                     height=26,
                     width=80,
                     command=lambda p=p: self.handle_install(p),
+                    border_width=0,
                     fg_color=("#2ECC71", "#27AE60"),
                     hover_color=("#27AE60", "#219150"),
                     font=customtkinter.CTkFont(size=12)
@@ -178,9 +180,9 @@ class Plugin(BasePlugin):
                         height=26,
                         width=80,
                         command=lambda p=p: self.handle_uninstall(p),
-                        fg_color="transparent",
-                        text_color="#FF4444",
-                        hover_color=("#ffebee", "#2b1b1b"),
+                        border_width=0,
+                        fg_color=("#FF4444", "#C73636"),
+                        hover_color=("#C73636", "#9E2A2A"),
                         font=customtkinter.CTkFont(size=12)
                     )
                     uninstall_btn.grid(row=0, column=1, padx=5, pady=5)
