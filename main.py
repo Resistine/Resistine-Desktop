@@ -103,11 +103,14 @@ class App(AppUI):
         screen_height = self.winfo_screenheight()
         window_width = int(screen_width * 0.7)
         window_height = int(screen_height * 0.7)
+        min_width = int(screen_width * 0.5)
+        min_height = int(screen_height * 0.5)
         position_right = int(screen_width / 2 - window_width / 2)
         position_down = int(screen_height / 2 - window_height / 2)
         self.geometry(
             f"{window_width}x{window_height}+{position_right}+{position_down}"
         )
+        self.minsize(min_width, min_height)
 
         # Check if already logged in
         if settings.get("auth", "logged_in", False):
