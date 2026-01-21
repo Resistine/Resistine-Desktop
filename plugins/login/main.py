@@ -123,7 +123,7 @@ class Plugin(BasePlugin):
         )
         try:
             shield_img = Image.open(shield_path)
-            shield_ctk = customtkinter.CTkImage(shield_img, size=(120, 120))
+            shield_ctk = customtkinter.CTkImage(shield_img, size=(250, 250))
             self.shield_label = customtkinter.CTkLabel(
                 self.content_frame, text="", image=shield_ctk
             )
@@ -164,7 +164,7 @@ class Plugin(BasePlugin):
             command=self.handle_signin_click,
             width=400,
             height=45,
-            corner_radius=22,  # Fully rounded
+            corner_radius=corner_radius,
             fg_color="#0D5394",  # Professional blue
             hover_color="#0A4275",
             font=customtkinter.CTkFont(family="Inter", size=16, weight="bold"),
