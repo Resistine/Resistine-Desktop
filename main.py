@@ -8,9 +8,9 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import argparse
+import ctypes
 import os
 import sys
-import ctypes
 
 import customtkinter
 
@@ -31,6 +31,8 @@ def is_admin():
         return ctypes.windll.shell32.IsUserAnAdmin()
     except Exception:
         return False
+
+
 def relaunch_as_admin():
     """
     Relaunch the current script with admin privileges (Windows only).
@@ -39,12 +41,14 @@ def relaunch_as_admin():
 
     ctypes.windll.shell32.ShellExecuteW(
         None,
-        "runas",           # Triggers UAC
-        sys.executable,    # python.exe or your packaged exe
+        "runas",  # Triggers UAC
+        sys.executable,  # python.exe or your packaged exe
         params,
         os.getcwd(),
-        1                  # SW_SHOWNORMAL
+        1,  # SW_SHOWNORMAL
     )
+
+
 def was_relaunched():
     return "--elevated" in sys.argv
 
@@ -61,6 +65,7 @@ def resource_path(relative_path):
         base_path = os.path.abspath(".")
 
     return os.path.join(base_path, relative_path)
+
 
 class App(AppUI):
     """
@@ -132,15 +137,13 @@ class App(AppUI):
 
 
 if __name__ == "__main__":
-    
+
+    # CHECK: Why is this here?
     # Check for admin privileges on Windows
     if sys.platform == "win32" and not is_admin() and not was_relaunched():
         relaunch_as_admin()
         sys.exit(0)
 
-    # ---- Normal startup ----
-    app = App()
-    app.mainloop()   
     # Parse command-line arguments
     parser = argparse.ArgumentParser(
         description="Resistine Desktop Application",
@@ -167,7 +170,14 @@ if __name__ == "__main__":
         DEBUG = True
 
     # Configure logging based on configuration and flags
-    setup_logging(level=args.log_level)
+    # Default to DEBUG level if we are in DEBUG/IDE mode and no explicit level was provided
+    log_level = args.log_level
+    if DEBUG and log_level == "INFO":
+        # Check if the user explicitly requested INFO via command line
+        if not any(arg in sys.argv for arg in ["-l", "--log-level"]):
+            log_level = "DEBUG"
+
+    setup_logging(level=log_level)
 
     # DEPRECATED: Debug window flag can be set from code only
     if DEBUG_WINDOW:
@@ -186,4 +196,5 @@ if __name__ == "__main__":
         # Attach Inspector
         app.inspector = RuntimeInspector(app)
 
+    # Application loop - run!
     app.mainloop()
