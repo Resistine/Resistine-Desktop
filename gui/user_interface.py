@@ -389,28 +389,32 @@ class AppUI(customtkinter.CTk):
             return 15  # Default fallback
 
     @classmethod
-    def calculate_rows_cols(cls, num_plugins, max_cols=None):
+    def calculate_rows_cols(cls, num_plugins, max_cols=None, min_cols=None):
         """Calculate rows and columns for a grid layout.
         
         Args:
             num_plugins: Number of plugins to display
             max_cols: Optional maximum number of columns (for responsive layouts)
+            min_cols: Optional minimum number of columns (for responsive layouts)
         """
         cols = math.ceil(math.sqrt(num_plugins))
         if max_cols is not None and cols > max_cols:
             cols = max_cols
+        if min_cols is not None and cols < min_cols:
+            cols = min_cols
         rows = math.ceil(num_plugins / cols) if cols > 0 else 1
         return tuple(range(rows)), tuple(range(cols))
 
 
     @classmethod
-    def create_grid(cls, frame, row, column, plugins, color, sticky="nsew", aspect_ratio=1.3, max_cols=None):
+    def create_grid(cls, frame, row, column, plugins, color, sticky="nsew", aspect_ratio=1.3, max_cols=None, min_cols=None):
         """Create a mathematically uniform grid layout for plugins with a consistent aspect ratio.
         
         Args:
             max_cols: Optional maximum number of columns (for responsive layouts)
+            min_cols: Optional minimum number of columns (for responsive layouts)
         """
-        rows_tuple, cols_tuple = cls.calculate_rows_cols(len(plugins), max_cols=max_cols)
+        rows_tuple, cols_tuple = cls.calculate_rows_cols(len(plugins), max_cols=max_cols, min_cols=min_cols)
 
         container = customtkinter.CTkFrame(frame, corner_radius=0, fg_color=color)
         container.grid(row=row, column=column, sticky=sticky)
@@ -422,14 +426,29 @@ class AppUI(customtkinter.CTk):
         container._resistine_last_w = -1
         container._resistine_desc_labels = [] # Centralized wraplength updates
         container._resistine_num_cols = len(cols_tuple)
+        container._resistine_screen_width = None  # Cached screen width for performance
+        container._resistine_resize_job = None  # For debouncing
 
         def update_aspect_ratio(event=None, force_width=None):
+            # Debounce resize events (skip if another update is pending)
+            if event and not force_width:
+                if container._resistine_resize_job:
+                    try:
+                        container.after_cancel(container._resistine_resize_job)
+                    except:
+                        pass
+                container._resistine_resize_job = container.after(16, lambda: _do_update_aspect_ratio(force_width=None))
+                return
+            _do_update_aspect_ratio(force_width=force_width)
+        
+        def _do_update_aspect_ratio(force_width=None):
+            container._resistine_resize_job = None
             try:
                 if not container.winfo_exists():
                     return
                 
-                # Calculate column width directly from event or winfo or force_width
-                total_width = force_width if force_width else (event.width if event else container.winfo_width())
+                # Calculate column width directly from force_width or winfo
+                total_width = force_width if force_width else container.winfo_width()
                 if total_width <= 1:
                     return
                 
@@ -452,6 +471,27 @@ class AppUI(customtkinter.CTk):
                 
                 # Ensure minimum height for content
                 target_height = max(target_height, 160)
+                
+                # Cap maximum height based on number of columns
+                # Shorter cards when in 2-column layout
+                if num_cols == 2:
+                    max_height = 250
+                    target_height = min(target_height, max_height)
+                elif num_cols >= 4:
+                    # For 4+ columns, set minimum height to match what cards would be at 90% width with 3 cols
+                    # Store screen width for performance
+                    if container._resistine_screen_width is None:
+                        container._resistine_screen_width = container.winfo_screenwidth()
+                    screen_w = container._resistine_screen_width
+                    # Estimate content width at 90% (minus sidebar ~200, minus padding ~40)
+                    content_at_90 = screen_w * 0.9 - 240
+                    col_w_at_90 = content_at_90 / 3
+                    card_w_at_90 = col_w_at_90 - 20
+                    min_height_4col = int(card_w_at_90 / aspect_ratio) + 20
+                    target_height = max(target_height, min_height_4col)
+                else:
+                    max_height = 900
+                    target_height = min(target_height, max_height)
                 
                 # Store for cards created later (pre-allocation)
                 container._resistine_target_height = target_height
