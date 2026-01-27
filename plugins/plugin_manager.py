@@ -55,14 +55,14 @@ class PluginManager:
             return []
 
     def _load_state(self):
-        """Load persistent plugin state (e.g., uninstalled plugins)."""
+        """Load persistent plugin state (e.g., uninstalled plugins, download order)."""
         if os.path.exists(self.state_file):
             try:
                 with open(self.state_file, 'r') as f:
                     return json.load(f)
             except Exception as e:
                 logger.error(f"Failed to load plugin state: {e}")
-        return {"uninstalled": []}
+        return {"uninstalled": [], "download_order": {}}
 
     def _save_state(self, state):
         """Save persistent plugin state."""
@@ -81,7 +81,14 @@ class PluginManager:
         state = self._load_state()
         if plugin.id not in state["uninstalled"]:
             state["uninstalled"].append(plugin.id)
-            self._save_state(state)
+        
+        # Remove from download order tracking
+        download_order = state.get("download_order", {})
+        if plugin.id in download_order:
+            del download_order[plugin.id]
+            state["download_order"] = download_order
+            
+        self._save_state(state)
         
         # If the plugin is in the user directory, try to delete it
         user_plugin_dir = os.path.join(self.user_plugins_path, os.path.basename(os.path.dirname(plugin.__class__.__module__.replace('.', '/'))))
@@ -94,7 +101,7 @@ class PluginManager:
                 logger.warning(f"Could not delete plugin directory {user_plugin_dir}: {e}")
         
         # Refresh plugins list and UI
-        self.plugins = self.load_plugins()
+        self.plugins = sorted(self.load_plugins(), key=lambda x: x.order)
         if hasattr(self.app, "create_dashboard"):
             self.app.create_dashboard()
         return True, "Plugin uninstalled successfully."
@@ -140,13 +147,24 @@ class PluginManager:
                     zip_ref.extractall(target_path)
             
             # If we know the ID, make sure it's not marked as uninstalled
+            # and track download order for sidebar positioning
             if plugin_id:
                 state = self._load_state()
                 if plugin_id in state.get("uninstalled", []):
                     state["uninstalled"].remove(plugin_id)
-                    self._save_state(state)
+                
+                # Track download order if not already present
+                download_order = state.get("download_order", {})
+                if plugin_id not in download_order:
+                    # Find the next order number (start at 101, after Store which is 100)
+                    existing_orders = list(download_order.values())
+                    next_order = 101 if not existing_orders else max(existing_orders) + 1
+                    download_order[plugin_id] = next_order
+                    state["download_order"] = download_order
+                
+                self._save_state(state)
             
-            self.plugins = self.load_plugins()
+            self.plugins = sorted(self.load_plugins(), key=lambda x: x.order)
             if hasattr(self.app, "create_dashboard"):
                 self.app.create_dashboard()
             return True, "Plugin downloaded and extracted successfully."
@@ -227,10 +245,17 @@ class PluginManager:
                     # already handled directory collision, BUT ID collision across different
                     # folder names could still happen. 
                     continue
+                
+                # Apply download order for user-installed plugins BEFORE appending
+                # This ensures they appear between Store (100) and Help (200)
+                download_order = state.get("download_order", {})
+                if plugin_instance.id in download_order:
+                    plugin_instance.order = download_order[plugin_instance.id]
                     
                 loaded_plugins.append(plugin_instance)
                 seen_ids.add(plugin_instance.id)
                 plugin_instance.status = plugin_instance.get_status()
+                    
             except Exception as e:
                 logger.error(f"Failed to load plugin {module_name}: {e}")
                 
