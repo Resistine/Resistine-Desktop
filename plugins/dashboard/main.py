@@ -106,7 +106,7 @@ class Plugin(BasePlugin):
         protection_label = customtkinter.CTkLabel(
             protection_frame,
             text="You are protected!",
-            font=customtkinter.CTkFont(family="Inter", size=26, weight="bold"),
+            font=customtkinter.CTkFont(family="Inter", size=30, weight="bold"),
             text_color=accent_blue,
             justify="center",
             anchor="center",
