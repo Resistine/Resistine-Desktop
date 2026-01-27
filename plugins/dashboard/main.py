@@ -82,23 +82,36 @@ class Plugin(BasePlugin):
 
         # --- Protection panel (Sleek SOC-style) ---
         accent_blue = ThemeManager.theme["CTkButton"]["border_color"]
+        card_bg = ThemeManager.theme["CTkFrame"]["fg_color"]
+        corner_radius = ThemeManager.theme["CTkFrame"]["corner_radius"]
 
         # Add a top spacer to move content down and away from the window title bar/header
         top_margin_spacer = customtkinter.CTkLabel(self.main_frame, text="", height=30)
         top_margin_spacer.grid(row=0, column=0, sticky="ew")
 
-        # Simplified protection panel - directly in main_frame
+        # Container for centered protection panel
+        protection_container = customtkinter.CTkFrame(self.main_frame, fg_color="transparent", height=80)
+        protection_container.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 20))
+        protection_container.grid_columnconfigure(0, weight=1)
+        protection_container.grid_propagate(False)
+        
+        # Protection panel with background frame (max width 50%)
+        protection_frame = customtkinter.CTkFrame(
+            protection_container,
+            fg_color=card_bg,
+            corner_radius=corner_radius
+        )
+        protection_frame.place(relx=0.5, rely=0.5, anchor="center", relwidth=0.5, relheight=1.0)
+        
         protection_label = customtkinter.CTkLabel(
-            self.main_frame,
+            protection_frame,
             text="You are protected!",
             font=customtkinter.CTkFont(family="Inter", size=26, weight="bold"),
             text_color=accent_blue,
-            height=80, # Explicit height to prevent text clipping
             justify="center",
             anchor="center",
         )
-        # Place at row 1 (below spacer)
-        protection_label.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 20))
+        protection_label.pack(expand=True, fill="both", padx=20, pady=20)
 
         # --- Plugins grid ---
         if not hasattr(self.app, "plugin_list") or not self.app.plugin_list:
@@ -171,8 +184,7 @@ class Plugin(BasePlugin):
             c = index % len(cols)
             self.app.create_plugin_card(
                 r, c, self.grid_frame, plugin, 
-                show_description=True,
-                truncate=True
+                show_description=True
             )
         
         # Bind resize handler to app window for responsive layout
@@ -293,6 +305,5 @@ class Plugin(BasePlugin):
             c = index % len(cols)
             self.app.create_plugin_card(
                 r, c, self.grid_frame, plugin, 
-                show_description=True,
-                truncate=True
+                show_description=True
             )
