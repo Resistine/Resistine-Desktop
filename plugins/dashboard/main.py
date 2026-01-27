@@ -66,52 +66,39 @@ class Plugin(BasePlugin):
         return mode
 
     def create_main_screen(self):
-        # Modern main frame with proper spacing
-        self.main_frame = customtkinter.CTkFrame(
+        # Use a ScrollableFrame for the dashboard to prevent clipping on smaller screens
+        self.main_frame = customtkinter.CTkScrollableFrame(
             self.app,
             corner_radius=0,
             fg_color="transparent",
         )
         self.main_frame.grid_columnconfigure(0, weight=1)
-        self.main_frame.grid_rowconfigure(0, weight=0)  # protection panel
-        self.main_frame.grid_rowconfigure(1, weight=0)  # grid
-        self.main_frame.grid_rowconfigure(2, weight=1)  # spacer to push content up
-
+        
+        # We don't need fixed row weights in a scrollable frame as much, 
+        # but we'll ensure the grid is clean.
+        
         appearance_mode = self._effective_appearance_mode()
         is_dark = appearance_mode == "Dark"
 
         # --- Protection panel (Sleek SOC-style) ---
-        text_primary = ThemeManager.theme["CTkLabel"]["text_color"]
         accent_blue = ThemeManager.theme["CTkButton"]["border_color"]
-        text_secondary = ThemeManager.theme["CTkLabel"]["text_color"]  # Fallback
-        corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
 
-        # Container for the protection panel to control its width and centering
-        protection_container = customtkinter.CTkFrame(
-            self.main_frame, fg_color="transparent"
-        )
-        protection_container.grid(row=0, column=0, sticky="ew", padx=20, pady=(15, 0))
-        protection_container.grid_columnconfigure(0, weight=1)
+        # Add a top spacer to move content down and away from the window title bar/header
+        top_margin_spacer = customtkinter.CTkLabel(self.main_frame, text="", height=30)
+        top_margin_spacer.grid(row=0, column=0, sticky="ew")
 
-        protection_panel = customtkinter.CTkFrame(
-            protection_container,
-            corner_radius=corner_radius,
-            fg_color="transparent",
-            border_width=0,
-            width=600,  # Decreased width
-        )
-        protection_panel.grid(row=0, column=0, sticky="n")  # Center horizontally
-        protection_panel.grid_columnconfigure(0, weight=1)
-        protection_panel.grid_propagate(True)
-
+        # Simplified protection panel - directly in main_frame
         protection_label = customtkinter.CTkLabel(
-            protection_panel,
+            self.main_frame,
             text="You are protected!",
-            font=customtkinter.CTkFont(family="Inter", size=22, weight="bold"),
+            font=customtkinter.CTkFont(family="Inter", size=26, weight="bold"),
             text_color=accent_blue,
+            height=80, # Explicit height to prevent text clipping
             justify="center",
+            anchor="center",
         )
-        protection_label.grid(row=0, column=0, sticky="ew", padx=40, pady=(15, 5))
+        # Place at row 1 (below spacer)
+        protection_label.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 20))
 
         # --- Plugins grid ---
         if not hasattr(self.app, "plugin_list") or not self.app.plugin_list:
@@ -128,14 +115,36 @@ class Plugin(BasePlugin):
             if p.get_name() != "Dashboard" and p.order != -1
         ]
         
-        rows, cols = self.app.calculate_rows_cols(len(plugins))
+        # Store plugins for responsive rebuild
+        self._dashboard_plugins = plugins
+        
+        # Responsive layout: determine max columns based on window width
+        screen_width = self.app.winfo_screenwidth()
+        window_width = self.app.winfo_width()
+        if window_width <= screen_width * 0.6:
+            max_cols = 2
+            min_cols = None
+        elif window_width >= screen_width * 0.9:
+            max_cols = None
+            min_cols = 4
+        else:
+            max_cols = None
+            min_cols = None
+        rows, cols = self.app.calculate_rows_cols(len(plugins), max_cols=max_cols, min_cols=min_cols)
+        
+        # Store current column count to detect changes
+        self._current_cols = len(cols)
+        self._current_max_cols = max_cols
 
         content_frame = customtkinter.CTkFrame(
             self.main_frame, corner_radius=0, fg_color="transparent"
         )
-        content_frame.grid(row=1, column=0, sticky="new", padx=15, pady=0)
+        # Place grid at row 2
+        content_frame.grid(row=2, column=0, sticky="new", padx=15, pady=0)
         content_frame.grid_columnconfigure(0, weight=1)
-        content_frame.grid_rowconfigure(0, weight=1)
+        
+        # Store reference for rebuilding
+        self._content_frame = content_frame
 
         self.grid_frame = self.app.create_grid(
             frame=content_frame,
@@ -144,11 +153,9 @@ class Plugin(BasePlugin):
             plugins=plugins,
             color="transparent",
             sticky="nsew",
+            max_cols=max_cols,
+            min_cols=min_cols,
         )
-        self.grid_frame.grid_columnconfigure(
-            tuple(range(len(cols))), weight=1, uniform="cols"
-        )
-        self.grid_frame.grid_rowconfigure(tuple(range(len(rows))), weight=0)
 
         def open_plugin(p):
             # Preserve existing functionality: use app frame switching (updates sidebar state)
@@ -167,5 +174,125 @@ class Plugin(BasePlugin):
                 show_description=True,
                 truncate=True
             )
+        
+        # Bind resize handler to app window for responsive layout
+        self._bind_responsive_resize()
 
         return self.main_frame
+    
+    def _bind_responsive_resize(self):
+        """
+        Bind a resize handler to rebuild grid when crossing 60% threshold.
+        
+        Uses a feature called debounce that limits the frequency of rebuilds during resizing.
+        30ms debounce delay is used to ensure responsiveness without excessive rebuilds.
+        """
+        def on_resize(event=None):
+            if not hasattr(self, '_dashboard_plugins') or not hasattr(self, '_content_frame'):
+                return
+            try:
+                if not self._content_frame.winfo_exists():
+                    return
+            except:
+                return
+                
+            screen_width = self.app.winfo_screenwidth()
+            window_width = self.app.winfo_width()
+            
+            # Determine target columns based on width thresholds
+            if window_width <= screen_width * 0.6:
+                max_cols = 2
+                min_cols = None
+            elif window_width >= screen_width * 0.9:
+                max_cols = None
+                min_cols = 4
+            else:
+                max_cols = None
+                min_cols = None
+            
+            # Calculate target columns
+            target_cols = len(self.app.calculate_rows_cols(len(self._dashboard_plugins), max_cols=max_cols, min_cols=min_cols)[1])
+            
+            # Only rebuild if column count changed
+            current = getattr(self, '_current_cols', None)
+            if current == target_cols:
+                return
+            
+            self._rebuild_grid(max_cols, min_cols)
+        
+        # Debounce: trigger quickly but avoid excessive rebuilds
+        self._resize_after_id = None
+        self._last_threshold_state = None
+        self._cached_screen_width = self.app.winfo_screenwidth()  # Cache screen width
+        
+        def debounced_resize(event=None):
+            # Skip if dashboard is not visible
+            if not hasattr(self, 'main_frame') or not self.main_frame.winfo_ismapped():
+                return
+            
+            # Quick check if we crossed the threshold (no debounce for threshold crossing)
+            screen_width = self._cached_screen_width
+            window_width = self.app.winfo_width()
+            # Track state: 0=narrow (<=60%), 1=normal, 2=wide (>=90%)
+            if window_width <= screen_width * 0.6:
+                threshold_state = 0
+            elif window_width >= screen_width * 0.9:
+                threshold_state = 2
+            else:
+                threshold_state = 1
+            
+            # If threshold state changed, trigger immediately
+            if self._last_threshold_state is not None and self._last_threshold_state != threshold_state:
+                self._last_threshold_state = threshold_state
+                if self._resize_after_id:
+                    self.app.after_cancel(self._resize_after_id)
+                    self._resize_after_id = None
+                on_resize()
+                return
+            
+            self._last_threshold_state = threshold_state
+            
+            # For other resizes, use debounce to avoid excessive rebuilds
+            if self._resize_after_id:
+                self.app.after_cancel(self._resize_after_id)
+            self._resize_after_id = self.app.after(100, on_resize)
+        
+        self.app.bind("<Configure>", debounced_resize, add="+")
+    
+    def _rebuild_grid(self, max_cols, min_cols=None):
+        """Rebuild the plugin grid with new column count."""
+        if not hasattr(self, '_dashboard_plugins') or not hasattr(self, '_content_frame'):
+            return
+        
+        plugins = self._dashboard_plugins
+        
+        # Destroy old grid
+        if hasattr(self, 'grid_frame') and self.grid_frame:
+            try:
+                self.grid_frame.destroy()
+            except:
+                pass
+        
+        rows, cols = self.app.calculate_rows_cols(len(plugins), max_cols=max_cols, min_cols=min_cols)
+        self._current_cols = len(cols)
+        self._current_max_cols = max_cols
+        
+        self.grid_frame = self.app.create_grid(
+            frame=self._content_frame,
+            row=0,
+            column=0,
+            plugins=plugins,
+            color="transparent",
+            sticky="nsew",
+            max_cols=max_cols,
+            min_cols=min_cols,
+        )
+        
+        for index, plugin in enumerate(plugins):
+            r = index // len(cols)
+            c = index % len(cols)
+            self.app.create_plugin_card(
+                r, c, self.grid_frame, plugin, 
+                show_description=True,
+                truncate=True
+            )

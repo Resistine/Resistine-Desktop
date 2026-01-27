@@ -42,10 +42,10 @@ class Plugin(BasePlugin):
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Chat", "ES": "Chat", "FR": "Chat"},
             icon_light_path=os.path.join(
-                os.path.dirname(os.path.realpath(__file__)), "chat_light.png"
+                os.path.dirname(os.path.realpath(__file__)), "chat_light.svg"
             ),
             icon_dark_path=os.path.join(
-                os.path.dirname(os.path.realpath(__file__)), "chat_dark.png"
+                os.path.dirname(os.path.realpath(__file__)), "chat_dark.svg"
             ),
         )
         self.app = app
