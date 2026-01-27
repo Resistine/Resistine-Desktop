@@ -239,7 +239,14 @@ class Plugin(BasePlugin):
         
         def debounced_resize(event=None):
             # Skip if dashboard is not visible
-            if not hasattr(self, 'main_frame') or not self.main_frame.winfo_ismapped():
+            if not hasattr(self, 'main_frame'):
+                return
+            try:
+                # Check if widget still exists and is mapped
+                if not self.main_frame.winfo_exists() or not self.main_frame.winfo_ismapped():
+                    return
+            except Exception:
+                # Widget has been destroyed, ignore
                 return
             
             # Quick check if we crossed the threshold (no debounce for threshold crossing)
