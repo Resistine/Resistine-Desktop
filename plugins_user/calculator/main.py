@@ -6,7 +6,7 @@ class Plugin(BasePlugin):
     """    
     Calculator plugin for Resistine Desktop.
     """    
-        
+     # sdfsadf   
     def __init__(self, app):
         """    
         Initialize the Calculator plugin.
