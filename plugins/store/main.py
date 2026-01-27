@@ -269,7 +269,12 @@ class Plugin(BasePlugin):
         
         def debounced_resize(event=None):
             # Skip if store is not visible
-            if not hasattr(self, 'main_frame') or not self.main_frame.winfo_ismapped():
+            if not hasattr(self, 'main_frame'):
+                return
+            try:
+                if not self.main_frame.winfo_exists() or not self.main_frame.winfo_ismapped():
+                    return
+            except Exception:
                 return
             
             # Quick check if we crossed the threshold (no debounce for threshold crossing)
@@ -299,7 +304,31 @@ class Plugin(BasePlugin):
                 self.app.after_cancel(self._resize_after_id)
             self._resize_after_id = self.app.after(100, on_resize)
         
-        self.app.bind("<Configure>", debounced_resize, add="+")
+        # LEAK PREVENTION: Unbind any existing global handler before adding a new one.
+        # This is critical because create_main_screen() is called on every tab switch.
+        if hasattr(self, '_resize_handler_id') and self._resize_handler_id:
+            try:
+                self.app.unbind("<Configure>", self._resize_handler_id)
+            except:
+                pass
+        
+        self._resize_handler_id = self.app.bind("<Configure>", debounced_resize, add="+")
+    
+    def destroy(self):
+        """Cleanup handler for uninstallation."""
+        if hasattr(self, '_resize_after_id') and self._resize_after_id:
+            try:
+                self.app.after_cancel(self._resize_after_id)
+            except:
+                pass
+        
+        if hasattr(self, '_resize_handler_id') and self._resize_handler_id:
+            try:
+                self.app.unbind("<Configure>", self._resize_handler_id)
+            except:
+                pass
+        
+        super().destroy()
     
     def _rebuild_grid(self, max_cols, min_cols, inject_store_buttons):
         """Rebuild the plugin grid with new column count."""

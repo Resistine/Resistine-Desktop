@@ -534,6 +534,66 @@ class AppUI(customtkinter.CTk):
 
         return container
 
+    def refresh_navigation(self):
+        """
+        Surgical update: Rebuild only the navigation sidebar buttons.
+        """
+        if not hasattr(self, "navigation_frame") or not self.navigation_frame.winfo_exists():
+            # If sidebar doesn't exist, we must do a full dashboard creation
+            return self.create_dashboard()
+
+        # Clear existing buttons from navigation frame
+        try:
+            for widget in self.navigation_frame.winfo_children():
+                if not widget.winfo_exists():
+                    continue
+                # Keep the logo/label at the top (row 0)
+                info = widget.grid_info()
+                if info and int(info.get("row", 0)) > 0:
+                    widget.destroy()
+        except Exception as e:
+            logger.warning(f"Error while clearing navigation frame: {e}")
+
+        # Reset grid row configurations to avoid gaps from uninstalled plugins
+        # We assume a reasonable maximum number of plugins (e.g. 50) to clear weights
+        for r in range(50):
+            self.navigation_frame.grid_rowconfigure(r, weight=0)
+
+        # Update plugin list from manager
+        self.plugin_list = self.get_plugin_manager().plugins
+        number_plugins = len(self.plugin_list) + 1
+        # Only the very last row (the spacer) should have weight 1
+        self.navigation_frame.grid_rowconfigure(number_plugins, weight=1)
+
+        self.frames = {}
+        row = 1
+        for plugin in self.plugin_list:
+            frame_name = f"frame_{plugin.get_name()}"
+            self.frames[frame_name] = plugin
+            
+            if plugin.order <= 0:
+                continue
+
+            try:
+                # Create sidebar button
+                btn = self.create_tab_button(
+                    self.navigation_frame,
+                    plugin.get_name(),
+                    plugin.get_icon(),
+                    lambda p=plugin: self.select_frame_by_name(
+                        f"frame_{p.get_name()}", button=p.get_button()
+                    ),
+                    row,
+                    0,
+                )
+                plugin.set_button(btn)
+                # Ensure the button reflects the current active state if we are on this plugin's frame
+                if frame_name == getattr(self, "current_frame_name", ""):
+                    self.update_tab_button_active_state(btn, is_active=True)
+            except Exception as e:
+                logger.error(f"Error loading plugin button {plugin.get_name()}: {e}")
+            row += 1
+
     def create_dashboard(self):
         """
         Create the main dashboard of the application.
@@ -541,16 +601,12 @@ class AppUI(customtkinter.CTk):
         for widget in self.winfo_children():
             if isinstance(widget, (tk.Toplevel, customtkinter.CTkToplevel)):
                 continue
-            widget.grid_forget()
+            widget.destroy()
 
         # Re-configure the main window
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=0)  # Navigation column
         self.grid_columnconfigure(1, weight=1)  # Content column
-
-        # Plugin List Management
-        self.plugin_list = self.get_plugin_manager().plugins
-        number_plugins = len(self.plugin_list) + 1
 
         # Theme-aware sidebar colors
         sidebar_bg = self._get_theme_color("CTkFrame", "fg_color")
@@ -561,7 +617,6 @@ class AppUI(customtkinter.CTk):
         )
         self.navigation_frame.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
         self.grid_columnconfigure(0, minsize=200)
-        self.navigation_frame.grid_rowconfigure(number_plugins, weight=1)
         self.navigation_frame.grid_columnconfigure(0, weight=1)
 
         # Logo
@@ -607,37 +662,8 @@ class AppUI(customtkinter.CTk):
             row=0, column=0, padx=20, pady=(25, 10), sticky="ew"
         )
 
-        self.frames = {}
-        row = 1
-        for plugin in self.plugin_list:
-            # Skip plugins with negative or zero order (e.g. Login at 0, hidden at -1)
-            # Order 0: Shows in Dashboard but not Sidebar
-            # Order -1: Hidden everywhere
-            if plugin.order <= 0:
-                # Still register the frame so it can be navigated to if needed (e.g. from Dashboard)
-                frame_name = f"frame_{plugin.get_name()}"
-                self.frames[frame_name] = plugin
-                continue
-
-            frame_name = f"frame_{plugin.get_name()}"
-            self.frames[frame_name] = plugin
-
-            try:
-                # Create sidebar button
-                btn = self.create_tab_button(
-                    self.navigation_frame,
-                    plugin.get_name(),
-                    plugin.get_icon(),
-                    lambda p=plugin: self.select_frame_by_name(
-                        f"frame_{p.get_name()}", button=p.get_button()
-                    ),
-                    row,
-                    0,
-                )
-                plugin.set_button(btn)
-            except Exception as e:
-                logger.error(f"Error loading plugin button {plugin.get_name()}: {e}")
-            row += 1
+        # Use the surgical refresh to handle the buttons
+        self.refresh_navigation()
 
         self.select_frame_by_name("frame_Dashboard")
 

@@ -276,7 +276,31 @@ class Plugin(BasePlugin):
                 self.app.after_cancel(self._resize_after_id)
             self._resize_after_id = self.app.after(100, on_resize)
         
-        self.app.bind("<Configure>", debounced_resize, add="+")
+        # LEAK PREVENTION: Unbind any existing global handler before adding a new one.
+        # This is critical because create_main_screen() is called on every tab switch.
+        if hasattr(self, '_resize_handler_id') and self._resize_handler_id:
+            try:
+                self.app.unbind("<Configure>", self._resize_handler_id)
+            except:
+                pass
+        
+        self._resize_handler_id = self.app.bind("<Configure>", debounced_resize, add="+")
+    
+    def destroy(self):
+        """Cleanup handler for uninstallation."""
+        if hasattr(self, '_resize_after_id') and self._resize_after_id:
+            try:
+                self.app.after_cancel(self._resize_after_id)
+            except:
+                pass
+        
+        if hasattr(self, '_resize_handler_id') and self._resize_handler_id:
+            try:
+                self.app.unbind("<Configure>", self._resize_handler_id)
+            except:
+                pass
+        
+        super().destroy()
     
     def _rebuild_grid(self, max_cols, min_cols=None):
         """Rebuild the plugin grid with new column count."""

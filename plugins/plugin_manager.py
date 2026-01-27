@@ -88,22 +88,55 @@ class PluginManager:
             del download_order[plugin.id]
             state["download_order"] = download_order
             
+        # Call cleanup on the plugin instance before saving state or deleting files
+        try:
+            if hasattr(plugin, "destroy"):
+                plugin.destroy()
+        except Exception as e:
+            logger.error(f"Error while destroying plugin {plugin.id}: {e}")
+
         self._save_state(state)
         
         # If the plugin is in the user directory, try to delete it
         user_plugin_dir = os.path.join(self.user_plugins_path, os.path.basename(os.path.dirname(plugin.__class__.__module__.replace('.', '/'))))
-        if os.path.exists(user_plugin_dir):
-            try:
-                import shutil
-                shutil.rmtree(user_plugin_dir)
-                logger.info(f"Deleted user plugin directory: {user_plugin_dir}")
-            except Exception as e:
-                logger.warning(f"Could not delete plugin directory {user_plugin_dir}: {e}")
         
-        # Refresh plugins list and UI
-        self.plugins = sorted(self.load_plugins(), key=lambda x: x.order)
-        if hasattr(self.app, "create_dashboard"):
-            self.app.create_dashboard()
+        def delete_dir():
+            if os.path.exists(user_plugin_dir):
+                try:
+                    import shutil
+                    shutil.rmtree(user_plugin_dir)
+                    logger.info(f"Deleted user plugin directory: {user_plugin_dir}")
+                except Exception as e:
+                    logger.warning(f"Could not delete plugin directory {user_plugin_dir}: {e}")
+        
+        # Run deletion in a background thread to prevent GUI hang
+        logger.info(f"Uninstallation: Starting background deletion for {plugin.id}")
+        import threading
+        threading.Thread(target=delete_dir, daemon=True).start()
+        
+        # Surgical Update: Remove the plugin from active lists and refresh only the sidebar
+        logger.info(f"Uninstallation: Removing {plugin.id} from active memory lists")
+        if plugin in self.plugins:
+            self.plugins.remove(plugin)
+        
+        if hasattr(self.app, "frames"):
+            frame_name = f"frame_{plugin.get_name()}"
+            if frame_name in self.app.frames:
+                del self.app.frames[frame_name]
+
+        # Defer the UI refresh to keep the UI responsive
+        def refresh_ui():
+            if hasattr(self.app, "refresh_navigation"):
+                self.app.refresh_navigation()
+            elif hasattr(self.app, "create_dashboard"):
+                # Fallback if refresh_navigation isn't available for some reason
+                self.app.create_dashboard()
+        
+        if hasattr(self.app, "after"):
+            self.app.after(100, refresh_ui)
+        else:
+            refresh_ui()
+
         return True, "Plugin uninstalled successfully."
 
     def download_plugin(self, url, plugin_id=None, plugin_name=None):
@@ -164,9 +197,19 @@ class PluginManager:
                 
                 self._save_state(state)
             
-            self.plugins = sorted(self.load_plugins(), key=lambda x: x.order)
-            if hasattr(self.app, "create_dashboard"):
-                self.app.create_dashboard()
+            # Defer the UI refresh to keep the UI responsive
+            def refresh_ui():
+                self.plugins = sorted(self.load_plugins(), key=lambda x: x.order)
+                if hasattr(self.app, "refresh_navigation"):
+                    self.app.refresh_navigation()
+                elif hasattr(self.app, "create_dashboard"):
+                    self.app.create_dashboard()
+            
+            if hasattr(self.app, "after"):
+                self.app.after(100, refresh_ui)
+            else:
+                refresh_ui()
+
             return True, "Plugin downloaded and extracted successfully."
         except requests.RequestException as e:
             error_msg = f"Download failed: {str(e)}"
@@ -229,6 +272,18 @@ class PluginManager:
             try:
                 # Force reload if it was already in sys.modules (relevant for updates/downloads)
                 if module_name in sys.modules:
+                    # If we had a previously loaded instance of this plugin, try to destroy it
+                    # by searching in our current plugins list or other sources if necessary.
+                    # Since we are about to reload the module and create a new instance,
+                    # we want the old code to stop its background tasks.
+                    for p in getattr(self, 'plugins', []):
+                        if p.__class__.__module__ == module_name:
+                            try:
+                                if hasattr(p, 'destroy'):
+                                    p.destroy()
+                            except Exception as e:
+                                logger.error(f"Error destroying old plugin instance for {module_name}: {e}")
+                    
                     importlib.reload(sys.modules[module_name])
                 
                 module = importlib.import_module(module_name)
@@ -254,7 +309,8 @@ class PluginManager:
                     
                 loaded_plugins.append(plugin_instance)
                 seen_ids.add(plugin_instance.id)
-                plugin_instance.status = plugin_instance.get_status()
+                # DEFERRED: Status will be fetched lazily by the UI to prevent blocking the main thread during load
+                # plugin_instance.status = plugin_instance.get_status()
                     
             except Exception as e:
                 logger.error(f"Failed to load plugin {module_name}: {e}")
