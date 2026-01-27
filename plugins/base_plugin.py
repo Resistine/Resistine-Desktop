@@ -90,6 +90,13 @@ class BasePlugin:
         """
         raise NotImplementedError("Subclasses should implement this method")
 
+    def destroy(self):
+        """
+        Cleanup method to be called when the plugin is uninstalled or reloaded.
+        Subclasses should override this if they have background threads or other resources to release.
+        """
+        pass
+
     def set_id(self, id):
         """
         Set the ID of the plugin.

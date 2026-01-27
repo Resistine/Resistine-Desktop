@@ -46,8 +46,6 @@ Darwin*)
 		export PATH="$(brew --prefix tcl-tk)/bin:$PATH"
 		export LDFLAGS="-L$(brew --prefix tcl-tk)/lib"
 		export CPPFLAGS="-I$(brew --prefix tcl-tk)/include"
-		# Add Homebrew lib path for Cairo and other libraries
-		export DYLD_LIBRARY_PATH="/opt/homebrew/lib:$DYLD_LIBRARY_PATH"
 	fi
 
 	# Install/update requirements if needed
