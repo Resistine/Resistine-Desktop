@@ -31,7 +31,7 @@ class Plugin(BasePlugin):
         super().__init__(
             id="009",
             version="2025.01.01",
-            order=101,
+            order=200,
             name="Help",
             status=None,
             description="This plugin provides help documentation.",
