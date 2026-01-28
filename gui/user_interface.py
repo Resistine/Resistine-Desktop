@@ -94,12 +94,18 @@ class AppUI(customtkinter.CTk):
         hover_color = cls._get_theme_color("CTkButton", "hover_color")
         border_color = cls._get_theme_color("CTkButton", "border_color")
 
-        if is_active:
-            button.configure(
-                fg_color=hover_color, border_width=1, border_color=border_color
-            )
-        else:
-            button.configure(fg_color="transparent", border_width=0)
+        try:
+            if not button or not button.winfo_exists():
+                return
+            
+            if is_active:
+                button.configure(
+                    fg_color=hover_color, border_width=1, border_color=border_color
+                )
+            else:
+                button.configure(fg_color="transparent", border_width=0)
+        except (tk.TclError, RuntimeError, AttributeError):
+            pass
 
 
     @classmethod

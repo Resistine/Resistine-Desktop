@@ -630,18 +630,29 @@ def ensure_helper_registered():
 def prompt_helper_approval(service):
     """Prompt user to approve helper in System Settings"""
     try:
-        import tkinter.messagebox as messagebox
+        from gui.dialogs import ask_yes_no
+        import tkinter as tk
+        
+        # Try to find the root window
+        try:
+            root = tk._default_root
+        except:
+            root = None
 
-        response = messagebox.askyesno(
+        def on_confirm(confirmed):
+            if confirmed:
+                # Open System Settings → Login Items
+                service.openSystemSettingsLoginItems()
+                logger.info("📱 Opened System Settings → Login Items")
+
+        ask_yes_no(
+            root,
             "Helper Approval Required",
             "Resistine needs your approval to install a helper tool for VPN functionality.\n\n"
             "Click 'Yes' to open System Settings where you can enable it in Login Items.",
-            icon="info",
+            on_confirm
         )
-
-        if response:
-            # Open System Settings → Login Items
-            service.openSystemSettingsLoginItems()
-            logger.info("📱 Opened System Settings → Login Items")
+    except Exception as e:
+        logger.error(f"⚠️ Could not prompt for approval: {e}")
     except Exception as e:
         logger.error(f"⚠️ Could not prompt for approval: {e}")
