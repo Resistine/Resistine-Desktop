@@ -226,8 +226,8 @@ class Plugin(BasePlugin):
         self._cached_screen_width = self.app.winfo_screenwidth()  # Cache screen width
         
         def debounced_resize(event=None):
-            # Skip if dashboard is not visible
-            if not hasattr(self, 'main_frame') or not self.main_frame.winfo_ismapped():
+            # Skip if dashboard is not visible or destroyed
+            if not hasattr(self, 'main_frame') or not self.main_frame.winfo_exists() or not self.main_frame.winfo_ismapped():
                 return
             
             # Quick check if we crossed the threshold (no debounce for threshold crossing)
