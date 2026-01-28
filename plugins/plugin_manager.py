@@ -128,15 +128,16 @@ class PluginManager:
         def refresh_ui():
             if hasattr(self.app, "refresh_navigation"):
                 self.app.refresh_navigation()
+            elif hasattr(self.app, "refresh_navigation_menu"):
+                self.app.refresh_navigation_menu()
             elif hasattr(self.app, "create_dashboard"):
-                # Fallback if refresh_navigation isn't available for some reason
+                # Fallback if refresh methods aren't available for some reason
                 self.app.create_dashboard()
         
         if hasattr(self.app, "after"):
             self.app.after(100, refresh_ui)
         else:
             refresh_ui()
-
         return True, "Plugin uninstalled successfully."
 
     def download_plugin(self, url, plugin_id=None, plugin_name=None):
@@ -224,12 +225,12 @@ class PluginManager:
             logger.error(f"Unexpected error during plugin install: {e}")
             return False, f"Installation error: {str(e)}"
 
-    def load_plugins(self):
+    def load_plugins(self, include_uninstalled=False):
         """
         Load all plugins from both system and user directories.
         """
         state = self._load_state()
-        uninstalled_ids = state.get("uninstalled", [])
+        uninstalled_ids = state.get("uninstalled", []) if not include_uninstalled else []
         
         system_plugins_path = self.get_plugins_path()
         user_plugins_path = self.user_plugins_path
@@ -315,6 +316,9 @@ class PluginManager:
             except Exception as e:
                 logger.error(f"Failed to load plugin {module_name}: {e}")
                 
+        # Sort plugins by their defined 'order'
+        loaded_plugins.sort(key=lambda p: getattr(p, 'order', 999))
+        
         return loaded_plugins
 
     def get_plugins_path(self):

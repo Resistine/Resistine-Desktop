@@ -29,7 +29,7 @@ class Plugin(BasePlugin):
         super().__init__(
             id="003",
             version="2025.01.01",
-            order=3,
+            order=4,
             name="Endpoint",
             status=None,
             description="This plugin allows you to view the endpoints.",

@@ -1,80 +1,89 @@
-import customtkinter as ctk
+import customtkinter
+from typing import Callable, Optional
 
-from utils.i18n import get_text
-
-
-class CTkPasswordDialog(ctk.CTkToplevel):
+class SafeDialog(customtkinter.CTkToplevel):
     """
-    A themed password dialog using CustomTkinter.
-    Usage:
-        dialog = CTkPasswordDialog(title="Password Required", text="Enter sudo password:")
-        password = dialog.get_input()
+    A custom dialog system that avoids native macOS NSAlert calls 
+    to prevent Bus Error crashes on Python 3.14/ARM64.
     """
-
-    def __init__(self, title=None, text=None, parent=None):
-        super().__init__(parent)
-
-        if title is None:
-            title = get_text("dialog.password.title")
-        if text is None:
-            text = get_text("dialog.password.text")
-
+    def __init__(
+        self, 
+        master, 
+        title: str, 
+        message: str, 
+        icon: str = "info",
+        options: list = ["OK"],
+        callback: Optional[Callable[[str], None]] = None
+    ):
+        super().__init__(master)
+        
         self.title(title)
-        self.geometry("500x200")
-        self.resizable(False, False)
-
-        # Center the window
-        self.update_idletasks()
-        if parent:
-            x = parent.winfo_x() + (parent.winfo_width() // 2) - (500 // 2)
-            y = parent.winfo_y() + (parent.winfo_height() // 2) - (200 // 2)
-        else:
-            x = (self.winfo_screenwidth() // 2) - (500 // 2)
-            y = (self.winfo_screenheight() // 2) - (200 // 2)
-        self.geometry(f"+{x}+{y}")
-
+        self.lift()  # Bring to front
         self.attributes("-topmost", True)
-        self.grab_set()  # Make it modal
-
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        
+        self.callback = callback
         self.result = None
 
-        self.label = ctk.CTkLabel(self, text=text, font=ctk.CTkFont(size=14))
-        self.label.pack(pady=(20, 10), padx=20)
-
-        self.entry = ctk.CTkEntry(self, show="*", width=400)
-        self.entry.pack(pady=10, padx=20)
-        self.entry.focus_set()
-        self.entry.bind("<Return>", lambda e: self.on_ok())
-
-        self.button_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.button_frame.pack(pady=(10, 20), padx=20, fill="x")
-
-        self.ok_button = ctk.CTkButton(
-            self.button_frame,
-            text=get_text("dialog.password.button.ok"),
-            command=self.on_ok,
-            width=100,
+        # Design
+        self.grid_columnconfigure(0, weight=1)
+        self.configure(padx=20, pady=20)
+        
+        # Message Label
+        self.label = customtkinter.CTkLabel(
+            self, 
+            text=message, 
+            wraplength=350,
+            font=customtkinter.CTkFont(size=14)
         )
-        self.ok_button.pack(side="right", padx=5)
+        self.label.grid(row=0, column=0, pady=(0, 20), sticky="nsew")
+        
+        # Buttons Frame
+        self.button_frame = customtkinter.CTkFrame(self, fg_color="transparent")
+        self.button_frame.grid(row=1, column=0, sticky="ew")
+        
+        for i, option in enumerate(options):
+            self.button_frame.grid_columnconfigure(i, weight=1)
+            btn = customtkinter.CTkButton(
+                self.button_frame,
+                text=option,
+                command=lambda opt=option: self._on_button_click(opt)
+            )
+            btn.grid(row=0, column=i, padx=5)
 
-        self.cancel_button = ctk.CTkButton(
-            self.button_frame,
-            text=get_text("dialog.password.button.cancel"),
-            command=self.on_cancel,
-            width=100,
-            fg_color="gray30",
-            hover_color="gray40",
-        )
-        self.cancel_button.pack(side="right", padx=5)
+        # Center on screen
+        self.after(10, self._center_window)
 
-    def on_ok(self):
-        self.result = self.entry.get()
+    def _center_window(self):
+        self.update_idletasks()
+        width = self.winfo_width()
+        height = self.winfo_height()
+        x = (self.winfo_screenwidth() // 2) - (width // 2)
+        y = (self.winfo_screenheight() // 2) - (height // 2)
+        self.geometry(f"{width}x{height}+{x}+{y}")
+
+    def _on_button_click(self, option: str):
+        self.result = option
+        if self.callback:
+            self.callback(option)
         self.destroy()
 
-    def on_cancel(self):
-        self.result = None
-        self.destroy()
+    def _on_close(self):
+        self._on_button_click(None)
 
-    def get_input(self):
-        self.wait_window()
-        return self.result
+def ask_yes_no(master, title: str, message: str, callback: Callable[[bool], None]):
+    """Safe replacement for messagebox.askyesno"""
+    def _internal_callback(result):
+        callback(result == "Yes")
+        
+    SafeDialog(
+        master, 
+        title, 
+        message, 
+        options=["Yes", "No"], 
+        callback=_internal_callback
+    )
+
+def show_info(master, title: str, message: str):
+    """Safe replacement for messagebox.showinfo"""
+    SafeDialog(master, title, message, options=["OK"])

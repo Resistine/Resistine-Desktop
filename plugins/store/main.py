@@ -51,7 +51,7 @@ class Plugin(BasePlugin):
         super().__init__(
             id="004",
             version="2025.01.01",
-            order=100,
+            order=1000,
             name="Store",
             status=None,
             description="This plugin allows you to download and install new plugins.",
@@ -113,14 +113,23 @@ class Plugin(BasePlugin):
         # --- Plugins grid ---
         manager = self.app.get_plugin_manager()
         installed_plugins = manager.plugins
+        all_local_plugins = manager.load_plugins(include_uninstalled=True)
         available_remote = manager.get_available_plugins()
         
-        # Wrap remote plugins that aren't installed yet
         installed_ids = {p.id for p in installed_plugins}
+        local_ids = {p.id for p in all_local_plugins}
         
         plugins = list(installed_plugins)
+        
+        # Add uninstalled local plugins
+        for lp in all_local_plugins:
+            if lp.id not in installed_ids:
+                lp.status = "Uninstalled"
+                plugins.append(lp)
+        
+        # Add remote plugins that aren't local at all
         for rp in available_remote:
-            if rp["id"] not in installed_ids:
+            if rp["id"] not in local_ids:
                 plugins.append(RemotePluginWrapper(self.app, rp))
         
         # Sort by name for the store
@@ -183,7 +192,7 @@ class Plugin(BasePlugin):
             )
             info_btn.grid(row=0, column=0, padx=5, pady=5)
 
-            if isinstance(p, RemotePluginWrapper):
+            if isinstance(p, RemotePluginWrapper) or getattr(p, "status", None) == "Uninstalled":
                 # Install Button
                 install_btn = customtkinter.CTkButton(
                     container,
@@ -268,7 +277,7 @@ class Plugin(BasePlugin):
         self._cached_screen_width = self.app.winfo_screenwidth()  # Cache screen width
         
         def debounced_resize(event=None):
-            # Skip if store is not visible
+            # Skip if store is not visible or destroyed
             if not hasattr(self, 'main_frame'):
                 return
             try:
@@ -371,12 +380,27 @@ class Plugin(BasePlugin):
     def handle_install(self, remote_plugin):
         """Handle plugin installation."""
         from utils.logger import logger
-        logger.info(f"Store: Initiating installation for {remote_plugin.get_name()} ({remote_plugin.id})")
-        
+        if not isinstance(remote_plugin, RemotePluginWrapper):
+            # It's an uninstalled local plugin, just re-enable it
+            manager = self.app.get_plugin_manager()
+            state = manager._load_state()
+            if remote_plugin.id in state.get("uninstalled", []):
+                state["uninstalled"].remove(remote_plugin.id)
+                manager._save_state(state)
+                manager.plugins = manager.load_plugins()
+                if hasattr(self.app, "refresh_navigation_menu"):
+                    self.app.refresh_navigation_menu()
+                self.app.show_notification(f"Plugin {remote_plugin.get_name()} re-enabled.", type="info")
+                # Refresh screen
+                self.app.select_frame_by_name("frame_Store")
+                return
+
         success, message = self.app.get_plugin_manager().download_plugin(remote_plugin.url, remote_plugin.id, remote_plugin.get_name())
         logger.info(f"Store: Installation result for {remote_plugin.get_name()}: success={success}, msg={message}")
         
         if success:
+            if hasattr(self.app, "refresh_navigation_menu"):
+                self.app.refresh_navigation_menu()
             self.app.show_notification(message, type="info")
             # Refresh screen
             self.app.select_frame_by_name("frame_Store")
@@ -385,20 +409,29 @@ class Plugin(BasePlugin):
 
     def show_remote_info(self, remote_plugin):
         """Show info for a remote plugin."""
-        import tkinter.messagebox
-        tkinter.messagebox.showinfo(remote_plugin.get_name(), remote_plugin.get_description())
+        from gui.dialogs import show_info
+        show_info(self.app, remote_plugin.get_name(), remote_plugin.get_description())
 
     def handle_uninstall(self, plugin):
         """Handle plugin uninstallation with confirmation."""
-        import tkinter.messagebox
-        if tkinter.messagebox.askyesno("Uninstall Plugin", f"Are you sure you want to uninstall {plugin.get_name()}?"):
-             success, res = self.app.get_plugin_manager().uninstall_plugin(plugin)
-             if success:
-                 self.app.show_notification(res, type="info")
-                 # Refresh screen
-                 self.app.select_frame_by_name("frame_Store")
-             else:
-                 self.app.show_notification(res, type="error")
+        from gui.dialogs import ask_yes_no
+        
+        def confirm_uninstall(confirmed):
+            if confirmed:
+                success, res = self.app.get_plugin_manager().uninstall_plugin(plugin)
+                if success:
+                    self.app.show_notification(res, type="info")
+                    # Refresh screen
+                    self.app.select_frame_by_name("frame_Store")
+                else:
+                    self.app.show_notification(res, type="error")
+
+        ask_yes_no(
+            self.app, 
+            "Uninstall Plugin", 
+            f"Are you sure you want to uninstall {plugin.get_name()}?",
+            confirm_uninstall
+        )
 
 class RemotePluginWrapper:
     """Wrapper to make remote plugin dicts compatible with AppUI.create_plugin_card."""

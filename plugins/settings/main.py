@@ -29,7 +29,7 @@ class Plugin(BasePlugin):
         super().__init__(
             id="010",
             version="2025.01.01",
-            order=201,
+            order=1020,
             name="Settings",
             status=None,
             description="This plugin allows you to configure your account settings.",
