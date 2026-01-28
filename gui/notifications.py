@@ -59,6 +59,13 @@ class ToastNotification(customtkinter.CTkFrame):
     def animate_in(self):
         if self.is_destroying:
             return
+        
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+
         if self.y_pos < self.target_y:
             self.y_pos += 0.01 # Faster animation
             self.place(relx=0.5, rely=self.y_pos, anchor="n")
@@ -68,6 +75,13 @@ class ToastNotification(customtkinter.CTkFrame):
 
     def animate_out(self):
         self.is_destroying = True
+
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+
         if self.y_pos > -0.2:
             self.y_pos -= 0.01
             self.place(relx=0.5, rely=self.y_pos, anchor="n")

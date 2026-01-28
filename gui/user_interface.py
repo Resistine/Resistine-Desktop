@@ -540,6 +540,66 @@ class AppUI(customtkinter.CTk):
 
         return container
 
+    def refresh_navigation(self):
+        """
+        Surgical update: Rebuild only the navigation sidebar buttons.
+        """
+        if not hasattr(self, "navigation_frame") or not self.navigation_frame.winfo_exists():
+            # If sidebar doesn't exist, we must do a full dashboard creation
+            return self.create_dashboard()
+
+        # Clear existing buttons from navigation frame
+        try:
+            for widget in self.navigation_frame.winfo_children():
+                if not widget.winfo_exists():
+                    continue
+                # Keep the logo/label at the top (row 0)
+                info = widget.grid_info()
+                if info and int(info.get("row", 0)) > 0:
+                    widget.destroy()
+        except Exception as e:
+            logger.warning(f"Error while clearing navigation frame: {e}")
+
+        # Reset grid row configurations to avoid gaps from uninstalled plugins
+        # We assume a reasonable maximum number of plugins (e.g. 50) to clear weights
+        for r in range(50):
+            self.navigation_frame.grid_rowconfigure(r, weight=0)
+
+        # Update plugin list from manager
+        self.plugin_list = self.get_plugin_manager().plugins
+        number_plugins = len(self.plugin_list) + 1
+        # Only the very last row (the spacer) should have weight 1
+        self.navigation_frame.grid_rowconfigure(number_plugins, weight=1)
+
+        self.frames = {}
+        row = 1
+        for plugin in self.plugin_list:
+            frame_name = f"frame_{plugin.get_name()}"
+            self.frames[frame_name] = plugin
+            
+            if plugin.order <= 0:
+                continue
+
+            try:
+                # Create sidebar button
+                btn = self.create_tab_button(
+                    self.navigation_frame,
+                    plugin.get_name(),
+                    plugin.get_icon(),
+                    lambda p=plugin: self.select_frame_by_name(
+                        f"frame_{p.get_name()}", button=p.get_button()
+                    ),
+                    row,
+                    0,
+                )
+                plugin.set_button(btn)
+                # Ensure the button reflects the current active state if we are on this plugin's frame
+                if frame_name == getattr(self, "current_frame_name", ""):
+                    self.update_tab_button_active_state(btn, is_active=True)
+            except Exception as e:
+                logger.error(f"Error loading plugin button {plugin.get_name()}: {e}")
+            row += 1
+
     def create_dashboard(self):
         """
         Create the main dashboard of the application.
@@ -547,16 +607,12 @@ class AppUI(customtkinter.CTk):
         for widget in self.winfo_children():
             if isinstance(widget, (tk.Toplevel, customtkinter.CTkToplevel)):
                 continue
-            widget.grid_forget()
+            widget.destroy()
 
         # Re-configure the main window
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=0)  # Navigation column
         self.grid_columnconfigure(1, weight=1)  # Content column
-
-        # Plugin List Management
-        self.plugin_list = self.get_plugin_manager().plugins
-        number_plugins = len(self.plugin_list) + 1
 
         # Theme-aware sidebar colors
         sidebar_bg = self._get_theme_color("CTkFrame", "fg_color")
@@ -567,7 +623,6 @@ class AppUI(customtkinter.CTk):
         )
         self.navigation_frame.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
         self.grid_columnconfigure(0, minsize=200)
-        self.navigation_frame.grid_rowconfigure(number_plugins, weight=1)
         self.navigation_frame.grid_columnconfigure(0, weight=1)
 
         # Logo
@@ -613,66 +668,10 @@ class AppUI(customtkinter.CTk):
             row=0, column=0, padx=20, pady=(25, 10), sticky="ew"
         )
 
-        self.frames = {}
-        self.refresh_navigation_menu()
+        # Use the surgical refresh to handle the buttons
+        self.refresh_navigation()
 
         self.select_frame_by_name("frame_Dashboard")
-
-    def refresh_navigation_menu(self):
-        """
-        Rebuild the sidebar navigation buttons without clearing the whole UI.
-        """
-        if not hasattr(self, "navigation_frame"):
-            return
-
-        # Clear existing buttons (except logo at row 0)
-        for widget in self.navigation_frame.winfo_children():
-            # Check grid position
-            info = widget.grid_info()
-            if info.get("row", 0) > 0:
-                widget.destroy()
-
-        # Refresh plugin list
-        self.plugin_list = self.get_plugin_manager().load_plugins() # Reload from disk/state
-        number_plugins = len(self.plugin_list) + 1
-        self.navigation_frame.grid_rowconfigure(number_plugins, weight=1)
-
-        # Re-synchronize frames dict (clear stale entries)
-        # Note: We keep "Dashboard" and other keys if they exist and are valid.
-        new_frames = {}
-        # Preserve standard frames that aren't plugins (if any)
-        for name, frame in self.frames.items():
-            if name == "frame_Dashboard": # Always keep dashboard
-                new_frames[name] = frame
-        
-        self.frames = new_frames
-
-        row = 1
-        for plugin in self.plugin_list:
-            frame_name = f"frame_{plugin.get_name()}"
-            self.frames[frame_name] = plugin
-
-            try:
-                # Create sidebar button
-                btn = self.create_tab_button(
-                    self.navigation_frame,
-                    plugin.get_name(),
-                    plugin.get_icon(),
-                    lambda p=plugin: self.select_frame_by_name(
-                        f"frame_{p.get_name()}", button=p.get_button()
-                    ),
-                    row,
-                    0,
-                )
-                plugin.set_button(btn)
-                
-                # If this is the current active frame, update its button state
-                if hasattr(self, "current_frame_name") and frame_name == self.current_frame_name:
-                    self.update_tab_button_active_state(btn, is_active=True)
-                    
-            except Exception as e:
-                logger.error(f"Error loading plugin button {plugin.get_name()}: {e}")
-            row += 1
 
     def select_frame_by_name(self, name, button=None):
         """
