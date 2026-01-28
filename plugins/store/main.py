@@ -72,26 +72,43 @@ class Plugin(BasePlugin):
         """
         @brief Create the main screen for the Store plugin.
         """
-        self.main_frame = customtkinter.CTkFrame(
+        self.main_frame = customtkinter.CTkScrollableFrame(
             self.app, corner_radius=0, fg_color="transparent"
         )
         self.main_frame.grid_columnconfigure(0, weight=1)
-        self.main_frame.grid_rowconfigure(0, weight=1)
-        self.main_frame.grid_rowconfigure(1, weight=10)
 
-        # Title frame
-        self.title_frame = customtkinter.CTkFrame(
-            self.main_frame, corner_radius=0, fg_color="transparent"
+        # Get theme colors
+        accent_blue = customtkinter.ThemeManager.theme["CTkButton"]["border_color"]
+        card_bg = customtkinter.ThemeManager.theme["CTkFrame"]["fg_color"]
+        corner_radius = customtkinter.ThemeManager.theme["CTkFrame"]["corner_radius"]
+
+        # Add a top spacer to move content down and away from the window title bar/header
+        top_margin_spacer = customtkinter.CTkLabel(self.main_frame, text="", height=30)
+        top_margin_spacer.grid(row=0, column=0, sticky="ew")
+
+        # Container for centered title panel
+        title_container = customtkinter.CTkFrame(self.main_frame, fg_color="transparent", height=80)
+        title_container.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 20))
+        title_container.grid_columnconfigure(0, weight=1)
+        title_container.grid_propagate(False)
+        
+        # Title panel with background frame (max width 50%)
+        title_frame = customtkinter.CTkFrame(
+            title_container,
+            fg_color=card_bg,
+            corner_radius=corner_radius
         )
-        self.title_frame.grid(row=0, column=0, sticky="nsew")
-        self.title_frame.grid_columnconfigure(0, weight=1)
-
+        title_frame.place(relx=0.5, rely=0.5, anchor="center", relwidth=0.5, relheight=1.0)
+        
         self.title_label = customtkinter.CTkLabel(
-            self.title_frame,
+            title_frame,
             text="Store",
-            font=customtkinter.CTkFont(size=30, weight="bold"),
+            font=customtkinter.CTkFont(family="Inter", size=30, weight="bold"),
+            text_color=accent_blue,
+            justify="center",
+            anchor="center",
         )
-        self.title_label.grid(row=0, column=0, padx=20, pady=(20, 10))
+        self.title_label.pack(expand=True, fill="both", padx=20, pady=20)
 
         # --- Plugins grid ---
         manager = self.app.get_plugin_manager()
@@ -139,10 +156,10 @@ class Plugin(BasePlugin):
         self._current_cols = len(cols)
         self._current_max_cols = max_cols
 
-        content_frame = customtkinter.CTkScrollableFrame(
+        content_frame = customtkinter.CTkFrame(
             self.main_frame, corner_radius=0, fg_color="transparent"
         )
-        content_frame.grid(row=1, column=0, sticky="nsew", padx=15, pady=0)
+        content_frame.grid(row=2, column=0, sticky="new", padx=15, pady=0)
         content_frame.grid_columnconfigure(0, weight=1)
         
         # Store reference for rebuilding
@@ -261,7 +278,12 @@ class Plugin(BasePlugin):
         
         def debounced_resize(event=None):
             # Skip if store is not visible or destroyed
-            if not hasattr(self, 'main_frame') or not self.main_frame.winfo_exists() or not self.main_frame.winfo_ismapped():
+            if not hasattr(self, 'main_frame'):
+                return
+            try:
+                if not self.main_frame.winfo_exists() or not self.main_frame.winfo_ismapped():
+                    return
+            except Exception:
                 return
             
             # Quick check if we crossed the threshold (no debounce for threshold crossing)
@@ -291,7 +313,31 @@ class Plugin(BasePlugin):
                 self.app.after_cancel(self._resize_after_id)
             self._resize_after_id = self.app.after(100, on_resize)
         
-        self.app.bind("<Configure>", debounced_resize, add="+")
+        # LEAK PREVENTION: Unbind any existing global handler before adding a new one.
+        # This is critical because create_main_screen() is called on every tab switch.
+        if hasattr(self, '_resize_handler_id') and self._resize_handler_id:
+            try:
+                self.app.unbind("<Configure>", self._resize_handler_id)
+            except:
+                pass
+        
+        self._resize_handler_id = self.app.bind("<Configure>", debounced_resize, add="+")
+    
+    def destroy(self):
+        """Cleanup handler for uninstallation."""
+        if hasattr(self, '_resize_after_id') and self._resize_after_id:
+            try:
+                self.app.after_cancel(self._resize_after_id)
+            except:
+                pass
+        
+        if hasattr(self, '_resize_handler_id') and self._resize_handler_id:
+            try:
+                self.app.unbind("<Configure>", self._resize_handler_id)
+            except:
+                pass
+        
+        super().destroy()
     
     def _rebuild_grid(self, max_cols, min_cols, inject_store_buttons):
         """Rebuild the plugin grid with new column count."""
