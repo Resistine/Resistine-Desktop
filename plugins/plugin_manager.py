@@ -95,7 +95,9 @@ class PluginManager:
         
         # Refresh plugins list and UI
         self.plugins = self.load_plugins()
-        if hasattr(self.app, "create_dashboard"):
+        if hasattr(self.app, "refresh_navigation_menu"):
+            self.app.refresh_navigation_menu()
+        elif hasattr(self.app, "create_dashboard"):
             self.app.create_dashboard()
         return True, "Plugin uninstalled successfully."
 
@@ -163,12 +165,12 @@ class PluginManager:
             logger.error(f"Unexpected error during plugin install: {e}")
             return False, f"Installation error: {str(e)}"
 
-    def load_plugins(self):
+    def load_plugins(self, include_uninstalled=False):
         """
         Load all plugins from both system and user directories.
         """
         state = self._load_state()
-        uninstalled_ids = state.get("uninstalled", [])
+        uninstalled_ids = state.get("uninstalled", []) if not include_uninstalled else []
         
         system_plugins_path = self.get_plugins_path()
         user_plugins_path = self.user_plugins_path
