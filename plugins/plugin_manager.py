@@ -236,6 +236,9 @@ class PluginManager:
             except Exception as e:
                 logger.error(f"Failed to load plugin {module_name}: {e}")
                 
+        # Sort plugins by their defined 'order'
+        loaded_plugins.sort(key=lambda p: getattr(p, 'order', 999))
+        
         return loaded_plugins
 
     def get_plugins_path(self):

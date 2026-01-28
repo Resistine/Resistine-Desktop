@@ -51,7 +51,7 @@ class Plugin(BasePlugin):
         super().__init__(
             id="004",
             version="2025.01.01",
-            order=100,
+            order=1000,
             name="Store",
             status=None,
             description="This plugin allows you to download and install new plugins.",

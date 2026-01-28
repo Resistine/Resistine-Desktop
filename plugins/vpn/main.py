@@ -93,7 +93,7 @@ class Plugin(BasePlugin):
         super().__init__(
             id="008",
             version="2025.01.01",
-            order=8,
+            order=3,
             name="VPN",
             status=None, # Default status
             description="VPN Management",
