@@ -94,12 +94,18 @@ class AppUI(customtkinter.CTk):
         hover_color = cls._get_theme_color("CTkButton", "hover_color")
         border_color = cls._get_theme_color("CTkButton", "border_color")
 
-        if is_active:
-            button.configure(
-                fg_color=hover_color, border_width=1, border_color=border_color
-            )
-        else:
-            button.configure(fg_color="transparent", border_width=0)
+        try:
+            if not button or not button.winfo_exists():
+                return
+            
+            if is_active:
+                button.configure(
+                    fg_color=hover_color, border_width=1, border_color=border_color
+                )
+            else:
+                button.configure(fg_color="transparent", border_width=0)
+        except (tk.TclError, RuntimeError, AttributeError):
+            pass
 
 
     @classmethod
@@ -608,17 +614,41 @@ class AppUI(customtkinter.CTk):
         )
 
         self.frames = {}
+        self.refresh_navigation_menu()
+
+        self.select_frame_by_name("frame_Dashboard")
+
+    def refresh_navigation_menu(self):
+        """
+        Rebuild the sidebar navigation buttons without clearing the whole UI.
+        """
+        if not hasattr(self, "navigation_frame"):
+            return
+
+        # Clear existing buttons (except logo at row 0)
+        for widget in self.navigation_frame.winfo_children():
+            # Check grid position
+            info = widget.grid_info()
+            if info.get("row", 0) > 0:
+                widget.destroy()
+
+        # Refresh plugin list
+        self.plugin_list = self.get_plugin_manager().load_plugins() # Reload from disk/state
+        number_plugins = len(self.plugin_list) + 1
+        self.navigation_frame.grid_rowconfigure(number_plugins, weight=1)
+
+        # Re-synchronize frames dict (clear stale entries)
+        # Note: We keep "Dashboard" and other keys if they exist and are valid.
+        new_frames = {}
+        # Preserve standard frames that aren't plugins (if any)
+        for name, frame in self.frames.items():
+            if name == "frame_Dashboard": # Always keep dashboard
+                new_frames[name] = frame
+        
+        self.frames = new_frames
+
         row = 1
         for plugin in self.plugin_list:
-            # Skip plugins with negative or zero order (e.g. Login at 0, hidden at -1)
-            # Order 0: Shows in Dashboard but not Sidebar
-            # Order -1: Hidden everywhere
-            if plugin.order <= 0:
-                # Still register the frame so it can be navigated to if needed (e.g. from Dashboard)
-                frame_name = f"frame_{plugin.get_name()}"
-                self.frames[frame_name] = plugin
-                continue
-
             frame_name = f"frame_{plugin.get_name()}"
             self.frames[frame_name] = plugin
 
@@ -635,11 +665,14 @@ class AppUI(customtkinter.CTk):
                     0,
                 )
                 plugin.set_button(btn)
+                
+                # If this is the current active frame, update its button state
+                if hasattr(self, "current_frame_name") and frame_name == self.current_frame_name:
+                    self.update_tab_button_active_state(btn, is_active=True)
+                    
             except Exception as e:
                 logger.error(f"Error loading plugin button {plugin.get_name()}: {e}")
             row += 1
-
-        self.select_frame_by_name("frame_Dashboard")
 
     def select_frame_by_name(self, name, button=None):
         """
