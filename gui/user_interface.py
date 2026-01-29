@@ -480,8 +480,8 @@ class AppUI(customtkinter.CTk):
                 
                 # Cap maximum height based on number of columns
                 # Shorter cards when in 2-column layout
+                max_height = 250
                 if num_cols == 2:
-                    max_height = 250
                     target_height = min(target_height, max_height)
                 elif num_cols >= 4:
                     # For 4+ columns, set minimum height to match what cards would be at 90% width with 3 cols
@@ -495,8 +495,9 @@ class AppUI(customtkinter.CTk):
                     card_w_at_90 = col_w_at_90 - 20
                     min_height_4col = int(card_w_at_90 / aspect_ratio) + 20
                     target_height = max(target_height, min_height_4col)
+                    target_height = min(target_height, max_height)
                 else:
-                    max_height = 900
+                    # max_height = 900
                     target_height = min(target_height, max_height)
                 
                 # Store for cards created later (pre-allocation)
