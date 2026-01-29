@@ -33,7 +33,7 @@ _interface_cache = {}
 
 
 class HelperToolManager:
-    """Manages XPC communication with the privileged helper via ResistCli"""
+    """Manages CLI communication with the resistine-vpn-cli tool"""
 
     def __init__(self):
         self.cli_path = self._find_cli_path()
@@ -44,24 +44,31 @@ class HelperToolManager:
         )
 
     def _find_cli_path(self):
-        """Locate ResistCli tool in the app bundle"""
+        """Locate resistine-vpn-cli tool in the embedded wireguard-apple.app"""
         # When frozen (PyInstaller), look relative to the executable
         if getattr(sys, "frozen", False):
-            # sys.executable is in Contents/MacOS/
+            # sys.executable is in Contents/MacOS/Resistine
             macos_dir = os.path.dirname(sys.executable)
-            app_contents = os.path.abspath(os.path.join(macos_dir, ".."))
+            contents_dir = os.path.dirname(macos_dir)
+            
+            # CLI is inside the embedded wireguard-apple.app
+            # Path: Contents/Resources/wireguard-apple.app/Contents/MacOS/resistine-vpn-cli
             cli_path = os.path.join(
-                app_contents, "Library", "LaunchServices", "ResistCli"
+                contents_dir, "Resources", "wireguard-apple.app",
+                "Contents", "MacOS", "resistine-vpn-cli"
             )
             if os.path.exists(cli_path):
                 return cli_path
+            
+            # Fallback: old path for backwards compatibility (in case of old builds)
+            old_cli_path = os.path.join(macos_dir, "resistine-cli")
+            if os.path.exists(old_cli_path):
+                logger.warning("⚠️ Using legacy CLI path - please rebuild for full VPN support")
+                return old_cli_path
 
-        # Development mode - search from script location
-        script_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-        dev_cli_path = os.path.join(script_dir, "apple_helper", "cli", "ResistCli")
-        if os.path.exists(dev_cli_path):
-            return dev_cli_path
-
+        # Development mode: VPN features require the built app bundle
+        # Run ./build-installer.sh first, then test from dist/Resistine.app
+        logger.warning("VPN CLI not found - run ./build-installer.sh to build the app")
         return None
 
 
@@ -71,57 +78,71 @@ helper = HelperToolManager()
 
 # Add VPN-specific helper methods
 class VPNHelper:
-    """VPN-specific operations using the XPC helper"""
+    """VPN-specific operations using the CLI interface"""
 
     @staticmethod
     def start_vpn(config_path: str) -> Tuple[bool, str]:
         """Start VPN using config file"""
         if not helper.cli_path:
+            logger.error("❌ [CLI] Helper CLI not found")
             return (False, "Helper CLI not found")
 
         try:
+            cmd = [helper.cli_path, "start", config_path]
+            logger.info(f"🔧 [CLI] Executing: {' '.join(cmd)}")
             result = subprocess.run(
-                [helper.cli_path, "start-vpn", config_path],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=30,
             )
             output = result.stdout.strip() or result.stderr.strip()
+            logger.info(f"📤 [CLI] Result: returncode={result.returncode}, output='{output}'")
             return (result.returncode == 0, output)
+        except subprocess.TimeoutExpired:
+            logger.error(f"⏰ [CLI] Command timed out after 30 seconds")
+            return (False, "Command timed out")
         except Exception as e:
+            logger.error(f"❌ [CLI] Command error: {e}")
             return (False, str(e))
 
     @staticmethod
-    def stop_vpn(config_path: str) -> Tuple[bool, str]:
-        """Stop VPN using config file"""
+    def stop_vpn(config_path: str = None) -> Tuple[bool, str]:
+        """Stop VPN (config_path is ignored - CLI uses 'stop' without arguments)"""
         if not helper.cli_path:
+            logger.error("❌ [CLI] Helper CLI not found")
             return (False, "Helper CLI not found")
 
         try:
+            cmd = [helper.cli_path, "stop"]
+            logger.info(f"🔧 [CLI] Executing: {' '.join(cmd)}")
             result = subprocess.run(
-                [helper.cli_path, "stop-vpn", config_path],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=30,
             )
             output = result.stdout.strip() or result.stderr.strip()
+            logger.info(f"📤 [CLI] Result: returncode={result.returncode}, output='{output}'")
             return (result.returncode == 0, output)
+        except subprocess.TimeoutExpired:
+            logger.error(f"⏰ [CLI] Command timed out after 30 seconds")
+            return (False, "Command timed out")
         except Exception as e:
+            logger.error(f"❌ [CLI] Command error: {e}")
             return (False, str(e))
 
     @staticmethod
     def check_status(
-        interface_name: str, test_ip: Optional[str] = None
+        interface_name: str = None, test_ip: Optional[str] = None
     ) -> Tuple[bool, str]:
-        """Check VPN status"""
+        """Check VPN status (interface_name is ignored - CLI uses 'status' without arguments)"""
         if not helper.cli_path:
             logger.warning("⚠️ [HELPER] CLI path not available")
             return (False, "Stopped")
 
         try:
-            cmd = [helper.cli_path, "status", interface_name]
-            if test_ip:
-                cmd.append(test_ip)
+            cmd = [helper.cli_path, "status"]
 
             logger.info(f"🔍 [HELPER] Running command: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -130,8 +151,8 @@ class VPNHelper:
                 f"📊 [HELPER] Command result: returncode={result.returncode}, output='{output}'"
             )
 
-            # Status check returns "Running" or "Stopped"
-            if "Running" in output:
+            # Status check returns "Connected" or "Disconnected" (or similar variations)
+            if "Running" in output or "Connected" in output:
                 is_running = True
             else:
                 is_running = False
@@ -565,6 +586,12 @@ def save_vpn_configuration(vpn_config_json):
 
 def ensure_helper_registered():
     """Register the privileged helper on macOS (runs silently on startup)"""
+    # CLI-only architecture: No privileged helper registration needed
+    # Python communicates with CLI exclusively via subprocess calls
+    # Network Extension handles privileged operations within the app sandbox
+    logger.info("ℹ️ Helper registration skipped (using CLI-only architecture)")
+    return
+
     try:
         from ServiceManagement import SMAppService
 

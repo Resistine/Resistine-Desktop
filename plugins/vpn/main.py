@@ -47,27 +47,50 @@ def initialize_vpn_status():
     global active_client_name, my_vpn_status, existing_interfaces
 
     existing_interfaces = []
-    
-    if platform.system() == "Windows":
+
+    # First, check if WireGuard is actually installed
+    if not check_wireguard_installed():
+        logger.warning("⚠️ WireGuard not installed - VPN features disabled")
+        my_vpn_status = "Stopped"
+        return
+
+    if platform.system() == "Darwin":
+        # macOS uses Network Extension — wg show interfaces won't see the tunnel.
+        # Query the CLI directly which checks NEVPNStatus via XPC.
+        status = check_service_status("vpn", DNS_SERVER)
+        if status == "Running":
+            # Find the config name so the UI knows which tunnel is active
+            if os.path.exists(wireguard_folder):
+                conf_files = [f for f in os.listdir(wireguard_folder) if f.endswith('.conf')]
+                if conf_files:
+                    active_client_name = os.path.splitext(conf_files[0])[0]
+            my_vpn_status = "Running"
+        else:
+            my_vpn_status = "Stopped"
+    elif platform.system() == "Windows":
         try:
             existing_interfaces = subprocess.run(['wg', 'show', 'interfaces'], capture_output=True, text=True, check=True).stdout.split()
-        except:
+        except Exception as e:
+            logger.warning(f"⚠️ Could not enumerate WireGuard interfaces on Windows: {e}")
             existing_interfaces = []
-    elif platform.system() == "Linux" or platform.system() == "Darwin":
+    elif platform.system() == "Linux":
         try:
             existing_interfaces = os.popen('wg show interfaces').read().split()
-        except:
+        except Exception as e:
+            logger.warning(f"⚠️ Could not enumerate WireGuard interfaces: {e}")
             existing_interfaces = []
 
-    # Check if any known interface is running
-    # Note: DNS_SERVER is used as a test ping IP
-    for interface in existing_interfaces:
-        status = check_service_status(interface, DNS_SERVER)
-        if status == "Running":
-            active_client_name = interface
-            break
+    if platform.system() != "Darwin":
+        # Check if any known interface is running (Linux/Windows only)
+        for interface in existing_interfaces:
+            if interface.strip():
+                status = check_service_status(interface, DNS_SERVER)
+                if status == "Running":
+                    active_client_name = interface
+                    break
 
-    my_vpn_status = check_service_status(active_client_name, DNS_SERVER) if active_client_name else "Stopped"
+        my_vpn_status = check_service_status(active_client_name, DNS_SERVER) if active_client_name else "Stopped"
+
     logger.info(f"VPN Status in Init: {my_vpn_status}")
 
 # --- Helper Functions ---
@@ -341,6 +364,7 @@ class Plugin(BasePlugin):
 
             if my_vpn_status == "Running":
                 # STOP
+                success = stop_vpn(config_path)
                 if success:
                     my_vpn_status = "Stopped"
                     active_client_name = None
