@@ -247,33 +247,30 @@ class AppUI(customtkinter.CTk):
             extra_buttons_func(buttons_container, plugin)
         else:
             # Dashboard/other pages: show status indicator (centered)
-            # Always render a status slot so the bottom section stays consistent,
-            # even for plugins that return no status (None).
+            # Only show status if the plugin has a meaningful status
             current_status = plugin.get_status()
-            status_container = customtkinter.CTkFrame(status_row, fg_color="transparent")
-            status_container.pack(expand=True, anchor="center")
+            
+            # Only display status if it's not None or empty
+            if current_status is not None and str(current_status).strip() != "":
+                status_container = customtkinter.CTkFrame(status_row, fg_color="transparent")
+                status_container.pack(expand=True, anchor="center")
 
-            if current_status is None or str(current_status).strip() == "":
-                status_dot_color = "#808080"
-                status_text = "Status: N/A"
-                status_text_color = ("#666666", "#aaaaaa")
-            else:
                 status_dot_color = cls.status_colors.get(str(current_status).lower(), "#808080")
                 status_text = f"Status: {str(current_status).title()}"
                 status_text_color = text_primary
 
-            status_dot = customtkinter.CTkFrame(
-                status_container, width=10, height=10, corner_radius=5, fg_color=status_dot_color
-            )
-            status_dot.pack(side="left", padx=(0, 8))
+                status_dot = customtkinter.CTkFrame(
+                    status_container, width=10, height=10, corner_radius=5, fg_color=status_dot_color
+                )
+                status_dot.pack(side="left", padx=(0, 8))
 
-            status_label = customtkinter.CTkLabel(
-                status_container,
-                text=status_text,
-                font=customtkinter.CTkFont(size=13),
-                text_color=status_text_color,
-            )
-            status_label.pack(side="left")
+                status_label = customtkinter.CTkLabel(
+                    status_container,
+                    text=status_text,
+                    font=customtkinter.CTkFont(size=13),
+                    text_color=status_text_color,
+                )
+                status_label.pack(side="left")
 
         # Interaction
         def on_click(_e=None):
