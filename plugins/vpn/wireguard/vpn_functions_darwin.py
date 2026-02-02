@@ -44,24 +44,26 @@ class HelperToolManager:
         )
 
     def _find_cli_path(self):
-        """Locate resistine-vpn-cli tool in the embedded wireguard-apple.app"""
+        """Locate resistine-vpn-cli tool in the app bundle"""
         # When frozen (PyInstaller), look relative to the executable
         if getattr(sys, "frozen", False):
             # sys.executable is in Contents/MacOS/Resistine
             macos_dir = os.path.dirname(sys.executable)
             contents_dir = os.path.dirname(macos_dir)
             
-            # CLI is inside the embedded wireguard-apple.app
-            # Path: Contents/Resources/wireguard-apple.app/Contents/MacOS/resistine-vpn-cli
-            cli_path = os.path.join(
-                contents_dir, "Resources", "wireguard-apple.app",
-                "Contents", "MacOS", "resistine-vpn-cli"
-            )
+            # CLI is in Contents/MacOS/ — must be here (not Contents/Helpers/)
+            # because NSXPCConnection(serviceName:) requires launchd to associate
+            # the process with its parent app bundle, which only works for
+            # binaries in Contents/MacOS/.
+            cli_path = os.path.join(contents_dir, "MacOS", "resistine-vpn-cli")
             if os.path.exists(cli_path):
                 return cli_path
             
-            # Fallback: old path for backwards compatibility (in case of old builds)
-            old_cli_path = os.path.join(macos_dir, "resistine-cli")
+            # Fallback: old nested path for backwards compatibility
+            old_cli_path = os.path.join(
+                contents_dir, "Resources", "wireguard-apple.app",
+                "Contents", "MacOS", "resistine-vpn-cli"
+            )
             if os.path.exists(old_cli_path):
                 logger.warning("⚠️ Using legacy CLI path - please rebuild for full VPN support")
                 return old_cli_path

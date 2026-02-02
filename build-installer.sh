@@ -9,21 +9,10 @@ echo "=== Resistine Build System ==="
 echo "Building unified installer with modular architecture"
 echo ""
 
-# Detect script location and project structure
+# Project paths
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-
-# Check if we're in Resistine-Desktop or need to find it
-if [[ "$SCRIPT_DIR" == *"Resistine-Desktop"* ]]; then
-    # Script is inside Resistine-Desktop
-    PYTHON_UI_PATH="$SCRIPT_DIR"
-    PARENT_DIR="$(dirname "$PYTHON_UI_PATH")"
-    VPN_PROJECT_PATH="$PARENT_DIR/wireguard-apple"
-else
-    # Script is in parent directory, assume standard layout
-    PARENT_DIR="$SCRIPT_DIR"
-    PYTHON_UI_PATH="$PARENT_DIR/Resistine-Desktop"
-    VPN_PROJECT_PATH="$PARENT_DIR/wireguard-apple"
-fi
+PYTHON_UI_PATH="$SCRIPT_DIR"
+VPN_PROJECT_PATH="$PYTHON_UI_PATH/vpn-apple"
 
 # Validate paths exist
 echo "Checking project structure..."
@@ -41,13 +30,6 @@ fi
 
 if [ ! -d "$VPN_PROJECT_PATH" ]; then
     echo "❌ Error: VPN project directory not found at: $VPN_PROJECT_PATH"
-    echo ""
-    echo "Expected structure:"
-    echo "  parent-directory/"
-    echo "  ├── Resistine-Desktop/"
-    echo "  └── wireguard-apple/"
-    echo ""
-    echo "Please ensure both directories exist in the same parent directory."
     exit 1
 fi
 
@@ -150,9 +132,17 @@ pyinstaller Resistine.spec --clean
 
 echo "✅ Python UI built"
 
-# Step 3: Embed complete wireguard-apple.app into Resistine.app
+# Step 3: Place VPN components directly in Resistine.app bundle
+# Apple bundle structure requirements (from Apple documentation):
+#   - App Extensions (.appex): Contents/PlugIns/
+#   - XPC Services (.xpc): Contents/XPCServices/
+#   - Helper Tools / CLI: Contents/Helpers/ or Contents/MacOS/
+#   - Frameworks: Contents/Frameworks/
+#
+# CRITICAL: Do NOT nest bundles inside Contents/Resources/. macOS extension
+# discovery looks for components relative to the parent bundle.
 echo ""
-echo "Step 3: Embedding VPN app bundle..."
+echo "Step 3: Placing VPN components in main app bundle..."
 
 PYTHON_APP="$DIST_DIR/$APP_NAME.app"
 VPN_ARCHIVE="$BUILD_DIR/wireguard-apple.xcarchive/Products/Applications/wireguard-apple.app"
@@ -169,57 +159,58 @@ if [ ! -d "$VPN_ARCHIVE" ]; then
     exit 1
 fi
 
-# Create necessary directories in Python app bundle
-mkdir -p "$PYTHON_APP/Contents/Resources/modules"
+# Create Apple-standard directories
+mkdir -p "$PYTHON_APP/Contents/PlugIns"
+mkdir -p "$PYTHON_APP/Contents/XPCServices"
 
-# Embed the wireguard-apple.app, excluding only the GUI app
-# The Network Extension AND XPC service must be in the embedded bundle structure
-# - network-extension.appex: provides the PacketTunnelProvider
-# - ResistineVPNXPC.xpc: holds the networkextension entitlement, CLI talks to it via XPC
-echo "  - Embedding wireguard-apple.app (CLI + XPC Service + Network Extension)..."
+# --- Copy CLI to Contents/MacOS/ ---
+# IMPORTANT: The CLI must be in Contents/MacOS/ (not Contents/Helpers/) because
+# NSXPCConnection(serviceName:) relies on launchd to discover XPC services.
+# launchd associates a process with its parent app bundle by checking if the
+# binary is in Contents/MacOS/. Binaries in Contents/Helpers/ are NOT associated
+# with the app bundle, so launchd can't find the XPC service for them.
+echo "  - Copying resistine-vpn-cli to Contents/MacOS/..."
+if [ ! -f "$VPN_ARCHIVE/Contents/MacOS/resistine-vpn-cli" ]; then
+    echo "❌ Error: resistine-vpn-cli not found in archive"
+    exit 1
+fi
+cp "$VPN_ARCHIVE/Contents/MacOS/resistine-vpn-cli" "$PYTHON_APP/Contents/MacOS/"
 
-# Copy with exclusions: no GUI app, no build artifacts
-rsync -av --delete \
-    --exclude="MacOS/wireguard-apple" \
-    --exclude=".DS_Store" \
-    "$VPN_ARCHIVE/" "$PYTHON_APP/Contents/Resources/wireguard-apple.app/"
+# --- Copy Network Extension to Contents/PlugIns/ ---
+echo "  - Copying network-extension.appex to Contents/PlugIns/..."
+if [ ! -d "$VPN_ARCHIVE/Contents/PlugIns/network-extension.appex" ]; then
+    echo "❌ Error: network-extension.appex not found in archive"
+    exit 1
+fi
+cp -R "$VPN_ARCHIVE/Contents/PlugIns/network-extension.appex" "$PYTHON_APP/Contents/PlugIns/"
 
-# Verify the embedded structure (critical components only)
-if [ ! -d "$PYTHON_APP/Contents/Resources/wireguard-apple.app/Contents/PlugIns/network-extension.appex" ]; then
-    echo "❌ Error: Network Extension not found in embedded app"
+# --- Copy XPC Service to Contents/XPCServices/ ---
+echo "  - Copying ResistineVPNXPC.xpc to Contents/XPCServices/..."
+if [ ! -d "$VPN_ARCHIVE/Contents/XPCServices/ResistineVPNXPC.xpc" ]; then
+    echo "❌ Error: ResistineVPNXPC.xpc not found in archive"
+    exit 1
+fi
+cp -R "$VPN_ARCHIVE/Contents/XPCServices/ResistineVPNXPC.xpc" "$PYTHON_APP/Contents/XPCServices/"
+
+# Verify all components are in place
+echo "  - Verifying bundle structure..."
+if [ ! -f "$PYTHON_APP/Contents/MacOS/resistine-vpn-cli" ]; then
+    echo "❌ Error: CLI not in Contents/MacOS/"
+    exit 1
+fi
+if [ ! -d "$PYTHON_APP/Contents/PlugIns/network-extension.appex" ]; then
+    echo "❌ Error: Network Extension not in Contents/PlugIns/"
+    exit 1
+fi
+if [ ! -d "$PYTHON_APP/Contents/XPCServices/ResistineVPNXPC.xpc" ]; then
+    echo "❌ Error: XPC Service not in Contents/XPCServices/"
     exit 1
 fi
 
-if [ ! -f "$PYTHON_APP/Contents/Resources/wireguard-apple.app/Contents/MacOS/resistine-vpn-cli" ]; then
-    echo "❌ Error: VPN CLI not found in embedded app"
-    exit 1
-fi
-
-# Verify GUI app was excluded (we don't need the wireguard-apple GUI)
-if [ -f "$PYTHON_APP/Contents/Resources/wireguard-apple.app/Contents/MacOS/wireguard-apple" ]; then
-    echo "⚠️  Warning: GUI app was not excluded (will be removed)"
-    rm -f "$PYTHON_APP/Contents/Resources/wireguard-apple.app/Contents/MacOS/wireguard-apple"
-fi
-
-# Patch the embedded app's Info.plist to use resistine-vpn-cli as the main executable.
-# The original CFBundleExecutable points to "wireguard-apple" which we excluded above.
-# Without a valid main executable, macOS cannot resolve the embedded XPC service
-# and the CLI gets "Couldn't communicate with a helper application" errors.
-EMBEDDED_PLIST="$PYTHON_APP/Contents/Resources/wireguard-apple.app/Contents/Info.plist"
-echo "  - Patching embedded app Info.plist: CFBundleExecutable -> resistine-vpn-cli"
-/usr/libexec/PlistBuddy -c "Set :CFBundleExecutable resistine-vpn-cli" "$EMBEDDED_PLIST" || {
-    echo "  ❌ Failed to patch Info.plist"
-    exit 1
-}
-
-# Verify XPC service IS present (required for VPN functionality)
-if [ ! -d "$PYTHON_APP/Contents/Resources/wireguard-apple.app/Contents/XPCServices/ResistineVPNXPC.xpc" ]; then
-    echo "❌ Error: ResistineVPNXPC.xpc not found in embedded app"
-    echo "   The XPC service holds the networkextension entitlement and is required."
-    exit 1
-fi
-
-echo "✅ VPN app embedded"
+echo "✅ VPN components placed in Apple-standard locations"
+echo "   - CLI: Contents/MacOS/resistine-vpn-cli"
+echo "   - Network Extension: Contents/PlugIns/network-extension.appex"
+echo "   - XPC Service: Contents/XPCServices/ResistineVPNXPC.xpc"
 
 # Step 4: Verify permissions
 echo ""
@@ -227,17 +218,16 @@ echo "Step 4: Verifying permissions..."
 
 # The binaries were already built and signed by Xcode with correct permissions.
 # Do NOT chmod after signing — it invalidates the code signature.
-EMBEDDED_APP="$PYTHON_APP/Contents/Resources/wireguard-apple.app"
 
-if [ ! -x "$EMBEDDED_APP/Contents/MacOS/resistine-vpn-cli" ]; then
+if [ ! -x "$PYTHON_APP/Contents/MacOS/resistine-vpn-cli" ]; then
     echo "  ⚠️  resistine-vpn-cli is not executable — this may indicate a build issue"
 fi
 
-if [ ! -x "$EMBEDDED_APP/Contents/PlugIns/network-extension.appex/Contents/MacOS/network-extension" ]; then
+if [ ! -x "$PYTHON_APP/Contents/PlugIns/network-extension.appex/Contents/MacOS/network-extension" ]; then
     echo "  ⚠️  network-extension is not executable — this may indicate a build issue"
 fi
 
-if [ ! -d "$EMBEDDED_APP/Contents/XPCServices/ResistineVPNXPC.xpc" ]; then
+if [ ! -d "$PYTHON_APP/Contents/XPCServices/ResistineVPNXPC.xpc" ]; then
     echo "  ⚠️  ResistineVPNXPC.xpc not found — XPC architecture requires this"
 fi
 
@@ -258,8 +248,6 @@ if [ ! -f "$ENTITLEMENTS_FILE" ]; then
 else
     ENTITLEMENTS_FLAG="--entitlements $ENTITLEMENTS_FILE"
 fi
-
-EMBEDDED_APP="$PYTHON_APP/Contents/Resources/wireguard-apple.app"
 
 # The network-extension.appex and ResistineVPNXPC.xpc were signed by Xcode
 # during archive with provisioning profiles and restricted entitlements.
@@ -282,53 +270,37 @@ codesign --force --sign "$SIGN_IDENTITY" \
     --options runtime \
     --timestamp \
     $CLI_ENTITLEMENTS_FLAG \
-    "$EMBEDDED_APP/Contents/MacOS/resistine-vpn-cli" || {
+    "$PYTHON_APP/Contents/MacOS/resistine-vpn-cli" || {
     echo "  ❌ resistine-vpn-cli signing failed"
     exit 1
 }
 echo "  ✅ resistine-vpn-cli signed (with entitlements)"
 
-echo "  - Verifying embedded VPN component signatures..."
-codesign --verify --verbose "$EMBEDDED_APP/Contents/MacOS/resistine-vpn-cli" 2>&1 && \
+echo "  - Verifying VPN component signatures..."
+codesign --verify --verbose "$PYTHON_APP/Contents/MacOS/resistine-vpn-cli" 2>&1 && \
     echo "  ✅ resistine-vpn-cli signature valid" || \
     echo "  ❌ resistine-vpn-cli signature INVALID"
 
-codesign --verify --verbose "$EMBEDDED_APP/Contents/PlugIns/network-extension.appex" 2>&1 && \
+codesign --verify --verbose "$PYTHON_APP/Contents/PlugIns/network-extension.appex" 2>&1 && \
     echo "  ✅ network-extension.appex signature valid" || \
     echo "  ❌ network-extension.appex signature INVALID — Xcode signing may have failed"
 
-codesign --verify --verbose "$EMBEDDED_APP/Contents/XPCServices/ResistineVPNXPC.xpc" 2>&1 && \
+codesign --verify --verbose "$PYTHON_APP/Contents/XPCServices/ResistineVPNXPC.xpc" 2>&1 && \
     echo "  ✅ ResistineVPNXPC.xpc signature valid" || \
     echo "  ❌ ResistineVPNXPC.xpc signature INVALID — Xcode signing may have failed"
-
-# Sign the embedded wireguard-apple.app bundle wrapper
-# The inner components (appex, XPC) are signed by Xcode; CLI is signed above.
-# We removed the main GUI executable, so the bundle wrapper needs re-signing.
-# Use --force but NOT --deep to preserve inner component signatures.
-echo "  - Signing embedded wireguard-apple.app bundle..."
-codesign --force --sign "$SIGN_IDENTITY" \
-    --options runtime \
-    --timestamp \
-    "$EMBEDDED_APP" || {
-    echo "  ❌ Embedded VPN app signing failed"
-    exit 1
-}
 
 # Sign all PyInstaller-produced frameworks, dylibs, and shared objects.
 # PyInstaller ad-hoc signs these, but macOS AMFI rejects ad-hoc signed
 # binaries in an app bundle signed with a Developer ID certificate.
 # We must sign them individually BEFORE signing the outer app bundle.
-# IMPORTANT: Skip anything inside the embedded wireguard-apple.app
-# (those are already signed by Xcode with provisioning profiles).
 echo "  - Signing PyInstaller frameworks and shared libraries..."
 SIGN_COUNT=0
 SIGN_FAIL=0
 
 # Find all .so, .dylib files and the Python framework binary inside Contents/Frameworks/
-# and Contents/MacOS/, but NOT inside Contents/Resources/wireguard-apple.app/
+# and Contents/MacOS/ (VPN components already signed above)
 find "$PYTHON_APP/Contents/Frameworks" "$PYTHON_APP/Contents/MacOS" \
-    -type f \( -name "*.so" -o -name "*.dylib" -o -name "Python" \) \
-    ! -path "*/wireguard-apple.app/*" | while read -r binary; do
+    -type f \( -name "*.so" -o -name "*.dylib" -o -name "Python" \) | while read -r binary; do
     codesign --force --sign "$SIGN_IDENTITY" \
         --options runtime \
         --timestamp \
@@ -359,7 +331,6 @@ echo "✅ App signed"
 # Verify signatures
 echo "  - Verifying final signatures..."
 codesign --verify --verbose=2 "$PYTHON_APP" 2>&1 || echo "  ⚠️  Outer app signature verification had warnings"
-codesign --verify --verbose=2 "$EMBEDDED_APP" 2>&1 || echo "  ⚠️  Embedded VPN app signature verification had warnings"
 
 # Step 6: Create DMG installer
 echo ""
