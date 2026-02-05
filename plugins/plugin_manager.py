@@ -69,6 +69,7 @@ class PluginManager:
         try:
             with open(self.state_file, 'w') as f:
                 json.dump(state, f, indent=4)
+            logger.info(f"PluginManager: State saved. Uninstalled list: {state.get('uninstalled', [])}")
             return True
         except Exception as e:
             logger.error(f"Failed to save plugin state: {e}")
@@ -98,21 +99,35 @@ class PluginManager:
         self._save_state(state)
         
         # If the plugin is in the user directory, try to delete it
-        user_plugin_dir = os.path.join(self.user_plugins_path, os.path.basename(os.path.dirname(plugin.__class__.__module__.replace('.', '/'))))
-        
-        def delete_dir():
-            if os.path.exists(user_plugin_dir):
-                try:
-                    import shutil
-                    shutil.rmtree(user_plugin_dir)
-                    logger.info(f"Deleted user plugin directory: {user_plugin_dir}")
-                except Exception as e:
-                    logger.warning(f"Could not delete plugin directory {user_plugin_dir}: {e}")
-        
-        # Run deletion in a background thread to prevent GUI hang
-        logger.info(f"Uninstallation: Starting background deletion for {plugin.id}")
-        import threading
-        threading.Thread(target=delete_dir, daemon=True).start()
+        # Extract folder name safely
+        try:
+            module_path = plugin.__class__.__module__
+            # Expected format: plugins.<folder>.main
+            parts = module_path.split('.')
+            if len(parts) >= 2 and parts[0] == 'plugins':
+                folder_name = parts[1]
+                user_plugin_dir = os.path.join(self.user_plugins_path, folder_name)
+            else:
+                # Fallback to old heuristic
+                logger.warning(f"Uninstallation: Unusual module path '{module_path}', falling back to heuristics.")
+                user_plugin_dir = os.path.join(self.user_plugins_path, os.path.basename(os.path.dirname(module_path.replace('.', '/'))))
+        except Exception as e:
+            logger.error(f"Uninstallation: Failed to calculate directory for {plugin.id}: {e}")
+            user_plugin_dir = None
+
+        if user_plugin_dir and os.path.exists(user_plugin_dir):
+            logger.info(f"Uninstallation: Deleting directory at {user_plugin_dir}")
+            try:
+                import shutil
+                shutil.rmtree(user_plugin_dir)
+                if os.path.exists(user_plugin_dir):
+                    logger.error(f"Uninstallation: ❌ Directory still exists after rmtree: {user_plugin_dir}")
+                else:
+                    logger.info(f"Uninstallation: ✅ Directory deleted: {user_plugin_dir}")
+            except Exception as e:
+                logger.warning(f"Could not delete plugin directory {user_plugin_dir}: {e}")
+        else:
+            logger.warning(f"Uninstallation: Directory not found or invalid: {user_plugin_dir}")
         
         # Surgical Update: Remove the plugin from active lists and refresh only the sidebar
         logger.info(f"Uninstallation: Removing {plugin.id} from active memory lists")
@@ -319,6 +334,7 @@ class PluginManager:
         # Sort plugins by their defined 'order'
         loaded_plugins.sort(key=lambda p: getattr(p, 'order', 999))
         
+        logger.info(f"PluginManager: Loaded {len(loaded_plugins)} plugins: {[f'{p.name} ({p.id})' for p in loaded_plugins]}")
         return loaded_plugins
 
     def get_plugins_path(self):

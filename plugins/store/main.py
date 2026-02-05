@@ -132,11 +132,26 @@ class Plugin(BasePlugin):
             if rp["id"] not in local_ids:
                 plugins.append(RemotePluginWrapper(self.app, rp))
         
+        # Store remote data for restoration after uninstall
+        self.remote_data_map = {rp["id"]: rp for rp in available_remote}
+        
         # Sort by name for the store
         plugins = sorted(plugins, key=lambda x: x.get_name())
         
+        # Deduplicate list by ID to be absolutely safe
+        unique_plugins = []
+        seen_store_ids = set()
+        for p in plugins:
+            if p.id not in seen_store_ids:
+                unique_plugins.append(p)
+                seen_store_ids.add(p.id)
+        plugins = unique_plugins
+        
         # Store plugins for responsive rebuild
         self._store_plugins = plugins
+        
+        from utils.logger import logger
+        logger.info(f"Store: Rendering {len(plugins)} cards. IDs: {[p.id for p in plugins]}")
         
         # Responsive layout: determine max columns based on window width
         screen_width = self.app.winfo_screenwidth()
@@ -176,60 +191,21 @@ class Plugin(BasePlugin):
             min_cols=min_cols,
         )
         
-        # Helper for extra buttons
-        def inject_store_buttons(container, p):
-            # Info Button
-            info_btn = customtkinter.CTkButton(
-                container,
-                text="Info",
-                height=26,
-                width=80,
-                command=lambda p=p: self.app.show_readme(p) if not isinstance(p, RemotePluginWrapper) else self.show_remote_info(p),
-                border_width=0,
-                fg_color=("#3B8ED0", "#1F6AA5"),
-                hover_color=("#367EBB", "#144870"),
-                font=customtkinter.CTkFont(size=12)
-            )
-            info_btn.grid(row=0, column=0, padx=5, pady=5)
+        # Helper for extra buttons - now uses class method
+        inject_store_buttons = self._inject_store_buttons
 
-            if isinstance(p, RemotePluginWrapper) or getattr(p, "status", None) == "Uninstalled":
-                # Install Button
-                install_btn = customtkinter.CTkButton(
-                    container,
-                    text="Install",
-                    height=26,
-                    width=80,
-                    command=lambda p=p: self.handle_install(p),
-                    border_width=0,
-                    fg_color=("#2ECC71", "#27AE60"),
-                    hover_color=("#27AE60", "#219150"),
-                    font=customtkinter.CTkFont(size=12)
-                )
-                install_btn.grid(row=0, column=1, padx=5, pady=5)
-            else:
-                # Uninstall Button (if enabled)
-                if getattr(p, "uninstall_enabled", True):
-                    uninstall_btn = customtkinter.CTkButton(
-                        container,
-                        text="Uninstall",
-                        height=26,
-                        width=80,
-                        command=lambda p=p: self.handle_uninstall(p),
-                        border_width=0,
-                        fg_color=("#FF4444", "#C73636"),
-                        hover_color=("#C73636", "#9E2A2A"),
-                        font=customtkinter.CTkFont(size=12)
-                    )
-                    uninstall_btn.grid(row=0, column=1, padx=5, pady=5)
+        # Track cards for surgical updates
+        self.plugin_cards = {}  # ID -> frame map
 
         for index, plugin in enumerate(plugins):
             r = index // len(cols)
             c = index % len(cols)
-            self.app.create_plugin_card(
+            card = self.app.create_plugin_card(
                 r, c, self.grid_frame, plugin, 
                 show_description=True, 
                 extra_buttons_func=inject_store_buttons
             )
+            self.plugin_cards[plugin.id] = card
         
         # Bind resize handler to app window for responsive layout
         self._bind_responsive_resize(inject_store_buttons)
@@ -368,42 +344,210 @@ class Plugin(BasePlugin):
             min_cols=min_cols,
         )
         
+        self.plugin_cards = {}
         for index, plugin in enumerate(plugins):
             r = index // len(cols)
             c = index % len(cols)
-            self.app.create_plugin_card(
+            card = self.app.create_plugin_card(
                 r, c, self.grid_frame, plugin, 
                 show_description=True,
                 extra_buttons_func=inject_store_buttons
             )
+            self.plugin_cards[plugin.id] = card
+
+    def _inject_store_buttons(self, container, p):
+        """Helper to inject buttons, extracted for reuse."""
+        # Info Button
+        customtkinter.CTkButton(
+            container,
+            text="Info",
+            height=26,
+            width=80,
+            command=lambda p=p: self.app.show_readme(p) if not isinstance(p, RemotePluginWrapper) else self.show_remote_info(p),
+            border_width=0,
+            fg_color=("#3B8ED0", "#1F6AA5"),
+            hover_color=("#367EBB", "#144870"),
+            font=customtkinter.CTkFont(size=12)
+        ).grid(row=0, column=0, padx=5, pady=5)
+
+        if isinstance(p, RemotePluginWrapper) or getattr(p, "status", None) == "Uninstalled":
+            # Install Button
+            customtkinter.CTkButton(
+                container,
+                text="Install",
+                height=26,
+                width=80,
+                command=lambda p=p: self.handle_install(p),
+                border_width=0,
+                fg_color=("#2ECC71", "#27AE60"),
+                hover_color=("#27AE60", "#219150"),
+                font=customtkinter.CTkFont(size=12)
+            ).grid(row=0, column=1, padx=5, pady=5)
+        else:
+            # Uninstall Button (if enabled)
+            if getattr(p, "uninstall_enabled", True):
+                customtkinter.CTkButton(
+                    container,
+                    text="Uninstall",
+                    height=26,
+                    width=80,
+                    command=lambda p=p: self.handle_uninstall(p),
+                    border_width=0,
+                    fg_color=("#FF4444", "#C73636"),
+                    hover_color=("#C73636", "#9E2A2A"),
+                    font=customtkinter.CTkFont(size=12)
+                ).grid(row=0, column=1, padx=5, pady=5)
+
+    def _replace_card(self, old_plugin_id, new_plugin):
+        """Surgically replace a card in the grid."""
+        if old_plugin_id not in self.plugin_cards:
+            return
+            
+        old_card = self.plugin_cards[old_plugin_id]
+        if not old_card.winfo_exists():
+            return
+            
+        # Get grid position
+        grid_info = old_card.grid_info()
+        row = grid_info.get("row")
+        col = grid_info.get("column")
+        
+        # Destroy and recreate
+        old_card.destroy()
+        
+        new_card = self.app.create_plugin_card(
+            row, col, self.grid_frame, new_plugin,
+            show_description=True,
+            extra_buttons_func=self._inject_store_buttons
+        )
+        self.plugin_cards[new_plugin.id] = new_card
+        
+        # Update internal list for responsiveness
+        plugin_found = False
+        for i, p in enumerate(self._store_plugins):
+            if p.id == old_plugin_id:
+                self._store_plugins[i] = new_plugin
+                plugin_found = True
+                break
+                
+        # If not found (should be impossible if card exists), try to find by ID if it changed?
+        # But for now, ensure we don't have duplicates or missing updates.
+        if not plugin_found:
+            # Fallback: trigger full reload to correct state
+            from utils.logger import logger
+            logger.warning(f"Store: Could not find plugin {old_plugin_id} in list during swap. Triggering full reload.")
+            self.app.after(10, lambda: self.app.select_frame_by_name("frame_Store"))
 
     def handle_install(self, remote_plugin):
         """Handle plugin installation."""
         from utils.logger import logger
+        
+        # Common success handler
+        def on_success(new_plugin_obj, msg):
+            if hasattr(self.app, "refresh_navigation"):
+                self.app.refresh_navigation()
+            elif hasattr(self.app, "refresh_navigation_menu"):
+                self.app.refresh_navigation_menu()
+            
+            self.app.show_notification(msg, type="info")
+            
+            # Surgical UI update
+            self._replace_card(remote_plugin.id, new_plugin_obj)
+
         if not isinstance(remote_plugin, RemotePluginWrapper):
-            # It's an uninstalled local plugin, just re-enable it
+            # It's an uninstalled local plugin.
+            # Check if files actually exist before trying to re-enable
             manager = self.app.get_plugin_manager()
+            
+            # We need to guess the folder name or check if the plugin object has a path?
+            # BasePlugin doesn't store path directly usually, but PluginManager knows.
+            # Simpler: check if load_plugins finds it? No, that's heavy.
+            # Let's check typical user path.
+            # Or better: Try to re-enable, if load_plugins fails to find it, it means files are gone.
+            
             state = manager._load_state()
             if remote_plugin.id in state.get("uninstalled", []):
+                # 1. Optimistically un-mark uninstalled
                 state["uninstalled"].remove(remote_plugin.id)
                 manager._save_state(state)
-                manager.plugins = manager.load_plugins()
-                if hasattr(self.app, "refresh_navigation_menu"):
-                    self.app.refresh_navigation_menu()
-                self.app.show_notification(f"Plugin {remote_plugin.get_name()} re-enabled.", type="info")
-                # Refresh screen
-                self.app.select_frame_by_name("frame_Store")
+                
+                # 2. Reload plugins
+                manager.plugins = sorted(manager.load_plugins(), key=lambda x: x.order)
+                
+                # 3. Check if it appeared
+                new_instance = next((p for p in manager.plugins if p.id == remote_plugin.id), None)
+                
+                if new_instance:
+                    # Success: Files were there, just re-enabled
+                    # Update status manually if needed (likely "Stopped" or "OK")
+                    new_instance.status = "Stopped" 
+                    on_success(new_instance, f"Plugin {remote_plugin.get_name()} re-enabled.")
+                    
+                    # Auto-navigate if refreshed
+                    frame_name = f"frame_{new_instance.get_name()}"
+                    # Ensure frames are refreshed before navigating
+                    if hasattr(self.app, "frames"):
+                        self.app.after(200, lambda: self.app.select_frame_by_name(frame_name))
+                    return
+                else:
+                    # Failure: Files are missing! We must download it.
+                    # Revert state change only if download fails? Or just proceed.
+                    logger.warning(f"Store: Plugin {remote_plugin.get_name()} marked as re-enabled but files missing. Attempting redownload.")
+                    
+                    # Try to find URL in remote_data_map
+                    url = None
+                    if hasattr(self, 'remote_data_map') and remote_plugin.id in self.remote_data_map:
+                         url = self.remote_data_map[remote_plugin.id].get("url")
+                    
+                    if not url:
+                        # Try to fetch fresh if map is empty/stale?
+                        # For now, just error if we can't find it.
+                        self.app.show_notification(f"Cannot reinstall {remote_plugin.get_name()}: Files missing and remote source unknown.", type="error")
+                        
+                        # Re-add to uninstalled list to be consistent with missing files
+                        state["uninstalled"].append(remote_plugin.id)
+                        manager._save_state(state)
+                        return
+
+                    # Fall through to download logic below...
+            else:
+                # Not in uninstalled list? Already installed?
+                logger.info(f"Store: Plugin {remote_plugin.get_name()} is local and not in uninstalled list. Refreshing...")
+                manager.plugins = sorted(manager.load_plugins(), key=lambda x: x.order)
+                new_instance = next((p for p in manager.plugins if p.id == remote_plugin.id), remote_plugin)
+                on_success(new_instance, "Plugin refreshed.")
+                
+                # Auto-navigate if refreshed
+                frame_name = f"frame_{new_instance.get_name()}"
+                if hasattr(self.app, "frames") and frame_name in self.app.frames:
+                    self.app.after(100, lambda: self.app.select_frame_by_name(frame_name))
                 return
 
         success, message = self.app.get_plugin_manager().download_plugin(remote_plugin.url, remote_plugin.id, remote_plugin.get_name())
         logger.info(f"Store: Installation result for {remote_plugin.get_name()}: success={success}, msg={message}")
         
         if success:
-            if hasattr(self.app, "refresh_navigation_menu"):
-                self.app.refresh_navigation_menu()
-            self.app.show_notification(message, type="info")
-            # Refresh screen
-            self.app.select_frame_by_name("frame_Store")
+            # Find the newly installed plugin instance
+            manager = self.app.get_plugin_manager()
+            # Explicitly reload to ensure we have the new class loaded
+            manager.plugins = sorted(manager.load_plugins(), key=lambda x: x.order)
+            
+            new_instance = next((p for p in manager.plugins if p.id == remote_plugin.id), None)
+            if new_instance:
+                on_success(new_instance, message)
+                
+                # Auto-navigate to the new plugin page
+                frame_name = f"frame_{new_instance.get_name()}"
+                # We need to wait slightly for the UI refresh (triggered by download_plugin) to register the frame
+                # Although download_plugin calls refresh_navigation, the frame creation happens in AppUI.select_frame_by_name or init?
+                # Actually, refresh_navigation updates buttons. Frames are lazy loaded?
+                # AppUI.select_frame_by_name handles creation if missing.
+                # So we can just call it safely.
+                self.app.after(200, lambda: self.app.select_frame_by_name(frame_name))
+            else:
+                # Fallback if strange error
+                self.app.show_notification("Plugin installed but not found in memory.", type="warning")
+                self.app.select_frame_by_name("frame_Store")
         else:
             self.app.show_notification(message, type="error")
 
@@ -421,8 +565,22 @@ class Plugin(BasePlugin):
                 success, res = self.app.get_plugin_manager().uninstall_plugin(plugin)
                 if success:
                     self.app.show_notification(res, type="info")
-                    # Refresh screen
-                    self.app.select_frame_by_name("frame_Store")
+                    
+                    # Surgical update: Swap with RemotePluginWrapper if available
+                    # This ensures "Install" button has the URL to re-download
+                    new_obj = plugin
+                    if hasattr(self, 'remote_data_map') and plugin.id in self.remote_data_map:
+                        new_obj = RemotePluginWrapper(self.app, self.remote_data_map[plugin.id])
+                    else:
+                        # Fallback for local-only plugins (no remote source known)
+                        plugin.status = "Uninstalled"
+                    
+                    self._replace_card(plugin.id, new_obj)
+                    
+                    if hasattr(self.app, "refresh_navigation"):
+                        self.app.refresh_navigation()
+                    elif hasattr(self.app, "refresh_navigation_menu"):
+                        self.app.refresh_navigation_menu()
                 else:
                     self.app.show_notification(res, type="error")
 

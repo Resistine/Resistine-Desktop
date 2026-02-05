@@ -162,11 +162,12 @@ class AppUI(customtkinter.CTk):
         frame.grid(row=row, column=column, padx=10, pady=10, sticky="nsew")
         frame.grid_columnconfigure(0, weight=1)
         
-        # Structure rows: Content (~70%), Divider, Status/Buttons (~30%)
+        # Structure rows: Content (~80%), Divider, Status/Buttons (~20%)
         # Buttons are 26px height + padding, so minsize needs to be at least 50px
-        frame.grid_rowconfigure(0, weight=7, minsize=90)
+        # Content row needs enough space for title + multi-line description (typically 2-3 lines)
+        frame.grid_rowconfigure(0, weight=8, minsize=200)
         frame.grid_rowconfigure(1, weight=0) # h_div
-        frame.grid_rowconfigure(2, weight=3, minsize=55)
+        frame.grid_rowconfigure(2, weight=2, minsize=55)
 
         # --- Top content row: icon panel | divider | text panel ---
         # Add top padding to respect rounded corners (prevents child frames from covering rounded top corners)

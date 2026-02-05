@@ -168,6 +168,7 @@ class Plugin(BasePlugin):
             sticky="nsew",
             max_cols=max_cols,
             min_cols=min_cols,
+            aspect_ratio=1.1
         )
 
         def open_plugin(p):
@@ -329,6 +330,7 @@ class Plugin(BasePlugin):
             sticky="nsew",
             max_cols=max_cols,
             min_cols=min_cols,
+            aspect_ratio=1.1,
         )
         
         for index, plugin in enumerate(plugins):
