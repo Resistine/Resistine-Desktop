@@ -17,7 +17,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "6D1590E52F1E2178006FE806"
-               BuildableName = "network-extension.appex"
+               BuildableName = "com.resistine.desktop.network-extension.systemextension"
                BlueprintName = "network-extension"
                ReferencedContainer = "container:wireguard-apple.xcodeproj">
             </BuildableReference>

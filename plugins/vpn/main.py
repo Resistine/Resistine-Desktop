@@ -15,6 +15,7 @@ from utils.logger import logger
 import customtkinter
 import os 
 import tkinter as tk
+from tkinter import filedialog
 import platform
 import subprocess
 import re
@@ -139,6 +140,42 @@ class Plugin(BasePlugin):
             return "Info"
         return "Warning"
 
+    def import_config(self):
+        """Allows the user to import a WireGuard config file."""
+        file_path = filedialog.askopenfilename(
+            title="Select WireGuard Config",
+            filetypes=[("WireGuard Config", "*.conf"), ("All Files", "*.*")]
+        )
+
+        if not file_path:
+            return
+
+        try:
+            # Destination is the wireguard folder (App Group path)
+            filename = os.path.basename(file_path)
+            dest_path = os.path.join(wireguard_folder, filename)
+
+            # Read content
+            with open(file_path, 'r') as src:
+                content = src.read()
+
+            # Write to destination
+            with open(dest_path, 'w') as dst:
+                dst.write(content)
+            
+            # Set permissions (600) for security
+            os.chmod(dest_path, 0o600)
+            
+            logger.info(f"✅ Imported config to: {dest_path}")
+            self.app.show_notification("Configuration imported successfully!", type="success")
+            
+            # Refresh UI to show the new config
+            self.update_plugin(self.id)
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to import config: {e}")
+            self.app.show_notification(f"Failed to import config: {e}", type="error")
+
     def get_selected_conf_file_name(self):
         """
         Get the single VPN config file from the wireguard directory.
@@ -199,6 +236,7 @@ class Plugin(BasePlugin):
 
         if not selected_conf_file:
             logger.error("❌ Cannot toggle: No VPN config found in wireguard directory.")
+            self.app.show_notification("No VPN configuration found. Please log in or add a config.", type="error")
             # Reset switch to off if no config available
             if hasattr(self, 'vpn_toggle_switch'):
                 self.vpn_toggle_switch.deselect()
@@ -240,11 +278,20 @@ class Plugin(BasePlugin):
         global my_vpn_status
         is_connected = my_vpn_status == "Running"
         
-        status_text = "Connected" if is_connected else "Disconnected"
-        status_color = ("#1E8E3E", "#2CC985") if is_connected else ("#C5221F", "#FF474C")
-        warning_text = "Your connection is secure" if is_connected else "Your connection is not secure"
-        warning_bg = ("#E6F4EA", "#1E3A2F") if is_connected else ("#FDEDEC", "#3E2B2C")
-        warning_fg = ("#1E8E3E", "#2CC985") if is_connected else ("#C5221F", "#FF474C")
+        if not selected_conf_file:
+            status_text = "No Configuration"
+            status_color = ("#666666", "#aaaaaa")
+            warning_text = "Please log in or add a VPN configuration"
+            warning_bg = ("#F5F5F5", "#2A2A2A")
+            warning_fg = ("#666666", "#aaaaaa")
+            is_enabled = False
+        else:
+            status_text = "Connected" if is_connected else "Disconnected"
+            status_color = ("#1E8E3E", "#2CC985") if is_connected else ("#C5221F", "#FF474C")
+            warning_text = "Your connection is secure" if is_connected else "Your connection is not secure"
+            warning_bg = ("#E6F4EA", "#1E3A2F") if is_connected else ("#FDEDEC", "#3E2B2C")
+            warning_fg = ("#1E8E3E", "#2CC985") if is_connected else ("#C5221F", "#FF474C")
+            is_enabled = True
 
         # --- 1. Connection Status Bar ---
         status_frame = customtkinter.CTkFrame(scroll_frame, corner_radius=15, fg_color=("#ffffff", "#141414"), border_width=1, border_color=("#dddddd", "#333333"))
@@ -263,9 +310,10 @@ class Plugin(BasePlugin):
             switch_width=50, 
             switch_height=25, 
             onvalue=1, 
-            offvalue=0
+            offvalue=0,
+            state="normal" if is_enabled else "disabled"
         )
-        if toggle_initial_value == 1:
+        if toggle_initial_value == 1 and is_enabled:
             self.vpn_toggle_switch.select() 
         else:
             self.vpn_toggle_switch.deselect()
@@ -303,6 +351,22 @@ class Plugin(BasePlugin):
             value_label = customtkinter.CTkLabel(info_frame, text=value, justify="right", font=customtkinter.CTkFont(family="Inter", size=13, weight="bold"), text_color=("#000000", "#ffffff"))
             value_label.grid(row=row_num, column=1, padx=15, pady=5, sticky="e")
             row_num += 1
+
+            value_label.grid(row=row_num, column=1, padx=15, pady=5, sticky="e")
+            row_num += 1
+
+        # --- 4. Import Button ---
+        import_button = customtkinter.CTkButton(
+            scroll_frame,
+            text="Import Configuration",
+            command=self.import_config,
+            fg_color="transparent",
+            border_width=1,
+            border_color=("#3a7ebf", "#1f538d"),
+            text_color=("#3a7ebf", "#3a7ebf"),
+            font=customtkinter.CTkFont(size=13)
+        )
+        import_button.grid(row=4, column=0, pady=20, sticky="ew")
 
         return self.main_container
 
