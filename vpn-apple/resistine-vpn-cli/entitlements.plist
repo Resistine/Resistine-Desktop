@@ -2,15 +2,22 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- No sandbox: CLI is an internal tool called by the Python app via subprocess.
-	     It needs to read config files from the user's Application Support directory.
-	     The XPC service (ResistineVPNXPC.xpc) is sandboxed and holds the
-	     networkextension entitlement — that's the appropriate trust boundary. -->
-
-	<!-- Application group for shared data access with XPC service -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.developer.networking.networkextension</key>
+	<array>
+		<string>packet-tunnel-provider-systemextension</string>
+	</array>
+	<key>com.apple.developer.system-extension.install</key>
+	<true/>
 	<key>com.apple.security.application-groups</key>
 	<array>
 		<string>group.Resistine.WireguardTest</string>
+		<string>C7KSRZC3Q9.*</string>
+	</array>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>C7KSRZC3Q9.*</string>
 	</array>
 </dict>
 </plist>

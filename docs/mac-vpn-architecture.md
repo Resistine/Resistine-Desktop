@@ -83,40 +83,30 @@ The Resistine VPN uses a clean **CLI-only architecture** for communication betwe
 2. **No PyObjC**: Eliminates dependency on PyObjC (which can be fragile)
 3. **Testability**: CLI can be tested independently from Python UI
 4. **Simplicity**: Subprocess calls are straightforward and well-understood
-5. **Future-Proof**: CLI can be called from Python, Swift, or other languages
+5. **No XPC Bridge**: Removing the XPC bridge eliminates the "internal error" caused by bundle detection failures.
 6. **Security**: CLI handles privileged operations, Python never directly accesses APIs
-
-### XPC Service Role
-- **ResistineVPNXPC.xpc**: Holds the Network Extension entitlement
-- **CLI → XPC**: The CLI communicates with the XPC service for privileged operations
-- **XPC → NetworkExtension**: XPC service manages the tunnel via NetworkExtension framework
-- **Why XPC?**: Network Extension entitlements require a properly signed XPC service
 
 ## Build Process
 
 ### Swift Compilation
-1. Xcode project (`wireguard-apple.xcodeproj`) builds four targets:
+1. Xcode project (`wireguard-apple.xcodeproj`) builds two main targets:
    - `resistine-vpn-cli` - Swift CLI tool
    - `network-extension` - App extension (.appex bundle)
-   - `ResistineVPNXPC` - XPC service for Network Extension entitlements
-   - `wireguard-apple` - GUI app (testing only, excluded from production)
 
 2. CLI is built with embedded entitlements for NetworkExtension access
 
 ### App Bundling
 1. Build script (`build-installer.sh`) embeds compiled outputs in Resistine.app:
    ```
-   Resistine.app/Contents/Resources/wireguard-apple.app/
-   ├── Contents/MacOS/
+   Resistine.app/Contents/
+   ├── MacOS/
    │   └── resistine-vpn-cli          ← CLI tool
-   ├── Contents/PlugIns/
-   │   └── network-extension.appex    ← App extension
-   └── Contents/XPCServices/
-       └── ResistineVPNXPC.xpc        ← XPC service
+   └── PlugIns/
+       └── network-extension.appex    ← App extension
    ```
 
 2. Python discovers CLI at runtime:
-   - Frozen app (PyInstaller): `sys.executable` → find Resources/wireguard-apple.app/Contents/MacOS/resistine-vpn-cli
+   - Frozen app (PyInstaller): `sys.executable` → find Contents/MacOS/resistine-vpn-cli
    - Development: Not available (run `build-installer.sh` first)
 
 ### Code Signing
@@ -170,7 +160,7 @@ Return status: "Connected" / "Disconnected"
 
 ### Test CLI directly
 ```bash
-cd /Applications/Resistine.app/Contents/Resources/wireguard-apple.app/Contents/MacOS
+cd /Applications/Resistine.app/Contents/MacOS
 
 # Check if CLI is available
 ./resistine-vpn-cli --help
@@ -266,14 +256,14 @@ log stream --predicate 'process == "Resistine"' --level debug
 ## Troubleshooting
 
 ### VPN not starting
-1. Check if `resistine-vpn-cli` exists: `ls -la /Applications/Resistine.app/Contents/Resources/wireguard-apple.app/Contents/MacOS/resistine-vpn-cli`
+1. Check if `resistine-vpn-cli` exists: `ls -la /Applications/Resistine.app/Contents/MacOS/resistine-vpn-cli`
 2. Check WireGuard installation: `which wg wg-quick`
 3. Check logs: `log stream --predicate 'process == "Resistine"'`
-4. Test CLI directly: `/Applications/Resistine.app/Contents/Resources/wireguard-apple.app/Contents/MacOS/resistine-vpn-cli status`
+4. Test CLI directly: `/Applications/Resistine.app/Contents/MacOS/resistine-vpn-cli status`
 
 ### CLI not found at runtime
 - Build app with: `./build-installer.sh`
-- Test from: `dist/Resistine.app/Contents/Resources/wireguard-apple.app/Contents/MacOS/`
+- Test from: `dist/Resistine.app/Contents/MacOS/`
 
 ### Tunnel won't activate
 1. Check config file syntax

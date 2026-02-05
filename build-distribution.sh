@@ -62,6 +62,10 @@ if [ -z "$TEAM_ID" ]; then
     exit 1
 fi
 
+# Provisioning Profile UUIDs (from provisioning-profiles folder)
+NE_PROFILE_UUID="df58a6c4-c227-435a-b136-d508374cf32c"
+CLI_PROFILE_UUID="924cf30e-5ec1-481a-a37b-1256b8447e22"
+
 # Verify notarization credentials are stored
 echo "  Checking notarization credentials..."
 if ! xcrun notarytool history --keychain-profile "resistine-notarize" > /dev/null 2>&1; then
@@ -97,9 +101,7 @@ xcodebuild \
   -configuration Release \
   -archivePath "$BUILD_DIR/wireguard-apple.xcarchive" \
   archive \
-  -allowProvisioningUpdates \
-  CODE_SIGN_STYLE="Automatic" \
-  DEVELOPMENT_TEAM="$TEAM_ID"
+  -allowProvisioningUpdates
 
 echo "  Swift components built"
 
@@ -127,7 +129,7 @@ fi
 rm -rf dist/Resistine dist/Resistine.app
 
 echo "  - Building with PyInstaller..."
-pyinstaller Resistine.spec --clean
+pyinstaller Resistine.spec --clean --noconfirm
 
 echo "  Python UI built"
 
@@ -136,8 +138,7 @@ echo "  Python UI built"
 # ============================================================
 # Apple bundle structure requirements (from Apple documentation):
 #   - App Extensions (.appex): Contents/PlugIns/
-#   - XPC Services (.xpc): Contents/XPCServices/
-#   - Helper Tools / CLI: Contents/Helpers/ or Contents/MacOS/
+#   - Helper Tools / CLI: Contents/MacOS/
 #   - Frameworks: Contents/Frameworks/
 #
 # CRITICAL: Do NOT nest bundles inside Contents/Resources/. macOS extension
@@ -163,56 +164,76 @@ fi
 
 # Create Apple-standard directories
 mkdir -p "$PYTHON_APP/Contents/PlugIns"
-mkdir -p "$PYTHON_APP/Contents/XPCServices"
+mkdir -p "$PYTHON_APP/Contents/Library/SystemExtensions"
 
 # --- Copy CLI to Contents/MacOS/ ---
-# IMPORTANT: The CLI must be in Contents/MacOS/ (not Contents/Helpers/) because
-# NSXPCConnection(serviceName:) relies on launchd to discover XPC services.
-# launchd associates a process with its parent app bundle by checking if the
-# binary is in Contents/MacOS/. Binaries in Contents/Helpers/ are NOT associated
-# with the app bundle, so launchd can't find the XPC service for them.
-echo "  - Copying resistine-vpn-cli to Contents/MacOS/..."
-if [ ! -f "$VPN_ARCHIVE/Contents/MacOS/resistine-vpn-cli" ]; then
+# IMPORTANT: The CLI must be in Contents/MacOS/ because
+# NSXPCConnection(serviceName:) (used indirectly by some frameworks) 
+# and other bundle detection logic relies on the process being 
+# in the main app's MacOS folder.
+# --- Copy CLI to Contents/MacOS/ as a Bundle ---
+# To support restricted entitlements (App Groups) in the CLI, it must have a 
+# provisioning profile embedded. Standalone binaries cannot easily have embedded 
+# profiles, so we wrap it in a nested bundle: ResistineCLI.app
+
+echo "  - Packaging resistine-vpn-cli into nested bundle..."
+CLI_APP="$PYTHON_APP/Contents/MacOS/ResistineCLI.app"
+mkdir -p "$CLI_APP/Contents/MacOS"
+
+# Find CLI in archive
+CLI_SOURCE=$(find "$VPN_ARCHIVE" -name "resistine-vpn-cli" -type f | grep -v "dSYM" | grep "/MacOS/" | head -1)
+if [ -z "$CLI_SOURCE" ] || [ ! -f "$CLI_SOURCE" ]; then
     echo "  Error: resistine-vpn-cli not found in archive"
     exit 1
 fi
-cp "$VPN_ARCHIVE/Contents/MacOS/resistine-vpn-cli" "$PYTHON_APP/Contents/MacOS/"
 
-# --- Copy Network Extension to Contents/PlugIns/ ---
-echo "  - Copying network-extension.appex to Contents/PlugIns/..."
-if [ ! -d "$VPN_ARCHIVE/Contents/PlugIns/network-extension.appex" ]; then
-    echo "  Error: network-extension.appex not found in archive"
-    exit 1
-fi
-cp -R "$VPN_ARCHIVE/Contents/PlugIns/network-extension.appex" "$PYTHON_APP/Contents/PlugIns/"
+echo "    Found CLI at: $CLI_SOURCE"
+cp "$CLI_SOURCE" "$CLI_APP/Contents/MacOS/resistine-vpn-cli"
 
-# --- Copy XPC Service to Contents/XPCServices/ ---
-echo "  - Copying ResistineVPNXPC.xpc to Contents/XPCServices/..."
-if [ ! -d "$VPN_ARCHIVE/Contents/XPCServices/ResistineVPNXPC.xpc" ]; then
-    echo "  Error: ResistineVPNXPC.xpc not found in archive"
-    exit 1
-fi
-cp -R "$VPN_ARCHIVE/Contents/XPCServices/ResistineVPNXPC.xpc" "$PYTHON_APP/Contents/XPCServices/"
+# --- Copy Network Extension to Contents/Library/SystemExtensions/ ---
+# CRITICAL: System Extensions MUST use .systemextension extension, not .appex!
+echo "  - Copying network-extension to Contents/Library/SystemExtensions/..."
 
-# Verify all components are in place
-echo "  - Verifying bundle structure..."
-if [ ! -f "$PYTHON_APP/Contents/MacOS/resistine-vpn-cli" ]; then
-    echo "  Error: CLI not in Contents/MacOS/"
-    exit 1
-fi
-if [ ! -d "$PYTHON_APP/Contents/PlugIns/network-extension.appex" ]; then
-    echo "  Error: Network Extension not in Contents/PlugIns/"
-    exit 1
-fi
-if [ ! -d "$PYTHON_APP/Contents/XPCServices/ResistineVPNXPC.xpc" ]; then
-    echo "  Error: XPC Service not in Contents/XPCServices/"
+NE_SOURCE=$(find "$VPN_ARCHIVE" -name "*network-extension*" \( -name "*.appex" -o -name "*.systemextension" \) -type d | grep -v "dSYM" | head -1)
+
+if [ -z "$NE_SOURCE" ]; then
+    echo "  Error: Network Extension not found in archive"
     exit 1
 fi
 
-echo "  VPN components placed in Apple-standard locations"
-echo "     - CLI: Contents/MacOS/resistine-vpn-cli"
-echo "     - Network Extension: Contents/PlugIns/network-extension.appex"
-echo "     - XPC Service: Contents/XPCServices/ResistineVPNXPC.xpc"
+# Use the full bundle name: com.resistine.desktop.network-extension.systemextension
+DEST_EXTENSION="$PYTHON_APP/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension"
+mkdir -p "$PYTHON_APP/Contents/Library/SystemExtensions"
+rm -rf "$DEST_EXTENSION"
+cp -R "$NE_SOURCE" "$DEST_EXTENSION"
+
+# Verify placement
+if [ ! -d "$PYTHON_APP/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension" ]; then
+    echo "  Error: System Extension not in Contents/Library/SystemExtensions/"
+    exit 1
+fi
+
+# Create minimal Info.plist for the CLI bundle
+cat > "$CLI_APP/Contents/Info.plist" << PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.resistine.desktop.vpnxpc</string>
+    <key>CFBundleName</key>
+    <string>ResistineCLI</string>
+    <key>CFBundleExecutable</key>
+    <string>resistine-vpn-cli</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+</dict>
+</plist>
+PLISTEOF
 
 # ============================================================
 # Step 5: Embed Developer ID provisioning profiles & sign
@@ -220,40 +241,53 @@ echo "     - XPC Service: Contents/XPCServices/ResistineVPNXPC.xpc"
 echo ""
 echo "Step 5: Embedding Developer ID provisioning profiles & signing..."
 
-# Developer ID provisioning profiles (required for restricted entitlements)
 PROFILES_DIR="$PYTHON_UI_PATH/provisioning-profiles"
 NE_PROFILE="$PROFILES_DIR/Mac_Network_Ext.provisionprofile"
 XPC_PROFILE="$PROFILES_DIR/Mac_VPNXPC.provisionprofile"
+MAIN_PROFILE="$PROFILES_DIR/MacDesktopFeb26.provisionprofile"
 
+# Validate Profiles
 if [ ! -f "$NE_PROFILE" ]; then
     echo "  Error: Network Extension Developer ID profile not found at: $NE_PROFILE"
-    echo "  Download it from Apple Developer Portal and place it in provisioning-profiles/"
     exit 1
 fi
 
 if [ ! -f "$XPC_PROFILE" ]; then
     echo "  Error: VPNXPC Service Developer ID profile not found at: $XPC_PROFILE"
-    echo "  Download it from Apple Developer Portal and place it in provisioning-profiles/"
     exit 1
 fi
 
-# Embed Developer ID profiles into components (at their new Apple-standard locations)
-echo "  - Embedding Developer ID profile into network-extension.appex..."
-cp "$NE_PROFILE" "$PYTHON_APP/Contents/PlugIns/network-extension.appex/Contents/embedded.provisionprofile"
+if [ ! -f "$MAIN_PROFILE" ]; then
+    echo "  Error: Main App Developer ID profile not found at: $MAIN_PROFILE"
+    exit 1
+fi
 
-echo "  - Embedding Developer ID profile into ResistineVPNXPC.xpc..."
-cp "$XPC_PROFILE" "$PYTHON_APP/Contents/XPCServices/ResistineVPNXPC.xpc/Contents/embedded.provisionprofile"
+# Embedding Developer ID profiles into components
+echo "  - Embedding Developer ID profile into system extension..."
+cp "$NE_PROFILE" "$PYTHON_APP/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension/Contents/embedded.provisionprofile"
+
+echo "  - Embedding Developer ID profile into main app..."
+cp "$MAIN_PROFILE" "$PYTHON_APP/Contents/embedded.provisionprofile"
+
+echo "  - Embedding XPC profile into CLI bundle..."
+cp "$XPC_PROFILE" "$CLI_APP/Contents/embedded.provisionprofile"
+
+# Create symlink for compatibility
+# Python code expects resistine-vpn-cli at ../MacOS/resistine-vpn-cli
+echo "  - Creating symlink for CLI..."
+ln -sf "ResistineCLI.app/Contents/MacOS/resistine-vpn-cli" "$PYTHON_APP/Contents/MacOS/resistine-vpn-cli"
+
 
 # Locate entitlements files
 ENTITLEMENTS_FILE="$PYTHON_UI_PATH/Resistine.entitlements"
 CLI_ENTITLEMENTS="$VPN_PROJECT_PATH/resistine-vpn-cli/entitlements.plist"
 
-# For Developer ID distribution, networkextension entitlements need the
-# -systemextension suffix. The entitlements must also include
-# com.apple.application-identifier and com.apple.developer.team-identifier
-# to match the embedded provisioning profile, otherwise signature
-# validation fails ("Signature check failed").
 NE_DIST_ENTITLEMENTS="/tmp/ne-distribution.entitlements.plist"
+CLI_DIST_ENTITLEMENTS="/tmp/cli-distribution.entitlements.plist"
+
+echo "  - Generating distribution entitlements..."
+
+# NE Entitlements
 cat > "$NE_DIST_ENTITLEMENTS" << ENTEOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -272,6 +306,7 @@ cat > "$NE_DIST_ENTITLEMENTS" << ENTEOF
 	<key>com.apple.security.application-groups</key>
 	<array>
 		<string>group.Resistine.WireguardTest</string>
+		<string>${TEAM_ID}.*</string>
 	</array>
 	<key>com.apple.security.network.client</key>
 	<true/>
@@ -285,8 +320,8 @@ cat > "$NE_DIST_ENTITLEMENTS" << ENTEOF
 </plist>
 ENTEOF
 
-XPC_DIST_ENTITLEMENTS="/tmp/xpc-distribution.entitlements.plist"
-cat > "$XPC_DIST_ENTITLEMENTS" << ENTEOF
+# CLI Entitlements (referencing the bundle ID)
+cat > "$CLI_DIST_ENTITLEMENTS" << ENTEOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -304,6 +339,7 @@ cat > "$XPC_DIST_ENTITLEMENTS" << ENTEOF
 	<key>com.apple.security.application-groups</key>
 	<array>
 		<string>group.Resistine.WireguardTest</string>
+		<string>${TEAM_ID}.*</string>
 	</array>
 	<key>com.apple.security.network.client</key>
 	<true/>
@@ -314,6 +350,7 @@ cat > "$XPC_DIST_ENTITLEMENTS" << ENTEOF
 </dict>
 </plist>
 ENTEOF
+
 
 # Verify CLI entitlements exist
 if [ ! -f "$CLI_ENTITLEMENTS" ]; then
@@ -329,36 +366,24 @@ fi
 # --- Sign innermost components first, then work outward ---
 # Order matters: sign binaries inside bundles before signing the bundle itself.
 
-# 5a: Sign the network extension with distribution entitlements
-echo "  - Signing network-extension.appex with Developer ID..."
+# 5a: Sign the system extension with distribution entitlements
+echo "  - Signing system extension with Developer ID..."
 codesign --force --sign "$SIGN_IDENTITY" \
     --options runtime \
     --timestamp \
     --entitlements "$NE_DIST_ENTITLEMENTS" \
-    "$PYTHON_APP/Contents/PlugIns/network-extension.appex" || {
-    echo "  network-extension.appex signing failed"
+    "$PYTHON_APP/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension" || {
+    echo "  System Extension signing failed"
     exit 1
 }
-echo "    network-extension.appex signed"
+echo "    System Extension signed"
 
-# 5b: Sign the XPC service with distribution entitlements
-echo "  - Signing ResistineVPNXPC.xpc with Developer ID..."
-codesign --force --sign "$SIGN_IDENTITY" \
-    --options runtime \
-    --timestamp \
-    --entitlements "$XPC_DIST_ENTITLEMENTS" \
-    "$PYTHON_APP/Contents/XPCServices/ResistineVPNXPC.xpc" || {
-    echo "  ResistineVPNXPC.xpc signing failed"
-    exit 1
-}
-echo "    ResistineVPNXPC.xpc signed"
-
-# 5c: Sign the CLI
+# 5b: Sign the CLI with distribution entitlements (reusing VPNXPC profile)
 echo "  - Signing resistine-vpn-cli with Developer ID..."
 codesign --force --sign "$SIGN_IDENTITY" \
     --options runtime \
     --timestamp \
-    --entitlements "$CLI_ENTITLEMENTS" \
+    --entitlements "$CLI_DIST_ENTITLEMENTS" \
     "$PYTHON_APP/Contents/MacOS/resistine-vpn-cli" || {
     echo "  resistine-vpn-cli signing failed"
     exit 1
@@ -395,11 +420,8 @@ echo ""
 echo "  Verifying signatures..."
 VERIFY_FAILED=false
 
-codesign --verify --verbose "$PYTHON_APP/Contents/PlugIns/network-extension.appex" 2>&1 && \
-    echo "    network-extension.appex: valid" || { echo "    network-extension.appex: INVALID"; VERIFY_FAILED=true; }
-
-codesign --verify --verbose "$PYTHON_APP/Contents/XPCServices/ResistineVPNXPC.xpc" 2>&1 && \
-    echo "    ResistineVPNXPC.xpc: valid" || { echo "    ResistineVPNXPC.xpc: INVALID"; VERIFY_FAILED=true; }
+codesign --verify --verbose "$PYTHON_APP/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension" 2>&1 && \
+    echo "    network-extension.systemextension: valid" || { echo "    network-extension.systemextension: INVALID"; VERIFY_FAILED=true; }
 
 codesign --verify --verbose "$PYTHON_APP/Contents/MacOS/resistine-vpn-cli" 2>&1 && \
     echo "    resistine-vpn-cli: valid" || { echo "    resistine-vpn-cli: INVALID"; VERIFY_FAILED=true; }
@@ -554,7 +576,7 @@ echo "  - Registering app with LaunchServices..."
 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -f "/Applications/$APP_NAME.app" 2>/dev/null || true
 
 echo "  - Registering network extension with pluginkit..."
-pluginkit -a "/Applications/$APP_NAME.app/Contents/PlugIns/network-extension.appex" 2>/dev/null || true
+pluginkit -a "/Applications/$APP_NAME.app/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension" 2>/dev/null || true
 
 # ============================================================
 # Summary

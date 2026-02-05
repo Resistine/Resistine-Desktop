@@ -6,25 +6,20 @@ This document describes the architecture of the Resistine macOS application, wit
 
 Resistine is a cross-platform security application with a **Python/CustomTkinter UI** that embeds native **Swift components** for privileged macOS operations.
 
-```
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Resistine.app (PyInstaller)                  │
 ├─────────────────────────────────────────────────────────────────┤
 │  Contents/                                                      │
-│  ├── MacOS/Resistine           ← Python executable              │
+│  ├── MacOS/                                                     │
+│  │   ├── Resistine             ← Python executable              │
+│  │   └── resistine-vpn-cli     ← Swift VPN Controller           │
 │  ├── Frameworks/               ← Python framework + deps        │
 │  ├── Resources/                                                 │
-│  │   ├── plugins/              ← Python plugin modules          │
-│  │   └── wireguard-apple.app/  ← Embedded Swift app             │
-│  │       ├── Contents/MacOS/                                    │
-│  │       │   └── resistine-vpn-cli    ← CLI tool                │
-│  │       ├── Contents/PlugIns/                                  │
-│  │       │   └── network-extension.appex  ← Network Extension   │
-│  │       └── Contents/XPCServices/                              │
-│  │           └── ResistineVPNXPC.xpc      ← XPC Service         │
+│  │   └── plugins/              ← Python plugin modules          │
+│  ├── PlugIns/                                                   │
+│  │   └── network-extension.appex  ← Network Extension           │
 │  └── _CodeSignature/                                            │
 └─────────────────────────────────────────────────────────────────┘
-```
 
 ## Communication Pattern
 
@@ -35,11 +30,11 @@ Python Plugin (UI)
        │
        │ subprocess.run(["resistine-vpn-cli", "start|stop|status"])
        ▼
-Swift CLI Tool
+Swift CLI Tool (Resistine.app/Contents/MacOS/)
        │
-       │ XPC / NetworkExtension APIs
+       │ NetworkExtension / SystemConfiguration APIs
        ▼
-App Extension (.appex) or XPC Service (.xpc)
+App Extension (PlugIns/network-extension.appex)
        │
        │ System Frameworks
        ▼
@@ -62,10 +57,8 @@ macOS requires strict code signing for privileged components. Here's the signing
 
 ```
 Resistine.app (signed with Developer ID Application)
-└── wireguard-apple.app (signed with Developer ID Application)
-    ├── resistine-vpn-cli (signed with Developer ID + entitlements)
-    ├── network-extension.appex (signed with Developer ID + provisioning profile)
-    └── ResistineVPNXPC.xpc (signed with Developer ID + provisioning profile)
+├── resistine-vpn-cli (signed with Developer ID + provisioning profile)
+└── network-extension.appex (signed with Developer ID + provisioning profile)
 ```
 
 ### Key Signing Requirements
@@ -73,9 +66,8 @@ Resistine.app (signed with Developer ID Application)
 | Component | Certificate Type | Provisioning Profile | Entitlements |
 |-----------|-----------------|---------------------|--------------|
 | Main App | Developer ID Application | Not required | App Sandbox, Hardened Runtime |
-| CLI Tool | Developer ID Application | Not required | App Sandbox, App Groups |
+| CLI Tool | Developer ID Application | **Required** (VPNXPC) | App Sandbox, App Groups, Network Extension |
 | Network Extension | Developer ID Application | **Required** | Network Extension, App Groups |
-| XPC Service | Developer ID Application | **Required** | Network Extension, App Groups |
 
 > [!IMPORTANT]
 > Network Extensions require **Developer ID provisioning profiles** from Apple Developer Portal. Apple Development profiles work for local testing but fail notarization.
@@ -106,10 +98,8 @@ Choose a bundle ID hierarchy that matches your team:
 
 ```
 com.resistine.desktop                              ← Main Python app
-com.resistine.wireguard-apple                      ← Embedded Swift app
-com.resistine.wireguard-apple.network-extension    ← Network Extension
-com.resistine.wireguard-apple.ResistineVPNXPC      ← XPC Service
-com.resistine.wireguard-apple.YOUR-NEW-EXTENSION   ← Your new extension
+com.resistine.desktop.network-extension            ← Network Extension
+com.resistine.desktop.vpnxpc                       ← CLI Tool (reusing ID)
 ```
 
 ### Step 3: Register App IDs in Apple Developer Portal
@@ -317,11 +307,9 @@ security cms -D -i /path/to/embedded.provisionprofile | grep -A1 "Name"
 |-----------|----------------|-------------------|
 | Python UI | `Resistine-Desktop/` | `Resistine.app/Contents/MacOS/` |
 | Python plugins | `plugins/` | `Resistine.app/Contents/Resources/plugins/` |
-| Swift project | `../wireguard-apple/` | — |
-| Embedded Swift app | — | `Resistine.app/Contents/Resources/wireguard-apple.app/` |
-| CLI tool | `resistine-vpn-cli/` | `.../wireguard-apple.app/Contents/MacOS/` |
-| Network Extension | `network-extension/` | `.../wireguard-apple.app/Contents/PlugIns/` |
-| XPC Service | `ResistineVPNXPC/` | `.../wireguard-apple.app/Contents/XPCServices/` |
+| Swift project | `vpn-apple/` | — |
+| CLI tool | `resistine-vpn-cli/` | `Resistine.app/Contents/MacOS/` |
+| Network Extension | `network-extension/` | `Resistine.app/Contents/PlugIns/` |
 
 ---
 
@@ -330,10 +318,10 @@ security cms -D -i /path/to/embedded.provisionprofile | grep -A1 "Name"
 ### VPN shows "Disconnected" on app restart
 The Python UI must query actual status on startup. See `initialize_vpn_status()` in `plugins/vpn/main.py`.
 
-### "Couldn't communicate with helper application"
-- Check CLI entitlements include App Groups
-- Verify XPC service is present and signed
-- Check Console.app for XPC connection errors
+### "Internal Error: nesessionmanager"
+- Check CLI entitlements include App Groups and Network Extension
+- Verify Bundle IDs match provisioning profiles exactly
+- Ensure Extension is in `PlugIns/` and CLI is in `MacOS/` of the SAME bundle
 
 ### Notarization fails with "Invalid"
 ```bash

@@ -83,6 +83,10 @@ if [ -z "$TEAM_ID" ]; then
     exit 1
 fi
 
+# Provisioning Profile UUIDs (from provisioning-profiles folder)
+NE_PROFILE_UUID="df58a6c4-c227-435a-b136-d508374cf32c"
+CLI_PROFILE_UUID="924cf30e-5ec1-481a-a37b-1256b8447e22"
+
 # Build the Xcode project for Release with proper code signing
 # IMPORTANT: Code signing must happen during the Xcode build, not after.
 # The networkextension entitlement is a restricted entitlement that requires
@@ -94,9 +98,7 @@ xcodebuild \
   -configuration Release \
   -archivePath "$BUILD_DIR/wireguard-apple.xcarchive" \
   archive \
-  -allowProvisioningUpdates \
-  CODE_SIGN_STYLE="Automatic" \
-  DEVELOPMENT_TEAM="$TEAM_ID"
+  -allowProvisioningUpdates
 
 echo "✅ Swift components built"
 
@@ -135,8 +137,7 @@ echo "✅ Python UI built"
 # Step 3: Place VPN components directly in Resistine.app bundle
 # Apple bundle structure requirements (from Apple documentation):
 #   - App Extensions (.appex): Contents/PlugIns/
-#   - XPC Services (.xpc): Contents/XPCServices/
-#   - Helper Tools / CLI: Contents/Helpers/ or Contents/MacOS/
+#   - Helper Tools / CLI: Contents/MacOS/
 #   - Frameworks: Contents/Frameworks/
 #
 # CRITICAL: Do NOT nest bundles inside Contents/Resources/. macOS extension
@@ -161,7 +162,7 @@ fi
 
 # Create Apple-standard directories
 mkdir -p "$PYTHON_APP/Contents/PlugIns"
-mkdir -p "$PYTHON_APP/Contents/XPCServices"
+mkdir -p "$PYTHON_APP/Contents/Library/SystemExtensions"
 
 # --- Copy CLI to Contents/MacOS/ ---
 # IMPORTANT: The CLI must be in Contents/MacOS/ (not Contents/Helpers/) because
@@ -176,41 +177,33 @@ if [ ! -f "$VPN_ARCHIVE/Contents/MacOS/resistine-vpn-cli" ]; then
 fi
 cp "$VPN_ARCHIVE/Contents/MacOS/resistine-vpn-cli" "$PYTHON_APP/Contents/MacOS/"
 
-# --- Copy Network Extension to Contents/PlugIns/ ---
-echo "  - Copying network-extension.appex to Contents/PlugIns/..."
-if [ ! -d "$VPN_ARCHIVE/Contents/PlugIns/network-extension.appex" ]; then
-    echo "❌ Error: network-extension.appex not found in archive"
+# --- Copy Network Extension as System Extension ---
+echo "  - Copying network-extension to Contents/Library/SystemExtensions/..."
+SYSEX_PATH="$PYTHON_APP/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension"
+
+if [ -d "$VPN_ARCHIVE/Contents/PlugIns/network-extension.appex" ]; then
+    cp -R "$VPN_ARCHIVE/Contents/PlugIns/network-extension.appex" "$SYSEX_PATH"
+elif [ -d "$VPN_ARCHIVE/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension" ]; then
+    cp -R "$VPN_ARCHIVE/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension" "$SYSEX_PATH"
+else
+    echo "❌ Error: Network Extension not found in archive"
     exit 1
 fi
-cp -R "$VPN_ARCHIVE/Contents/PlugIns/network-extension.appex" "$PYTHON_APP/Contents/PlugIns/"
 
-# --- Copy XPC Service to Contents/XPCServices/ ---
-echo "  - Copying ResistineVPNXPC.xpc to Contents/XPCServices/..."
-if [ ! -d "$VPN_ARCHIVE/Contents/XPCServices/ResistineVPNXPC.xpc" ]; then
-    echo "❌ Error: ResistineVPNXPC.xpc not found in archive"
-    exit 1
-fi
-cp -R "$VPN_ARCHIVE/Contents/XPCServices/ResistineVPNXPC.xpc" "$PYTHON_APP/Contents/XPCServices/"
-
-# Verify all components are in place
+# Verify placement
 echo "  - Verifying bundle structure..."
 if [ ! -f "$PYTHON_APP/Contents/MacOS/resistine-vpn-cli" ]; then
     echo "❌ Error: CLI not in Contents/MacOS/"
     exit 1
 fi
-if [ ! -d "$PYTHON_APP/Contents/PlugIns/network-extension.appex" ]; then
-    echo "❌ Error: Network Extension not in Contents/PlugIns/"
-    exit 1
-fi
-if [ ! -d "$PYTHON_APP/Contents/XPCServices/ResistineVPNXPC.xpc" ]; then
-    echo "❌ Error: XPC Service not in Contents/XPCServices/"
+if [ ! -d "$PYTHON_APP/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension" ]; then
+    echo "❌ Error: System Extension not in Contents/Library/SystemExtensions/"
     exit 1
 fi
 
 echo "✅ VPN components placed in Apple-standard locations"
 echo "   - CLI: Contents/MacOS/resistine-vpn-cli"
-echo "   - Network Extension: Contents/PlugIns/network-extension.appex"
-echo "   - XPC Service: Contents/XPCServices/ResistineVPNXPC.xpc"
+echo "   - System Extension: Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension"
 
 # Step 4: Verify permissions
 echo ""
@@ -223,12 +216,8 @@ if [ ! -x "$PYTHON_APP/Contents/MacOS/resistine-vpn-cli" ]; then
     echo "  ⚠️  resistine-vpn-cli is not executable — this may indicate a build issue"
 fi
 
-if [ ! -x "$PYTHON_APP/Contents/PlugIns/network-extension.appex/Contents/MacOS/network-extension" ]; then
+if [ ! -x "$SYSEX_PATH/Contents/MacOS/network-extension" ]; then
     echo "  ⚠️  network-extension is not executable — this may indicate a build issue"
-fi
-
-if [ ! -d "$PYTHON_APP/Contents/XPCServices/ResistineVPNXPC.xpc" ]; then
-    echo "  ⚠️  ResistineVPNXPC.xpc not found — XPC architecture requires this"
 fi
 
 echo "✅ Permissions verified"
@@ -249,13 +238,13 @@ else
     ENTITLEMENTS_FLAG="--entitlements $ENTITLEMENTS_FILE"
 fi
 
-# The network-extension.appex and ResistineVPNXPC.xpc were signed by Xcode
+# The network-extension.appex was signed by Xcode
 # during archive with provisioning profiles and restricted entitlements.
-# DO NOT re-sign them — re-signing strips provisioning profiles.
+# DO NOT re-sign it — re-signing strips provisioning profiles.
 #
 # The CLI (resistine-vpn-cli) must be re-signed with Developer ID for distribution,
 # but we MUST preserve its entitlements (sandbox + application-groups).
-# Without these entitlements, the CLI cannot connect to the embedded XPC service.
+# Without these entitlements, the CLI cannot connect to the Network Extension.
 CLI_ENTITLEMENTS="$VPN_PROJECT_PATH/resistine-vpn-cli/entitlements.plist"
 if [ ! -f "$CLI_ENTITLEMENTS" ]; then
     echo "  ⚠️  Warning: CLI entitlements file not found at $CLI_ENTITLEMENTS"
@@ -281,13 +270,9 @@ codesign --verify --verbose "$PYTHON_APP/Contents/MacOS/resistine-vpn-cli" 2>&1 
     echo "  ✅ resistine-vpn-cli signature valid" || \
     echo "  ❌ resistine-vpn-cli signature INVALID"
 
-codesign --verify --verbose "$PYTHON_APP/Contents/PlugIns/network-extension.appex" 2>&1 && \
-    echo "  ✅ network-extension.appex signature valid" || \
-    echo "  ❌ network-extension.appex signature INVALID — Xcode signing may have failed"
-
-codesign --verify --verbose "$PYTHON_APP/Contents/XPCServices/ResistineVPNXPC.xpc" 2>&1 && \
-    echo "  ✅ ResistineVPNXPC.xpc signature valid" || \
-    echo "  ❌ ResistineVPNXPC.xpc signature INVALID — Xcode signing may have failed"
+codesign --verify --verbose "$PYTHON_APP/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension" 2>&1 && \
+    echo "  ✅ system-extension signature valid" || \
+    echo "  ❌ system-extension signature INVALID — Xcode signing may have failed"
 
 # Sign all PyInstaller-produced frameworks, dylibs, and shared objects.
 # PyInstaller ad-hoc signs these, but macOS AMFI rejects ad-hoc signed
@@ -458,10 +443,10 @@ echo "  1. Test the installed app: open '/Applications/$APP_NAME.app'"
 echo "  2. Notarize for public distribution (optional)"
 echo ""
 echo "Distribution checklist:"
-echo "  ☐ Test installation on clean macOS system"
-echo "  ☐ Test VPN connection functionality"
-echo "  ☐ Check Console.app for errors"
-echo "  ☐ Verify CLI subprocess communication (no XPC errors)"
-echo "  ☐ Notarize DMG (for public distribution)"
+    echo "  ☐ Test installation on clean macOS system"
+    echo "  ☐ Test VPN connection functionality"
+    echo "  ☐ Check Console.app for errors"
+    echo "  ☐ Verify CLI subprocess communication"
+    echo "  ☐ Notarize DMG (for public distribution)"
 echo "  ☐ Upload to distribution server"
 echo ""

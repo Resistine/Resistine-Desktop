@@ -19,8 +19,18 @@ from utils.logger import logger
 
 
 def get_writable_wireguard_dir():
-    """Get a writable directory for WireGuard configuration files"""
-    wireguard_dir = os.path.join(get_config_dir(), "wireguard")
+    """Get a writable directory for WireGuard configuration files
+    
+    Uses the App Group container so the sandboxed CLI can access configs.
+    Path: ~/Library/Group Containers/group.Resistine.WireguardTest/wireguard/
+    """
+    # Use App Group container instead of Application Support
+    # This allows the sandboxed resistine-vpn-cli to access the configs
+    home = os.path.expanduser("~")
+    app_group_container = os.path.join(
+        home, "Library", "Group Containers", "group.Resistine.WireguardTest"
+    )
+    wireguard_dir = os.path.join(app_group_container, "wireguard")
     os.makedirs(wireguard_dir, exist_ok=True)
     return wireguard_dir
 
@@ -82,12 +92,35 @@ helper = HelperToolManager()
 class VPNHelper:
     """VPN-specific operations using the CLI interface"""
 
+    # Keep reference to avoid GC of the delegate
+    _activator_ref = None
+
+    @staticmethod
+    def activate_extension() -> bool:
+        """Activate the System Extension using Main App PyObjC bridge"""
+        try:
+            from .extension_activator import ExtensionActivator, run_activation
+            logger.info("🔌 [VPN] Triggering System Extension activation via Main App...")
+            
+            # Store reference to keep delegate alive
+            VPNHelper._activator_ref = run_activation("com.resistine.desktop.network-extension")
+            return True
+        except ImportError:
+            logger.error("❌ [VPN] PyObjC ExtensionActivator not found (ImportError)")
+            return False
+        except Exception as e:
+            logger.error(f"❌ [VPN] Activation error: {e}")
+            return False
+
     @staticmethod
     def start_vpn(config_path: str) -> Tuple[bool, str]:
         """Start VPN using config file"""
         if not helper.cli_path:
             logger.error("❌ [CLI] Helper CLI not found")
             return (False, "Helper CLI not found")
+
+        # Ensure extension is activated before starting
+        VPNHelper.activate_extension()
 
         try:
             cmd = [helper.cli_path, "start", config_path]
