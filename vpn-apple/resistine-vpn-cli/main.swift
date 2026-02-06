@@ -107,10 +107,33 @@ class VPNController: NSObject {
         }
     }
     
-    func status(completionHandler: @escaping (NEVPNStatus) -> Void) {
-        loadManager { manager in
-            let status = manager?.connection.status ?? .invalid
-            completionHandler(status)
+    func status(completionHandler: @escaping (NEVPNStatus, Bool) -> Void) {
+        NETunnelProviderManager.loadAllFromPreferences { managers, error in
+            if let error = error {
+                NSLog("ERROR [Status]: \(error.localizedDescription)")
+                completionHandler(.invalid, false)
+                return
+            }
+
+            // If no managers exist, the extension hasn't been approved/configured yet
+            guard let manager = managers?.first else {
+                completionHandler(.invalid, false)
+                return
+            }
+
+            // A manager can exist in preferences even when the network extension
+            // is disabled in Login Items & Extensions. Check that the manager has
+            // a valid protocol configuration with our bundle identifier to confirm
+            // the extension is actually functional.
+            guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol,
+                  proto.providerBundleIdentifier == self.extensionBundleIdentifier,
+                  manager.isEnabled else {
+                NSLog("STATUS [Status]: Manager exists but extension is not enabled (isEnabled=\(manager.isEnabled))")
+                completionHandler(.invalid, false)
+                return
+            }
+
+            completionHandler(manager.connection.status, true)
         }
     }
     
@@ -210,14 +233,18 @@ case "stop":
     }
 
 case "status":
-    VPNController.shared.status { status in
-        switch status {
-        case .connected:
-            print("Connected")
-        case .connecting, .reasserting:
-            print("Connecting")
-        default:
-            print("Disconnected")
+    VPNController.shared.status { status, hasManager in
+        if !hasManager {
+            print("NotInstalled")
+        } else {
+            switch status {
+            case .connected:
+                print("Connected")
+            case .connecting, .reasserting:
+                print("Connecting")
+            default:
+                print("Disconnected")
+            }
         }
         completeCommand()
     }

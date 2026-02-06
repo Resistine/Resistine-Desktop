@@ -232,6 +232,19 @@ class Plugin(BasePlugin):
         logger.info("User skipped login")
         if hasattr(self, "login_frame"):
             self.login_frame.destroy()
+
+        # TODO: Remove this dev-mode test hook before release
+        if platform.system() == "Darwin":
+            from plugins.login.vpn_onboarding import VPNOnboardingScreen
+
+            def on_complete():
+                self.app.create_dashboard()
+                self.app.after(100, lambda: self.app.select_frame_by_name("frame_VPN"))
+
+            self._onboarding = VPNOnboardingScreen(self.app, on_complete)
+            self._onboarding.show()
+            return
+
         self.app.show_notification("Login skipped - some features may be unavailable", type="warning")
         self.app.create_dashboard()
 
@@ -355,13 +368,32 @@ class Plugin(BasePlugin):
             if success:
                 logger.info("Login successful")
                 self.app.show_notification("Login successful!", type="info")
-                
+
                 # Save VPN config if provided
                 if result.get("data"):
                      save_vpn_configuration(result.get("data"))
 
-                self.destroy()
-                self.app.create_dashboard()
+                # Check if VPN onboarding is needed (macOS first-time setup)
+                from utils import settings as app_settings
+                needs_onboarding = (
+                    platform.system() == "Darwin"
+                    and not app_settings.get("vpn", "onboarding_complete", False)
+                )
+
+                if needs_onboarding:
+                    from plugins.login.vpn_onboarding import VPNOnboardingScreen
+                    self.destroy()
+
+                    def on_onboarding_complete():
+                        self.app.create_dashboard()
+                        self.app.after(100, lambda: self.app.select_frame_by_name("frame_VPN"))
+
+                    self._onboarding = VPNOnboardingScreen(self.app, on_onboarding_complete)
+                    self._onboarding.show()
+                else:
+                    app_settings.set("auth", "logged_in", True)
+                    self.destroy()
+                    self.app.create_dashboard()
             else:
                 logger.error(f"Login failed: {message}")
                 self.update_status(message, "red")
