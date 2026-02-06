@@ -386,8 +386,8 @@ class Plugin(BasePlugin):
                     # p=p to ensure that each instance captures its own plugin reference correctly, preventing late binding issues in loops
                     command=lambda p=p: self.handle_install(p),
                     border_width=0,
-                    fg_color=("#239852", "#1B7740"),
-                    hover_color=("#1B7740", "#14532D"),
+                    fg_color=("#2ECC71", "#27AE60"),
+                    hover_color=("#27AE60", "#219150"),
                     text_color=("white", "white"),
                     font=customtkinter.CTkFont(size=12)
                 ).grid(row=0, column=1, padx=5, pady=5, sticky="ew")
@@ -400,8 +400,8 @@ class Plugin(BasePlugin):
                         height=26,
                         command=show_confirm_buttons,
                         border_width=0,
-                        fg_color=("#A52626", "#7F1D1D"),
-                        hover_color=("#A62D2D", "#601515"),
+                        fg_color=("#FF4444", "#C73636"),
+                        hover_color=("#C73636", "#9E2A2A"),
                         text_color=("white", "white"),
                         font=customtkinter.CTkFont(size=12)
                     ).grid(row=0, column=1, padx=5, pady=5, sticky="ew")
