@@ -171,10 +171,15 @@ class Plugin(BasePlugin):
         self._current_cols = len(cols)
         self._current_max_cols = max_cols
 
+        # Content Wrapper for Grid (to allow horizontal centering)
+        content_wrapper = customtkinter.CTkFrame(self.main_frame, fg_color="transparent")
+        content_wrapper.grid(row=2, column=0, sticky="new", padx=15, pady=0)
+        content_wrapper.grid_columnconfigure(0, weight=1)
+        
         content_frame = customtkinter.CTkFrame(
-            self.main_frame, corner_radius=0, fg_color="transparent"
+            content_wrapper, corner_radius=0, fg_color="transparent"
         )
-        content_frame.grid(row=2, column=0, sticky="new", padx=15, pady=0)
+        content_frame.grid(row=0, column=0, sticky="new")
         content_frame.grid_columnconfigure(0, weight=1)
         
         # Store reference for rebuilding

@@ -31,6 +31,9 @@ class MarkdownBubble(customtkinter.CTkFrame):
 
         # Check if HtmlFrame is available
         if HtmlFrame is None:
+            if not hasattr(MarkdownBubble, '_warned_tkhtml'):
+                logger.warning("Tkhtml not available - using plain text fallback for markdown rendering")
+                MarkdownBubble._warned_tkhtml = True
             self._render_fallback()
             return
 
@@ -131,7 +134,10 @@ class MarkdownBubble(customtkinter.CTkFrame):
             self.resize_timer = None
 
         except Exception as e:
-            logger.error(f"MarkdownBubble error: {e}")
+            # Only log detailed error once
+            if not hasattr(MarkdownBubble, '_warned_render_error'):
+                logger.warning(f"MarkdownBubble rendering failed, using fallback: {e}")
+                MarkdownBubble._warned_render_error = True
             self._render_fallback()
 
     def on_parent_configure(self, event):

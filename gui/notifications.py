@@ -8,7 +8,7 @@ class ToastNotification(customtkinter.CTkFrame):
     Non-blocking, animated toast notification that overlays the main window.
     """
 
-    def __init__(self, master, text, icon_color="green", **kwargs):
+    def __init__(self, master, text, icon_color="green", relx=0.5, **kwargs):
         # Get theme corner radius
         corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
         super().__init__(
@@ -19,6 +19,7 @@ class ToastNotification(customtkinter.CTkFrame):
             border_color=("gray80", "gray30"),
             **kwargs,
         )
+        self.relx = relx
 
         # Icon (color dot)
         self.icon = customtkinter.CTkFrame(
@@ -47,7 +48,7 @@ class ToastNotification(customtkinter.CTkFrame):
         # Force a width for centering if content is small
         self.configure(width=400)
         
-        self.place(relx=0.5, rely=self.y_pos, anchor="n")
+        self.place(relx=self.relx, rely=self.y_pos, anchor="n")
         
         # Lift above everything
         self.lift()
@@ -68,7 +69,7 @@ class ToastNotification(customtkinter.CTkFrame):
 
         if self.y_pos < self.target_y:
             self.y_pos += 0.01 # Faster animation
-            self.place(relx=0.5, rely=self.y_pos, anchor="n")
+            self.place(relx=self.relx, rely=self.y_pos, anchor="n")
             self.master.after(10, self.animate_in)
         else:
             self.master.after(3000, self.animate_out) # Show for 3 seconds
@@ -84,7 +85,7 @@ class ToastNotification(customtkinter.CTkFrame):
 
         if self.y_pos > -0.2:
             self.y_pos -= 0.01
-            self.place(relx=0.5, rely=self.y_pos, anchor="n")
+            self.place(relx=self.relx, rely=self.y_pos, anchor="n")
             self.master.after(10, self.animate_out)
         else:
             self.destroy()
