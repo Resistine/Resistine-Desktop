@@ -356,47 +356,120 @@ class Plugin(BasePlugin):
             self.plugin_cards[plugin.id] = card
 
     def _inject_store_buttons(self, container, p):
-        """Helper to inject buttons, extracted for reuse."""
-        # Info Button
-        customtkinter.CTkButton(
-            container,
-            text="Info",
-            height=26,
-            width=80,
-            command=lambda p=p: self.app.show_readme(p) if not isinstance(p, RemotePluginWrapper) else self.show_remote_info(p),
-            border_width=0,
-            fg_color=("#3B8ED0", "#1F6AA5"),
-            hover_color=("#367EBB", "#144870"),
-            font=customtkinter.CTkFont(size=12)
-        ).grid(row=0, column=0, padx=5, pady=5)
-
-        if isinstance(p, RemotePluginWrapper) or getattr(p, "status", None) == "Uninstalled":
-            # Install Button
+        """Helper to inject buttons with inline confirmation for uninstall."""
+        # Track button state for confirmation UI
+        container._button_state = "normal"  # "normal" or "confirming"
+        
+        def show_normal_buttons():
+            """Show the default Info + (Install/Uninstall) buttons."""
+            # Clear container
+            for widget in container.winfo_children():
+                widget.destroy()
+            
+            # Info Button
             customtkinter.CTkButton(
                 container,
-                text="Install",
+                text="Info",
                 height=26,
                 width=80,
-                command=lambda p=p: self.handle_install(p),
+                command=lambda p=p: self.app.show_readme(p) if not isinstance(p, RemotePluginWrapper) else self.show_remote_info(p),
                 border_width=0,
-                fg_color=("#2ECC71", "#27AE60"),
-                hover_color=("#27AE60", "#219150"),
+                fg_color=("#3B8ED0", "#1F6AA5"),
+                hover_color=("#367EBB", "#144870"),
                 font=customtkinter.CTkFont(size=12)
-            ).grid(row=0, column=1, padx=5, pady=5)
-        else:
-            # Uninstall Button (if enabled)
-            if getattr(p, "uninstall_enabled", True):
+            ).grid(row=0, column=0, padx=5, pady=5)
+
+            if isinstance(p, RemotePluginWrapper) or getattr(p, "status", None) == "Uninstalled":
+                # Install Button
                 customtkinter.CTkButton(
                     container,
-                    text="Uninstall",
+                    text="Install",
                     height=26,
                     width=80,
-                    command=lambda p=p: self.handle_uninstall(p),
+                    command=lambda p=p: self.handle_install(p),
                     border_width=0,
-                    fg_color=("#FF4444", "#C73636"),
-                    hover_color=("#C73636", "#9E2A2A"),
+                    fg_color=("#2ECC71", "#27AE60"),
+                    hover_color=("#27AE60", "#219150"),
                     font=customtkinter.CTkFont(size=12)
                 ).grid(row=0, column=1, padx=5, pady=5)
+            else:
+                # Uninstall Button (if enabled)
+                if getattr(p, "uninstall_enabled", True):
+                    customtkinter.CTkButton(
+                        container,
+                        text="Uninstall",
+                        height=26,
+                        width=80,
+                        command=show_confirm_buttons,
+                        border_width=0,
+                        fg_color=("#FF4444", "#C73636"),
+                        hover_color=("#C73636", "#9E2A2A"),
+                        font=customtkinter.CTkFont(size=12)
+                    ).grid(row=0, column=1, padx=5, pady=5)
+            
+            container._button_state = "normal"
+        
+        def show_confirm_buttons():
+            """Show Confirm + Cancel buttons for uninstall confirmation."""
+            # Clear container
+            for widget in container.winfo_children():
+                widget.destroy()
+            
+            # Cancel Button
+            customtkinter.CTkButton(
+                container,
+                text="Cancel",
+                height=26,
+                width=80,
+                command=show_normal_buttons,
+                border_width=0,
+                fg_color=("#808080", "#606060"),
+                hover_color=("#707070", "#505050"),
+                font=customtkinter.CTkFont(size=12)
+            ).grid(row=0, column=0, padx=5, pady=5)
+            
+            # Confirm Button
+            customtkinter.CTkButton(
+                container,
+                text="Confirm",
+                height=26,
+                width=80,
+                command=confirm_uninstall,
+                border_width=0,
+                fg_color=("#FF4444", "#C73636"),
+                hover_color=("#C73636", "#9E2A2A"),
+                font=customtkinter.CTkFont(size=12)
+            ).grid(row=0, column=1, padx=5, pady=5)
+            
+            container._button_state = "confirming"
+        
+        def confirm_uninstall():
+            """Execute the uninstall action."""
+            success, res = self.app.get_plugin_manager().uninstall_plugin(p)
+            if success:
+                self.app.show_notification(res, type="info")
+                
+                # Surgical update: Swap with RemotePluginWrapper if available
+                new_obj = p
+                if hasattr(self, 'remote_data_map') and p.id in self.remote_data_map:
+                    new_obj = RemotePluginWrapper(self.app, self.remote_data_map[p.id])
+                else:
+                    # Fallback for local-only plugins
+                    p.status = "Uninstalled"
+                
+                self._replace_card(p.id, new_obj)
+                
+                if hasattr(self.app, "refresh_navigation"):
+                    self.app.refresh_navigation()
+                elif hasattr(self.app, "refresh_navigation_menu"):
+                    self.app.refresh_navigation_menu()
+            else:
+                self.app.show_notification(res, type="error")
+                # Revert to normal buttons on error
+                show_normal_buttons()
+        
+        # Initialize with normal buttons
+        show_normal_buttons()
 
     def _replace_card(self, old_plugin_id, new_plugin):
         """Surgically replace a card in the grid."""
@@ -556,40 +629,7 @@ class Plugin(BasePlugin):
         from gui.dialogs import show_info
         show_info(self.app, remote_plugin.get_name(), remote_plugin.get_description())
 
-    def handle_uninstall(self, plugin):
-        """Handle plugin uninstallation with confirmation."""
-        from gui.dialogs import ask_yes_no
-        
-        def confirm_uninstall(confirmed):
-            if confirmed:
-                success, res = self.app.get_plugin_manager().uninstall_plugin(plugin)
-                if success:
-                    self.app.show_notification(res, type="info")
-                    
-                    # Surgical update: Swap with RemotePluginWrapper if available
-                    # This ensures "Install" button has the URL to re-download
-                    new_obj = plugin
-                    if hasattr(self, 'remote_data_map') and plugin.id in self.remote_data_map:
-                        new_obj = RemotePluginWrapper(self.app, self.remote_data_map[plugin.id])
-                    else:
-                        # Fallback for local-only plugins (no remote source known)
-                        plugin.status = "Uninstalled"
-                    
-                    self._replace_card(plugin.id, new_obj)
-                    
-                    if hasattr(self.app, "refresh_navigation"):
-                        self.app.refresh_navigation()
-                    elif hasattr(self.app, "refresh_navigation_menu"):
-                        self.app.refresh_navigation_menu()
-                else:
-                    self.app.show_notification(res, type="error")
 
-        ask_yes_no(
-            self.app, 
-            "Uninstall Plugin", 
-            f"Are you sure you want to uninstall {plugin.get_name()}?",
-            confirm_uninstall
-        )
 
 class RemotePluginWrapper:
     """Wrapper to make remote plugin dicts compatible with AppUI.create_plugin_card."""
