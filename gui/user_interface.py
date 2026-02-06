@@ -176,9 +176,9 @@ class AppUI(customtkinter.CTk):
         top_row = customtkinter.CTkFrame(frame, fg_color="transparent")
         top_row.grid(row=0, column=0, sticky="nsew", padx=2, pady=(top_padding, 0))
         top_row.grid_rowconfigure(0, weight=1)
-        top_row.grid_columnconfigure(0, weight=32, uniform="top")
+        top_row.grid_columnconfigure(0, weight=25, uniform="top")
         top_row.grid_columnconfigure(1, weight=0, minsize=1)
-        top_row.grid_columnconfigure(2, weight=68, uniform="top")
+        top_row.grid_columnconfigure(2, weight=75, uniform="top")
 
         # Icon Panel
         icon_panel = customtkinter.CTkFrame(top_row, fg_color="transparent")
@@ -478,7 +478,7 @@ class AppUI(customtkinter.CTk):
                 
                 # Cap maximum height based on number of columns
                 # Shorter cards when in 2-column layout
-                max_height = 250
+                max_height = 280
                 if num_cols == 2:
                     target_height = min(target_height, max_height)
                 elif num_cols >= 4:
@@ -505,8 +505,17 @@ class AppUI(customtkinter.CTk):
                 for r in rows_tuple:
                     container.grid_rowconfigure(r, minsize=target_height)
 
+                # ENFORCE CARD HEIGHTS:
+                # Loop through children and ensure widgets marked with _resistine_plugin_card
+                # strictly follow the target height. This prevents "jumping" on load.
+                for child in container.winfo_children():
+                    if getattr(child, "_resistine_plugin_card", False):
+                        try:
+                            child.configure(height=target_height)
+                        except: pass
+
                 # Centralized wraplength update (efficiently loops through registered labels)
-                wrap_val = max(100, int(card_width * 0.6) - 24) # Approx description panel width
+                wrap_val = max(100, int(card_width * 0.7) - 20) # Approx description panel width
                 for label in container._resistine_desc_labels:
                     try:
                         if label.winfo_exists():
