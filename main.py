@@ -12,6 +12,15 @@ import os
 import sys
 
 import customtkinter
+import customtkinter.windows.widgets.ctk_scrollable_frame as _sf
+
+# Patch customtkinter bug where scroll events pass a string instead of a widget
+_orig_check = _sf.CTkScrollableFrame.check_if_master_is_canvas
+def _patched_check(self, widget):
+    if isinstance(widget, str):
+        return False
+    return _orig_check(self, widget)
+_sf.CTkScrollableFrame.check_if_master_is_canvas = _patched_check
 
 # DEPRECATED: Debug Window - controlled by command-line arguments
 from gui.debug_window import DebugWindow

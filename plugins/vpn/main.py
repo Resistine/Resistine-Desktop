@@ -21,18 +21,24 @@ import subprocess
 import re
 import sys
 import ctypes
+# --- Platform Detection (single source of truth) ---
+_PLATFORM = platform.system()
+IS_MACOS = _PLATFORM == "Darwin"
+IS_WINDOWS = _PLATFORM == "Windows"
+IS_LINUX = _PLATFORM == "Linux"
+
 # --- Platform Specific Imports ---
 # We assume these modules provide 'vpn_helper' and necessary logic
-if platform.system() == "Windows":
-    from plugins.vpn.wireguard.vpn_functions_windows import * 
+if IS_WINDOWS:
+    from plugins.vpn.wireguard.vpn_functions_windows import *
     wireguard_folder = get_writable_wireguard_dir()
-    
-elif platform.system() == "Linux":
+
+elif IS_LINUX:
     from python_wireguard import Client, ServerConnection, Key
     from plugins.vpn.wireguard.vpn_functions_linux import *
     wireguard_folder = get_writable_wireguard_dir()
 
-elif platform.system() == "Darwin":
+elif IS_MACOS:
     from plugins.vpn.wireguard.vpn_functions_darwin import *
     wireguard_folder = get_writable_wireguard_dir()
 # DNS Configuration - Change this value to update DNS across the application
@@ -55,33 +61,38 @@ def initialize_vpn_status():
         my_vpn_status = "Stopped"
         return
 
-    if platform.system() == "Darwin":
+    if IS_MACOS:
         # macOS uses Network Extension — wg show interfaces won't see the tunnel.
-        # Query the CLI directly which checks NEVPNStatus via XPC.
-        status = check_service_status("vpn", DNS_SERVER)
-        if status == "Running":
-            # Find the config name so the UI knows which tunnel is active
-            if os.path.exists(wireguard_folder):
-                conf_files = [f for f in os.listdir(wireguard_folder) if f.endswith('.conf')]
-                if conf_files:
-                    active_client_name = os.path.splitext(conf_files[0])[0]
-            my_vpn_status = "Running"
-        else:
+        # First verify the extension is actually enabled in Login Items & Extensions.
+        # A stale NETunnelProviderManager can make the CLI report a false status.
+        if not is_extension_enabled():
+            logger.warning("Network extension is not enabled — VPN unavailable")
             my_vpn_status = "Stopped"
-    elif platform.system() == "Windows":
+        else:
+            # Extension is enabled, query actual connection status via CLI
+            status = check_service_status("vpn", DNS_SERVER)
+            if status == "Running":
+                if os.path.exists(wireguard_folder):
+                    conf_files = [f for f in os.listdir(wireguard_folder) if f.endswith('.conf')]
+                    if conf_files:
+                        active_client_name = os.path.splitext(conf_files[0])[0]
+                my_vpn_status = "Running"
+            else:
+                my_vpn_status = "Stopped"
+    elif IS_WINDOWS:
         try:
             existing_interfaces = subprocess.run(['wg', 'show', 'interfaces'], capture_output=True, text=True, check=True).stdout.split()
         except Exception as e:
             logger.warning(f"⚠️ Could not enumerate WireGuard interfaces on Windows: {e}")
             existing_interfaces = []
-    elif platform.system() == "Linux":
+    elif IS_LINUX:
         try:
             existing_interfaces = os.popen('wg show interfaces').read().split()
         except Exception as e:
             logger.warning(f"⚠️ Could not enumerate WireGuard interfaces: {e}")
             existing_interfaces = []
 
-    if platform.system() != "Darwin":
+    if not IS_MACOS:
         # Check if any known interface is running (Linux/Windows only)
         for interface in existing_interfaces:
             if interface.strip():
@@ -129,11 +140,15 @@ class Plugin(BasePlugin):
         self.app = app
         self.config_dir = wireguard_folder
         self.active_interface = None
+        self._extension_poll_id = None
+        self._last_extension_state = None
         # Set status dynamically after super().__init__
-        self.status = self.get_status()   
+        self.status = self.get_status()
 
     def check_status(self):
         """Dynamic check of the VPN status."""
+        if IS_MACOS and not is_extension_enabled():
+            return "Error"
         if my_vpn_status == "Running":
             return "OK"
         elif my_vpn_status == "Connecting":
@@ -219,12 +234,13 @@ class Plugin(BasePlugin):
             "Server IP": endpoint,
             "Public Key": (data.get('public_key', 'N/A') or 'N/A')[:15] + '...' if data.get('public_key') else 'N/A',
             "Client IP": data.get('client_ip_address', 'N/A'),
-            "System": f"{platform.system()} {platform.release()}"
+            "System": f"{_PLATFORM} {platform.release()}"
         }
 
     def create_main_screen(self):
-        """Create the main screen for the VPN plugin."""        
-        return self.display_toggle_screen()   
+        """Create the main screen for the VPN plugin."""
+        self._stop_extension_polling()
+        return self.display_toggle_screen()
 
     def toggle_vpn_connection(self, switch_value):
         """Handles the toggle switch.
@@ -276,9 +292,27 @@ class Plugin(BasePlugin):
         scroll_frame.grid_columnconfigure(0, weight=1)
         
         global my_vpn_status
+
+        # On macOS, detect if the extension was disabled after onboarding
+        extension_disabled = IS_MACOS and not is_extension_enabled()
+        if extension_disabled and my_vpn_status == "Running":
+            # Extension was disabled while we thought VPN was on — correct the state
+            my_vpn_status = "Stopped"
+            active_client_name = None
+
         is_connected = my_vpn_status == "Running"
-        
-        if not selected_conf_file:
+
+        if extension_disabled:
+            status_text = "Extension Disabled"
+            status_color = ("#C5221F", "#FF474C")
+            warning_text = (
+                "VPN extension is disabled. Enable it in System Settings > "
+                "General > Login Items & Extensions > Network Extensions"
+            )
+            warning_bg = ("#FDEDEC", "#3E2B2C")
+            warning_fg = ("#C5221F", "#FF474C")
+            is_enabled = False
+        elif not selected_conf_file:
             status_text = "No Configuration"
             status_color = ("#666666", "#aaaaaa")
             warning_text = "Please log in or add a VPN configuration"
@@ -368,8 +402,44 @@ class Plugin(BasePlugin):
         )
         import_button.grid(row=4, column=0, pady=20, sticky="ew")
 
+        # Start polling for extension state changes (macOS only)
+        if IS_MACOS:
+            self._start_extension_polling()
+
         return self.main_container
 
+
+    def _start_extension_polling(self):
+        """Poll extension status every 5 seconds to detect enable/disable changes.
+        macOS only — no-op on other platforms.
+        """
+        if not IS_MACOS:
+            return
+        self._stop_extension_polling()
+        self._last_extension_state = is_extension_enabled()
+
+        def poll():
+            # Stop polling if the VPN page is no longer visible
+            if not hasattr(self, 'main_container') or not self.main_container.winfo_exists():
+                self._extension_poll_id = None
+                return
+
+            current_state = is_extension_enabled()
+            if current_state != self._last_extension_state:
+                logger.info(f"Extension state changed: {self._last_extension_state} -> {current_state}")
+                self._last_extension_state = current_state
+                self.update_plugin(self.id)
+                return  # update_plugin rebuilds the screen which restarts polling
+
+            self._extension_poll_id = self.app.after(5000, poll)
+
+        self._extension_poll_id = self.app.after(5000, poll)
+
+    def _stop_extension_polling(self):
+        """Cancel any active extension polling."""
+        if self._extension_poll_id:
+            self.app.after_cancel(self._extension_poll_id)
+            self._extension_poll_id = None
 
     def update_plugin(self, plugin_id):
         """Reloads the plugin UI to reflect state changes."""
@@ -417,10 +487,21 @@ class Plugin(BasePlugin):
         config_path = os.path.join(wireguard_folder, f"{tunnel_name}.conf")
         
         # --- MacOS Implementation ---
-        if platform.system() == "Darwin":
+        if IS_MACOS:
             logger.info(f"MacOS: Toggling {tunnel_name}")
-            
-            
+
+            if not is_extension_enabled():
+                logger.error("Network extension is disabled in System Settings")
+                self.app.show_notification(
+                    "VPN extension is disabled. Enable it in System Settings > "
+                    "General > Login Items & Extensions > Network Extensions",
+                    type="error",
+                )
+                my_vpn_status = "Stopped"
+                active_client_name = None
+                self.update_plugin(self.id)
+                return
+
             if not check_wireguard_installed():
                 logger.error("WireGuard tools not found.")
                 self.app.show_notification("WireGuard tools not found", type="error")
@@ -452,11 +533,11 @@ class Plugin(BasePlugin):
             self.update_plugin(self.id)
 
         # --- Windows Implementation ---
-        elif platform.system() == "Windows":
+        elif IS_WINDOWS:
             pass
 
         # --- Linux Implementation ---
-        elif platform.system() == "Linux":
+        elif IS_LINUX:
             logger.info(f"Linux: Toggling {tunnel_name}")
             
             if not check_wireguard_installed():

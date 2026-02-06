@@ -619,6 +619,52 @@ def save_vpn_configuration(vpn_config_json):
         return None
 
 
+import time as _time
+
+_extension_cache = {"value": None, "timestamp": 0}
+_EXTENSION_CACHE_TTL = 2  # seconds
+
+
+def is_extension_enabled():
+    """Check if the Resistine network extension is enabled in Login Items & Extensions.
+
+    Uses systemextensionsctl to verify the extension is both activated AND enabled.
+    A NETunnelProviderManager can exist in preferences even when the extension is
+    disabled, so this is the only reliable check.
+
+    Results are cached for 2 seconds to avoid redundant subprocess calls when
+    multiple callers check within the same render cycle.
+
+    Returns:
+        bool: True if the extension is [activated enabled], False otherwise.
+    """
+    now = _time.monotonic()
+    if now - _extension_cache["timestamp"] < _EXTENSION_CACHE_TTL:
+        return _extension_cache["value"]
+
+    try:
+        result = subprocess.run(
+            ["systemextensionsctl", "list"],
+            capture_output=True, text=True, timeout=10,
+        )
+        output = result.stdout + result.stderr
+        enabled = False
+        for line in output.splitlines():
+            if "com.resistine.desktop.network-extension" in line:
+                if "[activated enabled]" in line:
+                    enabled = True
+                else:
+                    logger.info(f"Extension not enabled: {line.strip()}")
+                break
+
+        _extension_cache["value"] = enabled
+        _extension_cache["timestamp"] = now
+        return enabled
+    except Exception as e:
+        logger.warning(f"Extension status check failed: {e}")
+        return False
+
+
 def ensure_helper_registered():
     """Register the privileged helper on macOS (runs silently on startup)"""
     # CLI-only architecture: No privileged helper registration needed
