@@ -209,7 +209,40 @@ class Plugin(BasePlugin):
         )
         self.terms_label.pack(side="top", pady=(5, 0))
 
+        # 8. Skip Button (Bottom Right)
+        self.skip_button = customtkinter.CTkButton(
+            self.login_frame,
+            text="Skip",
+            command=self.skip_login,
+            width=80,
+            height=30,
+            corner_radius=15,
+            fg_color="transparent",
+            border_width=1,
+            border_color=("#CCCCCC", "#444444"),
+            text_color=("#666666", "#AAAAAA"),
+            font=customtkinter.CTkFont(family="Inter", size=12),
+        )
+        self.skip_button.place(relx=0.98, rely=0.98, anchor="se")
+
         return self.login_frame
+
+    def skip_login(self):
+        """Skip login and go to dashboard."""
+        logger.info("User skipped login")
+        if hasattr(self, "login_frame"):
+            self.login_frame.destroy()
+        # TODO: Remove this dev-mode test hook before release
+        if platform.system() == "Darwin":
+            from plugins.login.vpn_onboarding import VPNOnboardingScreen
+            def on_complete():
+                self.app.create_dashboard()
+                self.app.after(100, lambda: self.app.select_frame_by_name("frame_VPN"))
+            self._onboarding = VPNOnboardingScreen(self.app, on_complete)
+            self._onboarding.show()
+            return
+        self.app.show_notification("Login skipped - some features may be unavailable", type="warning")
+        self.app.create_dashboard()
 
     def handle_signin_click(self):
         """Handle the sign-in button click."""
