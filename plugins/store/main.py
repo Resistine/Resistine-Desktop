@@ -376,6 +376,7 @@ class Plugin(BasePlugin):
                 border_width=0,
                 fg_color=("#3B8ED0", "#1F6AA5"),
                 hover_color=("#367EBB", "#144870"),
+                text_color=("white", "white"),
                 font=customtkinter.CTkFont(size=12)
             ).grid(row=0, column=0, padx=5, pady=5)
 
@@ -386,10 +387,12 @@ class Plugin(BasePlugin):
                     text="Install",
                     height=26,
                     width=80,
+                    # p=p to ensure that each instance captures its own plugin reference correctly, preventing late binding issues in loops
                     command=lambda p=p: self.handle_install(p),
                     border_width=0,
                     fg_color=("#2ECC71", "#27AE60"),
                     hover_color=("#27AE60", "#219150"),
+                    text_color=("white", "white"),
                     font=customtkinter.CTkFont(size=12)
                 ).grid(row=0, column=1, padx=5, pady=5)
             else:
@@ -404,6 +407,7 @@ class Plugin(BasePlugin):
                         border_width=0,
                         fg_color=("#FF4444", "#C73636"),
                         hover_color=("#C73636", "#9E2A2A"),
+                        text_color=("white", "white"),
                         font=customtkinter.CTkFont(size=12)
                     ).grid(row=0, column=1, padx=5, pady=5)
             
@@ -425,6 +429,7 @@ class Plugin(BasePlugin):
                 border_width=0,
                 fg_color=("#808080", "#606060"),
                 hover_color=("#707070", "#505050"),
+                text_color=("white", "white"),
                 font=customtkinter.CTkFont(size=12)
             ).grid(row=0, column=0, padx=5, pady=5)
             
@@ -438,6 +443,7 @@ class Plugin(BasePlugin):
                 border_width=0,
                 fg_color=("#FF4444", "#C73636"),
                 hover_color=("#C73636", "#9E2A2A"),
+                text_color=("white", "white"),
                 font=customtkinter.CTkFont(size=12)
             ).grid(row=0, column=1, padx=5, pady=5)
             
