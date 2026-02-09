@@ -72,15 +72,6 @@ class App(AppUI):
             self.debug_window = DebugWindow(self)
             self.debug_window.create_debug_window()
 
-        # Things to run when app is launched
-        if sys.platform == "darwin":
-            # Register privileged helper on macOS (only runs once per install)
-            from plugins.vpn.wireguard.vpn_functions_darwin import (
-                ensure_helper_registered,
-            )
-
-            ensure_helper_registered()
-
         self.title("Resistine")
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
@@ -114,6 +105,26 @@ class App(AppUI):
 
         # Ensure the window is visible
         self.update()
+
+        # Initialize auto-updater (cross-platform: Sparkle on macOS, stubs on Win/Linux)
+        try:
+            from utils import update_manager
+
+            update_manager.init(self)
+        except Exception as e:
+            logger.warning(f"Failed to start auto-updater: {e}")
+
+        self.protocol("WM_DELETE_WINDOW", self._on_closing)
+
+    def _on_closing(self):
+        """Clean up resources before closing."""
+        try:
+            from utils import update_manager
+
+            update_manager.shutdown()
+        except Exception:
+            pass
+        self.destroy()
 
 
 # class App

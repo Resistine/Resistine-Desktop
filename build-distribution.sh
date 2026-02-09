@@ -244,7 +244,7 @@ echo "Step 5: Embedding Developer ID provisioning profiles & signing..."
 PROFILES_DIR="$PYTHON_UI_PATH/provisioning-profiles"
 NE_PROFILE="$PROFILES_DIR/Mac_Network_Ext.provisionprofile"
 XPC_PROFILE="$PROFILES_DIR/Mac_VPNXPC.provisionprofile"
-MAIN_PROFILE="$PROFILES_DIR/MacDesktopFeb26.provisionprofile"
+MAIN_PROFILE="$PROFILES_DIR/Mac_Desktop.provisionprofile"
 
 # Validate Profiles
 if [ ! -f "$NE_PROFILE" ]; then
@@ -276,6 +276,17 @@ cp "$XPC_PROFILE" "$CLI_APP/Contents/embedded.provisionprofile"
 # Python code expects resistine-vpn-cli at ../MacOS/resistine-vpn-cli
 echo "  - Creating symlink for CLI..."
 ln -sf "ResistineCLI.app/Contents/MacOS/resistine-vpn-cli" "$PYTHON_APP/Contents/MacOS/resistine-vpn-cli"
+
+# --- Copy Sparkle.framework for auto-updates ---
+echo "  - Copying Sparkle.framework..."
+SPARKLE_SOURCE="$PYTHON_UI_PATH/vpn-apple/Sparkle.framework"
+if [ -d "$SPARKLE_SOURCE" ]; then
+    mkdir -p "$PYTHON_APP/Contents/Frameworks"
+    cp -R "$SPARKLE_SOURCE" "$PYTHON_APP/Contents/Frameworks/Sparkle.framework"
+    echo "    Sparkle.framework copied"
+else
+    echo "    Warning: Sparkle.framework not found at $SPARKLE_SOURCE — skipping auto-update"
+fi
 
 
 # Locate entitlements files
@@ -403,7 +414,47 @@ find "$PYTHON_APP/Contents/Frameworks" "$PYTHON_APP/Contents/MacOS" \
 done
 echo "    Framework/library signing complete"
 
-# 5e: Sign the outer Resistine.app bundle
+# 5e: Sign Sparkle.framework (inner-to-outer: deepest bundles first)
+if [ -d "$PYTHON_APP/Contents/Frameworks/Sparkle.framework" ]; then
+    SPARKLE_FW="$PYTHON_APP/Contents/Frameworks/Sparkle.framework"
+    echo "  - Signing Sparkle.framework internals (inner-to-outer)..."
+
+    # Sign XPC services (Downloader.xpc, Installer.xpc)
+    find "$SPARKLE_FW" -name "*.xpc" -type d | while read -r xpc_bundle; do
+        codesign --force --sign "$SIGN_IDENTITY" \
+            --options runtime --timestamp "$xpc_bundle" 2>/dev/null || {
+            echo "    Warning: Failed to sign: $(basename "$xpc_bundle")"
+        }
+    done
+
+    # Sign Updater.app (Sparkle 2.9+ ships its own updater app)
+    find "$SPARKLE_FW" -name "Updater.app" -type d | while read -r updater_app; do
+        codesign --force --sign "$SIGN_IDENTITY" \
+            --options runtime --timestamp "$updater_app" 2>/dev/null || {
+            echo "    Warning: Failed to sign Updater.app"
+        }
+    done
+
+    # Sign the Autoupdate executable
+    find "$SPARKLE_FW" -name "Autoupdate" -type f | while read -r autoupdate; do
+        codesign --force --sign "$SIGN_IDENTITY" \
+            --options runtime --timestamp "$autoupdate" 2>/dev/null || {
+            echo "    Warning: Failed to sign Autoupdate"
+        }
+    done
+
+    # Sign the Sparkle.framework bundle itself (outermost)
+    echo "  - Signing Sparkle.framework..."
+    codesign --force --sign "$SIGN_IDENTITY" \
+        --options runtime --timestamp \
+        "$SPARKLE_FW" || {
+        echo "  Sparkle.framework signing failed"
+        exit 1
+    }
+    echo "    Sparkle.framework signed"
+fi
+
+# 5f: Sign the outer Resistine.app bundle
 echo "  - Signing main Resistine.app bundle..."
 codesign --force --sign "$SIGN_IDENTITY" \
     --options runtime \
@@ -425,6 +476,11 @@ codesign --verify --verbose "$PYTHON_APP/Contents/Library/SystemExtensions/com.r
 
 codesign --verify --verbose "$PYTHON_APP/Contents/MacOS/resistine-vpn-cli" 2>&1 && \
     echo "    resistine-vpn-cli: valid" || { echo "    resistine-vpn-cli: INVALID"; VERIFY_FAILED=true; }
+
+if [ -d "$PYTHON_APP/Contents/Frameworks/Sparkle.framework" ]; then
+    codesign --verify --verbose "$PYTHON_APP/Contents/Frameworks/Sparkle.framework" 2>&1 && \
+        echo "    Sparkle.framework: valid" || { echo "    Sparkle.framework: INVALID"; VERIFY_FAILED=true; }
+fi
 
 codesign --verify --verbose=2 "$PYTHON_APP" 2>&1 && \
     echo "    Resistine.app: valid" || { echo "    Resistine.app: INVALID"; VERIFY_FAILED=true; }
