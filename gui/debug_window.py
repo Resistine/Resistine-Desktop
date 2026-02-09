@@ -61,9 +61,25 @@ class DebugWindow:
     def log_message(self, message):
         """Add a message to the debug window"""
         if self.text_widget:
-            self.text_widget.insert(tk.END, message)
-            self.text_widget.see(tk.END)  # Auto-scroll to bottom
-            self.text_widget.update_idletasks()
+            try:
+                # Ensure we're operating on the correct widget
+                if self.text_widget.winfo_exists():
+                    # Temporarily disable state to allow insertion
+                    current_state = self.text_widget.cget('state')
+                    self.text_widget.config(state='normal')
+                    
+                    # Insert at the end of THIS specific widget
+                    self.text_widget.insert('end', message)
+                    self.text_widget.see('end')  # Auto-scroll to bottom
+                    
+                    # Restore state
+                    self.text_widget.config(state=current_state)
+                    
+                    # Force update to this widget only
+                    self.text_widget.update_idletasks()
+            except tk.TclError:
+                # Widget was destroyed, stop trying to log
+                pass
 
     def clear_output(self):
         """Clear the debug output"""

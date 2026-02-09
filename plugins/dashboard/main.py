@@ -134,6 +134,16 @@ class Plugin(BasePlugin):
         # Responsive layout: determine max columns based on window width
         screen_width = self.app.winfo_screenwidth()
         window_width = self.app.winfo_width()
+        
+        # IMPROVED STARTUP HINT:
+        # If window is not yet mapped (width 1), use a sensible default (70% of screen)
+        # to ensure the first layout pass is reasonably accurate.
+        if window_width <= 1:
+            window_width = int(screen_width * 0.7)
+            
+        # Set hint for AppUI to use in create_grid synchronously
+        self.app._content_width_hint = window_width - 240 # Approx minus sidebar and padding
+        
         if window_width <= screen_width * 0.6:
             max_cols = 2
             min_cols = None
@@ -168,6 +178,7 @@ class Plugin(BasePlugin):
             sticky="nsew",
             max_cols=max_cols,
             min_cols=min_cols,
+            aspect_ratio=1.1
         )
 
         def open_plugin(p):
@@ -329,6 +340,7 @@ class Plugin(BasePlugin):
             sticky="nsew",
             max_cols=max_cols,
             min_cols=min_cols,
+            aspect_ratio=1.1,
         )
         
         for index, plugin in enumerate(plugins):
