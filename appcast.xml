@@ -4,7 +4,7 @@
      xmlns:dc="http://purl.org/dc/elements/1.1/">
   <channel>
     <title>Resistine Desktop Updates</title>
-    <link>https://resistine.github.io/desktop-releases/appcast.xml</link>
+    <link>https://resistine.github.io/Resistine-Desktop/appcast.xml</link>
     <description>Updates for Resistine Desktop</description>
     <language>en</language>
 

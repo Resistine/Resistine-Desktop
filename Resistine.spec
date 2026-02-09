@@ -179,7 +179,7 @@ app = BUNDLE(
         ],
 
         # Sparkle Auto-Update
-        'SUFeedURL': 'https://resistine.github.io/desktop-releases/appcast.xml',
+        'SUFeedURL': 'https://resistine.github.io/Resistine-Desktop/appcast.xml',
         'SUPublicEDKey': '2eiUHVoMgl+qqhEWO8iix5SUcRAKfkWYESh9F7jG6ls=',
         'SUEnableAutomaticChecks': True,
         'SUScheduledCheckInterval': 14400,  # 4 hours (base; Python scheduler adds jitter)
