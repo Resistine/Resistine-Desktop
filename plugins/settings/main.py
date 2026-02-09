@@ -203,6 +203,41 @@ class Plugin(BasePlugin):
         )
         appearance_menu.grid(row=2, column=0, padx=16, pady=(0, 14), sticky="ew")
 
+        # --- Software Updates card ---
+        updates_card = customtkinter.CTkFrame(self.frame_5, corner_radius=12)
+        updates_card.grid(row=3, column=0, padx=20, pady=(10, 16), sticky="ew")
+        updates_card.grid_columnconfigure(0, weight=1)
+
+        customtkinter.CTkLabel(
+            updates_card,
+            text="Software Updates",
+            font=customtkinter.CTkFont(size=18, weight="bold"),
+            text_color=text_color,
+        ).grid(row=0, column=0, padx=16, pady=(14, 8), sticky="w")
+
+        customtkinter.CTkLabel(
+            updates_card,
+            text=f"Current version: {self._get_app_version()}",
+            font=customtkinter.CTkFont(size=14),
+            text_color=text_color,
+        ).grid(row=1, column=0, padx=16, pady=(0, 6), sticky="w")
+
+        self.update_status_label = customtkinter.CTkLabel(
+            updates_card,
+            text="",
+            font=customtkinter.CTkFont(size=12),
+            text_color=text_color,
+        )
+
+        check_btn = customtkinter.CTkButton(
+            updates_card,
+            text="Check for Updates",
+            height=36,
+            command=self._check_for_updates,
+        )
+        check_btn.grid(row=2, column=0, padx=16, pady=(0, 6), sticky="w")
+        self.update_status_label.grid(row=3, column=0, padx=16, pady=(0, 14), sticky="w")
+
         return self.frame_5
 
     def save_api_key(self):
@@ -224,6 +259,49 @@ class Plugin(BasePlugin):
             self.app.after(2500, lambda: self.status_label.configure(text=""))
         else:
             self.status_label.configure(text=get_text("settings.apikey.saved_error"), text_color="red")
+
+    def _get_app_version(self):
+        """Read CFBundleShortVersionString from the app's Info.plist."""
+        try:
+            if getattr(sys, "frozen", False):
+                import plistlib
+
+                contents_dir = os.path.dirname(os.path.dirname(sys.executable))
+                plist_path = os.path.join(contents_dir, "Info.plist")
+                if os.path.exists(plist_path):
+                    with open(plist_path, "rb") as f:
+                        info = plistlib.load(f)
+                    return info.get("CFBundleShortVersionString", "1.0.0")
+        except Exception:
+            pass
+        return "1.0.0"
+
+    def _check_for_updates(self):
+        """Trigger an interactive update check via the cross-platform update manager."""
+        try:
+            from utils import update_manager
+
+            if not update_manager.is_available():
+                self.update_status_label.configure(
+                    text="Updates not available in this build", text_color="orange"
+                )
+                self.app.after(5000, lambda: self.update_status_label.configure(text=""))
+                return
+
+            success = update_manager.check_for_updates()
+            if success:
+                self.update_status_label.configure(
+                    text="Checking for updates...", text_color="green"
+                )
+            else:
+                self.update_status_label.configure(
+                    text="Update check failed", text_color="red"
+                )
+            self.app.after(5000, lambda: self.update_status_label.configure(text=""))
+        except Exception as e:
+            logger.error(f"Update check error: {e}")
+            self.update_status_label.configure(text=f"Error: {e}", text_color="red")
+            self.app.after(5000, lambda: self.update_status_label.configure(text=""))
 
     def change_appearance_mode(self, new_appearance_mode: str):
         try:
