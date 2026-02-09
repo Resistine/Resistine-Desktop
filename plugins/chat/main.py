@@ -278,13 +278,14 @@ class Plugin(BasePlugin):
             corner_radius=0,
             fg_color="transparent",
         )
+
         self.second_frame.grid_columnconfigure(0, weight=1)
         self.second_frame.grid_rowconfigure(0, weight=1)
         self.second_frame.grid_rowconfigure(1, weight=0)
 
-        # Helper: determine effective dark mode (supports System on macOS)
+        # Build Appearance mode detection
         appearance_mode = customtkinter.get_appearance_mode()
-
+        
         def is_dark_mode() -> bool:
             if appearance_mode == "Dark":
                 return True
@@ -293,7 +294,6 @@ class Plugin(BasePlugin):
             if sys.platform == "darwin":
                 try:
                     import subprocess
-
                     result = subprocess.run(
                         ["defaults", "read", "-g", "AppleInterfaceStyle"],
                         capture_output=True,
@@ -309,8 +309,22 @@ class Plugin(BasePlugin):
         panel_bg = "#1A1A1A" if is_dark else "#ffffff"
         fg_color = "#ffffff" if is_dark else "#000000"
 
+
+        # Container for chat messages (centered, 70% width)
+        chat_container = customtkinter.CTkFrame(self.second_frame, fg_color="transparent", height=100)
+        chat_container.grid(row=0, column=0, sticky="nsew", pady=(30, 10))
+        chat_container.grid_columnconfigure(0, weight=1)
+        chat_container.grid_rowconfigure(0, weight=1)
+        chat_container.grid_propagate(True)
+
+        # Inner centered chat wrapper
+        chat_wrapper = customtkinter.CTkFrame(chat_container, fg_color="transparent")
+        chat_wrapper.place(relx=0.5, rely=0.5, relwidth=0.7, relheight=1.0, anchor="center")
+        chat_wrapper.grid_columnconfigure(0, weight=1)
+        chat_wrapper.grid_rowconfigure(0, weight=1)
+
         self.chat_box = customtkinter.CTkTextbox(
-            self.second_frame,
+            chat_wrapper,
             wrap="word",
             font=customtkinter.CTkFont(size=15, weight="normal"),
             fg_color="transparent",
@@ -318,17 +332,17 @@ class Plugin(BasePlugin):
             corner_radius=self.corner_radius,
             border_width=0,
         )
-        self.chat_box.grid(row=0, column=0, padx=20, pady=(30, 10), sticky="nsew")
+        self.chat_box.grid(row=0, column=0, padx=0, pady=0, sticky="nsew")
 
         # Center content with dynamic margins
         def update_text_margins(event=None):
             box_width = self.chat_box.winfo_width()
             if box_width > 1:
-                side_margin = int(box_width * 0.15)
+                side_margin = int(box_width * 0.05)
                 self.chat_box._textbox.configure(padx=side_margin)
 
         self.chat_box.bind("<Configure>", update_text_margins)
-        self.chat_box._textbox.configure(padx=100)
+        self.chat_box._textbox.configure(padx=20)
 
         # Tags for styling
         self.chat_box._textbox.tag_config(
@@ -376,13 +390,23 @@ class Plugin(BasePlugin):
 
         self.chat_box.configure(state="disabled")
 
-        # Input container
+        # Container for input (centered, same 70% width as chat)
+        input_container = customtkinter.CTkFrame(self.second_frame, fg_color="transparent")
+        input_container.grid(row=1, column=0, sticky="ew", pady=(0, 20))
+        input_container.grid_columnconfigure(0, weight=1)
+        input_container.grid_propagate(True)
+
+        # Inner centered input wrapper
+        input_wrapper = customtkinter.CTkFrame(input_container, fg_color="transparent")
+        input_wrapper.place(relx=0.5, rely=0.5, relwidth=0.7, anchor="center")
+        input_wrapper.grid_columnconfigure(0, weight=1)
+
         container = customtkinter.CTkFrame(
-            self.second_frame,
+            input_wrapper,
             corner_radius=self.corner_radius,
             fg_color="transparent",
         )
-        container.grid(row=1, column=0, padx=20, pady=(0, 20), sticky="ew")
+        container.grid(row=0, column=0, padx=0, pady=0, sticky="ew")
         container.grid_columnconfigure(0, weight=1)
         container.grid_columnconfigure(1, weight=0)
 

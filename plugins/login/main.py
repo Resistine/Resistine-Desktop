@@ -236,6 +236,17 @@ class Plugin(BasePlugin):
         logger.info("User skipped login")
         if hasattr(self, "login_frame"):
             self.login_frame.destroy()
+            
+        # On macOS, show onboarding if not already done
+        if platform.system() == "Darwin":
+            from plugins.login.vpn_onboarding import VPNOnboardingScreen
+            def on_complete():
+                self.app.create_dashboard()
+            
+            self._onboarding = VPNOnboardingScreen(self.app, on_complete)
+            self._onboarding.show()
+            return
+
         self.app.show_notification("Login skipped - some features may be unavailable", type="warning")
         self.app.create_dashboard()
 
@@ -364,8 +375,25 @@ class Plugin(BasePlugin):
                 if result.get("data"):
                      save_vpn_configuration(result.get("data"))
 
-                self.destroy()
-                self.app.create_dashboard()
+                # On macOS, check if we need onboarding
+                needs_onboarding = False
+                if platform.system() == "Darwin":
+                    from utils import settings
+                    if not settings.get("vpn", "onboarding_complete", False):
+                        needs_onboarding = True
+
+                if needs_onboarding:
+                    from plugins.login.vpn_onboarding import VPNOnboardingScreen
+                    self.destroy()
+                    
+                    def on_onboarding_complete():
+                        self.app.create_dashboard()
+                    
+                    self._onboarding = VPNOnboardingScreen(self.app, on_onboarding_complete)
+                    self._onboarding.show()
+                else:
+                    self.destroy()
+                    self.app.create_dashboard()
             else:
                 logger.error(f"Login failed: {message}")
                 self.update_status(message, "red")

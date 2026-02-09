@@ -162,11 +162,12 @@ class AppUI(customtkinter.CTk):
         frame.grid(row=row, column=column, padx=10, pady=10, sticky="nsew")
         frame.grid_columnconfigure(0, weight=1)
         
-        # Structure rows: Content (~70%), Divider, Status/Buttons (~30%)
+        # Structure rows: Content (~80%), Divider, Status/Buttons (~20%)
         # Buttons are 26px height + padding, so minsize needs to be at least 50px
-        frame.grid_rowconfigure(0, weight=7, minsize=90)
+        # Content row needs enough space for title + multi-line description (typically 2-3 lines)
+        frame.grid_rowconfigure(0, weight=8, minsize=200)
         frame.grid_rowconfigure(1, weight=0) # h_div
-        frame.grid_rowconfigure(2, weight=3, minsize=55)
+        frame.grid_rowconfigure(2, weight=2, minsize=55)
 
         # --- Top content row: icon panel | divider | text panel ---
         # Add top padding to respect rounded corners (prevents child frames from covering rounded top corners)
@@ -175,9 +176,9 @@ class AppUI(customtkinter.CTk):
         top_row = customtkinter.CTkFrame(frame, fg_color="transparent")
         top_row.grid(row=0, column=0, sticky="nsew", padx=2, pady=(top_padding, 0))
         top_row.grid_rowconfigure(0, weight=1)
-        top_row.grid_columnconfigure(0, weight=32, uniform="top")
+        top_row.grid_columnconfigure(0, weight=25, uniform="top")
         top_row.grid_columnconfigure(1, weight=0, minsize=1)
-        top_row.grid_columnconfigure(2, weight=68, uniform="top")
+        top_row.grid_columnconfigure(2, weight=75, uniform="top")
 
         # Icon Panel
         icon_panel = customtkinter.CTkFrame(top_row, fg_color="transparent")
@@ -247,33 +248,30 @@ class AppUI(customtkinter.CTk):
             extra_buttons_func(buttons_container, plugin)
         else:
             # Dashboard/other pages: show status indicator (centered)
-            # Always render a status slot so the bottom section stays consistent,
-            # even for plugins that return no status (None).
+            # Only show status if the plugin has a meaningful status
             current_status = plugin.get_status()
-            status_container = customtkinter.CTkFrame(status_row, fg_color="transparent")
-            status_container.pack(expand=True, anchor="center")
+            
+            # Only display status if it's not None or empty
+            if current_status is not None and str(current_status).strip() != "":
+                status_container = customtkinter.CTkFrame(status_row, fg_color="transparent")
+                status_container.pack(expand=True, anchor="center")
 
-            if current_status is None or str(current_status).strip() == "":
-                status_dot_color = "#808080"
-                status_text = "Status: N/A"
-                status_text_color = ("#666666", "#aaaaaa")
-            else:
                 status_dot_color = cls.status_colors.get(str(current_status).lower(), "#808080")
                 status_text = f"Status: {str(current_status).title()}"
                 status_text_color = text_primary
 
-            status_dot = customtkinter.CTkFrame(
-                status_container, width=10, height=10, corner_radius=5, fg_color=status_dot_color
-            )
-            status_dot.pack(side="left", padx=(0, 8))
+                status_dot = customtkinter.CTkFrame(
+                    status_container, width=10, height=10, corner_radius=5, fg_color=status_dot_color
+                )
+                status_dot.pack(side="left", padx=(0, 8))
 
-            status_label = customtkinter.CTkLabel(
-                status_container,
-                text=status_text,
-                font=customtkinter.CTkFont(size=13),
-                text_color=status_text_color,
-            )
-            status_label.pack(side="left")
+                status_label = customtkinter.CTkLabel(
+                    status_container,
+                    text=status_text,
+                    font=customtkinter.CTkFont(size=13),
+                    text_color=status_text_color,
+                )
+                status_label.pack(side="left")
 
         # Interaction
         def on_click(_e=None):
@@ -480,8 +478,8 @@ class AppUI(customtkinter.CTk):
                 
                 # Cap maximum height based on number of columns
                 # Shorter cards when in 2-column layout
+                max_height = 280
                 if num_cols == 2:
-                    max_height = 250
                     target_height = min(target_height, max_height)
                 elif num_cols >= 4:
                     # For 4+ columns, set minimum height to match what cards would be at 90% width with 3 cols
@@ -495,8 +493,9 @@ class AppUI(customtkinter.CTk):
                     card_w_at_90 = col_w_at_90 - 20
                     min_height_4col = int(card_w_at_90 / aspect_ratio) + 20
                     target_height = max(target_height, min_height_4col)
+                    target_height = min(target_height, max_height)
                 else:
-                    max_height = 900
+                    # max_height = 900
                     target_height = min(target_height, max_height)
                 
                 # Store for cards created later (pre-allocation)
@@ -506,8 +505,17 @@ class AppUI(customtkinter.CTk):
                 for r in rows_tuple:
                     container.grid_rowconfigure(r, minsize=target_height)
 
+                # ENFORCE CARD HEIGHTS:
+                # Loop through children and ensure widgets marked with _resistine_plugin_card
+                # strictly follow the target height. This prevents "jumping" on load.
+                for child in container.winfo_children():
+                    if getattr(child, "_resistine_plugin_card", False):
+                        try:
+                            child.configure(height=target_height)
+                        except: pass
+
                 # Centralized wraplength update (efficiently loops through registered labels)
-                wrap_val = max(100, int(card_width * 0.6) - 24) # Approx description panel width
+                wrap_val = max(100, int(card_width * 0.7) - 20) # Approx description panel width
                 for label in container._resistine_desc_labels:
                     try:
                         if label.winfo_exists():
@@ -972,7 +980,19 @@ class AppUI(customtkinter.CTk):
         }
         icon_col = colors.get(type, "#00D100")
         
+        # Calculate centering relative to content area (excluding sidebar)
+        try:
+            total_w = self.winfo_width()
+            nav_w = self.navigation_frame.winfo_width() if hasattr(self, "navigation_frame") else 200
+            if nav_w < 100: nav_w = 200 # Fallback
+            
+            # relx = (sidebar + remaining/2) / total
+            content_center = nav_w + (total_w - nav_w) / 2
+            target_relx = content_center / total_w
+        except:
+            target_relx = 0.5
+
         # Ensure we use the root window for placement
         root = self.winfo_toplevel()
-        toast = ToastNotification(root, text=message, icon_color=icon_col)
+        toast = ToastNotification(root, text=message, icon_color=icon_col, relx=target_relx)
         toast.show()

@@ -289,12 +289,19 @@ class Plugin(BasePlugin):
 
 
     def update_plugin(self, plugin_id):
-        """Reloads the plugin UI to reflect state changes."""
+        """Reloads the plugin UI to reflect state changes, but only if it's the active tab."""
         for plugin in self.app.plugin_list:
             if plugin.id == plugin_id:
-                if hasattr(self, 'main_container'):
-                    self.main_container.destroy()
-                plugin.create_main_screen().grid(row=0, column=1, sticky="nsew")
+                # ONLY grid if we are actually currently viewing this scale
+                # This prevents "flashing" when status updates happen in the background
+                current = getattr(self.app, "current_frame_name", "")
+                target = f"frame_{plugin.get_name()}"
+                
+                if current == target:
+                    if hasattr(self, 'main_container'):
+                        try: self.main_container.destroy()
+                        except: pass
+                    plugin.create_main_screen().grid(row=0, column=1, sticky="nsew")
                 return    
 
     def get_configuration_values(self, tunnel_name):
