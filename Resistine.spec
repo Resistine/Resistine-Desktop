@@ -14,7 +14,7 @@ block_cipher = None
 # Application metadata
 APP_NAME = 'Resistine'
 BUNDLE_ID = 'com.resistine.desktop'
-VERSION = '1.0.0'
+VERSION = '1.0.1'
 
 # Paths
 base_path = os.path.abspath('.')
@@ -179,7 +179,7 @@ app = BUNDLE(
         ],
 
         # Sparkle Auto-Update
-        'SUFeedURL': 'https://resistine.github.io/Resistine-Desktop/appcast.xml',
+        'SUFeedURL': 'https://resistine.github.io/appcast.xml',
         'SUPublicEDKey': '2eiUHVoMgl+qqhEWO8iix5SUcRAKfkWYESh9F7jG6ls=',
         'SUEnableAutomaticChecks': True,
         'SUScheduledCheckInterval': 14400,  # 4 hours (base; Python scheduler adds jitter)

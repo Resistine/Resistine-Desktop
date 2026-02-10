@@ -175,7 +175,9 @@ class Plugin(BasePlugin):
             hover_color=None,
             text_color=("#0D5394", "#3a7ebf"),
             font=customtkinter.CTkFont(family="Inter", size=15, weight="bold"),
-            command=lambda: None,
+            command=lambda: __import__("webbrowser").open(
+                "https://resistine-main2-api2-27753069.dev.odoo.com/web/signup?redirect=%2Fodoo%3F"
+            ),
         )
         self.create_account_btn.grid(row=4, column=0, pady=(0, 40))
 
@@ -269,6 +271,78 @@ class Plugin(BasePlugin):
             font=customtkinter.CTkFont(family="Inter", size=16, weight="bold"),
         )
         self.verify_button.grid(row=3, column=0, pady=(0, 20))
+
+        # Back button to return to email entry
+        self.back_button = customtkinter.CTkButton(
+            self.content_frame,
+            text="Back",
+            fg_color="transparent",
+            hover_color=None,
+            text_color=("#0D5394", "#3a7ebf"),
+            font=customtkinter.CTkFont(family="Inter", size=15, weight="bold"),
+            command=self.back_to_email,
+        )
+        self.back_button.grid(row=4, column=0, pady=(0, 20))
+
+    def back_to_email(self):
+        """Navigate back from OTP screen to email entry screen."""
+        # Destroy OTP widgets
+        if hasattr(self, "otp_entry") and self.otp_entry.winfo_exists():
+            self.otp_entry.destroy()
+        if hasattr(self, "verify_button") and self.verify_button.winfo_exists():
+            self.verify_button.destroy()
+        if hasattr(self, "back_button") and self.back_button.winfo_exists():
+            self.back_button.destroy()
+
+        # Restore title
+        self.title_label.configure(
+            text="Sign in with your Resistine account to get started."
+        )
+
+        # Recreate email entry
+        self.email_entry = customtkinter.CTkEntry(
+            self.content_frame,
+            placeholder_text="Enter your email address",
+            width=400,
+            height=45,
+            corner_radius=4,
+            border_width=1,
+            font=customtkinter.CTkFont(family="Inter", size=14),
+        )
+        self.email_entry.grid(row=2, column=0, pady=(0, 20))
+        self.active_input_entry = self.email_entry
+        self.email_entry.focus_set()
+
+        # Recreate sign-in button
+        self.signin_button = customtkinter.CTkButton(
+            self.content_frame,
+            text="Sign in",
+            command=self.handle_signin_click,
+            width=400,
+            height=45,
+            corner_radius=22,
+            fg_color="#0D5394",
+            hover_color="#0A4275",
+            font=customtkinter.CTkFont(family="Inter", size=16, weight="bold"),
+        )
+        self.signin_button.grid(row=3, column=0, pady=(0, 20))
+
+        # Recreate account link
+        self.create_account_btn = customtkinter.CTkButton(
+            self.content_frame,
+            text="Create new account",
+            fg_color="transparent",
+            hover_color=None,
+            text_color=("#0D5394", "#3a7ebf"),
+            font=customtkinter.CTkFont(family="Inter", size=15, weight="bold"),
+            command=lambda: __import__("webbrowser").open(
+                "https://resistine-main2-api2-27753069.dev.odoo.com/web/signup?redirect=%2Fodoo%3F"
+            ),
+        )
+        self.create_account_btn.grid(row=4, column=0, pady=(0, 40))
+
+        # Clear status
+        self.update_status("", "white")
 
     def update_status(self, message, color="white"):
         """Update status label with message and color"""

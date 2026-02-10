@@ -259,11 +259,10 @@ def wireguard_keys_exist():
 
 def generate_wireguard_keys():
     """
-    Generate WireGuard public/private key pair.
+    Generate WireGuard public/private key pair using pure Python cryptography.
 
-    WireGuard keys are:
-    - Private key: 32 bytes, base64-encoded (44 characters)
-    - Public key: 32 bytes, base64-encoded (44 characters), derived from private key
+    Uses X25519 (Curve25519) from the cryptography library, which is the same
+    algorithm used by WireGuard. No wg binary required.
 
     Returns:
         dict: {
@@ -273,19 +272,30 @@ def generate_wireguard_keys():
         None: If key generation fails
     """
     try:
-        private_key = subprocess.check_output(["wg", "genkey"], text=True).strip()
-        public_key = subprocess.check_output(
-            ["wg", "pubkey"], input=private_key, text=True
-        ).strip()
+        import base64
+        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+        from cryptography.hazmat.primitives import serialization
+
+        private_key_obj = X25519PrivateKey.generate()
+
+        private_bytes = private_key_obj.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        private_key = base64.b64encode(private_bytes).decode("utf-8")
+
+        public_bytes = private_key_obj.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        public_key = base64.b64encode(public_bytes).decode("utf-8")
 
         return {
             "private_key": private_key,
             "public_key": public_key,
         }
 
-    except subprocess.CalledProcessError as e:
-        logger.error(f"❌ Key generation command failed: {e}")
-        return None
     except Exception as e:
         logger.error(f"❌ Key generation failed: {e}")
         return None
