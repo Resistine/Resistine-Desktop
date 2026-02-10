@@ -21,7 +21,17 @@ jobs:
 
       - name: Extract version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          # Detect if this is a beta/pre-release tag (e.g. v1.1.0-beta.1)
+          if [[ "$VERSION" == *"-"* ]]; then
+            echo "IS_PRERELEASE=true" >> "$GITHUB_OUTPUT"
+            echo "CHANNEL=beta" >> "$GITHUB_OUTPUT"
+          else
+            echo "IS_PRERELEASE=false" >> "$GITHUB_OUTPUT"
+            echo "CHANNEL=" >> "$GITHUB_OUTPUT"
+          fi
 
       # --- Import Developer ID certificate into CI keychain ---
       - name: Install Apple certificate
@@ -105,6 +115,7 @@ jobs:
         with:
           files: dist/Resistine-Installer.dmg
           generate_release_notes: true
+          prerelease: ${{ steps.version.outputs.IS_PRERELEASE == 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -114,15 +125,23 @@ jobs:
           ED_SIGNATURE: ${{ steps.sparkle_sign.outputs.ED_SIGNATURE }}
           LENGTH: ${{ steps.sparkle_sign.outputs.LENGTH }}
           VERSION: ${{ steps.version.outputs.VERSION }}
+          CHANNEL: ${{ steps.version.outputs.CHANNEL }}
           DEPLOY_KEY: ${{ secrets.PAGES_DEPLOY_KEY }}
         run: |
           PUB_DATE=$(date -u '+%a, %d %b %Y %H:%M:%S +0000')
           DOWNLOAD_URL="https://github.com/Resistine/Resistine-Desktop/releases/download/v${VERSION}/Resistine-Installer.dmg"
 
+          # Add sparkle:channel tag for beta/pre-release versions
+          CHANNEL_TAG=""
+          if [ -n "$CHANNEL" ]; then
+            CHANNEL_TAG="<sparkle:channel>${CHANNEL}</sparkle:channel>"
+          fi
+
           NEW_ITEM=$(cat <<XMLEOF
               <item>
                 <title>Version ${VERSION}</title>
                 <pubDate>${PUB_DATE}</pubDate>
+                ${CHANNEL_TAG}
                 <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
                 <enclosure
                   url="${DOWNLOAD_URL}"
