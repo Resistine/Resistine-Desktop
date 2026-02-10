@@ -5,18 +5,19 @@ Provides a single interface for all platforms. Dispatches to the
 appropriate backend (Sparkle on macOS, WinSparkle on Windows, etc.)
 and manages a jittered background check scheduler.
 
-Architecture (mirrors the VPN plugin pattern):
-    update_manager.py          ← shared interface (this file)
-    ├── updater_darwin.py      ← macOS: Sparkle via PyObjC
-    ├── updater_windows.py     ← Windows: WinSparkle (stub)
-    └── updater_linux.py       ← Linux: AppImage/custom (stub)
+Architecture:
+    utils/updates/
+    ├── manager.py         ← shared interface (this file)
+    ├── darwin.py          ← macOS: Sparkle via PyObjC
+    ├── windows.py         ← Windows: WinSparkle (stub)
+    └── linux.py           ← Linux: AppImage/custom (stub)
 
-Usage from main.py / plugins:
-    from utils import update_manager
+Usage:
+    from utils import updates
 
-    update_manager.init(app)           # Initialize backend + start scheduler
-    update_manager.check_for_updates() # Manual "Check for Updates" button
-    update_manager.shutdown()          # App closing
+    updates.init(app)           # Initialize backend + start scheduler
+    updates.check_for_updates() # Manual "Check for Updates" button
+    updates.shutdown()          # App closing
 
 Author: Resistine Team
 Copyright (c) Resistine 2025
@@ -37,11 +38,11 @@ _PLATFORM = platform.system()
 _backend = None
 
 if _PLATFORM == "Darwin":
-    from utils import updater_darwin as _backend
+    from utils.updates import darwin as _backend
 elif _PLATFORM == "Windows":
-    from utils import updater_windows as _backend
+    from utils.updates import windows as _backend
 elif _PLATFORM == "Linux":
-    from utils import updater_linux as _backend
+    from utils.updates import linux as _backend
 
 # ---------------------------------------------------------------------------
 # Jittered scheduler (shared across all platforms)

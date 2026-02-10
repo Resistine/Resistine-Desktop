@@ -238,6 +238,43 @@ class Plugin(BasePlugin):
         check_btn.grid(row=2, column=0, padx=16, pady=(0, 6), sticky="w")
         self.update_status_label.grid(row=3, column=0, padx=16, pady=(0, 14), sticky="w")
 
+        # --- Uninstall card ---
+        uninstall_card = customtkinter.CTkFrame(self.frame_5, corner_radius=12)
+        uninstall_card.grid(row=4, column=0, padx=20, pady=(10, 16), sticky="ew")
+        uninstall_card.grid_columnconfigure(0, weight=1)
+
+        customtkinter.CTkLabel(
+            uninstall_card,
+            text="Uninstall",
+            font=customtkinter.CTkFont(size=18, weight="bold"),
+            text_color=text_color,
+        ).grid(row=0, column=0, padx=16, pady=(14, 8), sticky="w")
+
+        customtkinter.CTkLabel(
+            uninstall_card,
+            text="Permanently remove Resistine and all associated data from this computer.",
+            font=customtkinter.CTkFont(size=14),
+            text_color=text_color,
+        ).grid(row=1, column=0, padx=16, pady=(0, 6), sticky="w")
+
+        self.uninstall_status_label = customtkinter.CTkLabel(
+            uninstall_card,
+            text="",
+            font=customtkinter.CTkFont(size=12),
+            text_color=text_color,
+        )
+
+        self.uninstall_button = customtkinter.CTkButton(
+            uninstall_card,
+            text="Uninstall Resistine",
+            height=36,
+            fg_color="#DC3545",
+            hover_color="#C82333",
+            command=self._handle_uninstall,
+        )
+        self.uninstall_button.grid(row=2, column=0, padx=16, pady=(0, 6), sticky="w")
+        self.uninstall_status_label.grid(row=3, column=0, padx=16, pady=(0, 14), sticky="w")
+
         return self.frame_5
 
     def save_api_key(self):
@@ -279,16 +316,16 @@ class Plugin(BasePlugin):
     def _check_for_updates(self):
         """Trigger an interactive update check via the cross-platform update manager."""
         try:
-            from utils import update_manager
+            from utils import updates
 
-            if not update_manager.is_available():
+            if not updates.is_available():
                 self.update_status_label.configure(
                     text="Updates not available in this build", text_color="orange"
                 )
                 self.app.after(5000, lambda: self.update_status_label.configure(text=""))
                 return
 
-            success = update_manager.check_for_updates()
+            success = updates.check_for_updates()
             if success:
                 self.update_status_label.configure(
                     text="Checking for updates...", text_color="green"
@@ -302,6 +339,43 @@ class Plugin(BasePlugin):
             logger.error(f"Update check error: {e}")
             self.update_status_label.configure(text=f"Error: {e}", text_color="red")
             self.app.after(5000, lambda: self.update_status_label.configure(text=""))
+
+    def _handle_uninstall(self):
+        """Handle the Uninstall button click with confirmation."""
+        import tkinter.messagebox
+
+        confirmed = tkinter.messagebox.askyesno(
+            "Uninstall Resistine",
+            "Are you sure you want to completely uninstall Resistine?\n\n"
+            "This will remove all VPN configurations, application data, "
+            "and the application itself.\n\n"
+            "This action cannot be undone.",
+        )
+        if not confirmed:
+            return
+
+        self.uninstall_button.configure(state="disabled")
+        self.uninstall_status_label.configure(text="Uninstalling...", text_color="orange")
+        self.app.update_idletasks()
+
+        try:
+            from utils import uninstall
+
+            def _progress(msg):
+                self.uninstall_status_label.configure(text=msg)
+                self.app.update_idletasks()
+
+            success, message = uninstall.run_uninstall(self.app, progress_callback=_progress)
+
+            if success:
+                self.app.destroy()
+            else:
+                self.uninstall_button.configure(state="normal")
+                self.uninstall_status_label.configure(text=message, text_color="red")
+        except Exception as e:
+            logger.error(f"Uninstall error: {e}")
+            self.uninstall_button.configure(state="normal")
+            self.uninstall_status_label.configure(text=f"Error: {e}", text_color="red")
 
     def change_appearance_mode(self, new_appearance_mode: str):
         try:

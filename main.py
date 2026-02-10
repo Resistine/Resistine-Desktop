@@ -108,9 +108,9 @@ class App(AppUI):
 
         # Initialize auto-updater (cross-platform: Sparkle on macOS, stubs on Win/Linux)
         try:
-            from utils import update_manager
+            from utils import updates
 
-            update_manager.init(self)
+            updates.init(self)
         except Exception as e:
             logger.warning(f"Failed to start auto-updater: {e}")
 
@@ -119,9 +119,9 @@ class App(AppUI):
     def _on_closing(self):
         """Clean up resources before closing."""
         try:
-            from utils import update_manager
+            from utils import updates
 
-            update_manager.shutdown()
+            updates.shutdown()
         except Exception:
             pass
         self.destroy()
