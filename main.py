@@ -10,7 +10,7 @@ Licensed under the GNU General Public License v2 or later
 import argparse
 import os
 import sys
-
+from utils.settings import get_config_dir
 import customtkinter
 import customtkinter.windows.widgets.ctk_scrollable_frame as _sf
 
