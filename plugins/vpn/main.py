@@ -13,14 +13,10 @@ Licensed under the GNU General Public License v2 or later
 from plugins.base_plugin import BasePlugin
 from utils.logger import logger
 import customtkinter
-import os 
-import tkinter as tk
+import os
 from tkinter import filedialog
 import platform
 import subprocess
-import re
-import sys
-import ctypes
 # --- Platform Detection (single source of truth) ---
 _PLATFORM = platform.system()
 IS_MACOS = _PLATFORM == "Darwin"
@@ -34,7 +30,6 @@ if IS_WINDOWS:
     wireguard_folder = get_writable_wireguard_dir()
 
 elif IS_LINUX:
-    from python_wireguard import Client, ServerConnection, Key
     from plugins.vpn.wireguard.vpn_functions_linux import *
     wireguard_folder = get_writable_wireguard_dir()
 
@@ -386,9 +381,6 @@ class Plugin(BasePlugin):
             value_label.grid(row=row_num, column=1, padx=15, pady=5, sticky="e")
             row_num += 1
 
-            value_label.grid(row=row_num, column=1, padx=15, pady=5, sticky="e")
-            row_num += 1
-
         # --- 4. Import Button ---
         import_button = customtkinter.CTkButton(
             scroll_frame,
@@ -482,13 +474,12 @@ class Plugin(BasePlugin):
             logger.error("❌ No tunnel name provided")
             self.app.show_notification("No tunnel name provided", type="error")
             return
-            
-        
+
         config_path = os.path.join(wireguard_folder, f"{tunnel_name}.conf")
-        
+
         # --- MacOS Implementation ---
         if IS_MACOS:
-            logger.info(f"MacOS: Toggling {tunnel_name}")
+            logger.info(f"macOS: Toggling {tunnel_name}")
 
             if not is_extension_enabled():
                 logger.error("Network extension is disabled in System Settings")
@@ -500,11 +491,6 @@ class Plugin(BasePlugin):
                 my_vpn_status = "Stopped"
                 active_client_name = None
                 self.update_plugin(self.id)
-                return
-
-            if not check_wireguard_installed():
-                logger.error("WireGuard tools not found.")
-                self.app.show_notification("WireGuard tools not found", type="error")
                 return
 
             if my_vpn_status == "Running":
@@ -569,7 +555,4 @@ class Plugin(BasePlugin):
             
             # Refresh UI
             self.update_plugin(self.id)
-
-
-
 

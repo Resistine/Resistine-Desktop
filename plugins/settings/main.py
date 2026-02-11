@@ -125,7 +125,17 @@ class Plugin(BasePlugin):
             text=f"Email: {email}",
             font=customtkinter.CTkFont(size=14),
             text_color=text_color,
-        ).grid(row=1, column=0, padx=16, pady=(0, 14), sticky="w")
+        ).grid(row=1, column=0, padx=16, pady=(0, 10), sticky="w")
+
+        self.logout_button = customtkinter.CTkButton(
+            profile_card,
+            text="Log Out",
+            height=36,
+            fg_color="#DC3545",
+            hover_color="#C82333",
+            command=self._handle_logout,
+        )
+        self.logout_button.grid(row=2, column=0, padx=16, pady=(0, 14), sticky="w")
 
         # --- API key card ---
         api_card = customtkinter.CTkFrame(self.frame_5, corner_radius=12)
@@ -376,6 +386,50 @@ class Plugin(BasePlugin):
             logger.error(f"Uninstall error: {e}")
             self.uninstall_button.configure(state="normal")
             self.uninstall_status_label.configure(text=f"Error: {e}", text_color="red")
+
+    def _handle_logout(self):
+        """Handle the Log Out button click with confirmation."""
+        import tkinter.messagebox
+
+        confirmed = tkinter.messagebox.askyesno(
+            "Log Out",
+            "Are you sure you want to log out?\n\n"
+            "You will need to sign in again to use Resistine.",
+        )
+        if not confirmed:
+            return
+
+        # Clear auth state
+        settings.set("auth", "logged_in", False)
+
+        # Remove saved email
+        email_file_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))),
+            "utils",
+            "email-settings.txt",
+        )
+        if os.path.exists(email_file_path):
+            try:
+                os.remove(email_file_path)
+            except Exception as e:
+                logger.error(f"Failed to remove email settings: {e}")
+
+        # Tear down dashboard and show login screen
+        try:
+            from plugins.login.main import Plugin as LoginPlugin
+
+            for widget in self.app.winfo_children():
+                widget.destroy()
+
+            self.app.grid_rowconfigure(0, weight=1)
+            self.app.grid_columnconfigure(0, weight=1)
+            self.app.grid_columnconfigure(1, weight=0)
+
+            login_plugin = LoginPlugin(self.app)
+            login_plugin.show()
+        except Exception as e:
+            logger.error(f"Failed to show login screen: {e}")
+            self.app.show_notification(f"Logout failed: {e}", type="error")
 
     def change_appearance_mode(self, new_appearance_mode: str):
         try:

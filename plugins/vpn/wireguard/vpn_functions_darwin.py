@@ -7,14 +7,12 @@ Licensed under the GNU General Public License v2 or later
 
 import json
 import os
-import platform
 import re
 import subprocess
 import sys
 from typing import Optional, Tuple
 
 from utils import settings
-from utils.settings import get_config_dir
 from utils.logger import logger
 
 
@@ -33,9 +31,6 @@ def get_writable_wireguard_dir():
     wireguard_dir = os.path.join(app_group_container, "wireguard")
     os.makedirs(wireguard_dir, exist_ok=True)
     return wireguard_dir
-
-
-
 
 
 # Cache to map config names to actual utun interfaces (e.g., wg0 → utun6)
@@ -135,7 +130,7 @@ class VPNHelper:
             logger.info(f"📤 [CLI] Result: returncode={result.returncode}, output='{output}'")
             return (result.returncode == 0, output)
         except subprocess.TimeoutExpired:
-            logger.error(f"⏰ [CLI] Command timed out after 30 seconds")
+            logger.error("⏰ [CLI] Command timed out after 30 seconds")
             return (False, "Command timed out")
         except Exception as e:
             logger.error(f"❌ [CLI] Command error: {e}")
@@ -161,7 +156,7 @@ class VPNHelper:
             logger.info(f"📤 [CLI] Result: returncode={result.returncode}, output='{output}'")
             return (result.returncode == 0, output)
         except subprocess.TimeoutExpired:
-            logger.error(f"⏰ [CLI] Command timed out after 30 seconds")
+            logger.error("⏰ [CLI] Command timed out after 30 seconds")
             return (False, "Command timed out")
         except Exception as e:
             logger.error(f"❌ [CLI] Command error: {e}")
@@ -194,7 +189,7 @@ class VPNHelper:
             return (is_running, output)
 
         except subprocess.TimeoutExpired:
-            logger.error(f"⏰ [HELPER] Command timed out after 30 seconds")
+            logger.error("⏰ [HELPER] Command timed out after 30 seconds")
             return (False, "Command timed out")
         except FileNotFoundError:
             logger.error(f"❌ [HELPER] CLI executable not found: {helper.cli_path}")
@@ -205,11 +200,6 @@ class VPNHelper:
 
 
 vpn_helper = VPNHelper()
-
-# Keychain Management Functions
-
-
-# Key management functions removed - replaced by utils.settings
 
 
 def save_wireguard_keys(private_key, public_key):
@@ -376,56 +366,7 @@ def check_service_status(interface_name, test_ip=None):
 
 
 def check_wireguard_installed():
-    """Check if WireGuard is available on the system"""
-    logger.info("🔍 [WIREGUARD] Checking WireGuard installation...")
-
-    # Check for wg binary in system locations (same as Swift helper)
-    wg_paths = [
-        "/usr/bin/wg",  # System installation (macOS built-in)
-        "/opt/homebrew/bin/wg",  # Apple Silicon Homebrew
-        "/usr/local/bin/wg",  # Intel Homebrew
-    ]
-
-    wg_found = False
-    wg_path = None
-    for path in wg_paths:
-        if os.path.exists(path):
-            logger.info(f"✅ WireGuard (wg) found at: {path}")
-            wg_found = True
-            wg_path = path
-            break
-
-    if not wg_found:
-        logger.error("❌ WireGuard (wg) not found in system locations")
-        logger.info("💡 Please install WireGuard:")
-        logger.info("   - Via Homebrew: brew install wireguard-tools")
-        logger.info("   - Or download from: https://www.wireguard.com/install/")
-        return False
-
-    # Check for wg-quick in system locations (same as Swift helper)
-    wg_quick_paths = [
-        "/usr/bin/wg-quick",  # System installation (macOS built-in)
-        "/opt/homebrew/bin/wg-quick",  # Apple Silicon Homebrew
-        "/usr/local/bin/wg-quick",  # Intel Homebrew
-    ]
-
-    wg_quick_found = False
-    wg_quick_path = None
-    for path in wg_quick_paths:
-        if os.path.exists(path):
-            logger.info(f"✅ WireGuard (wg-quick) found at: {path}")
-            wg_quick_found = True
-            wg_quick_path = path
-            break
-
-    if not wg_quick_found:
-        logger.error("❌ WireGuard (wg-quick) not found in system locations")
-        logger.info("💡 Please install WireGuard:")
-        logger.info("   - Via Homebrew: brew install wireguard-tools")
-        logger.info("   - Or download from: https://www.wireguard.com/install/")
-        return False
-
-    logger.info("✅ WireGuard is properly installed and working on the system")
+    """On macOS, VPN uses Network Extension — wg/wg-quick binaries are not needed."""
     return True
 
 
@@ -673,84 +614,3 @@ def is_extension_enabled():
     except Exception as e:
         logger.warning(f"Extension status check failed: {e}")
         return False
-
-
-def ensure_helper_registered():
-    """Register the privileged helper on macOS (runs silently on startup)"""
-    # CLI-only architecture: No privileged helper registration needed
-    # Python communicates with CLI exclusively via subprocess calls
-    # Network Extension handles privileged operations within the app sandbox
-    logger.info("ℹ️ Helper registration skipped (using CLI-only architecture)")
-    return
-
-    try:
-        from ServiceManagement import SMAppService
-
-        plist_name = "com.resistine.plist"
-
-        # Create the service
-        try:
-            service = SMAppService.daemonServiceWithPlistName_(plist_name)
-        except:
-            try:
-                service = SMAppService.daemonWithPlistName_(plist_name)
-            except:
-                logger.warning("⚠️ Could not create SMAppService for helper")
-                return
-
-        # Check current status
-        status = int(service.status())
-        status_map = {
-            0: "notRegistered",
-            1: "enabled",
-            2: "requiresApproval",
-            3: "notFound",
-        }
-        status_str = status_map.get(status, "unknown")
-
-        if status == 1:  # Already enabled
-            logger.info("✅ Helper already enabled")
-            return
-
-        if status == 2:  # Requires approval
-            logger.warning("⚠️ Helper registered but requires user approval")
-            prompt_helper_approval(service)
-            return
-
-        # Not registered yet (0 or 3), try to register
-        logger.info("🔧 Registering privileged helper...")
-        error = service.registerAndReturnError_(None)
-
-        if error:
-            logger.error(f"⚠️ Helper registration error: {error}")
-            # Check status again after registration attempt
-            new_status = int(service.status())
-            if new_status == 2:  # Now requires approval
-                prompt_helper_approval(service)
-        else:
-            logger.info("✅ Helper registered successfully")
-
-    except ImportError:
-        logger.warning("⚠️ ServiceManagement framework not available")
-    except Exception as e:
-        logger.error(f"⚠️ Helper registration error: {e}")
-
-
-def prompt_helper_approval(service):
-    """Prompt user to approve helper in System Settings"""
-    try:
-        import tkinter.messagebox as messagebox
-
-        response = messagebox.askyesno(
-            "Helper Approval Required",
-            "Resistine needs your approval to install a helper tool for VPN functionality.\n\n"
-            "Click 'Yes' to open System Settings where you can enable it in Login Items.",
-            icon="info",
-        )
-
-        if response:
-            # Open System Settings → Login Items
-            service.openSystemSettingsLoginItems()
-            logger.info("📱 Opened System Settings → Login Items")
-    except Exception as e:
-        logger.error(f"⚠️ Could not prompt for approval: {e}")
