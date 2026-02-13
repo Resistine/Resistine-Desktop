@@ -674,22 +674,21 @@ class RemotePluginWrapper:
             return customtkinter.CTkImage(light_image=blank, dark_image=blank, size=(20, 20))
     
     def get_icon_large(self):
-        # Return larger icon for dashboard/store cards (50x50)
+        # Return larger icon for dashboard/store cards (40x40)
         icons_path = os.path.dirname(os.path.realpath(__file__))
         light_path = os.path.join(icons_path, "store_light.png")
         dark_path = os.path.join(icons_path, "store_dark.png")
-        
+
         try:
-            light_image = self._load_icon_safe(light_path, (50, 50))
-            dark_image = self._load_icon_safe(dark_path, (50, 50))
+            light_image = self._load_icon_safe(light_path, (40, 40))
+            dark_image = self._load_icon_safe(dark_path, (40, 40))
             return customtkinter.CTkImage(
-                light_image=dark_image,  # Use dark icon (white) for light mode
-                dark_image=light_image,  # Use light icon (dark) for dark mode
-                size=(50, 50)  # Card icon size
+                light_image=dark_image,
+                dark_image=light_image,
+                size=(40, 40),
             )
         except Exception as e:
             from utils.logger import logger
             logger.error(f"Error loading store icon (large): {e}")
-            # Return a blank image as fallback
-            blank = Image.new('RGBA', (50, 50), (255, 255, 255, 0))
-            return customtkinter.CTkImage(light_image=blank, dark_image=blank, size=(50, 50))
+            blank = Image.new('RGBA', (40, 40), (255, 255, 255, 0))
+            return customtkinter.CTkImage(light_image=blank, dark_image=blank, size=(40, 40))

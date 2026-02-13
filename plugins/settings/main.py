@@ -124,9 +124,24 @@ class Plugin(BasePlugin):
             text_color=text_color,
         ).grid(row=1, column=0, padx=16, pady=(0, 10), sticky="w")
 
+        # Load sign-out icon
+        signout_icon = None
+        try:
+            from PIL import Image
+            plugin_dir = os.path.dirname(os.path.realpath(__file__))
+            signout_light = Image.open(os.path.join(plugin_dir, "signout_light.png"))
+            signout_dark = Image.open(os.path.join(plugin_dir, "signout_dark.png"))
+            signout_icon = customtkinter.CTkImage(
+                light_image=signout_light, dark_image=signout_dark, size=(18, 18)
+            )
+        except Exception:
+            pass
+
         self.logout_button = customtkinter.CTkButton(
             profile_card,
             text="Log Out",
+            image=signout_icon,
+            compound="left",
             height=36,
             fg_color="#DC3545",
             hover_color="#C82333",
