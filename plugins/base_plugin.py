@@ -172,7 +172,7 @@ class BasePlugin:
         try:
             light_image = Image.open(self.icon_light)
             dark_image = Image.open(self.icon_dark)
-            return customtkinter.CTkImage(light_image=dark_image, dark_image=light_image, size=size)
+            return customtkinter.CTkImage(light_image=light_image, dark_image=dark_image, size=size)
         except Exception as e:
             from utils.logger import logger
             logger.error(f"Failed to create icon for {self.name}: {e}")
@@ -194,7 +194,7 @@ class BasePlugin:
         :return: A larger icon of the plugin.
         """
         if self._icon_large is None:
-            self._icon_large = self.create_icon(size=(50, 50))
+            self._icon_large = self.create_icon(size=(48, 48))
         return self._icon_large
 
     def get_icon_alert(self):
