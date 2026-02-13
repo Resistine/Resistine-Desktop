@@ -8,7 +8,22 @@ Licensed under the GNU General Public License v2 or later
 
 from PIL import Image
 import customtkinter
-import os 
+import os
+from io import BytesIO
+
+try:
+    from cairosvg import svg2png
+    HAS_SVG = True
+    # Test if cairosvg actually works (sometimes it's installed but broken)
+    try:
+        # Use bytestring instead of url for the test to avoid OSError
+        test_data = svg2png(bytestring='<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>', output_width=1, output_height=1)
+        if not test_data:
+            HAS_SVG = False
+    except Exception:
+        HAS_SVG = False
+except ImportError:
+    HAS_SVG = False 
 
 class BasePlugin:
     """
@@ -52,6 +67,7 @@ class BasePlugin:
         self.icon_dark = icon_dark_path
         self.uninstall_enabled = uninstall_enabled
         self.icon = self.create_icon(size=(20, 20))
+        self._icon_large = None  # Cache for larger icon
         self.icon_alert = None
         self.button = None
         self.app = None # Will be set by subclasses or manager
@@ -73,6 +89,13 @@ class BasePlugin:
         This method should be implemented by subclasses.
         """
         raise NotImplementedError("Subclasses should implement this method")
+
+    def destroy(self):
+        """
+        Cleanup method to be called when the plugin is uninstalled or reloaded.
+        Subclasses should override this if they have background threads or other resources to release.
+        """
+        pass
 
     def set_id(self, id):
         """
@@ -157,21 +180,131 @@ class BasePlugin:
     def create_icon(self, size):
         """
         Create an icon for the plugin using the provided size.
+        Supports both PNG and SVG formats.
 
         :param size: The size of the icon.
         :return: The created icon.
         """
-        light_image = Image.open(self.icon_light)
-        dark_image = Image.open(self.icon_dark)
-        return customtkinter.CTkImage(light_image=dark_image, dark_image=light_image, size=size)
+        def load_icon(path, size):
+            from utils.logger import logger
+            
+            # Check if SVG version exists (even if path ends with .png)
+            if path.lower().endswith('.png'):
+                svg_path = path[:-4] + '.svg'
+                if os.path.exists(svg_path) and HAS_SVG:
+                    try:
+                        # Validate size parameters to prevent crashes
+                        if size[0] <= 0 or size[1] <= 0:
+                            logger.warning(f"⚠️ Invalid size for SVG: {size}, using PNG")
+                            return Image.open(path)
+                        # logger.info(f"📊 Loading SVG icon: {os.path.basename(svg_path)}")
+                        png_data = svg2png(url=svg_path, output_width=size[0], output_height=size[1])
+                        if not png_data:
+                            raise ValueError("svg2png returned empty data")
+                        logger.info(f"✅ Successfully loaded SVG: {os.path.basename(svg_path)}")
+                        return Image.open(BytesIO(png_data))
+                    except (OSError, ValueError, MemoryError, AttributeError) as e:
+                        logger.warning(f"⚠️ SVG loading failed for {os.path.basename(svg_path)}: {e}, using PNG")
+                        if os.path.exists(path):
+                            return Image.open(path)
+                        # If PNG doesn't exist, try to return SVG as-is (will fail gracefully)
+                        return Image.open(svg_path)
+                    except Exception as e:
+                        logger.error(f"❌ Unexpected error loading SVG {os.path.basename(svg_path)}: {e}, using PNG")
+                        if os.path.exists(path):
+                            return Image.open(path)
+                        raise
+                else:
+                    # No SVG found or no SVG support, use PNG
+                    if os.path.exists(path):
+                        return Image.open(path)
+                    # If PNG doesn't exist, try SVG only if supported
+                    if os.path.exists(svg_path) and HAS_SVG:
+                        try:
+                            png_data = svg2png(url=svg_path, output_width=size[0], output_height=size[1])
+                            return Image.open(BytesIO(png_data))
+                        except:
+                            pass
+                    
+                    # Last resort: return a placeholder
+                    logger.warning(f"⚠️ Could not find or load icon: {path}")
+                    return Image.new('RGBA', size, (0, 0, 0, 0))
+            
+            # Path already ends with .svg I don't think this path will be accessed until the init is changed
+            elif path.lower().endswith('.svg'):
+                if HAS_SVG:
+                    try:
+                        # Validate size parameters to prevent crashes
+                        if size[0] <= 0 or size[1] <= 0:
+                            logger.warning(f"⚠️ Invalid size for SVG: {size}, trying PNG fallback")
+                            png_path = path[:-4] + '.png'
+                            if os.path.exists(png_path):
+                                return Image.open(png_path)
+                            raise ValueError(f"Invalid size: {size}")
+                        # logger.info(f"📊 Loading SVG icon: {os.path.basename(path)}")
+                        png_data = svg2png(url=path, output_width=size[0], output_height=size[1])
+                        if not png_data:
+                            raise ValueError("svg2png returned empty data")
+                        logger.info(f"✅ Successfully loaded SVG: {os.path.basename(path)}")
+                        return Image.open(BytesIO(png_data))
+                    except (OSError, ValueError, MemoryError, AttributeError) as e:
+                        logger.warning(f"⚠️ SVG loading failed for {os.path.basename(path)}: {e}")
+                        # Try PNG fallback
+                        png_path = path[:-4] + '.png'
+                        if os.path.exists(png_path):
+                            logger.info(f"📄 Using PNG fallback: {os.path.basename(png_path)}")
+                            return Image.open(png_path)
+                        # If PNG doesn't exist, try to return SVG as-is (will fail gracefully)
+                        return Image.open(path)
+                    except Exception as e:
+                        logger.error(f"❌ Unexpected error loading SVG {os.path.basename(path)}: {e}")
+                        # Try PNG fallback
+                        png_path = path[:-4] + '.png'
+                        if os.path.exists(png_path):
+                            return Image.open(png_path)
+                        raise
+                else:
+                    logger.warning(f"⚠️ SVG support not available for {os.path.basename(path)}")
+                    png_path = path[:-4] + '.png'
+                    if os.path.exists(png_path):
+                        logger.info(f"📄 Using PNG fallback: {os.path.basename(png_path)}")
+                        return Image.open(png_path)
+                    
+                    # Cannot open SVG without cairosvg
+                    logger.error(f"❌ Cannot open SVG without SVG support: {path}")
+                    return Image.new('RGBA', size, (0, 0, 0, 0))
+            
+            # Default: try to open as-is
+            return Image.open(path)
+        
+        try:
+            light_image = load_icon(self.icon_light, size)
+            dark_image = load_icon(self.icon_dark, size)
+            return customtkinter.CTkImage(light_image=dark_image, dark_image=light_image, size=size)
+        except Exception as e:
+            from utils.logger import logger
+            logger.error(f"❌ Failed to create icon for {self.name}: {e}")
+            # Return a blank transparent image as fallback
+            blank = Image.new('RGBA', size, (255, 255, 255, 0))
+            return customtkinter.CTkImage(light_image=blank, dark_image=blank, size=size)
 
     def get_icon(self):
         """
-        Get the icon of the plugin.
+        Get the icon of the plugin (20x20 for sidebar).
 
         :return: The icon of the plugin.
         """
         return self.icon
+
+    def get_icon_large(self):
+        """
+        Get a larger icon of the plugin (50x50 for dashboard/store cards).
+
+        :return: A larger icon of the plugin.
+        """
+        if self._icon_large is None:
+            self._icon_large = self.create_icon(size=(50, 50))
+        return self._icon_large
 
     def get_icon_alert(self):
         """
@@ -191,7 +324,7 @@ class BasePlugin:
         icon_filename = icon_map.get(current_status, "warning.png")
         self.icon_light = f"{symbols_img_paths}/{icon_filename}"
         self.icon_dark = f"{symbols_img_paths}/{icon_filename}"
-        self.icon_alert = self.create_icon(size=(16, 16))
+        self.icon_alert = self.create_icon(size=(50, 50))
         return self.icon_alert
 
     def set_button(self, button):

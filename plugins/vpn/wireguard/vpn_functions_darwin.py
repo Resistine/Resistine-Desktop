@@ -396,8 +396,11 @@ def parse_and_create_vpn_config(vpn_config_json_string, config_name="wg0"):
     }
     """
     try:
-        # Parse the VPN config JSON string
-        vpn_config = json.loads(vpn_config_json_string)
+        # Parse the VPN config (accepts both dict and JSON string)
+        if isinstance(vpn_config_json_string, dict):
+            vpn_config = vpn_config_json_string
+        else:
+            vpn_config = json.loads(vpn_config_json_string)
 
         # Extract Peer configuration
         peer_config = vpn_config.get("Peer", {})
@@ -614,3 +617,92 @@ def is_extension_enabled():
     except Exception as e:
         logger.warning(f"Extension status check failed: {e}")
         return False
+
+
+def ensure_helper_registered():
+    """Register the privileged helper on macOS (runs silently on startup)"""
+    import sys
+    import os
+
+    # Skip registration if running from source (SMAppService requires a bundle)
+    if not (".app/Contents/MacOS" in sys.executable or ".app/Contents/MacOS" in os.path.abspath(sys.argv[0])):
+        logger.debug("Skipping helper registration (not running as an app bundle)")
+        return
+
+    try:
+        from ServiceManagement import SMAppService
+
+        plist_name = "com.resistine.plist"
+
+        # Create the service
+        try:
+            service = SMAppService.daemonServiceWithPlistName_(plist_name)
+        except:
+            try:
+                service = SMAppService.daemonWithPlistName_(plist_name)
+            except:
+                logger.warning("Could not create SMAppService for helper")
+                return
+
+        # Check current status
+        status = int(service.status())
+        status_map = {
+            0: "notRegistered",
+            1: "enabled",
+            2: "requiresApproval",
+            3: "notFound",
+        }
+        status_str = status_map.get(status, "unknown")
+
+        if status == 1:  # Already enabled
+            logger.info("Helper already enabled")
+            return
+
+        if status == 2:  # Requires approval
+            logger.warning("Helper registered but requires user approval")
+            prompt_helper_approval(service)
+            return
+
+        # Not registered yet (0 or 3), try to register
+        logger.info("Registering privileged helper...")
+        error = service.registerAndReturnError_(None)
+
+        if error:
+            logger.error(f"Helper registration error: {error}")
+            new_status = int(service.status())
+            if new_status == 2:
+                prompt_helper_approval(service)
+        else:
+            logger.info("Helper registered successfully")
+
+    except ImportError:
+        logger.warning("ServiceManagement framework not available")
+    except Exception as e:
+        logger.error(f"Helper registration error: {e}")
+
+
+def prompt_helper_approval(service):
+    """Prompt user to approve helper in System Settings"""
+    try:
+        from gui.dialogs import ask_yes_no
+        import tkinter as tk
+
+        try:
+            root = tk._default_root
+        except:
+            root = None
+
+        def on_confirm(confirmed):
+            if confirmed:
+                service.openSystemSettingsLoginItems()
+                logger.info("Opened System Settings - Login Items")
+
+        ask_yes_no(
+            root,
+            "Helper Approval Required",
+            "Resistine needs your approval to install a helper tool for VPN functionality.\n\n"
+            "Click 'Yes' to open System Settings where you can enable it in Login Items.",
+            on_confirm
+        )
+    except Exception as e:
+        logger.error(f"Could not prompt for approval: {e}")

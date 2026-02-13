@@ -28,7 +28,6 @@ from utils.logger import logger
 
 # Platform Specific Imports
 import platform
-import sys
 if platform.system() == "Windows":
     from plugins.vpn.wireguard.vpn_functions_windows import setup_vpn_keys, save_vpn_configuration
 elif platform.system() == "Linux":
@@ -123,7 +122,7 @@ class Plugin(BasePlugin):
         )
         try:
             shield_img = Image.open(shield_path)
-            shield_ctk = customtkinter.CTkImage(shield_img, size=(120, 120))
+            shield_ctk = customtkinter.CTkImage(shield_img, size=(250, 250))
             self.shield_label = customtkinter.CTkLabel(
                 self.content_frame, text="", image=shield_ctk
             )
@@ -140,13 +139,17 @@ class Plugin(BasePlugin):
         )
         self.title_label.grid(row=1, column=0, pady=(0, 25))
 
+        # Get theme corner radius
+        from customtkinter import ThemeManager
+        corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
+        
         # 3. Email Entry
         self.email_entry = customtkinter.CTkEntry(
             self.content_frame,
             placeholder_text="Enter your email address",
             width=400,
             height=45,
-            corner_radius=4,
+            corner_radius=corner_radius,
             border_width=1,
             font=customtkinter.CTkFont(family="Inter", size=14),
         )
@@ -160,7 +163,7 @@ class Plugin(BasePlugin):
             command=self.handle_signin_click,
             width=400,
             height=45,
-            corner_radius=22,  # Fully rounded
+            corner_radius=corner_radius,
             fg_color="#0D5394",  # Professional blue
             hover_color="#0A4275",
             font=customtkinter.CTkFont(family="Inter", size=16, weight="bold"),
@@ -211,7 +214,32 @@ class Plugin(BasePlugin):
         )
         self.terms_label.pack(side="top", pady=(5, 0))
 
+        # 8. Skip Button (Bottom Right)
+        self.skip_button = customtkinter.CTkButton(
+            self.login_frame,
+            text="Skip",
+            command=self.skip_login,
+            width=80,
+            height=30,
+            corner_radius=corner_radius,
+            fg_color="transparent",
+            border_width=1,
+            border_color=("#CCCCCC", "#444444"),
+            text_color=("#666666", "#AAAAAA"),
+            font=customtkinter.CTkFont(family="Inter", size=12),
+        )
+        self.skip_button.place(relx=0.98, rely=0.98, anchor="se")
+
         return self.login_frame
+
+    def skip_login(self):
+        """Skip login and go to dashboard."""
+        logger.info("User skipped login")
+        if hasattr(self, "login_frame"):
+            self.login_frame.destroy()
+
+        self.app.show_notification("Login skipped - some features may be unavailable", type="warning")
+        self.app.create_dashboard()
 
     def handle_signin_click(self):
         """Handle the sign-in button click."""
@@ -250,7 +278,7 @@ class Plugin(BasePlugin):
             placeholder_text="Enter OTP",
             width=400,
             height=45,
-            corner_radius=4,
+            corner_radius=corner_radius,
             show="*",
             font=customtkinter.CTkFont(family="Inter", size=14),
         )
