@@ -35,8 +35,8 @@ class Plugin(BasePlugin):
             description="This plugin allows you to view the endpoints.",
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Endpoint", "ES": "Endpoint", "FR": "Endpoint"},
-            icon_light_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "add_user_light.svg"),
-            icon_dark_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "add_user_dark.svg"),
+            icon_light_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "add_user_light.png"),
+            icon_dark_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "add_user_dark.png"),
         )
         self.app = app
         self.status = self.get_status()
