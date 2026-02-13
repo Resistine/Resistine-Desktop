@@ -436,7 +436,9 @@ class Plugin(BasePlugin):
 
                 # Save VPN config if provided
                 if result.get("data"):
-                     save_vpn_configuration(result.get("data"))
+                    config_path = save_vpn_configuration(result.get("data"))
+                    if not config_path:
+                        logger.warning("VPN config from API could not be saved")
 
                 # Check if VPN onboarding is needed (macOS first-time setup)
                 from utils import settings as app_settings

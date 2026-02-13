@@ -129,8 +129,8 @@ class Plugin(BasePlugin):
             description="VPN Management",
             supported_systems=["Windows", "Darwin", "Linux"],
             translations={"US": "VPN", "ES": "VPN", "FR": "VPN"},
-            icon_light_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "vpn_light.svg"),
-            icon_dark_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "vpn_dark.svg"),
+            icon_light_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "vpn_light.png"),
+            icon_dark_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "vpn_dark.png"),
         )
         self.app = app
         self.config_dir = wireguard_folder
@@ -150,8 +150,55 @@ class Plugin(BasePlugin):
             return "Info"
         return "Warning"
 
+    @staticmethod
+    def validate_wireguard_config(content):
+        """Validate that content is a well-formed WireGuard config.
+
+        Checks for required [Interface] and [Peer] sections and their
+        mandatory keys.  Returns (True, "") on success or (False, reason)
+        on failure.
+        """
+        MAX_CONFIG_SIZE = 10_240  # 10 KB — more than enough for any config
+        if len(content) > MAX_CONFIG_SIZE:
+            return False, "File is too large to be a valid WireGuard config"
+
+        lines = content.splitlines()
+        sections = {}
+        current_section = None
+        for line in lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if stripped.startswith("[") and stripped.endswith("]"):
+                current_section = stripped[1:-1]
+                sections.setdefault(current_section, set())
+            elif "=" in stripped and current_section:
+                key = stripped.split("=", 1)[0].strip()
+                sections[current_section].add(key.lower())
+
+        if "Interface" not in sections:
+            return False, "Missing [Interface] section"
+        if "Peer" not in sections:
+            return False, "Missing [Peer] section"
+
+        iface_keys = sections["Interface"]
+        peer_keys = sections["Peer"]
+
+        if "privatekey" not in iface_keys:
+            return False, "Missing PrivateKey in [Interface]"
+        if "address" not in iface_keys:
+            return False, "Missing Address in [Interface]"
+        if "publickey" not in peer_keys:
+            return False, "Missing PublicKey in [Peer]"
+        if "endpoint" not in peer_keys:
+            return False, "Missing Endpoint in [Peer]"
+
+        return True, ""
+
     def import_config(self):
         """Allows the user to import a WireGuard config file."""
+        global my_vpn_status, active_client_name
+
         file_path = filedialog.askopenfilename(
             title="Select WireGuard Config",
             filetypes=[("WireGuard Config", "*.conf"), ("All Files", "*.*")]
@@ -161,29 +208,52 @@ class Plugin(BasePlugin):
             return
 
         try:
-            # Destination is the wireguard folder (App Group path)
-            filename = os.path.basename(file_path)
-            dest_path = os.path.join(wireguard_folder, filename)
-
             # Read content
             with open(file_path, 'r') as src:
                 content = src.read()
 
+            # Validate structure before saving
+            valid, reason = self.validate_wireguard_config(content)
+            if not valid:
+                logger.warning(f"Invalid config rejected: {reason}")
+                self.app.show_notification(f"Invalid config: {reason}", type="error")
+                return
+
+            # Stop VPN if running before swapping configs
+            if my_vpn_status == "Running" and active_client_name:
+                old_config_path = os.path.join(wireguard_folder, f"{active_client_name}.conf")
+                stop_vpn(old_config_path)
+                my_vpn_status = "Stopped"
+                active_client_name = None
+
+            # Remove any existing configs so the imported one becomes active
+            if os.path.exists(wireguard_folder):
+                for old_conf in os.listdir(wireguard_folder):
+                    if old_conf.endswith('.conf'):
+                        os.remove(os.path.join(wireguard_folder, old_conf))
+
+            # Keep the original filename from the imported config
+            filename = os.path.basename(file_path)
+            dest_path = os.path.join(wireguard_folder, filename)
+
             # Write to destination
             with open(dest_path, 'w') as dst:
                 dst.write(content)
-            
+
             # Set permissions (600) for security
             os.chmod(dest_path, 0o600)
-            
-            logger.info(f"✅ Imported config to: {dest_path}")
+
+            # Reset state so the UI picks up the new config
+            active_client_name = None
+
+            logger.info(f"Imported config to: {dest_path}")
             self.app.show_notification("Configuration imported successfully!", type="success")
-            
+
             # Refresh UI to show the new config
             self.update_plugin(self.id)
-            
+
         except Exception as e:
-            logger.error(f"❌ Failed to import config: {e}")
+            logger.error(f"Failed to import config: {e}")
             self.app.show_notification(f"Failed to import config: {e}", type="error")
 
     def get_selected_conf_file_name(self):
