@@ -14,6 +14,7 @@ import re
 
 import customtkinter
 from PIL import Image
+from customtkinter import ThemeManager
 
 from plugins.base_plugin import BasePlugin
 
@@ -140,9 +141,8 @@ class Plugin(BasePlugin):
         self.title_label.grid(row=1, column=0, pady=(0, 25))
 
         # Get theme corner radius
-        from customtkinter import ThemeManager
         corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
-        
+
         # 3. Email Entry
         self.email_entry = customtkinter.CTkEntry(
             self.content_frame,
@@ -295,7 +295,7 @@ class Plugin(BasePlugin):
             command=self.verify_otp,
             width=400,
             height=45,
-            corner_radius=22,
+            corner_radius=corner_radius,
             fg_color="#0D5394",
             font=customtkinter.CTkFont(family="Inter", size=16, weight="bold"),
         )
@@ -315,6 +315,7 @@ class Plugin(BasePlugin):
 
     def back_to_email(self):
         """Navigate back from OTP screen to email entry screen."""
+        corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
         # Destroy OTP widgets
         if hasattr(self, "otp_entry") and self.otp_entry.winfo_exists():
             self.otp_entry.destroy()
@@ -334,7 +335,7 @@ class Plugin(BasePlugin):
             placeholder_text="Enter your email address",
             width=400,
             height=45,
-            corner_radius=4,
+            corner_radius=corner_radius,
             border_width=1,
             font=customtkinter.CTkFont(family="Inter", size=14),
         )
@@ -349,7 +350,7 @@ class Plugin(BasePlugin):
             command=self.handle_signin_click,
             width=400,
             height=45,
-            corner_radius=22,
+            corner_radius=corner_radius,
             fg_color="#0D5394",
             hover_color="#0A4275",
             font=customtkinter.CTkFont(family="Inter", size=16, weight="bold"),
