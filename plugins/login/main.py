@@ -258,6 +258,7 @@ class Plugin(BasePlugin):
 
     def transform_to_otp_input(self):
         """Transform the existing screen to show OTP entry."""
+        corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
         # Hide email entry and sign-in button
         if hasattr(self, "email_entry") and self.email_entry.winfo_exists():
             self.email_entry.destroy()
