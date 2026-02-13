@@ -43,9 +43,14 @@ Linux*)
 Darwin*)
 	# Make brewed Tcl/Tk visible (for Tkinter)
 	if command -v brew >/dev/null; then
-		export PATH="$(brew --prefix tcl-tk)/bin:$PATH"
-		export LDFLAGS="-L$(brew --prefix tcl-tk)/lib"
-		export CPPFLAGS="-I$(brew --prefix tcl-tk)/include"
+		BREW_PREFIX=$(brew --prefix)
+		export PATH="$BREW_PREFIX/opt/tcl-tk/bin:$PATH"
+		export LDFLAGS="-L$BREW_PREFIX/opt/tcl-tk/lib"
+		export CPPFLAGS="-I$BREW_PREFIX/opt/tcl-tk/include"
+		
+		# Safer alternative to DYLD_LIBRARY_PATH that avoids Bus Error 10 
+		# while still allowing Homebrew libraries (like Cairo) to be found.
+		export DYLD_FALLBACK_LIBRARY_PATH="$BREW_PREFIX/lib:$DYLD_FALLBACK_LIBRARY_PATH"
 	fi
 
 	# Install/update requirements if needed

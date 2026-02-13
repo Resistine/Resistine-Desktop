@@ -31,17 +31,17 @@ class Plugin(BasePlugin):
         super().__init__(
             id="009",
             version="2025.01.01",
-            order=101,
+            order=1010,
             name="Help",
             status=None,
             description="This plugin provides help documentation.",
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Help", "ES": "Ayuda", "FR": "Aide"},
             icon_light_path=os.path.join(
-                os.path.dirname(os.path.realpath(__file__)), "help_light.png"
+                os.path.dirname(os.path.realpath(__file__)), "help_light.svg"
             ),
             icon_dark_path=os.path.join(
-                os.path.dirname(os.path.realpath(__file__)), "help_dark.png"
+                os.path.dirname(os.path.realpath(__file__)), "help_dark.svg"
             ),
             uninstall_enabled=False,
         )

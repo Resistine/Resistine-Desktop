@@ -8,9 +8,9 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import argparse
+import ctypes
 import os
 import sys
-from utils.settings import get_config_dir
 import customtkinter
 import customtkinter.windows.widgets.ctk_scrollable_frame as _sf
 
@@ -34,12 +34,39 @@ DEBUG_WINDOW = False
 DEBUG = False
 
 
+def is_admin():
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except Exception:
+        return False
+
+
+def relaunch_as_admin():
+    """
+    Relaunch the current script with admin privileges (Windows only).
+    """
+    params = " ".join([f'"{arg}"' for arg in sys.argv])
+
+    ctypes.windll.shell32.ShellExecuteW(
+        None,
+        "runas",  # Triggers UAC
+        sys.executable,  # python.exe or your packaged exe
+        params,
+        os.getcwd(),
+        1,  # SW_SHOWNORMAL
+    )
+
+
+def was_relaunched():
+    return "--elevated" in sys.argv
+
+
 def resource_path(relative_path: str) -> str:
     """
     Get absolute path to resource, works for both dev and PyInstaller bundled app.
-    
+
     When running from source, returns path relative to the script directory.
-    When running from a PyInstaller bundle, returns path relative to the 
+    When running from a PyInstaller bundle, returns path relative to the
     temporary extraction directory (sys._MEIPASS).
     """
     if hasattr(sys, '_MEIPASS'):
@@ -77,11 +104,14 @@ class App(AppUI):
         screen_height = self.winfo_screenheight()
         window_width = int(screen_width * 0.7)
         window_height = int(screen_height * 0.7)
+        min_width = int(screen_width * 0.5)
+        min_height = int(screen_height * 0.5)
         position_right = int(screen_width / 2 - window_width / 2)
         position_down = int(screen_height / 2 - window_height / 2)
         self.geometry(
             f"{window_width}x{window_height}+{position_right}+{position_down}"
         )
+        self.minsize(min_width, min_height)
 
         # Check if already logged in
         if settings.get("auth", "logged_in", False):
@@ -131,6 +161,13 @@ class App(AppUI):
 
 
 if __name__ == "__main__":
+
+    # CHECK: Why is this here?
+    # Check for admin privileges on Windows
+    if sys.platform == "win32" and not is_admin() and not was_relaunched():
+        relaunch_as_admin()
+        sys.exit(0)
+
     # Parse command-line arguments
     parser = argparse.ArgumentParser(
         description="Resistine Desktop Application",
@@ -157,7 +194,14 @@ if __name__ == "__main__":
         DEBUG = True
 
     # Configure logging based on configuration and flags
-    setup_logging(level=args.log_level)
+    # Default to DEBUG level if we are in DEBUG/IDE mode and no explicit level was provided
+    log_level = args.log_level
+    if DEBUG and log_level == "INFO":
+        # Check if the user explicitly requested INFO via command line
+        if not any(arg in sys.argv for arg in ["-l", "--log-level"]):
+            log_level = "DEBUG"
+
+    setup_logging(level=log_level)
 
     # DEPRECATED: Debug window flag can be set from code only
     if DEBUG_WINDOW:
@@ -176,4 +220,5 @@ if __name__ == "__main__":
         # Attach Inspector
         app.inspector = RuntimeInspector(app)
 
+    # Application loop - run!
     app.mainloop()

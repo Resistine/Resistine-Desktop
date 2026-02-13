@@ -123,14 +123,14 @@ class Plugin(BasePlugin):
         super().__init__(
             id="008",
             version="2025.01.01",
-            order=8,
+            order=3,
             name="VPN",
             status=None, # Default status
             description="VPN Management",
             supported_systems=["Windows", "Darwin", "Linux"],
             translations={"US": "VPN", "ES": "VPN", "FR": "VPN"},
-            icon_light_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "vpn_light.png"),
-            icon_dark_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "vpn_dark.png"),
+            icon_light_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "vpn_light.svg"),
+            icon_dark_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "vpn_dark.svg"),
         )
         self.app = app
         self.config_dir = wireguard_folder
@@ -322,8 +322,12 @@ class Plugin(BasePlugin):
             warning_fg = ("#1E8E3E", "#2CC985") if is_connected else ("#C5221F", "#FF474C")
             is_enabled = True
 
+        # Get theme corner radius
+        from customtkinter import ThemeManager
+        corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
+        
         # --- 1. Connection Status Bar ---
-        status_frame = customtkinter.CTkFrame(scroll_frame, corner_radius=15, fg_color=("#ffffff", "#141414"), border_width=1, border_color=("#dddddd", "#333333"))
+        status_frame = customtkinter.CTkFrame(scroll_frame, corner_radius=corner_radius, fg_color=("#ffffff", "#141414"), border_width=1, border_color=("#dddddd", "#333333"))
         status_frame.grid(row=0, column=0, sticky="ew", pady=(10, 5))
         status_frame.grid_columnconfigure(0, weight=1)
         status_frame.grid_columnconfigure(1, weight=1)
@@ -350,12 +354,12 @@ class Plugin(BasePlugin):
         self.vpn_toggle_switch.grid(row=1, column=0, padx=20, pady=(0, 10), sticky="w")
         
         # --- 2. Warning / Info Box ---
-        warning_box = customtkinter.CTkFrame(scroll_frame, corner_radius=10, fg_color=warning_bg)
+        warning_box = customtkinter.CTkFrame(scroll_frame, corner_radius=corner_radius, fg_color=warning_bg)
         warning_box.grid(row=1, column=0, sticky="ew", pady=5)
         
         warning_label = customtkinter.CTkLabel(
             warning_box, 
-            text=f"{'🛡️' if is_connected else '⚠️'} {warning_text}", 
+            text=warning_text, 
             text_color=warning_fg,
             font=customtkinter.CTkFont(size=14, weight="bold")
         )
@@ -367,7 +371,7 @@ class Plugin(BasePlugin):
         sys_info_label = customtkinter.CTkLabel(scroll_frame, text="CURRENT VPN STATUS", font=customtkinter.CTkFont(family="Inter", size=16, weight="bold"), text_color="#3a7ebf")
         sys_info_label.grid(row=2, column=0, sticky="w", pady=(15, 5))
         
-        info_frame = customtkinter.CTkFrame(scroll_frame, corner_radius=15, fg_color=("#ffffff", "#141414"), border_width=1, border_color=("#dddddd", "#333333"))
+        info_frame = customtkinter.CTkFrame(scroll_frame, corner_radius=corner_radius, fg_color=("#ffffff", "#141414"), border_width=1, border_color=("#dddddd", "#333333"))
         info_frame.grid(row=3, column=0, sticky="ew", pady=(0, 10))
         info_frame.grid_columnconfigure(0, weight=1)
         info_frame.grid_columnconfigure(1, weight=1)
@@ -434,17 +438,25 @@ class Plugin(BasePlugin):
             self._extension_poll_id = None
 
     def update_plugin(self, plugin_id):
-        """Reloads the plugin UI to reflect state changes."""
+        """Reloads the plugin UI to reflect state changes, but only if it's the active tab."""
         for plugin in self.app.plugin_list:
             if plugin.id == plugin_id:
-                if hasattr(self, 'main_container'):
-                    self.main_container.destroy()
-                plugin.create_main_screen().grid(row=0, column=1, sticky="nsew")
+                # ONLY grid if we are actually currently viewing this scale
+                # This prevents "flashing" when status updates happen in the background
+                current = getattr(self.app, "current_frame_name", "")
+                target = f"frame_{plugin.get_name()}"
+                
+                if current == target:
+                    if hasattr(self, 'main_container'):
+                        try: self.main_container.destroy()
+                        except: pass
+                    plugin.create_main_screen().grid(row=0, column=1, sticky="nsew")
                 return    
 
     def get_configuration_values(self, tunnel_name):
         
         conf_file_path = os.path.join(wireguard_folder, f"{tunnel_name}.conf")
+        logger.info(f"Reading configuration from: {conf_file_path}")    
         data = {}
 
         if os.path.exists(conf_file_path):
@@ -461,6 +473,10 @@ class Plugin(BasePlugin):
                         elif key == 'endpoint': 
                             data['endpoint'] = value
                             if ':' in value: data['port'] = value.split(':')[-1]
+        elif not os.path.exists(wireguard_folder):
+            logger.error(f"WireGuard configuration directory does not exist: {wireguard_folder}")
+        else:
+            logger.error(f"Configuration file not found: {conf_file_path}") 
         return data
 
     def activate_tunnel(self, tunnel_name):
@@ -468,6 +484,7 @@ class Plugin(BasePlugin):
         Activates/Deactivates VPN tunnel.
         Handles MacOS specifically via helper functions.
         """
+        logger.info(f"Toggling VPN tunnel: {tunnel_name}")
         global my_vpn_status, active_client_name
         
         if not tunnel_name:
@@ -520,7 +537,28 @@ class Plugin(BasePlugin):
 
         # --- Windows Implementation ---
         elif IS_WINDOWS:
-            pass
+            logger.info(f"Windows: Toggling {tunnel_name}")
+
+            if my_vpn_status == "Running":
+                success = stop_vpn(tunnel_name)
+                if success:
+                    my_vpn_status = "Stopped"
+                    active_client_name = None
+                    self.app.show_notification("VPN stopped", type="info")
+                else:
+                    self.app.show_notification("Failed to stop VPN", type="error")
+                    logger.error("Failed to stop VPN")
+            else:
+                success = start_vpn(tunnel_name)
+                if success:
+                    my_vpn_status = "Running"
+                    active_client_name = tunnel_name
+                    self.app.show_notification("VPN started", type="info")
+                else:
+                    self.app.show_notification("Failed to start VPN", type="error")
+                    logger.error("Failed to start VPN")
+
+            self.update_plugin(self.id)
 
         # --- Linux Implementation ---
         elif IS_LINUX:

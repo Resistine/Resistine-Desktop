@@ -1,4 +1,8 @@
 {
+    "Theme": {
+      "corner_radius": 15,
+      "divider_color": ["#E5E7EB", "#2A2A2A"]
+    },
     "CTk": {
       "fg_color": ["#f0eff6", "#1c1c1e"]
     },
