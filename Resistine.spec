@@ -14,7 +14,7 @@ block_cipher = None
 # Application metadata
 APP_NAME = 'Resistine'
 BUNDLE_ID = 'com.resistine.desktop'
-VERSION = '1.0.1'
+VERSION = '1.0.2'
 
 # Paths
 base_path = os.path.abspath('.')
@@ -26,6 +26,9 @@ datas = [
     ('plugins_user', 'plugins_user'),
     ('gui', 'gui'),
     ('utils', 'utils'),
+    ('docs', 'docs'),
+    ('ResistineLogoWhiteText.png', '.'),
+    ('ResistineSheild.png', '.'),
 ]
 
 # Hidden imports (modules not auto-detected)

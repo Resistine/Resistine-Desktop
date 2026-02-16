@@ -44,6 +44,11 @@ _interface_cache = {}
 active_client_name = None
 my_vpn_status = "Stopped"
 
+# --- Config Manager (module-level for use in init) ---
+from plugins.vpn.config_manager import VPNConfigManager
+_config_manager = VPNConfigManager(wireguard_folder)
+_config_manager.migrate_legacy_config()
+
 # --- Initialization Logic ---
 def initialize_vpn_status():
     global active_client_name, my_vpn_status, existing_interfaces
@@ -67,10 +72,10 @@ def initialize_vpn_status():
             # Extension is enabled, query actual connection status via CLI
             status = check_service_status("vpn", DNS_SERVER)
             if status == "Running":
-                if os.path.exists(wireguard_folder):
-                    conf_files = [f for f in os.listdir(wireguard_folder) if f.endswith('.conf')]
-                    if conf_files:
-                        active_client_name = os.path.splitext(conf_files[0])[0]
+                # Use config manager to determine the active config name
+                active_name = _config_manager.get_active_config_name()
+                if active_name:
+                    active_client_name = active_name
                 my_vpn_status = "Running"
             else:
                 my_vpn_status = "Stopped"
@@ -134,6 +139,7 @@ class Plugin(BasePlugin):
         )
         self.app = app
         self.config_dir = wireguard_folder
+        self.config_manager = _config_manager
         self.active_interface = None
         self._extension_poll_id = None
         self._last_extension_state = None
@@ -196,7 +202,7 @@ class Plugin(BasePlugin):
         return True, ""
 
     def import_config(self):
-        """Allows the user to import a WireGuard config file."""
+        """Allows the user to import a WireGuard config file alongside existing configs."""
         global my_vpn_status, active_client_name
 
         file_path = filedialog.askopenfilename(
@@ -208,48 +214,33 @@ class Plugin(BasePlugin):
             return
 
         try:
-            # Read content
             with open(file_path, 'r') as src:
                 content = src.read()
 
-            # Validate structure before saving
             valid, reason = self.validate_wireguard_config(content)
             if not valid:
                 logger.warning(f"Invalid config rejected: {reason}")
                 self.app.show_notification(f"Invalid config: {reason}", type="error")
                 return
 
-            # Stop VPN if running before swapping configs
+            # Stop VPN if running before switching to imported config
             if my_vpn_status == "Running" and active_client_name:
                 old_config_path = os.path.join(wireguard_folder, f"{active_client_name}.conf")
                 stop_vpn(old_config_path)
                 my_vpn_status = "Stopped"
                 active_client_name = None
 
-            # Remove any existing configs so the imported one becomes active
-            if os.path.exists(wireguard_folder):
-                for old_conf in os.listdir(wireguard_folder):
-                    if old_conf.endswith('.conf'):
-                        os.remove(os.path.join(wireguard_folder, old_conf))
+            # Import via config manager (keeps existing configs)
+            success, config_name = self.config_manager.import_config(file_path, content)
+            if not success:
+                self.app.show_notification(f"Failed to import: {config_name}", type="error")
+                return
 
-            # Keep the original filename from the imported config
-            filename = os.path.basename(file_path)
-            dest_path = os.path.join(wireguard_folder, filename)
+            # Set imported config as active
+            self.config_manager.set_active_config(config_name)
 
-            # Write to destination
-            with open(dest_path, 'w') as dst:
-                dst.write(content)
-
-            # Set permissions (600) for security
-            os.chmod(dest_path, 0o600)
-
-            # Reset state so the UI picks up the new config
-            active_client_name = None
-
-            logger.info(f"Imported config to: {dest_path}")
+            logger.info(f"Imported config: {config_name}")
             self.app.show_notification("Configuration imported successfully!", type="success")
-
-            # Refresh UI to show the new config
             self.update_plugin(self.id)
 
         except Exception as e:
@@ -257,27 +248,15 @@ class Plugin(BasePlugin):
             self.app.show_notification(f"Failed to import config: {e}", type="error")
 
     def get_selected_conf_file_name(self):
-        """
-        Get the single VPN config file from the wireguard directory.
-        Since there's only one VPN config, we just find the first .conf file.
-        """
+        """Get the active VPN config name from the config manager."""
         global active_client_name
-        
-        # 1. If VPN is running, return the running interface name
+
+        # If VPN is running, return the running interface name
         if active_client_name and my_vpn_status == "Running":
             return active_client_name
-        
-        # 2. Find the single config file in wireguard directory
-       
-        if os.path.exists(wireguard_folder):
-            conf_files = [f for f in os.listdir(wireguard_folder) if f.endswith('.conf')]
-            if conf_files:
-                # Use the first config file found (there should only be one)
-                tunnel_name = os.path.splitext(conf_files[0])[0]
-                self.current_selected_conf = tunnel_name
-                return tunnel_name
-            
-        return None
+
+        # Use config manager to get the active config
+        return self.config_manager.get_active_config_name()
 
     def get_system_info(self, tunnel_name):
         """Generates the system information dictionary for display."""
@@ -422,27 +401,67 @@ class Plugin(BasePlugin):
             self.vpn_toggle_switch.deselect()
             
         self.vpn_toggle_switch.grid(row=1, column=0, padx=20, pady=(0, 10), sticky="w")
-        
-        # --- 2. Warning / Info Box ---
+
+        # --- 2. Config Selector Dropdown ---
+        configs = self.config_manager.list_configs()
+        if len(configs) > 1:
+            selector_frame = customtkinter.CTkFrame(scroll_frame, corner_radius=corner_radius, fg_color=("#ffffff", "#141414"), border_width=1, border_color=("#dddddd", "#333333"))
+            selector_frame.grid(row=1, column=0, sticky="ew", pady=5)
+            selector_frame.grid_columnconfigure(1, weight=1)
+
+            customtkinter.CTkLabel(
+                selector_frame, text="Configuration:",
+                font=customtkinter.CTkFont(family="Inter", size=13),
+                text_color=("#666666", "#aaaaaa")
+            ).grid(row=0, column=0, padx=(15, 5), pady=10, sticky="w")
+
+            config_display_names = [c["display_name"] for c in configs]
+            active_display = self.config_manager.get_display_name(selected_conf_file) if selected_conf_file else (config_display_names[0] if config_display_names else "None")
+
+            self.config_selector = customtkinter.CTkOptionMenu(
+                selector_frame,
+                values=config_display_names,
+                command=self._on_config_selected,
+                height=36,
+                corner_radius=8,
+            )
+            self.config_selector.set(active_display)
+            self.config_selector.grid(row=0, column=1, padx=(5, 10), pady=10, sticky="ew")
+
+            # Delete button for user-imported configs
+            if selected_conf_file and not self.config_manager.is_resistine_config(selected_conf_file):
+                delete_btn = customtkinter.CTkButton(
+                    selector_frame,
+                    text="Delete",
+                    width=70,
+                    height=36,
+                    corner_radius=8,
+                    fg_color="#C5221F",
+                    hover_color="#A01B18",
+                    command=lambda: self._delete_config(selected_conf_file),
+                )
+                delete_btn.grid(row=0, column=2, padx=(0, 15), pady=10)
+
+        # --- 3. Warning / Info Box ---
         warning_box = customtkinter.CTkFrame(scroll_frame, corner_radius=corner_radius, fg_color=warning_bg)
-        warning_box.grid(row=1, column=0, sticky="ew", pady=5)
-        
+        warning_box.grid(row=2, column=0, sticky="ew", pady=5)
+
         warning_label = customtkinter.CTkLabel(
-            warning_box, 
-            text=warning_text, 
+            warning_box,
+            text=warning_text,
             text_color=warning_fg,
             font=customtkinter.CTkFont(size=14, weight="bold")
         )
         warning_label.grid(row=0, column=0, padx=10, pady=10, sticky="w")
-        
-        # --- 3. System Information ---
+
+        # --- 4. System Information ---
         sys_info_data = self.get_system_info(selected_conf_file)
-        
+
         sys_info_label = customtkinter.CTkLabel(scroll_frame, text="CURRENT VPN STATUS", font=customtkinter.CTkFont(family="Inter", size=16, weight="bold"), text_color="#3a7ebf")
-        sys_info_label.grid(row=2, column=0, sticky="w", pady=(15, 5))
-        
+        sys_info_label.grid(row=3, column=0, sticky="w", pady=(15, 5))
+
         info_frame = customtkinter.CTkFrame(scroll_frame, corner_radius=corner_radius, fg_color=("#ffffff", "#141414"), border_width=1, border_color=("#dddddd", "#333333"))
-        info_frame.grid(row=3, column=0, sticky="ew", pady=(0, 10))
+        info_frame.grid(row=4, column=0, sticky="ew", pady=(0, 10))
         info_frame.grid_columnconfigure(0, weight=1)
         info_frame.grid_columnconfigure(1, weight=1)
 
@@ -450,12 +469,12 @@ class Plugin(BasePlugin):
         for key, value in sys_info_data.items():
             key_label = customtkinter.CTkLabel(info_frame, text=f"{key}:", justify="left", text_color=("#666666", "#aaaaaa"))
             key_label.grid(row=row_num, column=0, padx=15, pady=5, sticky="w")
-            
+
             value_label = customtkinter.CTkLabel(info_frame, text=value, justify="right", font=customtkinter.CTkFont(family="Inter", size=13, weight="bold"), text_color=("#000000", "#ffffff"))
             value_label.grid(row=row_num, column=1, padx=15, pady=5, sticky="e")
             row_num += 1
 
-        # --- 4. Import Button ---
+        # --- 5. Import Button ---
         import_button = customtkinter.CTkButton(
             scroll_frame,
             text="Import Configuration",
@@ -466,7 +485,7 @@ class Plugin(BasePlugin):
             text_color=("#3a7ebf", "#3a7ebf"),
             font=customtkinter.CTkFont(size=13)
         )
-        import_button.grid(row=4, column=0, pady=20, sticky="ew")
+        import_button.grid(row=5, column=0, pady=20, sticky="ew")
 
         # Start polling for extension state changes (macOS only)
         if IS_MACOS:
@@ -474,6 +493,50 @@ class Plugin(BasePlugin):
 
         return self.main_container
 
+    def _on_config_selected(self, display_name):
+        """Handle config dropdown selection."""
+        global my_vpn_status, active_client_name
+
+        configs = self.config_manager.list_configs()
+        selected = next((c for c in configs if c["display_name"] == display_name), None)
+        if not selected:
+            return
+
+        new_config_name = selected["name"]
+        current_active = self.config_manager.get_active_config_name()
+
+        if new_config_name == current_active:
+            return
+
+        # Stop VPN if running on the old config
+        if my_vpn_status == "Running" and active_client_name:
+            old_path = os.path.join(wireguard_folder, f"{active_client_name}.conf")
+            stop_vpn(old_path if not IS_WINDOWS else active_client_name)
+            my_vpn_status = "Stopped"
+            active_client_name = None
+
+        self.config_manager.set_active_config(new_config_name)
+        self.app.show_notification(f"Switched to {display_name}", type="info")
+        self.update_plugin(self.id)
+
+    def _delete_config(self, config_name):
+        """Delete a user-imported config."""
+        global my_vpn_status, active_client_name
+
+        # Stop VPN if running on this config
+        if my_vpn_status == "Running" and active_client_name == config_name:
+            config_path = os.path.join(wireguard_folder, f"{config_name}.conf")
+            stop_vpn(config_path if not IS_WINDOWS else config_name)
+            my_vpn_status = "Stopped"
+            active_client_name = None
+
+        success, message = self.config_manager.delete_config(config_name)
+        if success:
+            self.app.show_notification("Configuration deleted", type="info")
+        else:
+            self.app.show_notification(f"Failed to delete: {message}", type="error")
+
+        self.update_plugin(self.id)
 
     def _start_extension_polling(self):
         """Poll extension status every 5 seconds to detect enable/disable changes.

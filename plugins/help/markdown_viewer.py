@@ -12,13 +12,14 @@ import tkinter as tk
 import webbrowser
 
 import customtkinter
+from customtkinter import ThemeManager
 import markdown
 from utils.logger import logger
 
 # tkinterweb (Tkhtml) is optional on Tcl/Tk 9; it can fail at import-time or runtime.
 try:
     from tkinterweb import HtmlFrame  # type: ignore
-except Exception:  # pragma: no covDer
+except Exception:  # pragma: no cover
     HtmlFrame = None
 
 
@@ -28,47 +29,74 @@ class MarkdownViewer(customtkinter.CTkFrame):
     root_files = ["README.md", "LICENSE.md"]
 
     def __init__(self, master, docs_dir=None, **kwargs):
-        super().__init__(master, fg_color=("#f0eff6", "#1a1a1a"), **kwargs)
+        corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 12)
+        super().__init__(master, corner_radius=corner_radius, **kwargs)
 
         # Navigation history
         self.history = []
         self.current_index = -1
         self.docs_dir = docs_dir
 
-        # Navigation bar
-        self.nav_frame = customtkinter.CTkFrame(self, height=40, fg_color="transparent")
-        self.nav_frame.pack(fill="x", padx=10, pady=(10, 0))
-        self.nav_frame.pack_propagate(False)
+        # Navigation bar — styled as a card header
+        self.nav_frame = customtkinter.CTkFrame(self, fg_color="transparent")
+        self.nav_frame.pack(fill="x", padx=16, pady=(14, 0))
 
         # Back button
         self.back_button = customtkinter.CTkButton(
             self.nav_frame,
-            text="Back",
+            text="\u2190  Back",
             width=80,
+            height=32,
+            corner_radius=8,
+            font=customtkinter.CTkFont(size=13),
+            fg_color="transparent",
+            border_width=1,
+            border_color=("#E5E7EB", "#2A2A2C"),
+            text_color=("#000000", "#ffffff"),
+            hover_color=("#F0F0F5", "#1F1F22"),
             command=self.go_back,
             state="disabled",
         )
-        self.back_button.pack(side="left", padx=5, pady=5)
+        self.back_button.pack(side="left", padx=(0, 6))
 
         # Home button
         self.home_button = customtkinter.CTkButton(
-            self.nav_frame, text="Home", width=80, command=self.go_home
+            self.nav_frame,
+            text="\u2302  Home",
+            width=80,
+            height=32,
+            corner_radius=8,
+            font=customtkinter.CTkFont(size=13),
+            fg_color="transparent",
+            border_width=1,
+            border_color=("#E5E7EB", "#2A2A2C"),
+            text_color=("#000000", "#ffffff"),
+            hover_color=("#F0F0F5", "#1F1F22"),
+            command=self.go_home,
         )
-        self.home_button.pack(side="left", padx=5, pady=5)
+        self.home_button.pack(side="left", padx=(0, 12))
 
         # Help files dropdown
         if self.docs_dir:
-            self.nav_label = customtkinter.CTkLabel(self.nav_frame, text="Navigate: ")
-            self.nav_label.pack(side="left", padx=(10, 5), pady=5)
-
             self.help_files = self.get_help_files()
             self.file_dropdown = customtkinter.CTkOptionMenu(
                 self.nav_frame,
                 values=self.help_files,
                 command=self.navigate_to_file,
-                width=150,
+                width=180,
+                height=32,
+                corner_radius=8,
+                font=customtkinter.CTkFont(size=13),
             )
-            self.file_dropdown.pack(side="left", padx=5, pady=5)
+            self.file_dropdown.pack(side="left")
+
+        # Divider
+        divider_color = ThemeManager.theme.get("Theme", {}).get(
+            "divider_color", ["#E5E7EB", "#2A2A2A"]
+        )
+        divider = customtkinter.CTkFrame(self, height=1, fg_color=divider_color)
+        divider.pack(fill="x", padx=16, pady=(12, 0))
+
         # HTML frame with link click handler (fallback to plain text if Tkhtml unavailable)
         self._use_html = False
         self.html_frame = None
@@ -76,45 +104,24 @@ class MarkdownViewer(customtkinter.CTkFrame):
 
         if HtmlFrame is not None:
             try:
-                # Determine background color for HtmlFrame
                 mode = customtkinter.get_appearance_mode()
-                # On system, resolve to actual dark/light
                 if mode == "System":
-                    try:
-                        import sys
+                    mode = self._resolve_system_mode()
 
-                        if sys.platform == "darwin":
-                            import subprocess
-
-                            res = subprocess.run(
-                                ["defaults", "read", "-g", "AppleInterfaceStyle"],
-                                capture_output=True,
-                                text=True,
-                            )
-                            mode = (
-                                "Dark"
-                                if res.returncode == 0 and "Dark" in res.stdout
-                                else "Light"
-                            )
-                        else:
-                            mode = "Light"
-                    except:
-                        mode = "Light"
-
-                bg_color = "#1a1a1a" if mode == "Dark" else "#f0eff6"
+                bg_color = "#1A1A1C" if mode == "Dark" else "#ffffff"
 
                 self.html_frame = HtmlFrame(
                     self, messages_enabled=False, on_link_click=self.on_link_click
                 )
                 try:
                     self.html_frame.configure(background=bg_color)
-                except:
+                except Exception:
                     try:
                         self.html_frame.config(bg=bg_color)
-                    except:
+                    except Exception:
                         pass
 
-                self.html_frame.pack(fill="both", expand=True, padx=10, pady=10)
+                self.html_frame.pack(fill="both", expand=True, padx=16, pady=(12, 16))
                 self._use_html = True
             except Exception as e:
                 logger.warning(f"Help: HtmlFrame unavailable, using fallback viewer: {e}")
@@ -123,12 +130,31 @@ class MarkdownViewer(customtkinter.CTkFrame):
             self.fallback_text = customtkinter.CTkTextbox(
                 self,
                 wrap="word",
-                fg_color=("#f0eff6", "#1a1a1a"),
-                text_color=("#000000", "#ffffff"),
+                corner_radius=8,
             )
-            self.fallback_text.pack(fill="both", expand=True, padx=10, pady=10)
+            self.fallback_text.pack(fill="both", expand=True, padx=16, pady=(12, 16))
 
         self.home_file = None
+
+    @staticmethod
+    def _resolve_system_mode() -> str:
+        """Resolve 'System' appearance to 'Dark' or 'Light'."""
+        import sys as _sys
+
+        if _sys.platform == "darwin":
+            try:
+                import subprocess
+
+                res = subprocess.run(
+                    ["defaults", "read", "-g", "AppleInterfaceStyle"],
+                    capture_output=True,
+                    text=True,
+                )
+                if res.returncode == 0 and "Dark" in res.stdout:
+                    return "Dark"
+            except Exception:
+                pass
+        return "Light"
 
     def get_help_files(self):
         """Get list of help files from docs directory and root."""
@@ -234,7 +260,6 @@ class MarkdownViewer(customtkinter.CTkFrame):
             base_url = "file://" + os.path.abspath(self.current_dir) + "/"
 
             # Post-process HTML to linkify URLs in code blocks
-            # Find <pre><code>...</code></pre> blocks
             import re
 
             code_block_pattern = re.compile(
@@ -245,7 +270,6 @@ class MarkdownViewer(customtkinter.CTkFrame):
                 prefix = match.group(1)
                 content = match.group(2)
                 suffix = match.group(3)
-                # Content is already HTML escaped by markdown
                 linked_content = self._linkify_text(content, is_escaped=True)
                 return f"{prefix}{linked_content}{suffix}"
 
@@ -312,9 +336,6 @@ class MarkdownViewer(customtkinter.CTkFrame):
         """Convert URLs in text to anchor tags."""
         import re
 
-        # Regex to match URLs, excluding < and > and escaped &lt; &gt;
-        # We look for http/https URLs
-        # This regex stops at whitespace, <, >, or &lt; or &gt;
         url_pattern = re.compile(r"(https?://(?:(?!&lt;|&gt;|[<>]).)+)")
 
         parts = url_pattern.split(text)
@@ -322,9 +343,7 @@ class MarkdownViewer(customtkinter.CTkFrame):
 
         for i, part in enumerate(parts):
             if i % 2 == 0:
-                # This is text
                 if not is_escaped:
-                    # Escape it if not already escaped
                     part = (
                         part.replace("&", "&amp;")
                         .replace("<", "&lt;")
@@ -332,17 +351,13 @@ class MarkdownViewer(customtkinter.CTkFrame):
                     )
                 final_content.append(part)
             else:
-                # This is a URL, make it a link
-                # Check if the URL ends with punctuation that should be stripped
                 url = part
                 trailing_punct = ""
 
-                # Handle trailing &gt; if it somehow got included
                 if url.endswith("&gt;"):
                     url = url[:-4]
                     trailing_punct = "&gt;" + trailing_punct
 
-                # Common trailing punctuation
                 if (
                     url.endswith(".")
                     or url.endswith(",")
@@ -358,7 +373,6 @@ class MarkdownViewer(customtkinter.CTkFrame):
 
     def on_link_click(self, url):
         logger.info(f"Link clicked: {url}")
-        # logger.debug(f"Current dir: {self.current_dir}")
 
         # Check if it's a local file
         if "://" not in url:
@@ -366,12 +380,12 @@ class MarkdownViewer(customtkinter.CTkFrame):
             target_path = os.path.join(self.current_dir, url)
             if os.path.exists(target_path):
                 self.load_file(target_path)
-                return  # Don't call default handler
+                return
         elif url.startswith("file://"):
             target_path = url[7:]
             if os.path.exists(target_path):
                 self.load_file(target_path)
-                return  # Don't call default handler
+                return
 
         # External link - open in browser
         logger.info(f"Opening external link: {url}")
@@ -383,10 +397,9 @@ class MarkdownViewer(customtkinter.CTkFrame):
             self.fallback_text = customtkinter.CTkTextbox(
                 self,
                 wrap="word",
-                fg_color=("#f0eff6", "#1a1a1a"),
-                text_color=("#000000", "#ffffff"),
+                corner_radius=8,
             )
-            self.fallback_text.pack(fill="both", expand=True, padx=10, pady=10)
+            self.fallback_text.pack(fill="both", expand=True, padx=16, pady=(12, 16))
 
         try:
             self.fallback_text.configure(state="normal")
