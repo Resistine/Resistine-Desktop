@@ -110,12 +110,22 @@ cd "$PYTHON_UI_PATH"
 # Ensure virtual environment exists
 if [ ! -d ".venv" ]; then
     echo "  - Creating virtual environment..."
-    python3 -m venv .venv
+    # Use python.org universal2 build for broad macOS compatibility (minos 10.15)
+    # Do NOT use Homebrew Python which targets only the current macOS version
+    PYTHONORG="/Library/Frameworks/Python.framework/Versions/3.14/bin/python3.14"
+    if [ -f "$PYTHONORG" ]; then
+        "$PYTHONORG" -m venv .venv
+    else
+        echo "  Warning: python.org Python not found at $PYTHONORG"
+        echo "  Falling back to system python3 (may have limited macOS compatibility)"
+        python3 -m venv .venv
+    fi
 fi
 
 # Activate venv and install dependencies
 echo "  - Installing dependencies..."
 source .venv/bin/activate
+export MACOSX_DEPLOYMENT_TARGET=13.0  # Ensure compiled extensions target macOS 13+ (Ventura)
 pip install -q -r libraries/requirements-mac.txt
 
 # Check if Resistine.spec exists
@@ -282,10 +292,10 @@ echo "  - Signing PyInstaller frameworks and shared libraries..."
 SIGN_COUNT=0
 SIGN_FAIL=0
 
-# Find all .so, .dylib files and the Python framework binary inside Contents/Frameworks/
-# and Contents/MacOS/ (VPN components already signed above)
+# Find all Mach-O binaries inside Contents/Frameworks/ and Contents/MacOS/
+# NOTE: python.org Python bundles bare Tcl/Tk binaries (no file extension)
 find "$PYTHON_APP/Contents/Frameworks" "$PYTHON_APP/Contents/MacOS" \
-    -type f \( -name "*.so" -o -name "*.dylib" -o -name "Python" \) | while read -r binary; do
+    -type f \( -name "*.so" -o -name "*.dylib" -o -name "Python" -o -name "Tcl" -o -name "Tk" -o -name "tkhtml" \) | while read -r binary; do
     codesign --force --sign "$SIGN_IDENTITY" \
         --options runtime \
         --timestamp \

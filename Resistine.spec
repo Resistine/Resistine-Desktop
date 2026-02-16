@@ -136,7 +136,7 @@ app = BUNDLE(
         # UI settings
         'NSHighResolutionCapable': True,
         'NSRequiresAquaSystemAppearance': False,
-        'LSMinimumSystemVersion': '10.15.0',
+        'LSMinimumSystemVersion': '13.0',
 
         # Permissions (will be expanded with actual entitlements)
         'NSNetworkClient': True,
