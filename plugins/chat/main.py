@@ -10,6 +10,7 @@ Licensed under the GNU General Public License v2 or later
 import os
 import random  # noqa: F401 — used for suggestion shuffling
 import sys
+import tkinter as tk
 
 import customtkinter
 from customtkinter import ThemeManager
@@ -102,6 +103,25 @@ class Plugin(BasePlugin):
         if pair and isinstance(pair, (list, tuple)) and len(pair) == 2:
             return pair[1] if is_dark else pair[0]
         return fallback_dark if is_dark else fallback_light
+
+    def _bind_mousewheel(self, widget):
+        """Bind mouse wheel scrolling to a text widget."""
+        def on_mousewheel(event):
+            if sys.platform == "darwin":
+                widget.yview_scroll(int(-1 * event.delta), "units")
+            else:
+                widget.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            return "break"
+
+        if sys.platform == "darwin":
+            widget.bind("<MouseWheel>", on_mousewheel, add="+")
+        else:
+            widget.bind("<MouseWheel>", on_mousewheel, add="+")
+            widget.bind("<Button-4>", lambda e: widget.yview_scroll(-1, "units"), add="+")
+            widget.bind("<Button-5>", lambda e: widget.yview_scroll(1, "units"), add="+")
+
+        # Prevent horizontal scrolling
+        widget.configure(xscrollcommand=lambda *args: None)
 
     # ------------------------------------------------------------------
     # Client / API
@@ -234,55 +254,81 @@ class Plugin(BasePlugin):
     # Bubble rendering
     # ------------------------------------------------------------------
 
-    def render_user_bubble(self, user_message):
-        """Render the user's message bubble (right-aligned, Resistine blue)."""
-        is_dark = self._is_dark_mode()
-        bubble_color = "#0D5394"
-        bubble_text_color = "#ffffff"
+    def _get_chat_width(self):
+        """Return usable pixel width inside the chat textbox."""
+        tw = self.chat_box._textbox
+        tw.update_idletasks()
+        w = tw.winfo_width()
+        if w <= 1:
+            w = 800
+        padx = int(str(tw.cget("padx") or 0))
+        return max(w - padx * 2 - 4, 300)
 
-        bubble_frame = customtkinter.CTkFrame(
-            self.chat_box,
-            fg_color=bubble_color,
-            corner_radius=16,
+    def render_user_bubble(self, user_message):
+        """Render the user's message bubble flush to the right edge."""
+        tw = self.chat_box._textbox
+        available = self._get_chat_width()
+
+        # Fixed-width tk.Frame — pack_propagate(False) keeps the width,
+        # pack(side="right") pushes the bubble to the right edge.
+        container = tk.Frame(
+            tw, highlightthickness=0, bd=0,
+            width=available, bg=tw.cget("background"),
         )
-        bubble_text = customtkinter.CTkLabel(
-            bubble_frame,
+        container.pack_propagate(False)
+
+        bubble = customtkinter.CTkFrame(
+            container, fg_color="#0D5394", corner_radius=18,
+        )
+        bubble.pack(side="right", padx=(0, 12))
+
+        label = customtkinter.CTkLabel(
+            bubble,
             text=user_message,
             fg_color="transparent",
-            text_color=bubble_text_color,
-            wraplength=420,
-            font=customtkinter.CTkFont(family="Inter", size=14),
+            text_color="#FFFFFF",
+            wraplength=min(600, int(available * 0.75)),
+            font=customtkinter.CTkFont(family="Inter", size=15),
             justify="left",
             anchor="w",
         )
-        bubble_text.pack(padx=14, pady=10)
+        label.pack(padx=18, pady=11)
 
-        self.chat_box._textbox.window_create(
-            "end", window=bubble_frame, padx=10, pady=6
-        )
-        self.chat_box._textbox.insert("end", "\n\n")
+        # Height must be set after children are measured
+        container.update_idletasks()
+        container.configure(height=bubble.winfo_reqheight())
 
-        self.chat_box._textbox.tag_add("user_align", "end-3l", "end-2l")
-        self.chat_box._textbox.tag_config("user_align", justify="right")
+        tw.window_create("end", window=container, padx=0, pady=10)
+        tw.insert("end", "\n")
+
+        # Keep container width in sync when window resizes
+        def _sync(event, c=container):
+            try:
+                w = self._get_chat_width()
+                c.configure(width=w)
+            except tk.TclError:
+                pass
+        tw.bind("<Configure>", _sync, add="+")
 
     def render_assistant_bubble_markdown(self, message):
-        """Render the assistant's response using MarkdownBubble."""
+        """Render the assistant's response at full available width."""
         from plugins.chat.markdown_bubble import MarkdownBubble
-        bubble = MarkdownBubble(self.chat_box, message)
 
-        self.chat_box._textbox.mark_set("insert", "end")
-        insert_index = self.chat_box._textbox.index("insert")
+        tw = self.chat_box._textbox
+        available = self._get_chat_width()
 
-        self.chat_box._textbox.window_create(
-            "end", window=bubble, padx=10, pady=6, stretch=1
-        )
-        self.chat_box._textbox.insert("end", "\n\n")
+        # Give MarkdownBubble the correct width from the start
+        bubble = MarkdownBubble(self.chat_box, message, width=available)
 
-        line_start = insert_index.split(".")[0] + ".0"
-        line_end = insert_index.split(".")[0] + ".end"
+        tw.window_create("end", window=bubble, padx=0, pady=10)
+        tw.insert("end", "\n")
 
-        self.chat_box._textbox.tag_add("assistant_align", line_start, line_end)
-        self.chat_box._textbox.tag_config("assistant_align", justify="left")
+        # Force a proper resize after embedding
+        def _finalize():
+            w = self._get_chat_width()
+            if w > 1 and hasattr(bubble, "_update_width"):
+                bubble._update_width(w)
+        tw.after(50, _finalize)
 
     # ------------------------------------------------------------------
     # Welcome screen (shown when no conversation history)
@@ -461,41 +507,20 @@ class Plugin(BasePlugin):
             fg_color="transparent",
         )
         self.second_frame.grid_columnconfigure(0, weight=1)
-        self.second_frame.grid_rowconfigure(0, weight=0)  # header
-        self.second_frame.grid_rowconfigure(1, weight=1)  # chat area
-        self.second_frame.grid_rowconfigure(2, weight=0)  # input bar
-
-        # --- Header bar ---
-        header_frame = customtkinter.CTkFrame(
-            self.second_frame,
-            fg_color="transparent",
-            height=48,
-        )
-        header_frame.grid(row=0, column=0, sticky="ew", padx=20, pady=(12, 0))
-        header_frame.grid_columnconfigure(0, weight=1)
-        header_frame.grid_columnconfigure(1, weight=0)
-        header_frame.grid_propagate(False)
-
-        header_title = customtkinter.CTkLabel(
-            header_frame,
-            text="Resistine AI",
-            font=customtkinter.CTkFont(family="Inter", size=16, weight="bold"),
-            text_color=fg_color,
-            anchor="w",
-        )
-        header_title.grid(row=0, column=0, sticky="w", padx=4, pady=8)
+        self.second_frame.grid_rowconfigure(0, weight=1)  # chat area
+        self.second_frame.grid_rowconfigure(1, weight=0)  # input bar
 
         # --- Chat area (centered, constrained width) ---
         chat_container = customtkinter.CTkFrame(
             self.second_frame, fg_color="transparent"
         )
-        chat_container.grid(row=1, column=0, sticky="nsew", padx=0, pady=0)
+        chat_container.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
         chat_container.grid_columnconfigure(0, weight=1)
         chat_container.grid_rowconfigure(0, weight=1)
 
         chat_wrapper = customtkinter.CTkFrame(chat_container, fg_color="transparent")
         chat_wrapper.place(
-            relx=0.5, rely=0.5, relwidth=0.78, relheight=1.0, anchor="center"
+            relx=0.5, rely=0.5, relwidth=0.97, relheight=1.0, anchor="center"
         )
         chat_wrapper.grid_columnconfigure(0, weight=1)
         chat_wrapper.grid_rowconfigure(0, weight=1)
@@ -511,6 +536,9 @@ class Plugin(BasePlugin):
         )
         self.chat_box.grid(row=0, column=0, padx=0, pady=0, sticky="nsew")
         self.chat_box._textbox.configure(padx=16)
+
+        # Enable mouse wheel scrolling
+        self._bind_mousewheel(self.chat_box._textbox)
 
         # Tags for styling
         self.chat_box._textbox.tag_config(
@@ -566,12 +594,12 @@ class Plugin(BasePlugin):
         input_outer = customtkinter.CTkFrame(
             self.second_frame, fg_color="transparent"
         )
-        input_outer.grid(row=2, column=0, sticky="ew", padx=0, pady=(0, 16))
+        input_outer.grid(row=1, column=0, sticky="ew", padx=0, pady=(0, 16))
         input_outer.grid_columnconfigure(0, weight=1)
 
         # Centered wrapper matching chat width
         input_center = customtkinter.CTkFrame(input_outer, fg_color="transparent")
-        input_center.place(relx=0.5, rely=0.5, relwidth=0.78, anchor="center")
+        input_center.place(relx=0.5, rely=0.5, relwidth=0.97, anchor="center")
         input_center.grid_columnconfigure(0, weight=1)
 
         # Unified input container (entry + button inside one rounded bar)
@@ -649,12 +677,11 @@ class Plugin(BasePlugin):
         self.chat_box.update_idletasks()
         self.chat_box._textbox.see("end")
 
-        # Initialize Assistant Bubble (Empty)
+        # Insert marker for streaming text
         self.chat_box._textbox.insert("end", "", "assistant")
         start_index = self.chat_box._textbox.index("end-1c")
 
         disable_animation = settings.get("chat", "disable_animation", False)
-        buffered_response = ""
         full_response = ""
 
         try:
@@ -663,19 +690,14 @@ class Plugin(BasePlugin):
             for chunk in stream:
                 full_response += chunk
 
-                if disable_animation:
-                    buffered_response += chunk
-                else:
+                if not disable_animation:
                     self.chat_box.configure(state="normal")
                     self.chat_box._textbox.insert("end", chunk, "assistant")
                     self.chat_box.configure(state="disabled")
                     self.chat_box._textbox.see("end")
                     self.chat_box.update_idletasks()
 
-            if disable_animation:
-                pass
-
-            # Finalize: Replace text with MarkdownBubble
+            # Finalize: Replace streamed text with formatted MarkdownBubble
             self.chat_box.configure(state="normal")
 
             if not disable_animation:
