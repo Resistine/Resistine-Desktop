@@ -353,19 +353,29 @@ class Plugin(BasePlugin):
             for widget in container.winfo_children():
                 widget.destroy()
             
-            # Info Button
+            # Configure grid columns to expand equally
+            container.grid_columnconfigure(0, weight=1)
+            container.grid_columnconfigure(1, weight=1)
+            
+            # Determine if there will be a second button
+            has_second_button = (
+                isinstance(p, RemotePluginWrapper) or 
+                getattr(p, "status", None) == "Uninstalled" or
+                (not isinstance(p, RemotePluginWrapper) and getattr(p, "uninstall_enabled", True))
+            )
+            
+            # Info Button - span full width if no second button
             customtkinter.CTkButton(
                 container,
                 text="Info",
                 height=26,
-                width=80,
                 command=lambda p=p: self.app.show_readme(p) if not isinstance(p, RemotePluginWrapper) else self.show_remote_info(p),
                 border_width=0,
                 fg_color=("#3B8ED0", "#1F6AA5"),
                 hover_color=("#367EBB", "#144870"),
                 text_color=("white", "white"),
                 font=customtkinter.CTkFont(size=12)
-            ).grid(row=0, column=0, padx=5, pady=5)
+            ).grid(row=0, column=0, padx=5, pady=5, sticky="ew", columnspan=2 if not has_second_button else 1)
 
             if isinstance(p, RemotePluginWrapper) or getattr(p, "status", None) == "Uninstalled":
                 # Install Button
@@ -373,7 +383,6 @@ class Plugin(BasePlugin):
                     container,
                     text="Install",
                     height=26,
-                    width=80,
                     # p=p to ensure that each instance captures its own plugin reference correctly, preventing late binding issues in loops
                     command=lambda p=p: self.handle_install(p),
                     border_width=0,
@@ -381,7 +390,7 @@ class Plugin(BasePlugin):
                     hover_color=("#1B7740", "#14532D"),
                     text_color=("white", "white"),
                     font=customtkinter.CTkFont(size=12)
-                ).grid(row=0, column=1, padx=5, pady=5)
+                ).grid(row=0, column=1, padx=5, pady=5, sticky="ew")
             else:
                 # Uninstall Button (if enabled)
                 if getattr(p, "uninstall_enabled", True):
@@ -389,14 +398,13 @@ class Plugin(BasePlugin):
                         container,
                         text="Uninstall",
                         height=26,
-                        width=80,
                         command=show_confirm_buttons,
                         border_width=0,
                         fg_color=("#A52626", "#7F1D1D"),
                         hover_color=("#A62D2D", "#601515"),
                         text_color=("white", "white"),
                         font=customtkinter.CTkFont(size=12)
-                    ).grid(row=0, column=1, padx=5, pady=5)
+                    ).grid(row=0, column=1, padx=5, pady=5, sticky="ew")
             
             container._button_state = "normal"
         
@@ -406,33 +414,35 @@ class Plugin(BasePlugin):
             for widget in container.winfo_children():
                 widget.destroy()
             
+            # Configure grid columns to expand equally
+            container.grid_columnconfigure(0, weight=1)
+            container.grid_columnconfigure(1, weight=1)
+            
             # Cancel Button
             customtkinter.CTkButton(
                 container,
                 text="Cancel",
                 height=26,
-                width=80,
                 command=show_normal_buttons,
                 border_width=0,
                 fg_color=("#808080", "#606060"),
                 hover_color=("#707070", "#505050"),
                 text_color=("white", "white"),
                 font=customtkinter.CTkFont(size=12)
-            ).grid(row=0, column=0, padx=5, pady=5)
+            ).grid(row=0, column=0, padx=5, pady=5, sticky="ew")
             
             # Confirm Button
             customtkinter.CTkButton(
                 container,
                 text="Confirm",
                 height=26,
-                width=80,
                 command=confirm_uninstall,
                 border_width=0,
                 fg_color=("#FF4444", "#C73636"),
                 hover_color=("#C73636", "#9E2A2A"),
                 text_color=("white", "white"),
                 font=customtkinter.CTkFont(size=12)
-            ).grid(row=0, column=1, padx=5, pady=5)
+            ).grid(row=0, column=1, padx=5, pady=5, sticky="ew")
             
             container._button_state = "confirming"
         
