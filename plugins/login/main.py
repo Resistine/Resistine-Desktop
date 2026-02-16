@@ -11,6 +11,7 @@
 # Removed unused json import
 import os
 import re
+import sys
 
 import customtkinter
 from PIL import Image
@@ -25,6 +26,16 @@ from plugins.login.api import LoginAPI
 from utils.logger import logger
 
 # Removed standard logging setup
+
+
+def _resource_path(relative_path: str) -> str:
+    """Resolve path for both dev and PyInstaller bundles."""
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        relative_path,
+    )
 
 
 # Platform Specific Imports
@@ -115,12 +126,7 @@ class Plugin(BasePlugin):
         self.content_frame.grid_columnconfigure(0, weight=1)
 
         # 1. Shield Logo
-        shield_path = os.path.join(
-            os.path.dirname(
-                os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-            ),
-            "ResistineSheild.png",
-        )
+        shield_path = _resource_path("ResistineSheild.png")
         try:
             shield_img = Image.open(shield_path)
             shield_ctk = customtkinter.CTkImage(shield_img, size=(250, 250))
@@ -128,7 +134,7 @@ class Plugin(BasePlugin):
                 self.content_frame, text="", image=shield_ctk
             )
             self.shield_label.grid(row=0, column=0, pady=(0, 30))
-        except Exception as e:
+        except OSError as e:
             logger.warning(f"Shield logo load failed: {e}")
 
         # 2. Main Title
@@ -394,19 +400,13 @@ class Plugin(BasePlugin):
 
     def send_otp_api(self, email):
         """Send OTP via API."""
-        try:
-            success, message, _ = self.api.send_otp(email)
-            if success:
-                self.app.show_notification(message, type="info")
-                self.transform_to_otp_input()
-            else:
-                self.update_status(message, "red")
-                self.app.show_notification(message, type="error")
-        except Exception as e:
-            msg = f"Error sending OTP: {e}"
-            logger.error(msg)
-            self.update_status(msg, "red")
-            self.app.show_notification(msg, type="error")
+        success, message, _ = self.api.send_otp(email)
+        if success:
+            self.app.show_notification(message, type="info")
+            self.transform_to_otp_input()
+        else:
+            self.update_status(message, "red")
+            self.app.show_notification(message, type="error")
 
     def verify_otp(self):
         """Verify OTP via API."""
@@ -415,64 +415,77 @@ class Plugin(BasePlugin):
             self.update_status("Please enter OTP", "red")
             return
 
-        try:
-            # Generate/Get keys
-            public_key = setup_vpn_keys()
-            if not public_key:
-                msg = "Failed to generate encryption keys"
-                self.update_status(msg, "red")
-                self.app.show_notification(msg, type="error")
-                return
-
-            success, message, result = self.api.verify_otp(
-                email=self.email,
-                otp=otp,
-                public_key=public_key,
-                host_url="rfr1.resisti.net", # TODO: Move to config
-                vpn_name="testVPNapi"        # TODO: Move to config
-            )
-
-            if success:
-                logger.info("Login successful")
-                self.app.show_notification("Login successful!", type="info")
-
-                # Save VPN config if provided
-                if result.get("data"):
-                    config_path = save_vpn_configuration(result.get("data"))
-                    if not config_path:
-                        logger.warning("VPN config from API could not be saved")
-
-                # Check if VPN onboarding is needed (macOS first-time setup)
-                from utils import settings as app_settings
-                needs_onboarding = (
-                    platform.system() == "Darwin"
-                    and not app_settings.get("vpn", "onboarding_complete", False)
-                )
-
-                if needs_onboarding:
-                    from plugins.login.vpn_onboarding import VPNOnboardingScreen
-                    self.destroy()
-
-                    def on_onboarding_complete():
-                        self.app.create_dashboard()
-                        self.app.after(100, lambda: self.app.select_frame_by_name("frame_VPN"))
-
-                    self._onboarding = VPNOnboardingScreen(self.app, on_onboarding_complete)
-                    self._onboarding.show()
-                else:
-                    app_settings.set("auth", "logged_in", True)
-                    self.destroy()
-                    self.app.create_dashboard()
-            else:
-                logger.error(f"Login failed: {message}")
-                self.update_status(message, "red")
-                self.app.show_notification(message, type="error")
-
-        except Exception as e:
-            msg = f"Error verifying OTP: {e}"
-            logger.error(msg)
+        # Phase 1: Generate VPN keys (never raises — returns None on failure)
+        public_key = setup_vpn_keys()
+        if not public_key:
+            msg = "Failed to generate encryption keys"
             self.update_status(msg, "red")
             self.app.show_notification(msg, type="error")
+            return
+
+        # Phase 2: Verify OTP via API (never raises — returns tuple)
+        success, message, result = self.api.verify_otp(
+            email=self.email,
+            otp=otp,
+            public_key=public_key,
+            host_url="rfr1.resisti.net",  # TODO: Move to config
+            vpn_name="testVPNapi"         # TODO: Move to config
+        )
+
+        if not success:
+            logger.error(f"Login failed: {message}")
+            self.update_status(message, "red")
+            self.app.show_notification(message, type="error")
+            return
+
+        # Phase 3: Post-login processing (API succeeded)
+        logger.info("Login successful")
+        self.app.show_notification("Login successful!", type="info")
+
+        # Save VPN config if provided (never raises — returns None on failure)
+        config_data = result.get("vpn_config") or result.get("data")
+        if config_data:
+            config_path = save_vpn_configuration(config_data, config_name="resistine_default")
+            if config_path:
+                from plugins.vpn.config_manager import VPNConfigManager, RESISTINE_CONFIG_NAME
+                mgr = VPNConfigManager(os.path.dirname(config_path))
+                mgr.register_config(RESISTINE_CONFIG_NAME, source="api")
+                mgr.set_active_config(RESISTINE_CONFIG_NAME)
+            else:
+                logger.warning("VPN config from API could not be saved")
+        else:
+            logger.warning("No VPN config in API response (keys: %s)", list(result.keys()))
+
+        # Phase 4: Transition to next screen
+        from utils import settings as app_settings
+        needs_onboarding = (
+            platform.system() == "Darwin"
+            and not app_settings.get("vpn", "onboarding_complete", False)
+        )
+
+        if needs_onboarding:
+            self._transition_to_onboarding()
+        else:
+            app_settings.set("auth", "logged_in", True)
+            self.destroy()
+            self.app.create_dashboard()
+
+    def _transition_to_onboarding(self):
+        """Transition from login to VPN onboarding.
+
+        Constructs the onboarding screen BEFORE destroying the login frame,
+        so if construction fails the login screen stays visible.
+        """
+        from plugins.login.vpn_onboarding import VPNOnboardingScreen
+
+        def on_onboarding_complete():
+            self.app.create_dashboard()
+            self.app.after(100, lambda: self.app.select_frame_by_name("frame_VPN"))
+
+        # Build onboarding first, then tear down login
+        self._onboarding = VPNOnboardingScreen(self.app, on_onboarding_complete)
+        self.destroy()
+        self._onboarding.show()
 
     def on_otp_key_press(self, event):
         """Handle key press in OTP entry."""

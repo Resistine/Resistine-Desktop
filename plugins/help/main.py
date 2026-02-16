@@ -8,12 +8,23 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import os
+import sys
 
 import customtkinter
 
 from plugins.base_plugin import BasePlugin
 
 from .markdown_viewer import MarkdownViewer
+
+
+def _resource_path(relative_path: str) -> str:
+    """Resolve path for both dev and PyInstaller bundles."""
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        relative_path,
+    )
 
 
 class Plugin(BasePlugin):
@@ -53,20 +64,18 @@ class Plugin(BasePlugin):
         @brief Create the main screen for the Help plugin.
         Create the main screen for the Help plugin.
         """
-        self.main_container = customtkinter.CTkFrame(
-            self.app, corner_radius=0, fg_color=("#f0eff6", "#1a1a1a")
+        self.main_container = customtkinter.CTkScrollableFrame(
+            self.app,
+            corner_radius=0,
+            fg_color="transparent",
         )
         self.main_container.grid_columnconfigure(0, weight=1)
-        self.main_container.grid_rowconfigure(0, weight=1)
 
-        # Path to docs directory
-        current_dir = os.path.dirname(os.path.realpath(__file__))
-        project_root = os.path.dirname(os.path.dirname(current_dir))
-        docs_dir = os.path.join(project_root, "docs")
+        docs_dir = _resource_path("docs")
         help_file_path = os.path.join(docs_dir, "Help.md")
 
         self.viewer = MarkdownViewer(self.main_container, docs_dir=docs_dir)
-        self.viewer.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+        self.viewer.pack(fill="both", expand=True, padx=20, pady=(16, 20))
 
         self.viewer.load_file(help_file_path)
 
