@@ -31,6 +31,7 @@ pydantic_core
 python-dotenv
 python-wireguard
 pyuac
+pywin32
 requests
 sniffio
 tee
