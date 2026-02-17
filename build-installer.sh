@@ -110,13 +110,15 @@ cd "$PYTHON_UI_PATH"
 # Ensure virtual environment exists
 if [ ! -d ".venv" ]; then
     echo "  - Creating virtual environment..."
-    # Use python.org universal2 build for broad macOS compatibility (minos 10.15)
+    # Use python.org universal2 build for broad macOS compatibility (target 13.0 Ventura)
     # Do NOT use Homebrew Python which targets only the current macOS version
-    PYTHONORG="/Library/Frameworks/Python.framework/Versions/3.14/bin/python3.14"
-    if [ -f "$PYTHONORG" ]; then
+    # Auto-detect the latest python.org install instead of hardcoding a version
+    PYTHONORG=$(ls -d /Library/Frameworks/Python.framework/Versions/3.*/bin/python3.* 2>/dev/null | grep -v config | sort -t/ -k7 -V | tail -1)
+    if [ -n "$PYTHONORG" ] && [ -f "$PYTHONORG" ]; then
+        echo "  Using python.org Python: $PYTHONORG"
         "$PYTHONORG" -m venv .venv
     else
-        echo "  Warning: python.org Python not found at $PYTHONORG"
+        echo "  Warning: python.org Python not found"
         echo "  Falling back to system python3 (may have limited macOS compatibility)"
         python3 -m venv .venv
     fi
