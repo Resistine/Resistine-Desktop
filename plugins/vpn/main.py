@@ -286,6 +286,24 @@ class Plugin(BasePlugin):
         self._stop_extension_polling()
         return self.display_toggle_screen()
 
+    def refresh_vpn_state(self):
+        """Refresh VPN state from the Windows service."""
+        global my_vpn_status, active_client_name
+
+        try:
+            from plugins.vpn.wireguard.vpn_functions_windows import get_status
+            status = get_status()
+            if status and status.get("state"):
+                my_vpn_status = status["state"]
+                active_client_name = self.get_selected_conf_file_name() if my_vpn_status == "Running" else None
+            else:
+                my_vpn_status = "Stopped"
+                active_client_name = None
+        except Exception as e:
+            logger.error(f"Status refresh failed: {e}")
+            my_vpn_status = "Stopped"
+            active_client_name = None
+
     def toggle_vpn_connection(self, switch_value):
         """Handles the toggle switch.
         
@@ -304,23 +322,39 @@ class Plugin(BasePlugin):
 
         global my_vpn_status
         is_running = my_vpn_status == "Running"
-        
-        # Logic: 1 = ON Request, 0 = OFF Request
-        if switch_value == 1 and not is_running:
-            # User wants to turn VPN ON and it's currently OFF
-            logger.info(f"🔄 Toggle ON: Starting VPN tunnel: {selected_conf_file}")
-            self.activate_tunnel(selected_conf_file)
-        
-        elif switch_value == 0 and is_running:
-            # User wants to turn VPN OFF and it's currently ON
-            logger.info(f"🔄 Toggle OFF: Stopping VPN tunnel: {selected_conf_file}")
-            self.activate_tunnel(selected_conf_file)
-        
-        else:
-            # Edge case: Switch state doesn't match VPN state
-            # This can happen if UI is out of sync - refresh to correct it
-            logger.warning(f"⚠️ Switch state ({switch_value}) doesn't match VPN state (Running: {is_running}). Refreshing UI...")
+
+        # WINDOWS: use IPC service for connect/disconnect
+        if IS_WINDOWS:
+            from plugins.vpn.wireguard.service_client import send_command
+            from plugins.vpn.wireguard.vpn_functions_windows import get_status
+
+            current = get_status()
+            is_running = current.get("state") == "Running"
+
+            if switch_value == 1 and not is_running:
+                send_command("connect", selected_conf_file)
+            elif switch_value == 0 and is_running:
+                send_command("disconnect", selected_conf_file)
+
+            # Re-sync state from service
+            self.refresh_vpn_state()
             self.update_plugin(self.id)
+        else:
+            # Logic: 1 = ON Request, 0 = OFF Request
+            if switch_value == 1 and not is_running:
+                # User wants to turn VPN ON and it's currently OFF
+                logger.info(f"🔄 Toggle ON: Starting VPN tunnel: {selected_conf_file}")
+                self.activate_tunnel(selected_conf_file)
+
+            elif switch_value == 0 and is_running:
+                # User wants to turn VPN OFF and it's currently ON
+                logger.info(f"🔄 Toggle OFF: Stopping VPN tunnel: {selected_conf_file}")
+                self.activate_tunnel(selected_conf_file)
+
+            else:
+                # Edge case: Switch state doesn't match VPN state
+                logger.warning(f"⚠️ Switch state ({switch_value}) doesn't match VPN state (Running: {is_running}). Refreshing UI...")
+                self.update_plugin(self.id)
 
     def display_toggle_screen(self):
         """Display the modern main screen with toggle and info."""
@@ -336,6 +370,10 @@ class Plugin(BasePlugin):
         scroll_frame.grid_columnconfigure(0, weight=1)
         
         global my_vpn_status
+
+        # On Windows, always refresh state from the service
+        if IS_WINDOWS:
+            self.refresh_vpn_state()
 
         # On macOS, detect if the extension was disabled after onboarding
         extension_disabled = IS_MACOS and not is_extension_enabled()
@@ -668,29 +706,32 @@ class Plugin(BasePlugin):
             # Refresh UI
             self.update_plugin(self.id)
 
-        # --- Windows Implementation ---
+        # --- Windows Implementation (service-based) ---
         elif IS_WINDOWS:
-            logger.info(f"Windows: Toggling {tunnel_name}")
+            logger.info(f"Windows: Toggling {tunnel_name} via service")
+            from plugins.vpn.wireguard.service_client import send_command
 
             if my_vpn_status == "Running":
-                success = stop_vpn(tunnel_name)
-                if success:
+                result = send_command("disconnect", tunnel_name)
+                if result.get("status") == "ok":
                     my_vpn_status = "Stopped"
                     active_client_name = None
                     self.app.show_notification("VPN stopped", type="info")
                 else:
                     self.app.show_notification("Failed to stop VPN", type="error")
-                    logger.error("Failed to stop VPN")
+                    logger.error(f"Failed to stop VPN: {result.get('message', '')}")
             else:
-                success = start_vpn(tunnel_name)
-                if success:
+                result = send_command("connect", tunnel_name)
+                if result.get("status") == "ok":
                     my_vpn_status = "Running"
                     active_client_name = tunnel_name
                     self.app.show_notification("VPN started", type="info")
                 else:
                     self.app.show_notification("Failed to start VPN", type="error")
-                    logger.error("Failed to start VPN")
+                    logger.error(f"Failed to start VPN: {result.get('message', '')}")
 
+            # Re-sync from service
+            self.refresh_vpn_state()
             self.update_plugin(self.id)
 
         # --- Linux Implementation ---
