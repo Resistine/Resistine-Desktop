@@ -1,7 +1,7 @@
 
 from plugins.vpn.wireguard.service_client import send_command
 
-DEFAULT_TUNNEL = "resistine_vpn"
+DEFAULT_TUNNEL = "resistine_default"
 
 def get_status():
     return send_command("status", DEFAULT_TUNNEL)

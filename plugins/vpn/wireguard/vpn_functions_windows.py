@@ -14,7 +14,7 @@ from utils.settings import get_config_dir
 from plugins.vpn.wireguard.service_client import send_command
 from utils.logger import logger
 
-DEFAULT_TUNNEL = "resistine_vpn"
+DEFAULT_TUNNEL = "resistine_default"
 
 # Keys file path for Windows
 KEYS_FILE_PATH = os.path.join(get_config_dir(), "keys.json")
