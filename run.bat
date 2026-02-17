@@ -1,6 +1,10 @@
 @echo off
 setlocal
 
+:: Change to the directory where this batch file is located
+:: This is crucial when running as administrator, which changes working directory to System32
+cd /d "%~dp0"
+
 :: Check if .venv exists, if not run install.bat
 if not exist ".venv" (
     echo .venv folder not found. Running install.bat first...
