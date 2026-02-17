@@ -121,3 +121,18 @@ libraries/*/  # Exclude all library directories
 
 # Test files (may contain sensitive information)
 tests/
+
+# VPN Apple project artifacts
+vpn-apple/build/
+vpn-apple/DerivedData/
+vpn-apple/*.xcuserdatad
+vpn-apple/*.xcuserstate
+vpn-apple/.DS_Store
+vpn-apple/antigravity_run.sh
+
+# Apple Signing & Provisioning (Secrets)
+provisioning-profiles/
+*.provisionprofile
+*.mobileprovision
+*.cert
+*.p12

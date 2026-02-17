@@ -80,44 +80,58 @@ class Plugin(BasePlugin):
         appearance_mode = self._effective_appearance_mode()
         is_dark = appearance_mode == "Dark"
 
-        # --- Protection panel (Sleek SOC-style) ---
-        accent_blue = ThemeManager.theme["CTkButton"]["border_color"]
-        card_bg = ThemeManager.theme["CTkFrame"]["fg_color"]
-        corner_radius = ThemeManager.theme["CTkFrame"]["corner_radius"]
-
-        # Add a top spacer to move content down and away from the window title bar/header
-        top_margin_spacer = customtkinter.CTkLabel(self.main_frame, text="", height=30)
-        top_margin_spacer.grid(row=0, column=0, sticky="ew")
-
-        # Container for centered protection panel
-        protection_container = customtkinter.CTkFrame(self.main_frame, fg_color="transparent", height=80)
-        protection_container.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 20))
-        protection_container.grid_columnconfigure(0, weight=1)
-        protection_container.grid_propagate(False)
-        
-        # Protection panel with background frame (max width 50%)
-        protection_frame = customtkinter.CTkFrame(
-            protection_container,
-            fg_color=card_bg,
-            corner_radius=corner_radius
-        )
-        protection_frame.place(relx=0.5, rely=0.5, anchor="center", relwidth=0.5, relheight=1.0)
-        
-        protection_label = customtkinter.CTkLabel(
-            protection_frame,
-            text="You are protected!",
-            font=customtkinter.CTkFont(family="Inter", size=30, weight="bold"),
-            text_color=accent_blue,
-            justify="center",
-            anchor="center",
-        )
-        protection_label.pack(expand=True, fill="both", padx=20, pady=20)
-
-        # --- Plugins grid ---
+        # --- Plugins list (needed for banner + grid) ---
         if not hasattr(self.app, "plugin_list") or not self.app.plugin_list:
             plugin_list = PluginManager(self.app).plugins
         else:
             plugin_list = self.app.plugin_list
+
+        # --- Protection Status Bar ---
+        top_margin_spacer = customtkinter.CTkLabel(self.main_frame, text="", height=16)
+        top_margin_spacer.grid(row=0, column=0, sticky="ew")
+
+        vpn_plugin = next(
+            (p for p in plugin_list if p.get_name() == "VPN"), None
+        )
+        vpn_ok = vpn_plugin and vpn_plugin.get_status() == "OK" if vpn_plugin else False
+
+        if vpn_ok:
+            banner_bg = ThemeManager.theme.get("Theme", {}).get(
+                "protection_bg_ok", ["#DCFCE7", "#0A2F1A"]
+            )
+            banner_text_color = ThemeManager.theme.get("Theme", {}).get(
+                "protection_text_ok", ["#15803D", "#4ADE80"]
+            )
+            banner_text = "\u2713  Protected"
+        else:
+            banner_bg = ThemeManager.theme.get("Theme", {}).get(
+                "protection_bg_warn", ["#FEF3C7", "#2D1F05"]
+            )
+            banner_text_color = ThemeManager.theme.get("Theme", {}).get(
+                "protection_text_warn", ["#B45309", "#FBBF24"]
+            )
+            banner_text = "\u26A0  Not Protected"
+
+        protection_frame = customtkinter.CTkFrame(
+            self.main_frame,
+            fg_color=banner_bg,
+            corner_radius=12,
+            height=48,
+        )
+        protection_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 16))
+        protection_frame.grid_propagate(False)
+        protection_frame.grid_columnconfigure(0, weight=1)
+        protection_frame.grid_rowconfigure(0, weight=1)
+
+        protection_label = customtkinter.CTkLabel(
+            protection_frame,
+            text=banner_text,
+            font=customtkinter.CTkFont(family="Inter", size=15, weight="bold"),
+            text_color=banner_text_color,
+            justify="center",
+            anchor="center",
+        )
+        protection_label.place(relx=0.5, rely=0.5, anchor="center")
 
         # Filter plugins for the grid:
         # Exclude current plugin (Dashboard)
@@ -178,7 +192,7 @@ class Plugin(BasePlugin):
             sticky="nsew",
             max_cols=max_cols,
             min_cols=min_cols,
-            aspect_ratio=1.1
+            aspect_ratio=1.3
         )
 
         def open_plugin(p):
@@ -340,7 +354,7 @@ class Plugin(BasePlugin):
             sticky="nsew",
             max_cols=max_cols,
             min_cols=min_cols,
-            aspect_ratio=1.1,
+            aspect_ratio=1.3,
         )
         
         for index, plugin in enumerate(plugins):
