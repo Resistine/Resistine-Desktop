@@ -8,7 +8,6 @@ from customtkinter import ThemeManager
 from PIL import Image, ImageDraw
 
 from gui.notifications import ToastNotification
-from plugins.plugin_manager import PluginManager
 from utils.logger import logger
 
 
@@ -18,15 +17,13 @@ class AppUI(customtkinter.CTk):
     Inherits from CTk to serve as the main window base.
     """
 
-    # Status colors for plugin status indicators.
-    # TODO: Use theme colors instead of hex values.
     status_colors = {
-        "ok": "#00FF00",      # Green
-        "info": "#3B8ED0",      # Blue
-        "warning": "#FFA500",   # Orange
-        "error": "#FF0000",     # Red
-        "critical": "#8B0000"   # Dark Red
-    }    
+        "ok": "#22C55E",
+        "info": "#3B82F6",
+        "warning": "#F59E0B",
+        "error": "#EF4444",
+        "critical": "#DC2626",
+    }
 
     @staticmethod
     def _add_rounded_corners(image, radius):
@@ -45,104 +42,93 @@ class AppUI(customtkinter.CTk):
 
     @classmethod
     def create_tab_button(cls, frame, name, icon, command=None, row=0, col=0):
-        """Create a sleek, theme-aware sidebar button."""
-        text_color = cls._get_theme_color("CTkButton", "text_color")
-        hover_color = cls._get_theme_color("CTkButton", "hover_color")
-        border_color = cls._get_theme_color("CTkButton", "border_color")
-        # font_family = AppUI.get_font()
+        """Create a sidebar button with filled-pill active state."""
+        text_color = cls._get_theme_color("CTkLabel", "text_color")
+        hover_bg = ThemeManager.theme.get("Theme", {}).get(
+            "sidebar_hover_bg", ["#F0F0F5", "#1F1F22"]
+        )
 
-        # Using the color tuples directly allows CTk to handle theme switching
-        corner_radius = cls._get_theme_corner_radius()
         btn = customtkinter.CTkButton(
             frame,
-            corner_radius=corner_radius,
-            height=45,
-            border_spacing=12,
+            corner_radius=10,
+            height=40,
+            border_spacing=10,
             text=name,
             fg_color="transparent",
             text_color=text_color,
-            hover_color=hover_color,
+            hover_color=hover_bg,
             border_width=0,
-            border_color=border_color,
+            border_color=hover_bg,
             image=icon,
             anchor="w",
             font=customtkinter.CTkFont(size=14, weight="normal"),
             command=command,
         )
 
-        # Hover effects for "transparent" buttons to show border
-        def on_enter(_e):
-            btn.configure(border_width=1)
-
-        def on_leave(_e):
-            # Only remove border if not the active tab (checked via fg_color usually, but here relies on state)
-            # Simplification: Always remove border on leave if transparent.
-            # Active state is handled by changing fg_color, so this check works.
-            if btn.cget("fg_color") == "transparent":
-                btn.configure(border_width=0)
-
-        btn.bind("<Enter>", on_enter)
-        btn.bind("<Leave>", on_leave)
-        btn.grid(row=row, column=col, sticky="ew", padx=10, pady=2)
+        btn.grid(row=row, column=col, sticky="ew", padx=12, pady=2)
         return btn
 
     @classmethod
     def update_tab_button_active_state(
         cls, button: customtkinter.CTkButton, is_active: bool
     ):
-        """Apply active/inactive styling."""
-        hover_color = cls._get_theme_color("CTkButton", "hover_color")
-        border_color = cls._get_theme_color("CTkButton", "border_color")
+        """Apply filled-pill active/inactive styling."""
+        active_bg = ThemeManager.theme.get("Theme", {}).get(
+            "sidebar_active_bg", ["#EBF0FF", "#1A2744"]
+        )
+        active_text = ThemeManager.theme.get("Theme", {}).get(
+            "sidebar_active_text", ["#0D5394", "#60A5FA"]
+        )
+        default_text = cls._get_theme_color("CTkLabel", "text_color")
 
         try:
             if not button or not button.winfo_exists():
                 return
-            
+
             if is_active:
                 button.configure(
-                    fg_color=hover_color, border_width=1, border_color=border_color
+                    fg_color=active_bg,
+                    text_color=active_text,
+                    border_width=0,
                 )
             else:
-                button.configure(fg_color="transparent", border_width=0)
+                button.configure(
+                    fg_color="transparent",
+                    text_color=default_text,
+                    border_width=0,
+                )
         except (tk.TclError, RuntimeError, AttributeError):
             pass
 
 
     @classmethod
     def create_plugin_card(cls, row, column, container_frame, plugin, show_description=False, extra_buttons_func=None, truncate=False):
-        """
-        Create a plugin card with theme-aware colors and a clean split layout.
-        """
+        """Create a compact plugin card with inline icon, title, and status badge."""
         card_bg = cls._get_theme_color("CTkFrame", "fg_color")
         border_color = cls._get_theme_color("CTkFrame", "border_color")
         text_primary = cls._get_theme_color("CTkLabel", "text_color")
-        hover_bg = cls._get_theme_color("CTkButton", "hover_color")
-        accent_blue = cls._get_theme_color("CTkButton", "border_color")
-        corner_radius = cls._get_theme_corner_radius()
-        divider_color = ThemeManager.theme.get("Theme", {}).get(
-            "divider_color", ("#E5E7EB", "#2A2A2A")
+        text_secondary = ThemeManager.theme.get("Theme", {}).get(
+            "text_secondary", ["#6B7280", "#9CA3AF"]
         )
+        hover_bg = ThemeManager.theme.get("Theme", {}).get(
+            "sidebar_hover_bg", ["#F0F0F5", "#1F1F22"]
+        )
+        corner_radius = 12
 
         frame = customtkinter.CTkFrame(
             container_frame,
             corner_radius=corner_radius,
             fg_color=card_bg,
-            border_width=0,  # Start with no border, show on hover
+            border_width=1,
             border_color=border_color,
         )
-        # Mark so create_grid() can enforce consistent sizing/aspect ratio on resize
         frame._resistine_plugin_card = True
-        
-        # PRE-ALLOCATION: If container already knows the target height, use it immediately
-        # to prevent the "clunky" iteration on load.
-        # Ratio of card width (usually 0.6 of col width in dashboard layout)
-        initial_h = getattr(container_frame, "_resistine_target_height", 200)
+
+        # Pre-allocation for initial sizing
+        initial_h = getattr(container_frame, "_resistine_target_height", 160)
         num_cols = getattr(container_frame, "_resistine_num_cols", 1)
-        
-        # Calculate approximate width based on container width or hint
         cont_w = container_frame.winfo_width()
         if cont_w <= 1:
-            # Try to get hint from AppUI
             hint = None
             parent = container_frame.master
             while parent:
@@ -151,174 +137,128 @@ class AppUI(customtkinter.CTk):
                     break
                 parent = getattr(parent, "master", None)
             cont_w = hint if hint else 800
-            
-        initial_w = int(cont_w / num_cols) - 20
-        
+        initial_w = int(cont_w / num_cols) - 16
+
         try:
             frame.configure(width=initial_w, height=initial_h)
             frame.grid_propagate(False)
         except Exception:
             pass
-        frame.grid(row=row, column=column, padx=10, pady=10, sticky="nsew")
+
+        frame.grid(row=row, column=column, padx=8, pady=8, sticky="nsew")
         frame.grid_columnconfigure(0, weight=1)
-        
-        # Structure rows: Content (~80%), Divider, Status/Buttons (~20%)
-        # Buttons are 26px height + padding, so minsize needs to be at least 50px
-        # Content row needs enough space for title + multi-line description (typically 2-3 lines)
-        frame.grid_rowconfigure(0, weight=8, minsize=200)
-        frame.grid_rowconfigure(1, weight=0) # h_div
-        frame.grid_rowconfigure(2, weight=2, minsize=55)
+        frame.grid_rowconfigure(0, weight=0)  # header
+        frame.grid_rowconfigure(1, weight=0)  # description
+        frame.grid_rowconfigure(2, weight=1)  # spacer / extra buttons
 
-        # --- Top content row: icon panel | divider | text panel ---
-        # Add top padding to respect rounded corners (prevents child frames from covering rounded top corners)
-        # Use corner_radius + border_width to ensure rounded border is fully visible
-        top_padding = max(corner_radius + 2, 15)  # At least corner_radius + border_width, minimum 15px
-        top_row = customtkinter.CTkFrame(frame, fg_color="transparent")
-        top_row.grid(row=0, column=0, sticky="nsew", padx=2, pady=(top_padding, 0))
-        top_row.grid_rowconfigure(0, weight=1)
-        top_row.grid_columnconfigure(0, weight=25, uniform="top")
-        top_row.grid_columnconfigure(1, weight=0, minsize=1)
-        top_row.grid_columnconfigure(2, weight=75, uniform="top")
-
-        # Icon Panel
-        icon_panel = customtkinter.CTkFrame(top_row, fg_color="transparent")
-        icon_panel.grid(row=0, column=0, sticky="nsew", padx=(12, 0), pady=10)
-        icon_panel.grid_rowconfigure(0, weight=1)
-        icon_panel.grid_columnconfigure(0, weight=1)
+        # --- Header row: icon + title + status badge ---
+        header = customtkinter.CTkFrame(frame, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="new", padx=16, pady=(16, 0))
+        header.grid_columnconfigure(1, weight=1)
 
         icon_image = plugin.get_icon_large() if hasattr(plugin, 'get_icon_large') else plugin.get_icon()
         if icon_image:
-            icon_label = customtkinter.CTkLabel(icon_panel, image=icon_image, text="")
-            icon_label.grid(row=0, column=0, sticky="nsew")
-
-        # Text Panel (Title + Desc)
-        text_panel = customtkinter.CTkFrame(top_row, fg_color="transparent")
-        text_panel.grid(row=0, column=2, sticky="nsew", padx=12, pady=10)
-        text_panel.grid_columnconfigure(0, weight=1)
-        text_panel.grid_rowconfigure(2, weight=1) # spacer/expand
+            icon_label = customtkinter.CTkLabel(header, image=icon_image, text="")
+            icon_label.grid(row=0, column=0, sticky="w", padx=(0, 12))
 
         title_label = customtkinter.CTkLabel(
-            text_panel,
+            header,
             text=plugin.get_name(),
-            font=customtkinter.CTkFont(size=17, weight="bold"),
+            font=customtkinter.CTkFont(size=16, weight="bold"),
             text_color=text_primary,
-            anchor="w"
+            anchor="w",
         )
-        title_label.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        title_label.grid(row=0, column=1, sticky="ew")
 
+        # Status badge (pill)
+        current_status = plugin.get_status()
+        if current_status is not None and str(current_status).strip():
+            status_key = str(current_status).lower()
+            badge_bg = ThemeManager.theme.get("Theme", {}).get(
+                "status_badge_bg", {}
+            ).get(status_key, ["#F3F4F6", "#374151"])
+            badge_text_color = ThemeManager.theme.get("Theme", {}).get(
+                "status_badge_text", {}
+            ).get(status_key, ["#6B7280", "#9CA3AF"])
+
+            badge = customtkinter.CTkLabel(
+                header,
+                text=str(current_status).title(),
+                font=customtkinter.CTkFont(size=11, weight="bold"),
+                text_color=badge_text_color,
+                fg_color=badge_bg,
+                corner_radius=6,
+                height=22,
+            )
+            badge.grid(row=0, column=2, sticky="e", padx=(8, 0))
+
+        # --- Description ---
         if show_description:
             description = plugin.get_description()
-            if truncate and len(description) > 60:
-                description = description[:57] + "..."
-            
+            if truncate and len(description) > 80:
+                description = description[:77] + "..."
+
             desc_label = customtkinter.CTkLabel(
-                text_panel,
+                frame,
                 text=description,
-                font=customtkinter.CTkFont(size=13),
-                text_color=text_primary,
+                font=customtkinter.CTkFont(size=12),
+                text_color=text_secondary,
                 wraplength=200,
                 justify="left",
-                anchor="nw"
+                anchor="nw",
             )
-            desc_label.grid(row=2, column=0, sticky="nsew", pady=(8, 0))
+            desc_label.grid(row=1, column=0, sticky="new", padx=16, pady=(8, 0))
 
-            # Register description label for centralized wraplength updates from create_grid
             if hasattr(container_frame, "_resistine_desc_labels"):
                 container_frame._resistine_desc_labels.append(desc_label)
-                # Apply initial wraplength if possible
                 w = container_frame.winfo_width()
                 if w > 1:
-                    num_cols = getattr(container_frame, "_resistine_num_cols", 1)
-                    col_width = w / num_cols
-                    desc_label.configure(wraplength=max(100, int((col_width - 20) * 0.6) - 24))
+                    nc = getattr(container_frame, "_resistine_num_cols", 1)
+                    col_width = w / nc
+                    desc_label.configure(wraplength=max(100, int(col_width - 60)))
 
-        # --- Bottom Status Bar ---
-        # Add bottom padding to respect rounded corners
-        # Use corner_radius + border_width to ensure rounded border is fully visible
-        bottom_padding = max(corner_radius + 2, 15)  # At least corner_radius + border_width, minimum 15px
-        status_row = customtkinter.CTkFrame(frame, fg_color="transparent")
-        status_row.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, bottom_padding))
-        status_row.grid_columnconfigure(0, weight=1)
-
-        # --- Optional extra buttons (Store only) - replaces status ---
+        # --- Extra buttons (Store page) ---
         if extra_buttons_func:
-            # Center the buttons, no status indicator
-            buttons_container = customtkinter.CTkFrame(status_row, fg_color="transparent")
-            buttons_container.pack(expand=True, anchor="center")
-            extra_buttons_func(buttons_container, plugin)
-        else:
-            # Dashboard/other pages: show status indicator (centered)
-            # Only show status if the plugin has a meaningful status
-            current_status = plugin.get_status()
-            
-            # Only display status if it's not None or empty
-            if current_status is not None and str(current_status).strip() != "":
-                status_container = customtkinter.CTkFrame(status_row, fg_color="transparent")
-                status_container.pack(expand=True, anchor="center")
+            buttons_area = customtkinter.CTkFrame(frame, fg_color="transparent")
+            buttons_area.grid(row=2, column=0, sticky="sew", padx=16, pady=(8, 16))
+            extra_buttons_func(buttons_area, plugin)
 
-                status_dot_color = cls.status_colors.get(str(current_status).lower(), "#808080")
-                status_text = f"Status: {str(current_status).title()}"
-                status_text_color = text_primary
-
-                status_dot = customtkinter.CTkFrame(
-                    status_container, width=10, height=10, corner_radius=5, fg_color=status_dot_color
-                )
-                status_dot.pack(side="left", padx=(0, 8))
-
-                status_label = customtkinter.CTkLabel(
-                    status_container,
-                    text=status_text,
-                    font=customtkinter.CTkFont(size=13),
-                    text_color=status_text_color,
-                )
-                status_label.pack(side="left")
-
-        # Interaction
+        # --- Interaction ---
         def on_click(_e=None):
             curr = container_frame
             while curr and not hasattr(curr, "select_frame_by_name"):
                 curr = curr.master
-            if curr: curr.select_frame_by_name(f"frame_{plugin.get_name()}")
+            if curr:
+                curr.select_frame_by_name(f"frame_{plugin.get_name()}")
 
-        def on_enter(_e): 
+        def on_enter(_e):
             try:
                 if frame.winfo_exists():
-                    # Preserve corner_radius when applying border
-                    frame.configure(
-                        border_width=2, 
-                        border_color=accent_blue, 
-                        fg_color=hover_bg,
-                        corner_radius=corner_radius  # Explicitly maintain rounded corners
-                    )
+                    frame.configure(fg_color=hover_bg, corner_radius=corner_radius)
             except (tk.TclError, AttributeError, RuntimeError):
                 pass
-        def on_leave(_e): 
+
+        def on_leave(_e):
             try:
                 if frame.winfo_exists():
-                    # Preserve corner_radius when removing border
-                    frame.configure(
-                        border_width=0, 
-                        border_color=border_color, 
-                        fg_color=card_bg,
-                        corner_radius=corner_radius  # Explicitly maintain rounded corners
-                    )
+                    frame.configure(fg_color=card_bg, corner_radius=corner_radius)
             except (tk.TclError, AttributeError, RuntimeError):
                 pass
 
         def bind_recursive(widget):
             try:
-                if isinstance(widget, customtkinter.CTkButton): return
+                if isinstance(widget, customtkinter.CTkButton):
+                    return
                 if not widget.winfo_exists():
                     return
                 widget.bind("<Button-1>", on_click)
                 widget.bind("<Enter>", on_enter)
                 widget.bind("<Leave>", on_leave)
-                for child in widget.winfo_children(): 
+                for child in widget.winfo_children():
                     bind_recursive(child)
             except (tk.TclError, AttributeError, RuntimeError):
-                # Widget destroyed or error - skip
                 pass
-        
+
         bind_recursive(frame)
         return frame
 
@@ -326,7 +266,6 @@ class AppUI(customtkinter.CTk):
         """
         Open a new window to show the plugin's README.md file.
         """
-        import sys
         from plugins.help.markdown_viewer import MarkdownViewer
         
         # Determine the README path
@@ -474,11 +413,10 @@ class AppUI(customtkinter.CTk):
                 target_height = int(card_width / aspect_ratio) + 20 # add padding back
                 
                 # Ensure minimum height for content
-                target_height = max(target_height, 160)
+                target_height = max(target_height, 120)
                 
                 # Cap maximum height based on number of columns
-                # Shorter cards when in 2-column layout
-                max_height = 280
+                max_height = 250
                 if num_cols == 2:
                     target_height = min(target_height, max_height)
                 elif num_cols >= 4:
@@ -515,7 +453,7 @@ class AppUI(customtkinter.CTk):
                         except: pass
 
                 # Centralized wraplength update (efficiently loops through registered labels)
-                wrap_val = max(100, int(card_width * 0.7) - 20) # Approx description panel width
+                wrap_val = max(100, int(card_width) - 60)
                 for label in container._resistine_desc_labels:
                     try:
                         if label.winfo_exists():
@@ -561,9 +499,9 @@ class AppUI(customtkinter.CTk):
             for widget in self.navigation_frame.winfo_children():
                 if not widget.winfo_exists():
                     continue
-                # Keep the logo/label at the top (row 0)
+                # Keep the logo (row 0) and separator (row 1)
                 info = widget.grid_info()
-                if info and int(info.get("row", 0)) > 0:
+                if info and int(info.get("row", 0)) > 1:
                     widget.destroy()
         except Exception as e:
             logger.warning(f"Error while clearing navigation frame: {e}")
@@ -575,12 +513,12 @@ class AppUI(customtkinter.CTk):
 
         # Update plugin list from manager
         self.plugin_list = self.get_plugin_manager().plugins
-        number_plugins = len(self.plugin_list) + 1
-        # Only the very last row (the spacer) should have weight 1
-        self.navigation_frame.grid_rowconfigure(number_plugins, weight=1)
+        # Spacer row: logo(0) + separator(1) + plugins + 1
+        spacer_row = len(self.plugin_list) + 2
+        self.navigation_frame.grid_rowconfigure(spacer_row, weight=1)
 
         self.frames = {}
-        row = 1
+        row = 2
         for plugin in self.plugin_list:
             frame_name = f"frame_{plugin.get_name()}"
             self.frames[frame_name] = plugin
@@ -623,7 +561,9 @@ class AppUI(customtkinter.CTk):
         self.grid_columnconfigure(1, weight=1)  # Content column
 
         # Theme-aware sidebar colors
-        sidebar_bg = self._get_theme_color("CTkFrame", "fg_color")
+        sidebar_bg = ThemeManager.theme.get("Theme", {}).get(
+            "sidebar_bg", self._get_theme_color("CTkFrame", "fg_color")
+        )
         sidebar_text_color = self._get_theme_color("CTkLabel", "text_color")
 
         self.navigation_frame = customtkinter.CTkFrame(
@@ -648,10 +588,7 @@ class AppUI(customtkinter.CTk):
                 logo_img = logo_img.resize(
                     (max_width, logo_height), Image.Resampling.LANCZOS
                 )
-                
-                # Add rounded corners to the Resistine Logo
-                logo_img = self._add_rounded_corners(logo_img, 15)
-                
+
                 logo_image = customtkinter.CTkImage(
                     light_image=logo_img,
                     dark_image=logo_img,
@@ -673,8 +610,20 @@ class AppUI(customtkinter.CTk):
             text_color=sidebar_text_color if not logo_image else None,
         )
         self.navigation_frame_label.grid(
-            row=0, column=0, padx=20, pady=(25, 10), sticky="ew"
+            row=0, column=0, padx=20, pady=(20, 8), sticky="ew"
         )
+
+        # Separator below logo
+        separator_color = ThemeManager.theme.get("Theme", {}).get(
+            "divider_color", ["#E5E7EB", "#2A2A2A"]
+        )
+        self._nav_separator = customtkinter.CTkFrame(
+            self.navigation_frame,
+            height=1,
+            fg_color=separator_color,
+            corner_radius=0,
+        )
+        self._nav_separator.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 8))
 
         # Use the surgical refresh to handle the buttons
         self.refresh_navigation()

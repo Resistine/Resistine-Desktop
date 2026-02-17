@@ -1,5 +1,6 @@
 import os
 import sys
+import traceback
 from unittest.mock import MagicMock, patch
 
 # Add the project root to sys.path

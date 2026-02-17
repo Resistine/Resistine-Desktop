@@ -154,8 +154,14 @@ Darwin*)
 		echo "All required packages are already installed."
 	fi
 
-	# Create venv using the available python3
-	python3 -m venv .venv
+	# Create venv — prefer python.org universal2 build for broad macOS compatibility
+	PYTHONORG="/Library/Frameworks/Python.framework/Versions/3.14/bin/python3.14"
+	if [ -f "$PYTHONORG" ]; then
+		"$PYTHONORG" -m venv .venv
+	else
+		echo "Note: python.org Python not found, using system python3"
+		python3 -m venv .venv
+	fi
 	;;
 
 # Windows (Git Bash, Cygwin, MSYS2)

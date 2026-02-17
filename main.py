@@ -11,8 +11,16 @@ import argparse
 import ctypes
 import os
 import sys
-
 import customtkinter
+import customtkinter.windows.widgets.ctk_scrollable_frame as _sf
+
+# Patch customtkinter bug where scroll events pass a string instead of a widget
+_orig_check = _sf.CTkScrollableFrame.check_if_master_is_canvas
+def _patched_check(self, widget):
+    if isinstance(widget, str):
+        return False
+    return _orig_check(self, widget)
+_sf.CTkScrollableFrame.check_if_master_is_canvas = _patched_check
 
 # DEPRECATED: Debug Window - controlled by command-line arguments
 from gui.debug_window import DebugWindow
@@ -53,18 +61,20 @@ def was_relaunched():
     return "--elevated" in sys.argv
 
 
-def resource_path(relative_path):
+def resource_path(relative_path: str) -> str:
     """
-    Get absolute path to resource, works for dev and PyInstaller
-    """
-    try:
-        # PyInstaller temp folder
-        base_path = sys._MEIPASS
-    except AttributeError:
-        # Normal execution
-        base_path = os.path.abspath(".")
+    Get absolute path to resource, works for both dev and PyInstaller bundled app.
 
-    return os.path.join(base_path, relative_path)
+    When running from source, returns path relative to the script directory.
+    When running from a PyInstaller bundle, returns path relative to the
+    temporary extraction directory (sys._MEIPASS).
+    """
+    if hasattr(sys, '_MEIPASS'):
+        # Running in PyInstaller bundle
+        return os.path.join(sys._MEIPASS, relative_path)
+    else:
+        # Running from source - use the script's directory
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), relative_path)
 
 
 class App(AppUI):
@@ -82,21 +92,12 @@ class App(AppUI):
         super().__init__()
 
         # Theme: fixed Resistine CTk theme; only appearance mode varies (System/Light/Dark)
-        customtkinter.set_default_color_theme("resources/themes/resistine_ctk.json")
+        customtkinter.set_default_color_theme(resource_path("resources/themes/resistine_ctk.json"))
         customtkinter.set_appearance_mode("System")
 
         if DEBUG_WINDOW:
             self.debug_window = DebugWindow(self)
             self.debug_window.create_debug_window()
-
-        # Things to run when app is launched
-        if sys.platform == "darwin":
-            # Register privileged helper on macOS (only runs once per install)
-            from plugins.vpn.wireguard.vpn_functions_darwin import (
-                ensure_helper_registered,
-            )
-
-            ensure_helper_registered()
 
         self.title("Resistine")
         screen_width = self.winfo_screenwidth()
@@ -134,6 +135,26 @@ class App(AppUI):
 
         # Ensure the window is visible
         self.update()
+
+        # Initialize auto-updater (cross-platform: Sparkle on macOS, stubs on Win/Linux)
+        try:
+            from utils import updates
+
+            updates.init(self)
+        except Exception as e:
+            logger.warning(f"Failed to start auto-updater: {e}")
+
+        self.protocol("WM_DELETE_WINDOW", self._on_closing)
+
+    def _on_closing(self):
+        """Clean up resources before closing."""
+        try:
+            from utils import updates
+
+            updates.shutdown()
+        except Exception:
+            pass
+        self.destroy()
 
 
 # class App

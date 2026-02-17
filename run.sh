@@ -54,6 +54,7 @@ Darwin*)
 	fi
 
 	# Install/update requirements if needed
+	export MACOSX_DEPLOYMENT_TARGET=13.0  # Ensure compiled extensions target macOS 13+ (Ventura)
 	python3 -m pip install -U -q -r libraries/requirements-mac.txt
 	;;
 

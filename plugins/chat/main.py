@@ -8,16 +8,32 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import os
+import random  # noqa: F401 — used for suggestion shuffling
 import sys
 
 import customtkinter
-from openai import OpenAI
+from customtkinter import ThemeManager
 
 from plugins.base_plugin import BasePlugin
-from plugins.chat.animated_text import AnimatedText
-from plugins.chat.markdown_bubble import MarkdownBubble
 from utils import settings
 from utils.logger import logger
+
+# Pool of suggestion prompts shown on the welcome screen.
+# 4 are picked at random each time the chat is opened.
+_SUGGESTION_POOL = [
+    "Explain what a zero-day exploit is",
+    "How do I harden my Linux server?",
+    "Analyze a suspicious network log",
+    "What are common phishing indicators?",
+    "How does a man-in-the-middle attack work?",
+    "What is the MITRE ATT&CK framework?",
+    "Explain the difference between IDS and IPS",
+    "How do I set up a firewall with iptables?",
+    "What are best practices for password security?",
+    "How do I detect lateral movement in a network?",
+    "Explain DNS tunneling and how to detect it",
+    "What is ransomware and how do I prevent it?",
+]
 
 
 class Plugin(BasePlugin):
@@ -42,18 +58,54 @@ class Plugin(BasePlugin):
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Chat", "ES": "Chat", "FR": "Chat"},
             icon_light_path=os.path.join(
-                os.path.dirname(os.path.realpath(__file__)), "chat_light.svg"
+                os.path.dirname(os.path.realpath(__file__)), "chat_light.png"
             ),
             icon_dark_path=os.path.join(
-                os.path.dirname(os.path.realpath(__file__)), "chat_dark.svg"
+                os.path.dirname(os.path.realpath(__file__)), "chat_dark.png"
             ),
         )
         self.app = app
-        self.client: OpenAI | None = None
-        self.animated_text: AnimatedText | None = None
+        self.client = None
+        self.animated_text = None
         self.conversation_history = []
         self.reinitialize_client()
         self.status = self.get_status()
+
+    # ------------------------------------------------------------------
+    # Theme helpers
+    # ------------------------------------------------------------------
+
+    def _is_dark_mode(self) -> bool:
+        appearance_mode = customtkinter.get_appearance_mode()
+        if appearance_mode == "Dark":
+            return True
+        if appearance_mode == "Light":
+            return False
+        if sys.platform == "darwin":
+            try:
+                import subprocess
+
+                result = subprocess.run(
+                    ["defaults", "read", "-g", "AppleInterfaceStyle"],
+                    capture_output=True,
+                    text=True,
+                )
+                return result.returncode == 0 and "Dark" in result.stdout
+            except Exception:
+                return False
+        return False
+
+    def _theme_color(self, key, fallback_light, fallback_dark):
+        """Resolve a Theme color from the JSON theme, falling back to provided values."""
+        pair = ThemeManager.theme.get("Theme", {}).get(key)
+        is_dark = self._is_dark_mode()
+        if pair and isinstance(pair, (list, tuple)) and len(pair) == 2:
+            return pair[1] if is_dark else pair[0]
+        return fallback_dark if is_dark else fallback_light
+
+    # ------------------------------------------------------------------
+    # Client / API
+    # ------------------------------------------------------------------
 
     def check_status(self):
         """Check if the Chat plugin is ready to use."""
@@ -61,8 +113,14 @@ class Plugin(BasePlugin):
             return "OK"
         return "Warning"
 
-    def reinitialize_client(self):
-        """Reinitialize the OpenAI client with the current API key."""
+    def reinitialize_client(self, notify: bool = False):
+        """Reinitialize the OpenAI client with the current API key.
+
+        Args:
+            notify: If True, show a user-visible notification on failure.
+                    Defaults to False to avoid spurious toasts during plugin
+                    loading (e.g. when the Store enumerates all plugins).
+        """
         api_key = settings.get_secret("chat", "openai_api_key")
         self.base_url = settings.get("chat", "openai_base_url")
         self.session_id = None  # Reset session ID on re-init
@@ -70,11 +128,9 @@ class Plugin(BasePlugin):
         # Determine model and history setup based on base_url
         if self.base_url:
             self.model = "ministral-3:14b"
-            # Custom URL: Stateful, history managed by server, no system prompt needed here
             self.conversation_history = []
         else:
             self.model = "gpt-4o"
-            # Default URL: Stateless client-side, need system prompt
             self.conversation_history = [
                 {
                     "role": "system",
@@ -84,28 +140,25 @@ class Plugin(BasePlugin):
 
         if api_key:
             try:
-                # Initialize client, including base_url if provided
                 kwargs = {"api_key": api_key}
                 if self.base_url:
                     kwargs["base_url"] = self.base_url
+                from openai import OpenAI
                 self.client = OpenAI(**kwargs)
                 logger.info("Chat plugin: OpenAI client initialized successfully")
             except Exception as e:
                 logger.error(f"Chat plugin: Failed to initialize OpenAI client: {e}")
-                self.app.show_notification(f"Chat Init Error: {e}", type="error")
+                if notify:
+                    self.app.show_notification(f"Chat Init Error: {e}", type="error")
                 self.client = None
         else:
             self.client = None
             logger.warning(
                 "Chat plugin: No OpenAI API key found. Chat functionality disabled."
             )
-            self.app.show_notification(
-                "Chat disabled: No API key found", type="warning"
-            )
 
     def send_message_to_chatgpt(self, message: str):
         """Send a message to the ChatGPT model and yield the response chunks."""
-        # Try to reinitialize if client is None (in case key was just added)
         if not self.client:
             self.reinitialize_client()
 
@@ -119,10 +172,7 @@ class Plugin(BasePlugin):
         full_response = ""
 
         if self.base_url:
-            # --- Custom URL (Stateful) Logic ---
             messages = [{"role": "user", "content": message}]
-
-            # Append user message to local history for display persistence
             self.conversation_history.append({"role": "user", "content": message})
 
             extra_body = {}
@@ -133,7 +183,6 @@ class Plugin(BasePlugin):
                 f"Chat plugin: Sending request to Custom API (Model: {self.model}, Session: {self.session_id}, Stream: True): {messages}"
             )
 
-            # Send request with stream=True
             stream = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
@@ -147,7 +196,6 @@ class Plugin(BasePlugin):
                     full_response += content
                     yield content
 
-                # Extract session_id if present in chunk (often in last chunk or as extra field)
                 if hasattr(chunk, "session_id"):
                     self.session_id = chunk.session_id
 
@@ -156,15 +204,12 @@ class Plugin(BasePlugin):
             )
 
         else:
-            # --- Default OpenAI (Stateless) Logic ---
-            # Append user message to full history
             self.conversation_history.append({"role": "user", "content": message})
 
             logger.debug(
                 f"Chat plugin: Sending request to OpenAI API (Model: {self.model}, Stream: True): {self.conversation_history}"
             )
 
-            # Send request with full history and stream=True
             stream = self.client.chat.completions.create(
                 model=self.model,
                 messages=self.conversation_history,
@@ -181,168 +226,291 @@ class Plugin(BasePlugin):
                 f"Chat plugin: Received full response from OpenAI API: {full_response}"
             )
 
-        # Append assistant response to history
         self.conversation_history.append(
             {"role": "assistant", "content": full_response}
         )
 
+    # ------------------------------------------------------------------
+    # Bubble rendering
+    # ------------------------------------------------------------------
+
     def render_user_bubble(self, user_message):
-        """Render the user's message bubble."""
-        # Helper: determine effective dark mode (supports System on macOS)
-        appearance_mode = customtkinter.get_appearance_mode()
-        bubble_color = "#E5E5EA"
-        bubble_text_color = "#000000"
+        """Render the user's message bubble (right-aligned, Resistine blue)."""
+        is_dark = self._is_dark_mode()
+        bubble_color = "#0D5394"
+        bubble_text_color = "#ffffff"
 
-        if appearance_mode == "Dark":
-            bubble_color = "#3A3A3C"
-            bubble_text_color = "#ffffff"
-        elif appearance_mode == "Light":
-            bubble_color = "#E5E5EA"
-            bubble_text_color = "#000000"
-        else:
-            if sys.platform == "darwin":
-                try:
-                    import subprocess
-
-                    result = subprocess.run(
-                        ["defaults", "read", "-g", "AppleInterfaceStyle"],
-                        capture_output=True,
-                        text=True,
-                    )
-                    if result.returncode == 0 and "Dark" in result.stdout:
-                        bubble_color = "#3A3A3C"
-                        bubble_text_color = "#ffffff"
-                except Exception:
-                    pass
-
-        # USER bubble as an embedded window
         bubble_frame = customtkinter.CTkFrame(
             self.chat_box,
             fg_color=bubble_color,
-            corner_radius=getattr(self, "corner_radius", 15),
+            corner_radius=16,
         )
         bubble_text = customtkinter.CTkLabel(
             bubble_frame,
             text=user_message,
             fg_color="transparent",
             text_color=bubble_text_color,
-            wraplength=400,
-            font=customtkinter.CTkFont(size=15),
+            wraplength=420,
+            font=customtkinter.CTkFont(family="Inter", size=14),
             justify="left",
             anchor="w",
         )
-        bubble_text.pack(padx=12, pady=9)
+        bubble_text.pack(padx=14, pady=10)
 
         self.chat_box._textbox.window_create(
-            "end", window=bubble_frame, padx=10, pady=10
+            "end", window=bubble_frame, padx=10, pady=6
         )
-        self.chat_box._textbox.insert("end", "\n\n\n")
+        self.chat_box._textbox.insert("end", "\n\n")
 
-        # Right-align the bubble line
-        self.chat_box._textbox.tag_add("user_align", "end-4l", "end-3l")
+        self.chat_box._textbox.tag_add("user_align", "end-3l", "end-2l")
         self.chat_box._textbox.tag_config("user_align", justify="right")
 
     def render_assistant_bubble_markdown(self, message):
         """Render the assistant's response using MarkdownBubble."""
+        from plugins.chat.markdown_bubble import MarkdownBubble
         bubble = MarkdownBubble(self.chat_box, message)
 
-        # Ensure we insert at the end
         self.chat_box._textbox.mark_set("insert", "end")
         insert_index = self.chat_box._textbox.index("insert")
 
-        # Insert into text box
         self.chat_box._textbox.window_create(
-            "end", window=bubble, padx=0, pady=10, stretch=1
+            "end", window=bubble, padx=10, pady=6, stretch=1
         )
-        self.chat_box._textbox.insert("end", "\n\n\n")
+        self.chat_box._textbox.insert("end", "\n\n")
 
-        # Use index range for tag
         line_start = insert_index.split(".")[0] + ".0"
         line_end = insert_index.split(".")[0] + ".end"
 
-        # Apply strict left justify
         self.chat_box._textbox.tag_add("assistant_align", line_start, line_end)
         self.chat_box._textbox.tag_config("assistant_align", justify="left")
 
-    def create_main_screen(self):
-        """Create the main screen for the Chat plugin (bubbles + animated typing)."""
-        # Get theme corner radius
-        from customtkinter import ThemeManager
+    # ------------------------------------------------------------------
+    # Welcome screen (shown when no conversation history)
+    # ------------------------------------------------------------------
 
-        self.corner_radius = ThemeManager.theme.get("Theme", {}).get(
-            "corner_radius", 15
+    def _build_no_api_key_screen(self, parent):
+        """Build a centered overlay telling the user to configure an API key."""
+        is_dark = self._is_dark_mode()
+        secondary_color = self._theme_color("text_secondary", "#6B7280", "#9CA3AF")
+        resistine_blue = "#0D5394"
+        error_color = self._theme_color("", "#B45309", "#FBBF24")
+
+        self._no_key_frame = customtkinter.CTkFrame(parent, fg_color="transparent")
+        self._no_key_frame.place(relx=0.5, rely=0.45, anchor="center")
+
+        icon_label = customtkinter.CTkLabel(
+            self._no_key_frame,
+            text="\u26A0",
+            font=customtkinter.CTkFont(size=36),
+            text_color=error_color,
+        )
+        icon_label.pack(pady=(0, 8))
+
+        title_label = customtkinter.CTkLabel(
+            self._no_key_frame,
+            text="API Key Required",
+            font=customtkinter.CTkFont(family="Inter", size=20, weight="bold"),
+            text_color="#ffffff" if is_dark else "#000000",
+        )
+        title_label.pack(pady=(0, 6))
+
+        desc_label = customtkinter.CTkLabel(
+            self._no_key_frame,
+            text="Add your OpenAI API key in Settings to start chatting.",
+            font=customtkinter.CTkFont(family="Inter", size=14),
+            text_color=secondary_color,
+        )
+        desc_label.pack(pady=(0, 20))
+
+        settings_btn = customtkinter.CTkButton(
+            self._no_key_frame,
+            text="Open Settings",
+            font=customtkinter.CTkFont(family="Inter", size=13, weight="bold"),
+            fg_color=resistine_blue,
+            hover_color="#1565B0",
+            text_color="#ffffff",
+            corner_radius=10,
+            height=40,
+            width=160,
+            command=self._open_settings,
+        )
+        settings_btn.pack()
+
+    def _open_settings(self):
+        """Navigate to the Settings plugin."""
+        try:
+            settings_plugin = next(
+                (p for p in self.app.plugin_list if p.get_name() == "Settings"), None
+            )
+            if settings_plugin:
+                self.app.select_frame_by_name(
+                    "frame_Settings", button=settings_plugin.get_button()
+                )
+        except Exception:
+            pass
+
+    def _build_welcome_screen(self, parent):
+        """Build a centered welcome overlay with greeting + suggestion chips."""
+        is_dark = self._is_dark_mode()
+        fg_color = "#ffffff" if is_dark else "#000000"
+        secondary_color = self._theme_color("text_secondary", "#6B7280", "#9CA3AF")
+        card_bg = "#1A1A1C" if is_dark else "#ffffff"
+        card_hover = "#242426" if is_dark else "#F0F0F5"
+        resistine_blue = "#0D5394"
+
+        self._welcome_frame = customtkinter.CTkFrame(parent, fg_color="transparent")
+        self._welcome_frame.place(relx=0.5, rely=0.45, anchor="center")
+
+        # Greeting
+        greeting_label = customtkinter.CTkLabel(
+            self._welcome_frame,
+            text="Resistine AI",
+            font=customtkinter.CTkFont(family="Inter", size=26, weight="bold"),
+            text_color=resistine_blue,
+        )
+        greeting_label.pack(pady=(0, 4))
+
+        subtitle_label = customtkinter.CTkLabel(
+            self._welcome_frame,
+            text="Your AI security assistant. Ask me anything.",
+            font=customtkinter.CTkFont(family="Inter", size=14),
+            text_color=secondary_color,
+        )
+        subtitle_label.pack(pady=(0, 28))
+
+        # Pick 4 random suggestions from the pool
+        suggestions = random.sample(
+            _SUGGESTION_POOL, min(4, len(_SUGGESTION_POOL))
         )
 
+        chips_frame = customtkinter.CTkFrame(
+            self._welcome_frame, fg_color="transparent"
+        )
+        chips_frame.pack()
+
+        # 2x2 grid of suggestion chips
+        for i, suggestion in enumerate(suggestions):
+            row = i // 2
+            col = i % 2
+
+            chip = customtkinter.CTkButton(
+                chips_frame,
+                text=suggestion,
+                font=customtkinter.CTkFont(family="Inter", size=13),
+                fg_color=card_bg,
+                hover_color=card_hover,
+                text_color=fg_color,
+                corner_radius=10,
+                border_width=1,
+                border_color=self._theme_color("divider_color", "#E5E7EB", "#2A2A2A"),
+                height=44,
+                width=260,
+                anchor="w",
+                command=lambda s=suggestion: self._use_suggestion(s),
+            )
+            chip.grid(row=row, column=col, padx=6, pady=6)
+
+    def _use_suggestion(self, text):
+        """Fill the input bar with a suggestion and send it."""
+        if hasattr(self, "_welcome_frame") and self._welcome_frame:
+            self._welcome_frame.destroy()
+            self._welcome_frame = None
+        self.chat_entry.delete(0, "end")
+        self.chat_entry.insert(0, text)
+        self.send_message()
+
+    def _clear_conversation(self):
+        """Reset conversation history and rebuild the screen."""
+        if self.base_url:
+            self.conversation_history = []
+        else:
+            self.conversation_history = [
+                {
+                    "role": "system",
+                    "content": "You are SOC Copilot specialized in cybersecurity.",
+                }
+            ]
+        self.session_id = None
+        # Destroy and recreate the screen
+        if hasattr(self, "second_frame") and self.second_frame:
+            self.second_frame.destroy()
+        frame = self.create_main_screen()
+        frame.grid(row=0, column=1, sticky="nsew")
+
+    # ------------------------------------------------------------------
+    # Main screen
+    # ------------------------------------------------------------------
+
+    def create_main_screen(self):
+        """Create the main screen for the Chat plugin."""
+        self.corner_radius = ThemeManager.theme.get("Theme", {}).get(
+            "corner_radius", 12
+        )
+
+        is_dark = self._is_dark_mode()
+        resistine_blue = "#0D5394"
+        fg_color = "#ffffff" if is_dark else "#000000"
+        secondary_color = self._theme_color("text_secondary", "#6B7280", "#9CA3AF")
+        input_bg = "#1A1A1C" if is_dark else "#F5F5F7"
+        border_color = self._theme_color("divider_color", "#E5E7EB", "#2A2A2A")
+
+        # --- Root frame ---
         self.second_frame = customtkinter.CTkFrame(
             self.app,
             corner_radius=0,
             fg_color="transparent",
         )
-
         self.second_frame.grid_columnconfigure(0, weight=1)
-        self.second_frame.grid_rowconfigure(0, weight=1)
-        self.second_frame.grid_rowconfigure(1, weight=0)
+        self.second_frame.grid_rowconfigure(0, weight=0)  # header
+        self.second_frame.grid_rowconfigure(1, weight=1)  # chat area
+        self.second_frame.grid_rowconfigure(2, weight=0)  # input bar
 
-        # Build Appearance mode detection
-        appearance_mode = customtkinter.get_appearance_mode()
-        
-        def is_dark_mode() -> bool:
-            if appearance_mode == "Dark":
-                return True
-            if appearance_mode == "Light":
-                return False
-            if sys.platform == "darwin":
-                try:
-                    import subprocess
-                    result = subprocess.run(
-                        ["defaults", "read", "-g", "AppleInterfaceStyle"],
-                        capture_output=True,
-                        text=True,
-                    )
-                    return result.returncode == 0 and "Dark" in result.stdout
-                except Exception:
-                    return False
-            return False
+        # --- Header bar ---
+        header_frame = customtkinter.CTkFrame(
+            self.second_frame,
+            fg_color="transparent",
+            height=48,
+        )
+        header_frame.grid(row=0, column=0, sticky="ew", padx=20, pady=(12, 0))
+        header_frame.grid_columnconfigure(0, weight=1)
+        header_frame.grid_columnconfigure(1, weight=0)
+        header_frame.grid_propagate(False)
 
-        resistine_blue = "#0D5394"
-        is_dark = is_dark_mode()
-        panel_bg = "#1A1A1A" if is_dark else "#ffffff"
-        fg_color = "#ffffff" if is_dark else "#000000"
+        header_title = customtkinter.CTkLabel(
+            header_frame,
+            text="Resistine AI",
+            font=customtkinter.CTkFont(family="Inter", size=16, weight="bold"),
+            text_color=fg_color,
+            anchor="w",
+        )
+        header_title.grid(row=0, column=0, sticky="w", padx=4, pady=8)
 
-
-        # Container for chat messages (centered, 70% width)
-        chat_container = customtkinter.CTkFrame(self.second_frame, fg_color="transparent", height=100)
-        chat_container.grid(row=0, column=0, sticky="nsew", pady=(30, 10))
+        # --- Chat area (centered, constrained width) ---
+        chat_container = customtkinter.CTkFrame(
+            self.second_frame, fg_color="transparent"
+        )
+        chat_container.grid(row=1, column=0, sticky="nsew", padx=0, pady=0)
         chat_container.grid_columnconfigure(0, weight=1)
         chat_container.grid_rowconfigure(0, weight=1)
-        chat_container.grid_propagate(True)
 
-        # Inner centered chat wrapper
         chat_wrapper = customtkinter.CTkFrame(chat_container, fg_color="transparent")
-        chat_wrapper.place(relx=0.5, rely=0.5, relwidth=0.7, relheight=1.0, anchor="center")
+        chat_wrapper.place(
+            relx=0.5, rely=0.5, relwidth=0.78, relheight=1.0, anchor="center"
+        )
         chat_wrapper.grid_columnconfigure(0, weight=1)
         chat_wrapper.grid_rowconfigure(0, weight=1)
 
         self.chat_box = customtkinter.CTkTextbox(
             chat_wrapper,
             wrap="word",
-            font=customtkinter.CTkFont(size=15, weight="normal"),
+            font=customtkinter.CTkFont(family="Inter", size=14, weight="normal"),
             fg_color="transparent",
             text_color=fg_color,
-            corner_radius=self.corner_radius,
+            corner_radius=0,
             border_width=0,
         )
         self.chat_box.grid(row=0, column=0, padx=0, pady=0, sticky="nsew")
-
-        # Center content with dynamic margins
-        def update_text_margins(event=None):
-            box_width = self.chat_box.winfo_width()
-            if box_width > 1:
-                side_margin = int(box_width * 0.05)
-                self.chat_box._textbox.configure(padx=side_margin)
-
-        self.chat_box.bind("<Configure>", update_text_margins)
-        self.chat_box._textbox.configure(padx=20)
+        self.chat_box._textbox.configure(padx=16)
 
         # Tags for styling
         self.chat_box._textbox.tag_config(
@@ -352,18 +520,19 @@ class Plugin(BasePlugin):
             lmargin1=0,
             lmargin2=0,
         )
-        self.chat_box._textbox.tag_config("error", foreground="#ff4444")
+        self.chat_box._textbox.tag_config("error", foreground="#EF4444")
 
         self.chat_box.configure(state="disabled")
 
-        # Animated text handler for AI responses (animate into CTkTextbox's internal tk.Text)
+        # Animated text handler
+        from plugins.chat.animated_text import AnimatedText
         self.animated_text = AnimatedText(
             self.chat_box._textbox,
             character_delay=0.02,
             line_delay=0.5,
         )
 
-        # Restore history or show welcome message
+        # Restore history or show welcome screen
         self.chat_box.configure(state="normal")
 
         has_history = False
@@ -378,67 +547,87 @@ class Plugin(BasePlugin):
             if role == "user":
                 self.render_user_bubble(content)
             elif role == "assistant":
-                # Render previous assistant messages using MarkdownBubble
                 self.render_assistant_bubble_markdown(content)
-
-        if not has_history:
-            # Initial welcome message
-            welcome_msg = "Hello! I am Resistine, your AI security assistant. How can I help you today?"
-            self.chat_box._textbox.insert(
-                "1.0", f"Resistine AI: {welcome_msg}\n\n\n", "assistant"
-            )
 
         self.chat_box.configure(state="disabled")
 
-        # Container for input (centered, same 70% width as chat)
-        input_container = customtkinter.CTkFrame(self.second_frame, fg_color="transparent")
-        input_container.grid(row=1, column=0, sticky="ew", pady=(0, 20))
-        input_container.grid_columnconfigure(0, weight=1)
-        input_container.grid_propagate(True)
+        # Show appropriate overlay when no history
+        self._welcome_frame = None
+        self._no_key_frame = None
+        has_api_key = self.client is not None
 
-        # Inner centered input wrapper
-        input_wrapper = customtkinter.CTkFrame(input_container, fg_color="transparent")
-        input_wrapper.place(relx=0.5, rely=0.5, relwidth=0.7, anchor="center")
-        input_wrapper.grid_columnconfigure(0, weight=1)
+        if not has_history:
+            if has_api_key:
+                self._build_welcome_screen(chat_wrapper)
+            else:
+                self._build_no_api_key_screen(chat_wrapper)
 
-        container = customtkinter.CTkFrame(
-            input_wrapper,
-            corner_radius=self.corner_radius,
-            fg_color="transparent",
+        # --- Input bar (bottom, centered) ---
+        input_outer = customtkinter.CTkFrame(
+            self.second_frame, fg_color="transparent"
         )
-        container.grid(row=0, column=0, padx=0, pady=0, sticky="ew")
-        container.grid_columnconfigure(0, weight=1)
-        container.grid_columnconfigure(1, weight=0)
+        input_outer.grid(row=2, column=0, sticky="ew", padx=0, pady=(0, 16))
+        input_outer.grid_columnconfigure(0, weight=1)
+
+        # Centered wrapper matching chat width
+        input_center = customtkinter.CTkFrame(input_outer, fg_color="transparent")
+        input_center.place(relx=0.5, rely=0.5, relwidth=0.78, anchor="center")
+        input_center.grid_columnconfigure(0, weight=1)
+
+        # Unified input container (entry + button inside one rounded bar)
+        input_bar = customtkinter.CTkFrame(
+            input_center,
+            fg_color=input_bg,
+            corner_radius=22,
+            border_width=1,
+            border_color=border_color,
+        )
+        input_bar.grid(row=0, column=0, sticky="ew", padx=4, pady=8)
+        input_bar.grid_columnconfigure(0, weight=1)
+        input_bar.grid_columnconfigure(1, weight=0)
 
         self.chat_entry = customtkinter.CTkEntry(
-            container,
+            input_bar,
             placeholder_text="Message Resistine AI...",
-            corner_radius=self.corner_radius,
+            corner_radius=20,
             border_width=0,
-            height=40,
-            font=customtkinter.CTkFont(size=14),
-            fg_color=panel_bg,
+            height=44,
+            font=customtkinter.CTkFont(family="Inter", size=14),
+            fg_color="transparent",
             text_color=fg_color,
             placeholder_text_color="#8ea8c6" if is_dark else "#9aa5b1",
         )
-        self.chat_entry.grid(row=0, column=0, padx=(0, 20), pady=0, sticky="ew")
+        self.chat_entry.grid(row=0, column=0, padx=(16, 4), pady=0, sticky="ew")
 
         self.send_button = customtkinter.CTkButton(
-            container,
-            text="Send",
+            input_bar,
+            text="\u2191",
             command=self.send_message,
-            corner_radius=self.corner_radius,
-            height=40,
-            width=80,
-            font=customtkinter.CTkFont(size=14, weight="bold"),
+            corner_radius=18,
+            height=36,
+            width=36,
+            font=customtkinter.CTkFont(size=18, weight="bold"),
             fg_color=resistine_blue,
             hover_color="#1565B0",
             text_color="#ffffff",
         )
-        self.send_button.grid(row=0, column=1, padx=0, pady=12, sticky="ew")
+        self.send_button.grid(row=0, column=1, padx=(0, 6), pady=6)
+
         self.chat_entry.bind("<Return>", lambda event: self.send_message())
 
+        # Disable input when no API key is configured
+        if not has_api_key:
+            self.chat_entry.configure(
+                state="disabled",
+                placeholder_text="API key required \u2014 see Settings",
+            )
+            self.send_button.configure(state="disabled", fg_color="#6B7280")
+
         return self.second_frame
+
+    # ------------------------------------------------------------------
+    # Send message
+    # ------------------------------------------------------------------
 
     def send_message(self):
         """Send a message and render: user bubble + animated assistant reply."""
@@ -446,7 +635,11 @@ class Plugin(BasePlugin):
         if not user_message:
             return
 
-        # Clear entry and enable chat box for insertion
+        # Remove welcome screen if visible
+        if hasattr(self, "_welcome_frame") and self._welcome_frame:
+            self._welcome_frame.destroy()
+            self._welcome_frame = None
+
         self.chat_entry.delete(0, "end")
         self.chat_box.configure(state="normal")
 
@@ -460,13 +653,11 @@ class Plugin(BasePlugin):
         self.chat_box._textbox.insert("end", "", "assistant")
         start_index = self.chat_box._textbox.index("end-1c")
 
-        # Check animation setting - if disabled, we buffer and show at once
         disable_animation = settings.get("chat", "disable_animation", False)
         buffered_response = ""
         full_response = ""
 
         try:
-            # Consume stream
             stream = self.send_message_to_chatgpt(user_message)
 
             for chunk in stream:
@@ -482,21 +673,15 @@ class Plugin(BasePlugin):
                     self.chat_box.update_idletasks()
 
             if disable_animation:
-                # Still show text briefly if disabled, or just skip to replace?
-                # Let's direct render the markdown if disabled.
                 pass
 
             # Finalize: Replace text with MarkdownBubble
             self.chat_box.configure(state="normal")
 
             if not disable_animation:
-                # Delete the raw text we streamed
                 end_index = self.chat_box._textbox.index("end-1c")
-                # Ensure we strictly delete what we inserted.
-                # start_index was set before streaming.
                 self.chat_box._textbox.delete(start_index, end_index)
 
-            # Insert MarkdownBubble
             self.render_assistant_bubble_markdown(full_response)
 
             self.chat_box.configure(state="disabled")
