@@ -140,7 +140,9 @@ class MarkdownBubble(customtkinter.CTkFrame):
         tw.configure(padx=8, pady=4, wrap="word")
         # Prevent horizontal scrolling
         tw.configure(xscrollcommand=lambda *args: None)
-        
+        # Redirect scroll events so the outer chat container scrolls, not this bubble
+        self._bind_scroll_redirect(tw)
+
         # Prevent the frame from shrinking to the child's requested size
         self.pack_propagate(False)
 
@@ -309,6 +311,23 @@ class MarkdownBubble(customtkinter.CTkFrame):
             self._render_code_block(tw, code_lines, code_language)
             tw.insert("end", "\n")
 
+    def _bind_scroll_redirect(self, widget):
+        """Redirect mouse-wheel events on an inner widget to the outer chat container."""
+        parent = self.master
+        chat_tw = parent._textbox if hasattr(parent, "_textbox") else parent
+
+        def on_wheel(event):
+            if sys.platform == "darwin":
+                chat_tw.yview_scroll(int(-1 * event.delta), "units")
+            else:
+                chat_tw.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            return "break"
+
+        widget.bind("<MouseWheel>", on_wheel, add="+")
+        if sys.platform != "darwin":
+            widget.bind("<Button-4>", lambda e: chat_tw.yview_scroll(-1, "units") or "break", add="+")
+            widget.bind("<Button-5>", lambda e: chat_tw.yview_scroll(1, "units") or "break", add="+")
+
     def _render_code_block(self, tw, code_lines, language=None):
         """Render a code block with copy button and optional syntax highlighting."""
         if not code_lines:
@@ -380,6 +399,8 @@ class MarkdownBubble(customtkinter.CTkFrame):
         line_count = len(code_lines)
         widget_height = min(25, max(3, line_count + 1))
         code_widget.configure(state="disabled", height=widget_height)
+        # Redirect scroll so the outer chat container scrolls, not the code block
+        self._bind_scroll_redirect(code_widget)
 
         # Embed the frame
         tw.window_create("end", window=code_frame, padx=0, pady=10, stretch=1)
