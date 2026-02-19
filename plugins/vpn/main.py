@@ -473,6 +473,12 @@ class Plugin(BasePlugin):
                 ).grid(row=0, column=2, padx=(0, 12), pady=12)
 
         # ── 3. DETAIL PANELS (only when config is available) ──────────────
+        # Track references for the responsive resize handler
+        client_panel      = None
+        server_panel      = None
+        post_panel_widgets = []   # full-width panels after the two-column section
+        panel_row         = next_row
+
         if selected_conf_file:
             data     = self.get_configuration_values(selected_conf_file)
             sys_info = self.get_system_info(selected_conf_file)
@@ -504,7 +510,7 @@ class Plugin(BasePlugin):
                 ).grid(row=row, column=1, padx=(4, 14), pady=5, sticky="e")
 
             # Left — Client panel placed directly in scroll_frame column 0
-            client_panel = customtkinter.CTkFrame(
+            client_panel = customtkinter.CTkFrame(  # noqa: tracked for responsive layout
                 scroll_frame, corner_radius=cr,
                 fg_color=PANEL_BG, border_width=1, border_color=PANEL_BORDER
             )
@@ -520,7 +526,7 @@ class Plugin(BasePlugin):
             customtkinter.CTkFrame(client_panel, height=12, fg_color="transparent").grid(row=r, column=0)
 
             # Right — Server panel placed directly in scroll_frame column 1, same row
-            server_panel = customtkinter.CTkFrame(
+            server_panel = customtkinter.CTkFrame(  # noqa: tracked for responsive layout
                 scroll_frame, corner_radius=cr,
                 fg_color=PANEL_BG, border_width=1, border_color=PANEL_BORDER
             )
@@ -543,6 +549,7 @@ class Plugin(BasePlugin):
             keys_panel.grid(row=next_row, column=0, columnspan=2, sticky="ew", pady=6)
             keys_panel.grid_columnconfigure(0, weight=0)
             keys_panel.grid_columnconfigure(1, weight=1)
+            post_panel_widgets.append(keys_panel)
             next_row += 1
 
             kr = _section_header(keys_panel, 0, "PUBLIC KEYS")
@@ -578,6 +585,7 @@ class Plugin(BasePlugin):
             allowed_panel.grid(row=next_row, column=0, columnspan=2, sticky="ew", pady=6)
             allowed_panel.grid_columnconfigure(0, weight=0)
             allowed_panel.grid_columnconfigure(1, weight=1)
+            post_panel_widgets.append(allowed_panel)
             next_row += 1
 
             ar = _section_header(allowed_panel, 0, "ALLOWED IPs")
@@ -618,6 +626,71 @@ class Plugin(BasePlugin):
                 text_color=("#3A7EBF", "#3A7EBF"),
                 font=customtkinter.CTkFont(size=13), height=38
             ).grid(row=0, column=1, padx=(4, 0), sticky="ew")
+
+        # ── 5. RESPONSIVE LAYOUT + MAX-WIDTH CENTERING ────────────────────
+        MAX_CONTENT_WIDTH = 1100
+        PANEL_BREAKPOINT  = 600   # content px below which panels stack vertically
+        _stacked          = [False]
+        _resize_job       = [None]
+
+        def _do_layout():
+            """Apply centering and responsive layout using the current settled width."""
+            _resize_job[0] = None
+            try:
+                if not scroll_frame.winfo_exists():
+                    return
+            except Exception:
+                return
+
+            # Use winfo_width() on the settled widget, not event.width which may be stale
+            width = self.main_container.winfo_width()
+            if width < 10:
+                return
+
+            # — Max-width centering: pad symmetrically when content area exceeds cap —
+            pad = max(20, (width - MAX_CONTENT_WIDTH) // 2) if width > MAX_CONTENT_WIDTH + 40 else 20
+            scroll_frame.grid_configure(padx=pad)
+
+            # — Responsive panels (only when a config is loaded) —
+            if client_panel is None or server_panel is None:
+                return
+
+            content_w    = min(width - 2 * pad, MAX_CONTENT_WIDTH)
+            now_stacked  = content_w < PANEL_BREAKPOINT
+
+            if now_stacked == _stacked[0]:
+                return   # nothing to change
+
+            _stacked[0] = now_stacked
+            n_post       = len(post_panel_widgets)
+
+            if now_stacked:
+                client_panel.grid_configure(row=panel_row,     column=0, columnspan=2, sticky="ew", padx=0)
+                server_panel.grid_configure(row=panel_row + 1, column=0, columnspan=2, sticky="ew", padx=0)
+                for i, panel in enumerate(post_panel_widgets):
+                    panel.grid_configure(row=panel_row + 2 + i)
+                buttons_frame.grid_configure(row=panel_row + 2 + n_post)
+            else:
+                client_panel.grid_configure(row=panel_row, column=0, columnspan=1, sticky="nsew", padx=(0, 4))
+                server_panel.grid_configure(row=panel_row, column=1, columnspan=1, sticky="nsew", padx=(4, 0))
+                for i, panel in enumerate(post_panel_widgets):
+                    panel.grid_configure(row=panel_row + 1 + i)
+                buttons_frame.grid_configure(row=panel_row + 1 + n_post)
+
+        def _on_resize(event):
+            # Debounce: cancel any pending layout job and schedule a fresh one.
+            # after_idle runs after all pending events are processed, so winfo_width()
+            # will reflect the final settled size rather than an intermediate value.
+            if _resize_job[0] is not None:
+                try:
+                    self.app.after_cancel(_resize_job[0])
+                except Exception:
+                    pass
+            _resize_job[0] = self.app.after_idle(_do_layout)
+
+        self.main_container.bind("<Configure>", _on_resize)
+        # Apply correct initial centering once the widget is fully mapped
+        self.app.after(50, _do_layout)
 
         if IS_MACOS:
             self._start_extension_polling()

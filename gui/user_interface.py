@@ -587,7 +587,7 @@ class AppUI(customtkinter.CTk):
         if os.path.exists(logo_path):
             try:
                 logo_img = Image.open(logo_path)
-                max_width = 180
+                max_width = 176  # sidebar(200) - button padx*2(12*2)
                 aspect_ratio = logo_img.height / logo_img.width if logo_img.width else 1
                 logo_height = int(max_width * aspect_ratio)
                 logo_img = logo_img.resize(
@@ -615,7 +615,7 @@ class AppUI(customtkinter.CTk):
             text_color=sidebar_text_color if not logo_image else None,
         )
         self.navigation_frame_label.grid(
-            row=0, column=0, padx=20, pady=(20, 8), sticky="ew"
+            row=0, column=0, padx=12, pady=(20, 8), sticky="ew"
         )
 
         # Separator below logo
