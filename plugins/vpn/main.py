@@ -638,7 +638,7 @@ class Plugin(BasePlugin):
             ).grid(row=0, column=1, padx=(4, 0), sticky="ew")
 
         # ── 5. RESPONSIVE LAYOUT + MAX-WIDTH CENTERING ────────────────────
-        MAX_CONTENT_WIDTH = 1100
+        MAX_CONTENT_WIDTH = 750
         PANEL_BREAKPOINT  = 600   # content px below which panels stack vertically
         _stacked          = [False]
         _resize_job       = [None]
