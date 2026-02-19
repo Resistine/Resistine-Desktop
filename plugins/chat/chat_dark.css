@@ -60,18 +60,24 @@ li {
 }
 table {
   width: 100%;
-  table-layout: fixed;
+  table-layout: auto;
   border-collapse: collapse;
   margin: 0.6em 0;
+  border-radius: 8px;
+  overflow: hidden;
 }
 th, td {
   border: 1px solid #2A2A2C;
-  padding: 8px 10px;
+  padding: 10px 14px;
   text-align: left;
+  word-wrap: break-word;
 }
 th {
   background-color: #1A1A1C;
   font-weight: 600;
+}
+tr:nth-child(even) td {
+  background-color: #161618;
 }
 blockquote {
   border-left: 3px solid #0D5394;

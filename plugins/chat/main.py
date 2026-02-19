@@ -235,22 +235,22 @@ class Plugin(BasePlugin):
     # ------------------------------------------------------------------
 
     def render_user_bubble(self, user_message):
-        """Render the user's message bubble (right-aligned, Resistine blue)."""
+        """Render the user's message bubble (right-aligned, subtle background)."""
         is_dark = self._is_dark_mode()
-        bubble_color = "#0D5394"
-        bubble_text_color = "#ffffff"
+        bubble_color = "#2A2A2C" if is_dark else "#E8E8EC"
+        bubble_text_color = "#ffffff" if is_dark else "#000000"
 
         bubble_frame = customtkinter.CTkFrame(
             self.chat_box,
             fg_color=bubble_color,
-            corner_radius=16,
+            corner_radius=12,
         )
         bubble_text = customtkinter.CTkLabel(
             bubble_frame,
             text=user_message,
             fg_color="transparent",
             text_color=bubble_text_color,
-            wraplength=420,
+            wraplength=500,
             font=customtkinter.CTkFont(family="Inter", size=14),
             justify="left",
             anchor="w",
@@ -258,11 +258,11 @@ class Plugin(BasePlugin):
         bubble_text.pack(padx=14, pady=10)
 
         self.chat_box._textbox.window_create(
-            "end", window=bubble_frame, padx=10, pady=6
+            "end", window=bubble_frame, padx=10, pady=(2, 8)
         )
-        self.chat_box._textbox.insert("end", "\n\n")
+        self.chat_box._textbox.insert("end", "\n")
 
-        self.chat_box._textbox.tag_add("user_align", "end-3l", "end-2l")
+        self.chat_box._textbox.tag_add("user_align", "end-2l", "end-1l")
         self.chat_box._textbox.tag_config("user_align", justify="right")
 
     def render_assistant_bubble_markdown(self, message):
@@ -274,9 +274,9 @@ class Plugin(BasePlugin):
         insert_index = self.chat_box._textbox.index("insert")
 
         self.chat_box._textbox.window_create(
-            "end", window=bubble, padx=10, pady=6, stretch=1
+            "end", window=bubble, padx=10, pady=(2, 8), stretch=1
         )
-        self.chat_box._textbox.insert("end", "\n\n")
+        self.chat_box._textbox.insert("end", "\n")
 
         line_start = insert_index.split(".")[0] + ".0"
         line_end = insert_index.split(".")[0] + ".end"
