@@ -149,8 +149,8 @@ class MarkdownBubble(customtkinter.CTkFrame):
         if available_width <= 1:
             return
 
-        # Desired width: 85% of available space to look like a chat bubble
-        target_width = int(available_width * 0.60)
+        # Use most of the available width so tables and code blocks aren't squeezed
+        target_width = int(available_width * 0.92)
 
         if target_width != self.last_width:
             self.last_width = target_width
@@ -215,6 +215,6 @@ class MarkdownBubble(customtkinter.CTkFrame):
             text=self.markdown_content,
             anchor="w",
             justify="left",
-            wraplength=600,  # Estimate
+            wraplength=700,
         )
         label.pack(fill="both", expand=True, padx=10, pady=10)
