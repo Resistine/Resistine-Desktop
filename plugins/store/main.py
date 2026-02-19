@@ -86,7 +86,7 @@ class Plugin(BasePlugin):
             title_frame,
             text="Store",
             font=customtkinter.CTkFont(family="Inter", size=30, weight="bold"),
-            text_color=accent_blue,
+            text_color=("black", "white"),
             justify="center",
             anchor="center",
         )
