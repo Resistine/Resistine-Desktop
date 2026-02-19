@@ -367,6 +367,7 @@ class AppUI(customtkinter.CTk):
 
         # Optimization properties
         container._resistine_last_w = -1
+        container._resistine_last_height = -1  # Cache last target_height to skip redundant configure calls
         container._resistine_desc_labels = [] # Centralized wraplength updates
         container._resistine_num_cols = len(cols_tuple)
         container._resistine_screen_width = None  # Cached screen width for performance
@@ -380,7 +381,7 @@ class AppUI(customtkinter.CTk):
                         container.after_cancel(container._resistine_resize_job)
                     except:
                         pass
-                container._resistine_resize_job = container.after(16, lambda: _do_update_aspect_ratio(force_width=None))
+                container._resistine_resize_job = container.after(60, lambda: _do_update_aspect_ratio(force_width=None))
                 return
             _do_update_aspect_ratio(force_width=force_width)
         
@@ -439,18 +440,22 @@ class AppUI(customtkinter.CTk):
                 # Store for cards created later (pre-allocation)
                 container._resistine_target_height = target_height
 
-                # Update row minsize to maintain aspect ratio perfectly
-                for r in rows_tuple:
-                    container.grid_rowconfigure(r, minsize=target_height)
+                # Only update card heights and wraplengths if target_height actually changed
+                if target_height != container._resistine_last_height:
+                    container._resistine_last_height = target_height
 
-                # ENFORCE CARD HEIGHTS:
-                # Loop through children and ensure widgets marked with _resistine_plugin_card
-                # strictly follow the target height. This prevents "jumping" on load.
-                for child in container.winfo_children():
-                    if getattr(child, "_resistine_plugin_card", False):
-                        try:
-                            child.configure(height=target_height)
-                        except: pass
+                    # Update row minsize to maintain aspect ratio perfectly
+                    for r in rows_tuple:
+                        container.grid_rowconfigure(r, minsize=target_height)
+
+                    # ENFORCE CARD HEIGHTS:
+                    # Loop through children and ensure widgets marked with _resistine_plugin_card
+                    # strictly follow the target height. This prevents "jumping" on load.
+                    for child in container.winfo_children():
+                        if getattr(child, "_resistine_plugin_card", False):
+                            try:
+                                child.configure(height=target_height)
+                            except: pass
 
                 # Centralized wraplength update (efficiently loops through registered labels)
                 wrap_val = max(100, int(card_width) - 60)
