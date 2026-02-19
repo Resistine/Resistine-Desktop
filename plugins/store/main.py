@@ -209,8 +209,8 @@ class Plugin(BasePlugin):
                     return
             except:
                 return
-                
-            screen_width = self.app.winfo_screenwidth()
+
+            screen_width = self._cached_screen_width
             window_width = self.app.winfo_width()
             
             # Determine target columns based on width thresholds
