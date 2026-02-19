@@ -359,7 +359,11 @@ class Plugin(BasePlugin):
         self.main_container.grid_columnconfigure(2, weight=1)              # right spacer
         self.main_container.grid_rowconfigure(0, weight=1)
 
-        scroll_frame = customtkinter.CTkScrollableFrame(self.main_container, corner_radius=0, fg_color="transparent")
+        scroll_frame = customtkinter.CTkScrollableFrame(
+            self.main_container, 
+            corner_radius=0, 
+            fg_color="transparent"
+        )
         scroll_frame.grid(row=0, column=1, sticky="nsew", pady=10)
         # Two equal columns — panels sit directly here; no wrapper frame needed
         scroll_frame.grid_columnconfigure(0, weight=1)
@@ -392,6 +396,7 @@ class Plugin(BasePlugin):
             sub_text     = "All traffic is encrypted and routed securely" if is_connected else "Your internet traffic is not protected"
             card_bg      = ("#E8F5E9", "#1A2E1F") if is_connected else ("#FDEDEC", "#2E1A1A")
             is_enabled   = True
+
 
         from customtkinter import ThemeManager
         cr = ThemeManager.theme.get("Theme", {}).get("corner_radius", 12)
@@ -641,6 +646,34 @@ class Plugin(BasePlugin):
         def _do_layout():
             """Apply centering and responsive layout based on current app/sidebar widths."""
             _resize_job[0] = None
+            
+            # --- Auto-hide Scrollbar Logic ---
+            try:
+                if hasattr(scroll_frame, "_parent_canvas") and hasattr(scroll_frame, "_scrollbar"):
+                    yview = scroll_frame._parent_canvas.yview()
+                    
+                    # Check if currently hidden (hacky check usually works if grid_remove used)
+                    is_mapped = bool(scroll_frame._scrollbar.grid_info())
+                    
+                    # If content fits entirely (0.0 to 1.0)
+                    if yview and (yview[0] <= 0.01 and yview[1] >= 0.99):
+                        if is_mapped:
+                            # Save grid info to restore later if needed, though grid() usually suffices 
+                            # if grid_remove was used. To be safe with CTk internals:
+                            scroll_frame._saved_sb_grid = scroll_frame._scrollbar.grid_info()
+                            scroll_frame._scrollbar.grid_remove()
+                    else:
+                        if not is_mapped:
+                             # Restore
+                             if hasattr(scroll_frame, "_saved_sb_grid") and scroll_frame._saved_sb_grid:
+                                 scroll_frame._scrollbar.grid(**scroll_frame._saved_sb_grid)
+                             else:
+                                 # Default fallback if we somehow didn't save it
+                                 # Standard CTkScrollableFrame layout: row=0, column=1, sticky="ns"
+                                 scroll_frame._scrollbar.grid(row=0, column=1, sticky="ns", pady=0)
+            except Exception:
+                pass
+            # --- End Auto-hide ---
             try:
                 if not scroll_frame.winfo_exists():
                     return
