@@ -646,6 +646,10 @@ class Plugin(BasePlugin):
         def _do_layout():
             """Apply centering and responsive layout based on current app/sidebar widths."""
             _resize_job[0] = None
+
+            # Safety check: if plugin updated/destroyed, main_container might be gone
+            if not hasattr(self, 'main_container') or not self.main_container.winfo_exists():
+                return
             
             # --- Auto-hide Scrollbar Logic ---
             try:
@@ -705,7 +709,14 @@ class Plugin(BasePlugin):
             else:
                 col_w = max(100, width - 40)   # 20px breathing room on each side
 
-            self.main_container.grid_columnconfigure(1, weight=0, minsize=col_w)
+            # Ensure main_container still exists and is valid
+            if not hasattr(self, 'main_container') or not self.main_container.winfo_exists():
+                return
+
+            try:
+                self.main_container.grid_columnconfigure(1, weight=0, minsize=col_w)
+            except Exception:
+                return
 
             # — Responsive panels (only when a config is loaded) —
             if client_panel is None or server_panel is None:
