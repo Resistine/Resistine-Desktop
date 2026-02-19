@@ -351,11 +351,16 @@ class Plugin(BasePlugin):
         selected_conf_file = self.get_selected_conf_file_name()
 
         self.main_container = customtkinter.CTkFrame(self.app, corner_radius=0, fg_color="transparent")
-        self.main_container.grid_columnconfigure(0, weight=1)
+        # Three-column layout: left-spacer | content | right-spacer
+        # Equal-weight spacer columns auto-center the content column when the
+        # window is wider than MAX_CONTENT_WIDTH; _do_layout sets col 1's minsize.
+        self.main_container.grid_columnconfigure(0, weight=1)              # left spacer
+        self.main_container.grid_columnconfigure(1, weight=0, minsize=100) # content (updated in _do_layout)
+        self.main_container.grid_columnconfigure(2, weight=1)              # right spacer
         self.main_container.grid_rowconfigure(0, weight=1)
 
         scroll_frame = customtkinter.CTkScrollableFrame(self.main_container, corner_radius=0, fg_color="transparent")
-        scroll_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=10)
+        scroll_frame.grid(row=0, column=1, sticky="nsew", pady=10)
         # Two equal columns — panels sit directly here; no wrapper frame needed
         scroll_frame.grid_columnconfigure(0, weight=1)
         scroll_frame.grid_columnconfigure(1, weight=1)
@@ -634,7 +639,7 @@ class Plugin(BasePlugin):
         _resize_job       = [None]
 
         def _do_layout():
-            """Apply centering and responsive layout using the current settled width."""
+            """Apply centering and responsive layout based on current app/sidebar widths."""
             _resize_job[0] = None
             try:
                 if not scroll_frame.winfo_exists():
@@ -642,21 +647,38 @@ class Plugin(BasePlugin):
             except Exception:
                 return
 
-            # Use winfo_width() on the settled widget, not event.width which may be stale
-            width = self.main_container.winfo_width()
+            # Content area = total window width minus the fixed sidebar.
+            # Using app.winfo_width() is reliable; main_container.winfo_width()
+            # can be stale or wrong depending on when Configure fires.
+            app_w = self.app.winfo_width()
+            if app_w < 10:
+                return
+            try:
+                nav = getattr(self.app, 'navigation_frame', None)
+                nav_w = nav.winfo_width() if (nav and nav.winfo_exists()) else 200
+                nav_w = max(nav_w, 200)
+            except Exception:
+                nav_w = 200
+            width = app_w - nav_w
             if width < 10:
                 return
 
-            # — Max-width centering: pad symmetrically when content area exceeds cap —
-            pad = max(20, (width - MAX_CONTENT_WIDTH) // 2) if width > MAX_CONTENT_WIDTH + 40 else 20
-            scroll_frame.grid_configure(padx=pad)
+            # — Max-width centering via column widths, not padx —
+            # Column 1 (content) is set to the desired width.
+            # Columns 0 and 2 (spacers, weight=1 each) absorb any surplus equally,
+            # which automatically centers the content column in the available area.
+            if width > MAX_CONTENT_WIDTH + 40:
+                col_w = MAX_CONTENT_WIDTH
+            else:
+                col_w = max(100, width - 40)   # 20px breathing room on each side
+
+            self.main_container.grid_columnconfigure(1, weight=0, minsize=col_w)
 
             # — Responsive panels (only when a config is loaded) —
             if client_panel is None or server_panel is None:
                 return
 
-            content_w    = min(width - 2 * pad, MAX_CONTENT_WIDTH)
-            now_stacked  = content_w < PANEL_BREAKPOINT
+            now_stacked = col_w < PANEL_BREAKPOINT
 
             if now_stacked == _stacked[0]:
                 return   # nothing to change
