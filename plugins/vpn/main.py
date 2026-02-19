@@ -258,27 +258,50 @@ class Plugin(BasePlugin):
         # Use config manager to get the active config
         return self.config_manager.get_active_config_name()
 
+    def _get_client_public_key(self, private_key):
+        """Derive the WireGuard public key from a private key using 'wg pubkey'."""
+        try:
+            result = subprocess.run(
+                ['wg', 'pubkey'],
+                input=private_key,
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except Exception as e:
+            logger.warning(f"Could not compute client public key: {e}")
+        return 'N/A'
+
     def get_system_info(self, tunnel_name):
         """Generates the system information dictionary for display."""
         global my_vpn_status
         data = self.get_configuration_values(tunnel_name) if tunnel_name else {}
-        
+
         is_running = my_vpn_status == "Running"
-        protocol = "WireGuard" if is_running else "Disconnected"
-        
+
         # Parse Endpoint for display
-        endpoint = data.get('endpoint', 'Unknown')
-        if endpoint != 'Unknown' and ':' in endpoint:
-            endpoint = endpoint.split(':')[0] # Just show IP/Host
+        endpoint = data.get('endpoint', 'N/A')
+        if endpoint != 'N/A' and ':' in endpoint:
+            endpoint = endpoint.split(':')[0]  # Just show IP/Host
+
+        # Compute client public key from private key (never expose private key)
+        private_key = data.get('private_key', '')
+        client_public_key = self._get_client_public_key(private_key) if private_key else 'N/A'
+
+        # DNS from config or module default
+        dns = data.get('dns', DNS_SERVER)
 
         return {
             "Status": "Secured" if is_running else "Unsecured",
-            "Protocol": protocol,
-            "Tunnel Name": tunnel_name if tunnel_name else "None",
-            "Server IP": endpoint,
-            "Public Key": (data.get('public_key', 'N/A') or 'N/A')[:15] + '...' if data.get('public_key') else 'N/A',
+            "Config Name": tunnel_name if tunnel_name else "None",
+            "System": f"{_PLATFORM} {platform.release()}",
             "Client IP": data.get('client_ip_address', 'N/A'),
-            "System": f"{_PLATFORM} {platform.release()}"
+            "Client Public Key": client_public_key,
+            "Server IP": endpoint,
+            "Server Public Key": data.get('public_key', 'N/A'),
+            "DNS": dns,
         }
 
     def create_main_screen(self):
@@ -470,13 +493,25 @@ class Plugin(BasePlugin):
             key_label = customtkinter.CTkLabel(info_frame, text=f"{key}:", justify="left", text_color=("#666666", "#aaaaaa"))
             key_label.grid(row=row_num, column=0, padx=15, pady=5, sticky="w")
 
-            value_label = customtkinter.CTkLabel(info_frame, text=value, justify="right", font=customtkinter.CTkFont(family="Inter", size=13, weight="bold"), text_color=("#000000", "#ffffff"))
+            value_label = customtkinter.CTkLabel(
+                info_frame,
+                text=value,
+                justify="right",
+                font=customtkinter.CTkFont(family="Inter", size=13, weight="bold"),
+                text_color=("#000000", "#ffffff")
+            )
             value_label.grid(row=row_num, column=1, padx=15, pady=5, sticky="e")
             row_num += 1
 
-        # --- 5. Import Button ---
+        # --- 5. Action Buttons ---
+        buttons_frame = customtkinter.CTkFrame(scroll_frame, fg_color="transparent")
+        buttons_frame.grid(row=5, column=0, pady=20, sticky="ew")
+        buttons_frame.grid_columnconfigure(0, weight=1)
+        if selected_conf_file:
+            buttons_frame.grid_columnconfigure(1, weight=1)
+
         import_button = customtkinter.CTkButton(
-            scroll_frame,
+            buttons_frame,
             text="Import Configuration",
             command=self.import_config,
             fg_color="transparent",
@@ -485,7 +520,20 @@ class Plugin(BasePlugin):
             text_color=("#3a7ebf", "#3a7ebf"),
             font=customtkinter.CTkFont(size=13)
         )
-        import_button.grid(row=5, column=0, pady=20, sticky="ew")
+        import_button.grid(row=0, column=0, padx=(0, 5) if selected_conf_file else 0, sticky="ew")
+
+        if selected_conf_file:
+            view_config_button = customtkinter.CTkButton(
+                buttons_frame,
+                text="View Config",
+                command=lambda: self._show_config_dialog(selected_conf_file),
+                fg_color="transparent",
+                border_width=1,
+                border_color=("#3a7ebf", "#1f538d"),
+                text_color=("#3a7ebf", "#3a7ebf"),
+                font=customtkinter.CTkFont(size=13)
+            )
+            view_config_button.grid(row=0, column=1, padx=(5, 0), sticky="ew")
 
         # Start polling for extension state changes (macOS only)
         if IS_MACOS:
@@ -537,6 +585,56 @@ class Plugin(BasePlugin):
             self.app.show_notification(f"Failed to delete: {message}", type="error")
 
         self.update_plugin(self.id)
+
+    def _show_config_dialog(self, tunnel_name):
+        """Open a modal dialog showing the config file with a copy button."""
+        conf_file_path = os.path.join(wireguard_folder, f"{tunnel_name}.conf")
+
+        if not os.path.exists(conf_file_path):
+            self.app.show_notification("Config file not found", type="error")
+            return
+
+        with open(conf_file_path, 'r') as f:
+            content = f.read()
+
+        dialog = customtkinter.CTkToplevel(self.app)
+        dialog.title(f"{tunnel_name}.conf")
+        dialog.geometry("520x440")
+        dialog.resizable(True, True)
+        dialog.grab_set()
+        dialog.grid_columnconfigure(0, weight=1)
+        dialog.grid_rowconfigure(1, weight=1)
+
+        title_label = customtkinter.CTkLabel(
+            dialog,
+            text=f"{tunnel_name}.conf",
+            font=customtkinter.CTkFont(size=14, weight="bold")
+        )
+        title_label.grid(row=0, column=0, padx=20, pady=(15, 5), sticky="w")
+
+        textbox = customtkinter.CTkTextbox(
+            dialog,
+            font=customtkinter.CTkFont(family="Courier", size=12),
+            wrap="word",
+            state="normal"
+        )
+        textbox.grid(row=1, column=0, padx=20, pady=5, sticky="nsew")
+        textbox.insert("1.0", content)
+        textbox.configure(state="disabled")
+
+        def copy_to_clipboard():
+            dialog.clipboard_clear()
+            dialog.clipboard_append(content)
+            copy_btn.configure(text="Copied!")
+            dialog.after(2000, lambda: copy_btn.configure(text="Copy to Clipboard"))
+
+        copy_btn = customtkinter.CTkButton(
+            dialog,
+            text="Copy to Clipboard",
+            command=copy_to_clipboard,
+            height=36
+        )
+        copy_btn.grid(row=2, column=0, padx=20, pady=(5, 20), sticky="ew")
 
     def _start_extension_polling(self):
         """Poll extension status every 5 seconds to detect enable/disable changes.
@@ -603,7 +701,8 @@ class Plugin(BasePlugin):
                         if key == 'privatekey': data['private_key'] = value
                         elif key == 'address': data['client_ip_address'] = value
                         elif key == 'publickey': data['public_key'] = value
-                        elif key == 'endpoint': 
+                        elif key == 'dns': data['dns'] = value
+                        elif key == 'endpoint':
                             data['endpoint'] = value
                             if ':' in value: data['port'] = value.split(':')[-1]
         elif not os.path.exists(wireguard_folder):
