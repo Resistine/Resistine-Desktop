@@ -10,6 +10,7 @@ from PIL import Image, ImageDraw
 from gui.notifications import ToastNotification
 from utils.logger import logger
 from utils.svg_loader import load_svg_as_ctk_image
+from utils.functions import get_resource_path
 
 
 class AppUI(customtkinter.CTk):
@@ -585,16 +586,10 @@ class AppUI(customtkinter.CTk):
         logo_image = None
         
         # Path to SVG in resources/icons
-        svg_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
-            "resources", "icons", "ResistineLogo.svg"
-        )
+        svg_path = get_resource_path(os.path.join("resources", "icons", "ResistineLogo.svg"))
         
         # Fallback path to PNG in root
-        png_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
-            "ResistineLogoWhiteText.png",
-        )
+        png_path = get_resource_path(os.path.join("resources", "icons", "ResistineLogoWhiteText.png"))
 
         max_width = 226  # sidebar(250) - button padx*2(12*2)
         # Assuming a standard aspect ratio if we can't determine it easily from SVG without loading

@@ -358,10 +358,8 @@ fi
 
 # Check for app icon
 ICON_FLAG=""
-if [ -f "$PYTHON_UI_PATH/ResistineSheild.png" ]; then
-    ICON_FLAG="--volicon $PYTHON_UI_PATH/ResistineSheild.png"
-elif [ -f "$PYTHON_UI_PATH/resources/ResistineSheild.png" ]; then
-    ICON_FLAG="--volicon $PYTHON_UI_PATH/resources/ResistineSheild.png"
+if [ -f "$PYTHON_UI_PATH/resources/icons/ResistineSheild.png" ]; then
+    ICON_FLAG="--volicon $PYTHON_UI_PATH/resources/icons/ResistineSheild.png"
 fi
 
 # Create DMG

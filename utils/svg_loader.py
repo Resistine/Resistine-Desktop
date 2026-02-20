@@ -6,7 +6,7 @@ import customtkinter
 
 try:
     import cairosvg
-except ImportError:
+except (ImportError, OSError):
     cairosvg = None
 
 def load_svg_as_ctk_image(svg_path, size=None):

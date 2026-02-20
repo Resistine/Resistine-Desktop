@@ -27,8 +27,6 @@ datas = [
     ('gui', 'gui'),
     ('utils', 'utils'),
     ('docs', 'docs'),
-    ('ResistineLogoWhiteText.png', '.'),
-    ('ResistineSheild.png', '.'),
 ]
 
 # Hidden imports (modules not auto-detected)
@@ -118,7 +116,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name=f'{APP_NAME}.app',
-    icon='ResistineSheild.png',  # Will be converted to .icns
+    icon='resources/icons/ResistineSheild.png',  # Will be converted to .icns
     bundle_identifier=BUNDLE_ID,
     version=VERSION,
     info_plist={

@@ -17,6 +17,9 @@ import os
 from tkinter import filedialog
 import platform
 import subprocess
+import base64
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+from cryptography.hazmat.primitives import serialization
 # --- Platform Detection (single source of truth) ---
 _PLATFORM = platform.system()
 IS_MACOS = _PLATFORM == "Darwin"
@@ -258,21 +261,27 @@ class Plugin(BasePlugin):
         # Use config manager to get the active config
         return self.config_manager.get_active_config_name()
 
-    def _get_client_public_key(self, private_key):
-        """Derive the WireGuard public key from a private key using 'wg pubkey'."""
+    def _get_client_public_key(self, private_key_b64):
+        """Derive the WireGuard public key from a private key using pure Python."""
         try:
-            result = subprocess.run(
-                ['wg', 'pubkey'],
-                input=private_key,
-                capture_output=True,
-                text=True,
-                timeout=5
+            # Decode the base64 private key
+            private_bytes = base64.b64decode(private_key_b64)
+            if len(private_bytes) != 32:
+                # WireGuard keys are exactly 32 bytes (256 bits)
+                return 'N/A'
+                
+            # Create private key object and get public bytes
+            priv = X25519PrivateKey.from_private_bytes(private_bytes)
+            pub_bytes = priv.public_key().public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw
             )
-            if result.returncode == 0:
-                return result.stdout.strip()
+            
+            # Re-encode to base64 for display
+            return base64.b64encode(pub_bytes).decode('utf-8')
         except Exception as e:
             logger.warning(f"Could not compute client public key: {e}")
-        return 'N/A'
+            return 'N/A'
 
     def get_system_info(self, tunnel_name):
         """Generates the system information dictionary for display."""
