@@ -882,12 +882,27 @@ class Plugin(BasePlugin):
                 self._extension_poll_id = None
                 return
 
-            current_state = is_extension_enabled()
-            if current_state != self._last_extension_state:
-                logger.info(f"Extension state changed: {self._last_extension_state} -> {current_state}")
-                self._last_extension_state = current_state
+            # 1. Check Extension State
+            current_ext_state = is_extension_enabled()
+            if current_ext_state != self._last_extension_state:
+                logger.info(f"Extension state changed: {self._last_extension_state} -> {current_ext_state}")
+                self._last_extension_state = current_ext_state
                 self.update_plugin(self.id)
-                return  # update_plugin rebuilds the screen which restarts polling
+                return  # update_plugin rebuilds screen -> restarts polling
+
+            # 2. Check Connection Status
+            # We also poll the actual tunnel status to detect if it was turned off in System Settings
+            global my_vpn_status, active_client_name
+            current_status = check_service_status(active_client_name or "vpn", DNS_SERVER)
+            if current_status != my_vpn_status:
+                # We only care about sync if the app thinks it's Running but system says Stopped
+                # Or if it was Stopped but now it's Running (e.g. turned on in Settings)
+                # If status is "Connecting", we let the connection logic handle it.
+                if my_vpn_status in ["Running", "Stopped"]:
+                    logger.info(f"VPN Connection status changed externally: {my_vpn_status} -> {current_status}")
+                    my_vpn_status = current_status
+                    self.update_plugin(self.id)
+                    return
 
             self._extension_poll_id = self.app.after(5000, poll)
 
