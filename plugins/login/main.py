@@ -24,18 +24,11 @@ from plugins.login.api import LoginAPI
 
 # Removed unused settings import
 from utils.logger import logger
+from utils.functions import get_resource_path
 
 # Removed standard logging setup
 
 
-def _resource_path(relative_path: str) -> str:
-    """Resolve path for both dev and PyInstaller bundles."""
-    if hasattr(sys, "_MEIPASS"):
-        return os.path.join(sys._MEIPASS, relative_path)
-    return os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        relative_path,
-    )
 
 
 # Platform Specific Imports
@@ -126,7 +119,7 @@ class Plugin(BasePlugin):
         self.content_frame.grid_columnconfigure(0, weight=1)
 
         # 1. Shield Logo
-        shield_path = _resource_path("ResistineSheild.png")
+        shield_path = get_resource_path(os.path.join("resources", "icons", "ResistineSheild.png"))
         try:
             shield_img = Image.open(shield_path)
             shield_ctk = customtkinter.CTkImage(shield_img, size=(250, 250))

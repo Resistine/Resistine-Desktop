@@ -62,19 +62,9 @@ def was_relaunched():
 
 
 def resource_path(relative_path: str) -> str:
-    """
-    Get absolute path to resource, works for both dev and PyInstaller bundled app.
-
-    When running from source, returns path relative to the script directory.
-    When running from a PyInstaller bundle, returns path relative to the
-    temporary extraction directory (sys._MEIPASS).
-    """
-    if hasattr(sys, '_MEIPASS'):
-        # Running in PyInstaller bundle
-        return os.path.join(sys._MEIPASS, relative_path)
-    else:
-        # Running from source - use the script's directory
-        return os.path.join(os.path.dirname(os.path.abspath(__file__)), relative_path)
+    """Delegates to central utils.functions.get_resource_path."""
+    from utils.functions import get_resource_path
+    return get_resource_path(relative_path)
 
 
 class App(AppUI):
