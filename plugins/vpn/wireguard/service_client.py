@@ -1,5 +1,8 @@
-# plugins/vpn/wireguard/service_client.py
-"""IPC client for communicating with the ResistineVPN Windows service."""
+"""
+IPC client for communicating with the ResistineVPN Windows service.
+Author: Merhawi
+Copyright (c) Resistine 2025
+"""
 import socket
 import json
 

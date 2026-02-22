@@ -1,7 +1,7 @@
 ## Windows VPN Service for Resistine VPN
 """Windows Service to manage WireGuard VPN tunnels for Resistine VPN.
 This service listens for IPC commands to control VPN connections.
-Authors: Merhawi & Johann Gawron
+Authors: Merhawi
 """
 import win32serviceutil
 import win32service
@@ -113,31 +113,34 @@ def install_tunnel(tunnel):
     return result.returncode == 0, result.stderr.strip()
 
 
+
+
 def start_tunnel(tunnel):
     svc_name = wg_service_name(tunnel)
     logger.info(f"Starting tunnel service: {svc_name}")
-    
+
     result = subprocess.run(
         ["sc", "start", svc_name],
         capture_output=True,
         text=True,
     )
 
-    logger.trace(f"Start tunnel result - returncode: {result.returncode}")
-    logger.trace(f"Start tunnel output: {result.stdout} {result.stderr}")
+    combined = (result.stdout + result.stderr).lower()
 
-    combined_output = (result.stdout + result.stderr).lower()
-    if "already running" in combined_output:
+    if "already running" in combined:
         logger.info(f"Tunnel '{tunnel}' is already running")
         return True, "Already running"
 
+    if "start_pending" in combined or result.returncode == 1056:
+        logger.info(f"Tunnel '{tunnel}' is starting")
+        return True, "Starting"
+
     if result.returncode == 0:
         logger.info(f"Tunnel '{tunnel}' started successfully")
-    else:
-        logger.error(f"Failed to start tunnel '{tunnel}': {result.stderr}")
+        return True, "Started"
 
-    return result.returncode == 0, result.stderr.strip()
-
+    logger.error(f"Failed to start tunnel '{tunnel}': {result.stderr}")
+    return False, result.stderr.strip()
 
 def stop_tunnel(tunnel):
     result = subprocess.run(
@@ -166,6 +169,8 @@ def status_tunnel(tunnel):
     logger.trace(f"Status output: {out.strip()}")
 
     if "1060" in out or "does not exist" in out:
+        logger.warning(f"Tunnel {tunnel} not installed")
+
         return "Not Installed"
     if "running" in out:
         return "Running"
@@ -220,6 +225,24 @@ def handle_request(request: dict):
                 
             ok, msg = start_tunnel(tunnel)
             return {"status": "ok" if ok else "error", "message": msg}
+        
+        if cmd == "connect":
+            state = status_tunnel(tunnel)
+
+            if state == "Running":
+                return {"status": "ok", "state": "Running", "message": "Already running"}
+
+            if state == "Not Installed":
+                ok, msg = install_tunnel(tunnel)
+                if not ok:
+                    return {"status": "error", "state": "Not Installed", "message": msg}
+
+            ok, msg = start_tunnel(tunnel)
+            # Re-query actual state after start attempt
+            actual_state = status_tunnel(tunnel)
+            if actual_state in ("Running", "Starting"):
+                return {"status": "ok", "state": actual_state, "message": msg}
+            return {"status": "error", "state": actual_state, "message": msg}
 
         if cmd == "disconnect":
             state = status_tunnel(tunnel)
