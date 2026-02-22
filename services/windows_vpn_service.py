@@ -76,15 +76,36 @@ logger = logging.getLogger("ResistineVPN")
 def wg_service_name(tunnel):
     return f"WireGuardTunnel${tunnel}"
 
+def find_config(tunnel: str, config_path: str = None) -> str | None:
+    """
+    Priority:
+    1. Explicit path from GUI request (user's AppData)
+    2. ProgramData (service-installed config from login/installer)
+    """
+    if config_path and os.path.exists(config_path):
+        logger.info(f"Using provided config path: {config_path}")
+        return config_path
 
-def install_tunnel(tunnel):
-    conf = os.path.join(CONFIG_BASE, f"{tunnel}.conf")
-    logger.info(f"Installing tunnel '{tunnel}' from: {conf}")
+    programdata_conf = os.path.join(CONFIG_BASE, f"{tunnel}.conf")
+    if os.path.exists(programdata_conf):
+        logger.info(f"Using ProgramData config: {programdata_conf}")
+        return programdata_conf
+
+    logger.warning(f"Config not found for tunnel '{tunnel}' in any known location")
+    return None
+
+
+def install_tunnel(tunnel, config_path=None):
+    """Install a WireGuard tunnel service.
     
-    if not os.path.exists(conf):
-        logger.error(f"Config file not found: {conf}")
-        logger.info(f"Available files in {CONFIG_BASE}: {os.listdir(CONFIG_BASE) if os.path.exists(CONFIG_BASE) else 'directory does not exist'}")
-        return False, f"Config not found: {conf}"
+    Args:
+        tunnel: Tunnel name.
+        config_path: Full path to .conf file. If not provided,
+                     falls back to CONFIG_BASE (ProgramData).
+    """
+    conf = find_config(tunnel, config_path)
+    if not conf:
+        return False, f"Config not found for tunnel: {tunnel}"
 
     if not os.path.exists(WIREGUARD_EXE):
         logger.error(f"WireGuard executable not found: {WIREGUARD_EXE}")
@@ -96,24 +117,20 @@ def install_tunnel(tunnel):
         text=True,
     )
 
-    logger.debug(f"WireGuard install result - returncode: {result.returncode}")
-    logger.debug(f"WireGuard install stdout: {result.stdout}")
-    logger.debug(f"WireGuard install stderr: {result.stderr}")
+    logger.debug(f"Install result: returncode={result.returncode}")
+    logger.debug(f"Install stdout: {result.stdout}")
+    logger.debug(f"Install stderr: {result.stderr}")
 
     if "already installed" in result.stderr.lower():
         return True, "Already installed"
 
     if result.returncode == 0:
         logger.info(f"Tunnel '{tunnel}' installed successfully")
-        # Give WireGuard a moment to initialize the service
         time.sleep(1)
-    else:
-        logger.error(f"Failed to install tunnel '{tunnel}': {result.stderr}")
+        return True, "Installed"
 
-    return result.returncode == 0, result.stderr.strip()
-
-
-
+    logger.error(f"Failed to install tunnel '{tunnel}': {result.stderr}")
+    return False, result.stderr.strip()
 
 def start_tunnel(tunnel):
     svc_name = wg_service_name(tunnel)
@@ -189,26 +206,20 @@ def status_tunnel(tunnel):
 # ---------------- IPC HANDLER ----------------
 
 def handle_request(request: dict):
+    if request.get("token") != IPC_TOKEN:
+        return {"status": "error", "message": "Unauthorized"}
 
-    # ---- Security: token required ----
-    token = request.get("token")
-    if token != IPC_TOKEN:
-        return {
-            "status": "error",
-            "message": "Unauthorized"
-        }
     cmd = request.get("command")
     tunnel = request.get("tunnel")
+    config_path = request.get("config_path")  # <-- from GUI user's AppData
+
     if cmd not in ALLOWED_COMMANDS:
-        return {
-            "status": "error",
-            "message": f"Invalid command: {cmd}"
-        }
+        return {"status": "error", "message": f"Invalid command: {cmd}"}
+
+    if not tunnel:
+        return {"status": "error", "message": "Missing tunnel"}
+
     try:
-
-        if not tunnel:
-            return {"status": "error", "message": "Missing tunnel"}
-
         if cmd == "status":
             return {"status": "ok", "state": status_tunnel(tunnel)}
 
@@ -216,29 +227,14 @@ def handle_request(request: dict):
             state = status_tunnel(tunnel)
 
             if state == "Running":
-                return {"status": "ok", "message": "Already running"}
-
-            if state == "Not Installed":
-                ok, msg = install_tunnel(tunnel)
-                if not ok:
-                    return {"status": "error", "message": msg}
-                
-            ok, msg = start_tunnel(tunnel)
-            return {"status": "ok" if ok else "error", "message": msg}
-        
-        if cmd == "connect":
-            state = status_tunnel(tunnel)
-
-            if state == "Running":
                 return {"status": "ok", "state": "Running", "message": "Already running"}
 
             if state == "Not Installed":
-                ok, msg = install_tunnel(tunnel)
+                ok, msg = install_tunnel(tunnel, config_path)  # <-- pass path
                 if not ok:
                     return {"status": "error", "state": "Not Installed", "message": msg}
 
             ok, msg = start_tunnel(tunnel)
-            # Re-query actual state after start attempt
             actual_state = status_tunnel(tunnel)
             if actual_state in ("Running", "Starting"):
                 return {"status": "ok", "state": actual_state, "message": msg}
@@ -246,42 +242,36 @@ def handle_request(request: dict):
 
         if cmd == "disconnect":
             state = status_tunnel(tunnel)
-
             if state in ("Stopped", "Not Installed"):
-                return {"status": "ok", "message": "Already stopped"}
-            
+                return {"status": "ok", "state": "Stopped", "message": "Already stopped"}
             ok, msg = stop_tunnel(tunnel)
-            return {"status": "ok" if ok else "error", "message": msg}
-        
-        if cmd == "start":
-            start_tunnel(tunnel)
-            return {"status": "ok", "message": "Started"}
-
-        if cmd == "stop":
-            stop_tunnel(tunnel)
-            return {"status": "ok", "message": "Stopped"}
-
+            actual_state = status_tunnel(tunnel)
+            return {"status": "ok" if ok else "error", "state": actual_state, "message": msg}
 
         if cmd == "restart":
             stop_tunnel(tunnel)
             start_tunnel(tunnel)
-            return {"status": "ok", "message": "Restarted"}
+            actual_state = status_tunnel(tunnel)
+            return {"status": "ok", "state": actual_state, "message": "Restarted"}
 
         if cmd == "health":
             return {
                 "status": "ok",
                 "service": "running",
                 "socket": "listening",
-                "wireguard": status_tunnel(tunnel)
+                "wireguard": status_tunnel(tunnel),
             }
 
-        
+        if cmd == "stop":
+            stop_tunnel(tunnel)
+            return {"status": "ok", "message": "Stopped"}
+
+
     except Exception as e:
         logger.exception(f"Error handling request: {e}")
         return {"status": "error", "message": str(e)}
 
     return {"status": "error", "message": "Unknown command"}
-
 
 # ---------------- Socket Server ----------------
 
