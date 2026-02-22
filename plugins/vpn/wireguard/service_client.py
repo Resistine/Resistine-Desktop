@@ -1,43 +1,62 @@
 """
-IPC client for communicating with the ResistineVPN Windows service.
-Author: Merhawi
+IPC client for the ResistineVPN Windows service.
+Authors: Merhawi 
 Copyright (c) Resistine 2025
 """
 import socket
 import json
-
 from utils.logger import logger
 
-HOST = "127.0.0.1"
-PORT = 51888
-
+SERVICE_HOST = "127.0.0.1"
+SERVICE_PORT = 51888
+BUFFER_SIZE = 4096
 IPC_TOKEN = "RESISTINE_INTERNAL_TOKEN_CHANGE_ME"
 
 
-def send_command(command, tunnel):
-    """Send a command to the VPN service via IPC socket.
-
-    Returns a dict with at least a 'status' key.
-    On connection failure returns an error dict with state='Stopped'.
+def send_command(command: str, tunnel: str, config_path: str = None) -> dict:
+    """Send a command to the ResistineVPN service via IPC socket.
+    
+    Args:
+        command: The command to send (status, connect, disconnect, etc.)
+        tunnel: The tunnel name.
+        config_path: Full path to the .conf file (optional, used for connect).
+    Returns:
+        dict with at minimum 'status' key.
     """
     payload = {
         "token": IPC_TOKEN,
         "command": command,
-        "tunnel": tunnel
+        "tunnel": tunnel,
     }
+    if config_path:
+        payload["config_path"] = config_path
+
+    print(f"Sending command to VPN service: {command} for tunnel: {tunnel}")
+    if config_path:
+        print(f"Config path: {config_path}")
 
     try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(5)
-            s.connect((HOST, PORT))
-            s.send(json.dumps(payload).encode())
-            return json.loads(s.recv(4096).decode())
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5)
+        sock.connect((SERVICE_HOST, SERVICE_PORT))
+        sock.sendall(json.dumps(payload).encode("utf-8"))
+
+        data = sock.recv(BUFFER_SIZE)
+        response = json.loads(data.decode("utf-8"))
+        logger.debug(f"Service response for '{command}': {response}")
+        return response
+
     except ConnectionRefusedError:
-        logger.warning("VPN service is not running (connection refused)")
+        logger.error("VPN service is not running (connection refused)")
         return {"status": "error", "state": "Stopped", "message": "VPN service not running"}
     except socket.timeout:
-        logger.warning("VPN service timed out")
+        logger.error("VPN service timed out")
         return {"status": "error", "state": "Stopped", "message": "VPN service timed out"}
     except Exception as e:
-        logger.error(f"IPC communication failed: {e}")
+        logger.exception("Unexpected error communicating with VPN service")
         return {"status": "error", "state": "Stopped", "message": str(e)}
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass

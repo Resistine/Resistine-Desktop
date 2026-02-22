@@ -352,7 +352,8 @@ class Plugin(BasePlugin):
             is_running = current.get("state") == "Running"
 
             if switch_value == 1 and not is_running:
-                result = connect(selected_conf_file)
+                config_path = os.path.join(wireguard_folder, f"{selected_conf_file}.conf")
+                result = connect(selected_conf_file, config_path=config_path)
                 if result.get("status") != "ok" and result.get("state") not in ("Starting", "Running"):
                     logger.error(f"Connect failed: {result.get('message', '')}")
                     self.app.show_notification("Failed to connect VPN", type="error")
