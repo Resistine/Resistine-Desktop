@@ -24,9 +24,17 @@ IS_WINDOWS = _PLATFORM == "Windows"
 IS_LINUX = _PLATFORM == "Linux"
 
 # --- Platform Specific Imports ---
-# We assume these modules provide 'vpn_helper' and necessary logic
 if IS_WINDOWS:
-    from plugins.vpn.wireguard.vpn_functions_windows import *
+    from plugins.vpn.wireguard.vpn_functions_windows import (
+        get_writable_wireguard_dir,
+        check_wireguard_installed,
+        check_service_status,
+        start_vpn,
+        stop_vpn,
+    )
+    from plugins.vpn.wireguard.vpn_windows_client import (
+        get_status, connect, disconnect, toggle
+    )
     wireguard_folder = get_writable_wireguard_dir()
 
 elif IS_LINUX:
@@ -36,6 +44,7 @@ elif IS_LINUX:
 elif IS_MACOS:
     from plugins.vpn.wireguard.vpn_functions_darwin import *
     wireguard_folder = get_writable_wireguard_dir()
+
 # DNS Configuration - Change this value to update DNS across the application
 DNS_SERVER = "10.49.11.10"
 
@@ -79,12 +88,22 @@ def initialize_vpn_status():
                 my_vpn_status = "Running"
             else:
                 my_vpn_status = "Stopped"
+    
     elif IS_WINDOWS:
         try:
-            existing_interfaces = subprocess.run(['wg', 'show', 'interfaces'], capture_output=True, text=True, check=True).stdout.split()
+            active_name = _config_manager.get_active_config_name()
+            if active_name:
+                state = check_service_status(active_name)
+                if state == "Running":
+                    active_client_name = active_name
+                    my_vpn_status = "Running"
+                else:
+                    my_vpn_status = "Stopped"
+            else:
+                my_vpn_status = "Stopped"
         except Exception as e:
-            logger.warning(f"⚠️ Could not enumerate WireGuard interfaces on Windows: {e}")
-            existing_interfaces = []
+            logger.warning(f"⚠️ Could not determine VPN status on Windows: {e}")
+            my_vpn_status = "Stopped"
     elif IS_LINUX:
         try:
             existing_interfaces = os.popen('wg show interfaces').read().split()
@@ -92,6 +111,7 @@ def initialize_vpn_status():
             logger.warning(f"⚠️ Could not enumerate WireGuard interfaces: {e}")
             existing_interfaces = []
 
+#? On Linux, we can check the status of each interface to find the active one. On Windows/macOS, we rely on service/extension status and config manager.
     if not IS_MACOS:
         # Check if any known interface is running (Linux/Windows only)
         for interface in existing_interfaces:
@@ -290,15 +310,19 @@ class Plugin(BasePlugin):
         """Refresh VPN state from the Windows service."""
         global my_vpn_status, active_client_name
 
+        if not IS_WINDOWS:
+            return
+
+        tunnel = self.get_selected_conf_file_name()
+        if not tunnel:
+            my_vpn_status = "Stopped"
+            active_client_name = None
+            return
+
         try:
-            from plugins.vpn.wireguard.vpn_functions_windows import get_status
-            status = get_status()
-            if status and status.get("state"):
-                my_vpn_status = status["state"]
-                active_client_name = self.get_selected_conf_file_name() if my_vpn_status == "Running" else None
-            else:
-                my_vpn_status = "Stopped"
-                active_client_name = None
+            status = get_status(tunnel)
+            my_vpn_status = status.get("state", "Stopped")
+            active_client_name = tunnel if my_vpn_status == "Running" else None
         except Exception as e:
             logger.error(f"Status refresh failed: {e}")
             my_vpn_status = "Stopped"
@@ -320,25 +344,27 @@ class Plugin(BasePlugin):
                 self.vpn_toggle_switch.deselect()
             return
 
-        global my_vpn_status
-        is_running = my_vpn_status == "Running"
-
         # WINDOWS: use IPC service for connect/disconnect
         if IS_WINDOWS:
-            from plugins.vpn.wireguard.service_client import send_command
-            from plugins.vpn.wireguard.vpn_functions_windows import get_status
-
-            current = get_status()
+            # Always get fresh state from service before acting
+            current = get_status(selected_conf_file)
+            print(f"Current VPN status for '{selected_conf_file}': {current.get('state', 'Unknown')}")
             is_running = current.get("state") == "Running"
 
             if switch_value == 1 and not is_running:
-                send_command("connect", selected_conf_file)
+                result = connect(selected_conf_file)
+                if result.get("status") != "ok" and result.get("state") not in ("Starting", "Running"):
+                    logger.error(f"Connect failed: {result.get('message', '')}")
+                    self.app.show_notification("Failed to connect VPN", type="error")
             elif switch_value == 0 and is_running:
-                send_command("disconnect", selected_conf_file)
+                result = disconnect(selected_conf_file)
+                if result.get("status") != "ok":
+                    logger.error(f"Disconnect failed: {result.get('message', '')}")
+                    self.app.show_notification("Failed to disconnect VPN", type="error")
 
-            # Re-sync state from service
             self.refresh_vpn_state()
             self.update_plugin(self.id)
+
         else:
             # Logic: 1 = ON Request, 0 = OFF Request
             if switch_value == 1 and not is_running:
@@ -704,34 +730,6 @@ class Plugin(BasePlugin):
                     self.app.show_notification("Failed to start VPN", type="error")
             
             # Refresh UI
-            self.update_plugin(self.id)
-
-        # --- Windows Implementation (service-based) ---
-        elif IS_WINDOWS:
-            logger.info(f"Windows: Toggling {tunnel_name} via service")
-            from plugins.vpn.wireguard.service_client import send_command
-
-            if my_vpn_status == "Running":
-                result = send_command("disconnect", tunnel_name)
-                if result.get("status") == "ok":
-                    my_vpn_status = "Stopped"
-                    active_client_name = None
-                    self.app.show_notification("VPN stopped", type="info")
-                else:
-                    self.app.show_notification("Failed to stop VPN", type="error")
-                    logger.error(f"Failed to stop VPN: {result.get('message', '')}")
-            else:
-                result = send_command("connect", tunnel_name)
-                if result.get("status") == "ok":
-                    my_vpn_status = "Running"
-                    active_client_name = tunnel_name
-                    self.app.show_notification("VPN started", type="info")
-                else:
-                    self.app.show_notification("Failed to start VPN", type="error")
-                    logger.error(f"Failed to start VPN: {result.get('message', '')}")
-
-            # Re-sync from service
-            self.refresh_vpn_state()
             self.update_plugin(self.id)
 
         # --- Linux Implementation ---
