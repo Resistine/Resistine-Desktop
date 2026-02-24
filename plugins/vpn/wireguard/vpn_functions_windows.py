@@ -234,31 +234,53 @@ def setup_vpn_keys() -> str | None:
 # ----------------------------------------------------------------
 # Config file management
 # ----------------------------------------------------------------
-
 def parse_and_create_vpn_config(
     vpn_config_json_string: str,
     config_name: str = "resistine_default",
 ) -> str | None:
-    """Parse a JSON VPN config string and write the .conf file.
-    
-    Args:
-        vpn_config_json_string: JSON string containing a 'config' key with WireGuard config content.
-        config_name: Name for the tunnel (filename without .conf).
-    Returns:
-        Path to the saved config file, or None on failure.
-    """
     try:
         if not vpn_config_json_string:
-            return None
+            raise ValueError("Empty API response")
 
         vpn_config = json.loads(vpn_config_json_string)
+
+        interface = vpn_config.get("Interface")
+        peer = vpn_config.get("Peer")
+
+        if not isinstance(interface, dict) or not isinstance(peer, dict):
+            raise ValueError(f"Invalid WireGuard JSON shape: keys={list(vpn_config.keys())}")
+
+        # Build WireGuard .conf text
+        lines = []
+        lines.append("[Interface]")
+        for k, v in interface.items():
+            if v is None:
+                continue
+            lines.append(f"{k} = {v}")
+
+        lines.append("")  # blank line between sections
+        lines.append("[Peer]")
+        for k, v in peer.items():
+            if v is None:
+                continue
+            lines.append(f"{k} = {v}")
+
+        conf_text = "\n".join(lines).strip() + "\n"
+
+        if not conf_text.strip():
+            raise ValueError("Generated WireGuard config is empty")
+
         config_dir = get_writable_wireguard_dir()
+        os.makedirs(config_dir, exist_ok=True)
+
         config_path = os.path.join(config_dir, f"{config_name}.conf")
 
-        with open(config_path, "w") as f:
-            f.write(vpn_config.get("config", ""))
+        with open(config_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(conf_text)
+            f.flush()
+            os.fsync(f.fileno())
 
-        logger.info(f"VPN configuration saved to: {config_path}")
+        logger.info(f"VPN configuration saved to: {os.path.abspath(config_path)}")
         return config_path
 
     except json.JSONDecodeError as e:
@@ -268,13 +290,9 @@ def parse_and_create_vpn_config(
         logger.error(f"Error creating VPN config: {e}")
         return None
 
-
 def save_vpn_configuration(
     vpn_config_json: str,
     config_name: str = "resistine_default",
 ) -> str | None:
     """Alias for parse_and_create_vpn_config."""
     return parse_and_create_vpn_config(vpn_config_json, config_name)
-
-
-logger.info("WireGuard Windows VPN functions loaded (service-based)")
