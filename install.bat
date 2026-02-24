@@ -17,7 +17,8 @@ set ICON=%SCRIPT_DIR%\resources\icons\icon.ico
 set VENV_DIR=%SCRIPT_DIR%\venv
 set VENV_PYTHON=%VENV_DIR%\Scripts\python.exe
 set VENV_PIP=%VENV_DIR%\Scripts\pip.exe
-set REQUIREMENTS=%SCRIPT_DIR%\requirements.txt
+set REQUIREMENTS=%SCRIPT_DIR%\libraries\requirements-windows.txt
+if not exist "%REQUIREMENTS%" set REQUIREMENTS=%SCRIPT_DIR%\requirements.txt
 set APPDATA_DIR=%APPDATA%\Resistine
 set WG_DIR=%APPDATA_DIR%\wireguard
 set PROGRAMDATA_DIR=%PROGRAMDATA%\Resistine
@@ -126,10 +127,10 @@ echo       Upgrading pip...
 "%VENV_PIP%" install --quiet --upgrade pip
 
 if exist "%REQUIREMENTS%" (
-    echo       Installing from requirements.txt...
+    echo       Installing from %REQUIREMENTS%...
     "%VENV_PIP%" install --quiet -r "%REQUIREMENTS%"
 ) else (
-    echo       No requirements.txt found, installing defaults...
+    echo       No requirements file found, installing defaults...
     "%VENV_PIP%" install --quiet ^
         customtkinter ^
         pillow ^
@@ -279,13 +280,25 @@ echo       OK - %PROGRAMDATA_DIR%
 
 :: ---- pywin32 post-install ----
 echo Running pywin32 post-install...
-for /f "usebackq tokens=*" %%p in (`"%VENV_PYTHON%" -c "import sys; print(sys.prefix)"`) do (
-    if exist "%%p\Scripts\pywin32_postinstall.py" (
-        "%VENV_PYTHON%" "%%p\Scripts\pywin32_postinstall.py" -install >nul 2>&1
-        echo       OK
-    ) else (
-        echo       Skipped - post-install script not found
+set "PYWIN32_POSTINSTALL_OK="
+"%VENV_PYTHON%" -m pywin32_postinstall -install >nul 2>&1
+if !errorlevel! equ 0 (
+    set "PYWIN32_POSTINSTALL_OK=1"
+) else (
+    "%VENV_PYTHON%" -c "import sys, pathlib; p = pathlib.Path(sys.prefix) / 'Scripts' / 'pywin32_postinstall.py'; print(p)" > "%TEMP%\resistine_pywin32_postinstall_path.txt" 2>nul
+    if exist "%TEMP%\resistine_pywin32_postinstall_path.txt" (
+        set /p PYWIN32_POSTINSTALL_SCRIPT=<"%TEMP%\resistine_pywin32_postinstall_path.txt"
+        del "%TEMP%\resistine_pywin32_postinstall_path.txt" >nul 2>&1
+        if exist "%PYWIN32_POSTINSTALL_SCRIPT%" (
+            "%VENV_PYTHON%" "%PYWIN32_POSTINSTALL_SCRIPT%" -install >nul 2>&1
+            if !errorlevel! equ 0 set "PYWIN32_POSTINSTALL_OK=1"
+        )
     )
+)
+if defined PYWIN32_POSTINSTALL_OK (
+    echo       OK
+) else (
+    echo       WARNING - pywin32 post-install failed or script was not found
 )
 
 :: ---- Remove existing service if present ----
