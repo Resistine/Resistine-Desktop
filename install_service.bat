@@ -11,7 +11,7 @@ set SERVICE_NAME=ResistineVPN
 set SCRIPT_DIR=%~dp0
 if "%SCRIPT_DIR:~-1%"=="\" set SCRIPT_DIR=%SCRIPT_DIR:~0,-1%
 
-set SERVICE_SCRIPT=%SCRIPT_DIR%\plugins\vpn\wireguard\vpn_windows_service.py
+set SERVICE_SCRIPT=%SCRIPT_DIR%\plugins\vpn\wireguard\windows_vpn_service.py
 set PROGRAMDATA_DIR=%PROGRAMDATA%\Resistine\wireguard
 set LOG_DIR=%PROGRAMDATA%\Resistine
 
