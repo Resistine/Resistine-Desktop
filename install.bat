@@ -8,7 +8,7 @@ setlocal EnableDelayedExpansion
 set SCRIPT_DIR=%~dp0
 if "%SCRIPT_DIR:~-1%"=="\" set SCRIPT_DIR=%SCRIPT_DIR:~0,-1%
 
-set SERVICE_SCRIPT=%SCRIPT_DIR%\plugins\vpn\wireguard\vpn_windows_service.py
+set SERVICE_SCRIPT=%SCRIPT_DIR%\plugins\vpn\wireguard\windows_vpn_service.py
 set MAIN_SCRIPT=%SCRIPT_DIR%\main.py
 set TRAY_SCRIPT=%SCRIPT_DIR%\tray.py
 set ICON=%SCRIPT_DIR%\resources\icons\icon.ico
