@@ -1,0 +1,1443 @@
+#ifndef AppName
+  #define AppName "Resistine"
+#endif
+
+#ifndef AppVersion
+  #define AppVersion "0.0.0"
+#endif
+
+#ifndef SourceDir
+  #define SourceDir "..\..\dist\Resistine"
+#endif
+
+#ifndef OutputDir
+  #define OutputDir "..\..\dist\installers"
+#endif
+
+#define AppId "ResistineDesktop"
+
+[Setup]
+AppId={#AppId}
+AppName={#AppName}
+AppVersion={#AppVersion}
+AppPublisher=Resistine
+DefaultDirName={autopf}\{#AppName}
+DefaultGroupName={#AppName}
+UsePreviousAppDir=yes
+UsePreviousGroup=yes
+OutputDir={#OutputDir}
+OutputBaseFilename={#AppName}-Setup-{#AppVersion}
+Compression=lzma2
+SolidCompression=yes
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+PrivilegesRequired=admin
+WizardStyle=modern
+DisableDirPage=auto
+DisableReadyPage=yes
+DisableProgramGroupPage=yes
+UninstallDisplayIcon={app}\Resistine.exe
+SetupLogging=yes
+
+[Languages]
+Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Tasks]
+Name: "desktopicon"; Description: "Create a desktop icon"; Flags: unchecked
+Name: "startup"; Description: "Start Resistine when I sign in"; Flags: unchecked
+
+[Files]
+Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "..\..\install_service.bat"; DestDir: "{app}"; Flags: ignoreversion
+
+[Icons]
+Name: "{autoprograms}\{#AppName}\{#AppName}"; Filename: "{app}\Resistine.exe"
+Name: "{autoprograms}\{#AppName}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\Resistine.exe"; Tasks: desktopicon
+
+[Registry]
+Root: HKLM64; Subkey: "Software\Resistine"; ValueType: string; ValueName: "InstallDir"; ValueData: "{app}"; Flags: uninsdeletekeyifempty
+Root: HKLM64; Subkey: "Software\Resistine"; ValueType: string; ValueName: "Version"; ValueData: "{#AppVersion}"; Flags: uninsdeletevalue
+Root: HKLM64; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Resistine"; ValueData: """{app}\Resistine.exe"""; Tasks: startup; Flags: uninsdeletevalue
+
+[Run]
+Filename: "{app}\Resistine.exe"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent; Check: ShouldPerformInstallAction
+
+[Code]
+type
+  TMaintenanceAction = (maInstall, maUpdate, maReinstall, maUninstall);
+
+var
+  ExistingInstallDetected: Boolean;
+  ExistingInstallDir: string;
+  ExistingInstallVersion: string;
+  ExistingUninstallCmd: string;
+  MaintenancePage: TWizardPage;
+  MaintenanceInfoLabel: TNewStaticText;
+  InstallRadio: TRadioButton;
+  UpdateRadio: TRadioButton;
+  ReinstallRadio: TRadioButton;
+  UninstallRadio: TRadioButton;
+  MaintenanceActionHeaderLabel: TNewStaticText;
+  MaintenanceActionDetailHeaderLabel: TNewStaticText;
+  MaintenanceActionDetailLabel: TNewStaticText;
+  MaintenanceDataOptionsHeaderLabel: TNewStaticText;
+  MaintenanceDataOptionsEmptyLabel: TNewStaticText;
+  RemoveUserDataCheck: TNewCheckBox;
+  BackupSettingsCheck: TNewCheckBox;
+  BackupHelpLabel: TNewStaticText;
+  RemoveUserDataHelpLabel: TNewStaticText;
+  PreflightPage: TWizardPage;
+  PreflightInfoLabel: TNewStaticText;
+  PreflightActionHeaderLabel: TNewStaticText;
+  PreflightActionLabel: TNewStaticText;
+  PreflightChecksHeaderLabel: TNewStaticText;
+  PreflightChecksLabel: TNewStaticText;
+  PreflightTasksHeaderLabel: TNewStaticText;
+  PreflightTasksLabel: TNewStaticText;
+  SelectedAction: TMaintenanceAction;
+  UpdateAvailable: Boolean;
+  RemoveUserDataAfterUninstall: Boolean;
+  PendingReinstallRestore: Boolean;
+  ReinstallBackupRoot: string;
+  ReinstallBackupUserDataDir: string;
+  ReinstallBackupCommonDataDir: string;
+  DependencyInstallWarnings: string;
+  DependencyInstallAttempted: Boolean;
+  LastDependencyPreflightText: string;
+  StandaloneUninstallRemoveUserData: Boolean;
+  MaintenanceUninstallByInstaller: Boolean;
+
+function PopVersionPart(var S: string): Integer;
+var
+  P: Integer;
+  Part: string;
+begin
+  P := Pos('.', S);
+  if P = 0 then
+  begin
+    Part := S;
+    S := '';
+  end
+  else
+  begin
+    Part := Copy(S, 1, P - 1);
+    Delete(S, 1, P);
+  end;
+  Result := StrToIntDef(Part, 0);
+end;
+
+function CompareVersionStrings(A, B: string): Integer;
+var
+  SA: string;
+  SB: string;
+  PA: Integer;
+  PB: Integer;
+begin
+  SA := A;
+  SB := B;
+  while (SA <> '') or (SB <> '') do
+  begin
+    PA := PopVersionPart(SA);
+    PB := PopVersionPart(SB);
+    if PA < PB then
+    begin
+      Result := -1;
+      exit;
+    end;
+    if PA > PB then
+    begin
+      Result := 1;
+      exit;
+    end;
+  end;
+  Result := 0;
+end;
+
+function GetRegistryString64(Name: string; var Value: string): Boolean;
+begin
+  Result := RegQueryStringValue(HKLM64, 'Software\Resistine', Name, Value);
+  if not Result then
+    Result := RegQueryStringValue(HKLM, 'Software\Resistine', Name, Value);
+end;
+
+function GetUninstallRegistryString(const SubKey, Name: string; var Value: string): Boolean;
+begin
+  Result := RegQueryStringValue(HKLM64, SubKey, Name, Value);
+  if not Result then
+    Result := RegQueryStringValue(HKLM, SubKey, Name, Value);
+end;
+
+function QuotePath(const S: string): string;
+begin
+  Result := '"' + S + '"';
+end;
+
+function GetResistineUserDataDir: string;
+begin
+  Result := ExpandConstant('{userappdata}\Resistine');
+end;
+
+function GetResistineCommonDataDir: string;
+begin
+  Result := ExpandConstant('{commonappdata}\Resistine');
+end;
+
+function GetInteropSubkey: string;
+begin
+  Result := 'Software\Resistine\InstallerInterop';
+end;
+
+function RunHiddenCmd(const Params: string; var ResultCode: Integer): Boolean;
+begin
+  Result := Exec(ExpandConstant('{cmd}'), '/C ' + Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+function HiddenCmdSucceeded(const Params: string): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := RunHiddenCmd(Params, ResultCode) and (ResultCode = 0);
+end;
+
+function IsWireGuardInstalled: Boolean;
+begin
+  Result := FileExists('C:\Program Files\WireGuard\wireguard.exe');
+end;
+
+function IsGtkRuntimeInstalled: Boolean;
+begin
+  Result := FileExists('C:\Program Files\GTK3-Runtime Win64\bin\libcairo-2.dll');
+end;
+
+function IsWingetAvailable: Boolean;
+begin
+  Result := HiddenCmdSucceeded('where winget >nul 2>nul');
+end;
+
+function IsInternetReachable: Boolean;
+begin
+  { Heuristic only; ICMP may be blocked on some networks. }
+  Result := HiddenCmdSucceeded('ping -n 1 -w 1200 1.1.1.1 >nul 2>nul');
+end;
+
+function IsResistineRunning: Boolean;
+begin
+  Result := HiddenCmdSucceeded('tasklist /FI "IMAGENAME eq Resistine.exe" | find /I "Resistine.exe" >nul');
+end;
+
+function IsVpnServiceInstalled: Boolean;
+begin
+  Result := HiddenCmdSucceeded('sc query "ResistineVPN" >nul 2>nul');
+end;
+
+function TryKillResistineProcess(ForceKill: Boolean): Boolean;
+var
+  ResultCode: Integer;
+  Params: string;
+begin
+  if ForceKill then
+    Params := 'taskkill /F /T /IM Resistine.exe >nul 2>nul'
+  else
+    Params := 'taskkill /T /IM Resistine.exe >nul 2>nul';
+
+  { taskkill returns non-zero if not running; treat "not running" as success. }
+  RunHiddenCmd(Params, ResultCode);
+  Sleep(750);
+  Result := not IsResistineRunning;
+end;
+
+function BoolStatus(const Value: Boolean; const TrueText, FalseText: string): string;
+begin
+  if Value then
+    Result := TrueText
+  else
+    Result := FalseText;
+end;
+
+function DirectoryExistsAndNotEmpty(const DirName: string): Boolean;
+begin
+  Result := DirExists(DirName);
+  if Result then
+    Result := HiddenCmdSucceeded('dir /A /B ' + QuotePath(DirName) + ' 2>nul | findstr . >nul');
+end;
+
+procedure DeleteDirectoryIfExists(const DirName: string);
+var
+  ResultCode: Integer;
+begin
+  if DirExists(DirName) then
+  begin
+    RunHiddenCmd('rmdir /S /Q ' + QuotePath(DirName), ResultCode);
+  end;
+end;
+
+function CopyDirectoryTree(const SrcDir, DstDir: string): Boolean;
+var
+  ResultCode: Integer;
+begin
+  if not DirExists(SrcDir) then
+  begin
+    Result := True;
+    exit;
+  end;
+
+  ForceDirectories(DstDir);
+
+  if HiddenCmdSucceeded('where robocopy >nul 2>nul') then
+  begin
+    if not RunHiddenCmd(
+      'robocopy ' + QuotePath(SrcDir) + ' ' + QuotePath(DstDir) +
+      ' /E /R:1 /W:1 /NFL /NDL /NJH /NJS /NP >nul', ResultCode) then
+    begin
+      Result := False;
+      exit;
+    end;
+    Result := ResultCode <= 7;
+    exit;
+  end;
+
+  if not RunHiddenCmd(
+    'xcopy ' + QuotePath(SrcDir) + ' ' + QuotePath(DstDir) +
+    ' /E /I /H /Y >nul', ResultCode) then
+  begin
+    Result := False;
+    exit;
+  end;
+  Result := (ResultCode = 0) or (ResultCode = 1);
+end;
+
+procedure DeleteResistineUserData;
+begin
+  DeleteDirectoryIfExists(GetResistineUserDataDir);
+  DeleteDirectoryIfExists(GetResistineCommonDataDir);
+end;
+
+function HasAnyResistineUserData: Boolean;
+begin
+  Result := DirectoryExistsAndNotEmpty(GetResistineUserDataDir) or
+            DirectoryExistsAndNotEmpty(GetResistineCommonDataDir);
+end;
+
+procedure DetectExistingInstall;
+var
+  LegacyUninstallKey: string;
+  InnoUninstallKey: string;
+begin
+  ExistingInstallDetected := False;
+  ExistingInstallDir := '';
+  ExistingInstallVersion := '';
+  ExistingUninstallCmd := '';
+
+  GetRegistryString64('InstallDir', ExistingInstallDir);
+  GetRegistryString64('Version', ExistingInstallVersion);
+
+  InnoUninstallKey := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#AppId}_is1';
+  LegacyUninstallKey := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\Resistine';
+
+  if GetUninstallRegistryString(InnoUninstallKey, 'UninstallString', ExistingUninstallCmd) then
+  begin
+    if ExistingInstallVersion = '' then
+      GetUninstallRegistryString(InnoUninstallKey, 'DisplayVersion', ExistingInstallVersion);
+    if ExistingInstallDir = '' then
+      GetUninstallRegistryString(InnoUninstallKey, 'InstallLocation', ExistingInstallDir);
+  end
+  else if GetUninstallRegistryString(LegacyUninstallKey, 'UninstallString', ExistingUninstallCmd) then
+  begin
+    if ExistingInstallVersion = '' then
+      GetUninstallRegistryString(LegacyUninstallKey, 'DisplayVersion', ExistingInstallVersion);
+    if ExistingInstallDir = '' then
+      GetUninstallRegistryString(LegacyUninstallKey, 'InstallLocation', ExistingInstallDir);
+  end;
+
+  if (ExistingInstallDir = '') and DirExists(ExpandConstant('{autopf}\{#AppName}')) then
+    ExistingInstallDir := ExpandConstant('{autopf}\{#AppName}');
+
+  if (ExistingUninstallCmd = '') and FileExists(AddBackslash(ExistingInstallDir) + 'unins000.exe') then
+    ExistingUninstallCmd := QuotePath(AddBackslash(ExistingInstallDir) + 'unins000.exe');
+  if (ExistingUninstallCmd = '') and FileExists(AddBackslash(ExistingInstallDir) + 'Uninstall.exe') then
+    ExistingUninstallCmd := QuotePath(AddBackslash(ExistingInstallDir) + 'Uninstall.exe');
+
+  ExistingInstallDetected := (ExistingInstallDir <> '') or (ExistingUninstallCmd <> '');
+end;
+
+procedure EvaluateUpdateAvailability;
+begin
+  UpdateAvailable := True;
+  if ExistingInstallVersion <> '' then
+    UpdateAvailable := CompareVersionStrings(ExistingInstallVersion, '{#AppVersion}') < 0;
+end;
+
+function ExtractExePathFromCommand(const CommandLine: string): string; forward;
+function ShouldPerformInstallAction: Boolean; forward;
+
+function ExistingUninstallerLooksLikeInno: Boolean;
+var
+  ExePath: string;
+begin
+  ExePath := LowerCase(ExtractFileName(ExtractExePathFromCommand(ExistingUninstallCmd)));
+  Result := Pos('unins', ExePath) = 1;
+end;
+
+procedure SetInstallerUninstallInteropFlags(const RemoveUserData: Boolean);
+begin
+  RegWriteStringValue(HKLM64, GetInteropSubkey, 'TriggeredByInstaller', '1');
+  if RemoveUserData then
+    RegWriteStringValue(HKLM64, GetInteropSubkey, 'RemoveUserData', '1')
+  else
+    RegWriteStringValue(HKLM64, GetInteropSubkey, 'RemoveUserData', '0');
+end;
+
+procedure ClearInstallerUninstallInteropFlags;
+begin
+  RegDeleteValue(HKLM64, GetInteropSubkey, 'TriggeredByInstaller');
+  RegDeleteValue(HKLM64, GetInteropSubkey, 'RemoveUserData');
+  RegDeleteValue(HKLM, GetInteropSubkey, 'TriggeredByInstaller');
+  RegDeleteValue(HKLM, GetInteropSubkey, 'RemoveUserData');
+end;
+
+procedure LoadInstallerUninstallInteropFlags;
+var
+  Triggered: string;
+  RemoveData: string;
+begin
+  MaintenanceUninstallByInstaller := False;
+  StandaloneUninstallRemoveUserData := False;
+
+  if RegQueryStringValue(HKLM64, GetInteropSubkey, 'TriggeredByInstaller', Triggered) or
+     RegQueryStringValue(HKLM, GetInteropSubkey, 'TriggeredByInstaller', Triggered) then
+  begin
+    MaintenanceUninstallByInstaller := Triggered = '1';
+  end;
+
+  if RegQueryStringValue(HKLM64, GetInteropSubkey, 'RemoveUserData', RemoveData) or
+     RegQueryStringValue(HKLM, GetInteropSubkey, 'RemoveUserData', RemoveData) then
+  begin
+    StandaloneUninstallRemoveUserData := RemoveData = '1';
+  end;
+
+  if MaintenanceUninstallByInstaller then
+    ClearInstallerUninstallInteropFlags;
+end;
+
+function BackupDataForReinstall: Boolean;
+var
+  AnySourceData: Boolean;
+  OkUser: Boolean;
+  OkCommon: Boolean;
+  ContinueWithoutBackup: Integer;
+begin
+  Result := True;
+  PendingReinstallRestore := False;
+
+  if (BackupSettingsCheck = nil) or (not BackupSettingsCheck.Checked) then
+    exit;
+
+  AnySourceData := DirExists(GetResistineUserDataDir) or DirExists(GetResistineCommonDataDir);
+  if not AnySourceData then
+    exit;
+
+  ReinstallBackupRoot := ExpandConstant('{tmp}\ResistineReinstallBackup');
+  ReinstallBackupUserDataDir := AddBackslash(ReinstallBackupRoot) + 'UserAppData';
+  ReinstallBackupCommonDataDir := AddBackslash(ReinstallBackupRoot) + 'CommonAppData';
+
+  DeleteDirectoryIfExists(ReinstallBackupRoot);
+  ForceDirectories(ReinstallBackupRoot);
+
+  OkUser := CopyDirectoryTree(GetResistineUserDataDir, ReinstallBackupUserDataDir);
+  OkCommon := CopyDirectoryTree(GetResistineCommonDataDir, ReinstallBackupCommonDataDir);
+
+  if not (OkUser and OkCommon) then
+  begin
+    ContinueWithoutBackup := MsgBox(
+      'Resistine could not back up all settings before reinstall.' + #13#10 +
+      'You can cancel and back up manually, or continue the reinstall without a complete backup.' + #13#10#13#10 +
+      'Continue without backup?',
+      mbError, MB_YESNO);
+    if ContinueWithoutBackup <> IDYES then
+    begin
+      Result := False;
+      exit;
+    end;
+    DeleteDirectoryIfExists(ReinstallBackupRoot);
+    exit;
+  end;
+
+  PendingReinstallRestore := DirectoryExistsAndNotEmpty(ReinstallBackupUserDataDir) or
+                             DirectoryExistsAndNotEmpty(ReinstallBackupCommonDataDir);
+end;
+
+procedure RestoreDataAfterReinstallIfNeeded;
+var
+  OkUser: Boolean;
+  OkCommon: Boolean;
+begin
+  if not PendingReinstallRestore then
+    exit;
+
+  OkUser := CopyDirectoryTree(ReinstallBackupUserDataDir, GetResistineUserDataDir);
+  OkCommon := CopyDirectoryTree(ReinstallBackupCommonDataDir, GetResistineCommonDataDir);
+
+  if not (OkUser and OkCommon) then
+  begin
+    MsgBox(
+      'Resistine completed installation, but some backed-up settings could not be restored automatically.' + #13#10 +
+      'Backup folder: ' + ReinstallBackupRoot,
+      mbError, MB_OK);
+  end;
+
+  DeleteDirectoryIfExists(ReinstallBackupRoot);
+  PendingReinstallRestore := False;
+end;
+
+procedure MaybeOfferManualDownload(const FriendlyName, Url: string; const Reason: string);
+var
+  Response: Integer;
+  ResultCode: Integer;
+begin
+  Response := MsgBox(
+    FriendlyName + ' could not be installed automatically.' + #13#10 +
+    Reason + #13#10#13#10 +
+    'Open the download page now?' + #13#10 + Url,
+    mbError, MB_YESNO);
+  if Response = IDYES then
+    ShellExec('open', Url, '', '', SW_SHOWNORMAL, ewNoWait, ResultCode);
+end;
+
+procedure AppendDependencyWarning(const WarningText: string);
+begin
+  if DependencyInstallWarnings <> '' then
+    DependencyInstallWarnings := DependencyInstallWarnings + #13#10;
+  DependencyInstallWarnings := DependencyInstallWarnings + WarningText;
+end;
+
+function RunWingetDependencyInstall(const FriendlyName, PackageId, DetectPath, DownloadUrl: string): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := True;
+
+  if FileExists(DetectPath) then
+    exit;
+
+  if not IsWingetAvailable then
+  begin
+    AppendDependencyWarning(FriendlyName + ': winget is not available.');
+    MaybeOfferManualDownload(FriendlyName, DownloadUrl, 'winget is not installed or not on PATH.');
+    Result := False;
+    exit;
+  end;
+
+  if not IsInternetReachable then
+  begin
+    AppendDependencyWarning(FriendlyName + ': internet connectivity check failed.');
+    MaybeOfferManualDownload(FriendlyName, DownloadUrl, 'Internet connectivity could not be confirmed.');
+    Result := False;
+    exit;
+  end;
+
+  if not RunHiddenCmd(
+    'winget install -e --id ' + QuotePath(PackageId) +
+    ' --accept-package-agreements --accept-source-agreements --silent --disable-interactivity',
+    ResultCode) then
+  begin
+    AppendDependencyWarning(FriendlyName + ': failed to launch winget.');
+    MaybeOfferManualDownload(FriendlyName, DownloadUrl, 'The installer could not launch winget.');
+    Result := False;
+    exit;
+  end;
+
+  if (ResultCode <> 0) or (not FileExists(DetectPath)) then
+  begin
+    AppendDependencyWarning(FriendlyName + ': winget install failed (exit code ' + IntToStr(ResultCode) + ').');
+    MaybeOfferManualDownload(FriendlyName, DownloadUrl, 'winget exited with code ' + IntToStr(ResultCode) + '.');
+    Result := False;
+    exit;
+  end;
+end;
+
+procedure InstallMissingDependenciesWithFeedback;
+begin
+  if DependencyInstallAttempted then
+    exit;
+
+  DependencyInstallAttempted := True;
+  DependencyInstallWarnings := '';
+
+  if ShouldPerformInstallAction then
+  begin
+    RunWingetDependencyInstall(
+      'WireGuard Desktop',
+      'WireGuard.WireGuard',
+      'C:\Program Files\WireGuard\wireguard.exe',
+      'https://www.wireguard.com/install/'
+    );
+
+    RunWingetDependencyInstall(
+      'GTK Runtime (for Cairo graphics)',
+      'tschoonj.GTKForWindows',
+      'C:\Program Files\GTK3-Runtime Win64\bin\libcairo-2.dll',
+      'https://github.com/tschoonj/GTK-for-Windows-Runtime-Environment-Installer'
+    );
+
+    if DependencyInstallWarnings <> '' then
+      MsgBox(
+        'Resistine installed successfully, but some optional dependencies still need attention:' + #13#10#13#10 +
+        DependencyInstallWarnings,
+        mbInformation, MB_OK);
+  end;
+end;
+
+procedure ApplyStartupTaskSelection;
+var
+  AppExe: string;
+begin
+  if not ShouldPerformInstallAction then
+    exit;
+
+  AppExe := QuotePath(ExpandConstant('{app}\Resistine.exe'));
+  if WizardIsTaskSelected('startup') then
+    RegWriteStringValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Resistine', AppExe)
+  else
+    RegDeleteValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Resistine');
+end;
+
+procedure RunVpnServiceSetupRequired;
+var
+  ResultCode: Integer;
+  ScriptPath: string;
+begin
+  if not ShouldPerformInstallAction then
+    exit;
+
+  ScriptPath := ExpandConstant('{app}\install_service.bat');
+  if not FileExists(ScriptPath) then
+  begin
+    MsgBox(
+      'Required VPN service setup script was not found:' + #13#10 + ScriptPath + #13#10#13#10 +
+      'Resistine VPN features will not work until this is repaired.',
+      mbError, MB_OK);
+    exit;
+  end;
+
+  if not Exec(ExpandConstant('{cmd}'),
+    '/C ""' + ScriptPath + '" /quiet""',
+    ExpandConstant('{app}'),
+    SW_SHOW, ewWaitUntilTerminated, ResultCode) then
+  begin
+    MsgBox(
+      'The installer could not start required VPN service setup.' + #13#10 +
+      'Run install_service.bat as Administrator after setup completes.',
+      mbError, MB_OK);
+    exit;
+  end;
+
+  if ResultCode <> 0 then
+  begin
+    MsgBox(
+      'Resistine installed, but required VPN service setup failed (exit code ' + IntToStr(ResultCode) + ').' + #13#10 +
+      'Check: C:\ProgramData\Resistine\vpn_service.log' + #13#10 +
+      'Then rerun install_service.bat as Administrator.',
+      mbError, MB_OK);
+  end;
+end;
+
+function EnsureResistineClosedForInstall: Boolean;
+var
+  Response: Integer;
+begin
+  Result := True;
+
+  if not ShouldPerformInstallAction then
+    exit;
+
+  if not IsResistineRunning then
+    exit;
+
+  Response := MsgBox(
+    'Resistine is currently running and must be closed before setup can continue.' + #13#10#13#10 +
+    'Click Yes to let the installer close it automatically.' + #13#10 +
+    'Click No to close it yourself and restart setup later.',
+    mbConfirmation, MB_YESNO);
+  if Response <> IDYES then
+  begin
+    Result := False;
+    exit;
+  end;
+
+  if TryKillResistineProcess(False) then
+    exit;
+
+  Response := MsgBox(
+    'Resistine did not close cleanly.' + #13#10#13#10 +
+    'Force close it now?',
+    mbConfirmation, MB_YESNO);
+  if (Response = IDYES) and TryKillResistineProcess(True) then
+    exit;
+
+  if IsResistineRunning then
+  begin
+    MsgBox('Please close Resistine and run the installer again.', mbError, MB_OK);
+    Result := False;
+  end;
+end;
+
+function SelectedActionCaption: string;
+begin
+  case SelectedAction of
+    maInstall: Result := 'Install';
+    maUpdate: Result := 'Update';
+    maReinstall: Result := 'Repair';
+    maUninstall: Result := 'Uninstall';
+  else
+    Result := 'Install';
+  end;
+end;
+
+function GetSelectedMaintenanceAction: TMaintenanceAction;
+begin
+  if (ReinstallRadio <> nil) and ReinstallRadio.Checked then
+    Result := maReinstall
+  else if (UninstallRadio <> nil) and UninstallRadio.Checked then
+    Result := maUninstall
+  else if (UpdateRadio <> nil) and UpdateRadio.Checked then
+    Result := maUpdate
+  else
+    Result := maInstall;
+end;
+
+function GetMaintenanceActionDetailText(const ActionValue: TMaintenanceAction): string;
+begin
+  case ActionValue of
+    maInstall:
+      Result := 'Installs this version over the current app files. Your settings, logs, and VPN data stay in place.';
+    maUpdate:
+      if UpdateAvailable then
+        Result := 'Recommended when this installer is newer. Updates app files and keeps your existing settings and data.'
+      else
+        Result := 'Update is not available because the installed version is the same as, or newer than, this installer.';
+    maReinstall:
+      Result := 'Repairs a broken installation by uninstalling and reinstalling Resistine. You can back up data first.';
+    maUninstall:
+      Result := 'Uninstalls Resistine and exits setup. You can choose whether to keep or remove user data.';
+  else
+    Result := '';
+  end;
+end;
+
+procedure RefreshMaintenanceSelectionUI;
+var
+  ActionValue: TMaintenanceAction;
+  ShowBackupOptions: Boolean;
+  ShowUninstallOptions: Boolean;
+begin
+  if MaintenancePage = nil then
+    exit;
+
+  ActionValue := GetSelectedMaintenanceAction;
+
+  if MaintenanceActionDetailLabel <> nil then
+  begin
+    MaintenanceActionDetailLabel.Caption := GetMaintenanceActionDetailText(ActionValue);
+    WizardForm.AdjustLabelHeight(MaintenanceActionDetailLabel);
+  end;
+
+  ShowBackupOptions := ActionValue = maReinstall;
+  ShowUninstallOptions := ActionValue = maUninstall;
+
+  if MaintenanceDataOptionsHeaderLabel <> nil then
+  begin
+    if ShowBackupOptions then
+      MaintenanceDataOptionsHeaderLabel.Caption := 'Repair options'
+    else if ShowUninstallOptions then
+      MaintenanceDataOptionsHeaderLabel.Caption := 'Uninstall options'
+    else
+      MaintenanceDataOptionsHeaderLabel.Caption := 'Options';
+  end;
+
+  if BackupSettingsCheck <> nil then
+  begin
+    BackupSettingsCheck.Visible := ShowBackupOptions;
+    BackupSettingsCheck.Enabled := ShowBackupOptions and HasAnyResistineUserData;
+  end;
+  if BackupHelpLabel <> nil then
+  begin
+    BackupHelpLabel.Visible := ShowBackupOptions;
+    BackupHelpLabel.Enabled := ShowBackupOptions;
+  end;
+
+  if RemoveUserDataCheck <> nil then
+  begin
+    RemoveUserDataCheck.Visible := ShowUninstallOptions;
+    RemoveUserDataCheck.Enabled := ShowUninstallOptions and HasAnyResistineUserData;
+  end;
+  if RemoveUserDataHelpLabel <> nil then
+  begin
+    RemoveUserDataHelpLabel.Visible := ShowUninstallOptions;
+    RemoveUserDataHelpLabel.Enabled := ShowUninstallOptions;
+  end;
+
+  if MaintenanceDataOptionsEmptyLabel <> nil then
+  begin
+    MaintenanceDataOptionsEmptyLabel.Visible := not (ShowBackupOptions or ShowUninstallOptions);
+    if ActionValue = maUpdate then
+      MaintenanceDataOptionsEmptyLabel.Caption := 'No additional options for Update.'
+    else if ActionValue = maInstall then
+      MaintenanceDataOptionsEmptyLabel.Caption := 'No additional options for Install.'
+    else
+      MaintenanceDataOptionsEmptyLabel.Caption := 'No additional options for this action.';
+  end;
+end;
+
+procedure MaintenanceActionChanged(Sender: TObject);
+begin
+  RefreshMaintenanceSelectionUI;
+end;
+
+procedure BuildPreflightSummaryParts(var ActionText, ChecksText, TasksText: string);
+var
+  WireGuardState: string;
+  GtkState: string;
+  WingetState: string;
+  InternetState: string;
+  RunningState: string;
+  VpnServiceState: string;
+begin
+  if IsWireGuardInstalled then
+    WireGuardState := 'Installed'
+  else
+    WireGuardState := 'Missing (installer will try winget)';
+
+  if IsGtkRuntimeInstalled then
+    GtkState := 'Installed'
+  else
+    GtkState := 'Missing (installer will try winget)';
+
+  WingetState := BoolStatus(IsWingetAvailable, 'Available', 'Missing');
+  InternetState := BoolStatus(IsInternetReachable, 'Reachable (ICMP heuristic)', 'Not confirmed');
+  RunningState := BoolStatus(IsResistineRunning, 'Running (will be closed before install)', 'Not running');
+  VpnServiceState := BoolStatus(IsVpnServiceInstalled, 'Installed', 'Not installed');
+
+  ActionText :=
+    'Action: ' + SelectedActionCaption + #13#10 +
+    'Installer version: {#AppVersion}' + #13#10;
+
+  if ExistingInstallDetected then
+  begin
+    ActionText := ActionText + 'Existing install: Yes' + #13#10;
+    if ExistingInstallVersion <> '' then
+      ActionText := ActionText + 'Installed version: ' + ExistingInstallVersion + #13#10;
+    if ExistingInstallDir <> '' then
+      ActionText := ActionText + 'Install path: ' + ExistingInstallDir + #13#10;
+  end
+  else
+    ActionText := ActionText + 'Existing install: No' + #13#10;
+
+  ChecksText :=
+    '- WireGuard Desktop: ' + WireGuardState + #13#10 +
+    '- GTK Runtime: ' + GtkState + #13#10 +
+    '- winget: ' + WingetState + #13#10 +
+    '- Internet: ' + InternetState + #13#10 +
+    '- Resistine app: ' + RunningState + #13#10 +
+    '- VPN Windows service: ' + VpnServiceState;
+
+  TasksText :=
+    '- Desktop icon: ' + BoolStatus(WizardIsTaskSelected('desktopicon'), 'Yes', 'No') + #13#10 +
+    '- Start on sign-in: ' + BoolStatus(WizardIsTaskSelected('startup'), 'Yes', 'No') + #13#10 +
+    '- VPN service setup: Required (installer will install/repair it)';
+end;
+
+procedure RefreshPreflightSummary;
+var
+  ActionText: string;
+  ChecksText: string;
+  TasksText: string;
+  NextTop: Integer;
+begin
+  BuildPreflightSummaryParts(ActionText, ChecksText, TasksText);
+  LastDependencyPreflightText :=
+    'Install summary' + #13#10 + ActionText + #13#10 +
+    'System checks' + #13#10 + ChecksText + #13#10#13#10 +
+    'Selected options' + #13#10 + TasksText;
+
+  if PreflightInfoLabel <> nil then
+  begin
+    PreflightInfoLabel.Caption := 'Review what setup will do before installation starts.';
+    WizardForm.AdjustLabelHeight(PreflightInfoLabel);
+  end;
+
+  if PreflightActionLabel <> nil then
+  begin
+    PreflightActionLabel.Caption := ActionText;
+    WizardForm.AdjustLabelHeight(PreflightActionLabel);
+  end;
+
+  if PreflightChecksLabel <> nil then
+  begin
+    PreflightChecksLabel.Caption := ChecksText;
+    WizardForm.AdjustLabelHeight(PreflightChecksLabel);
+  end;
+
+  if PreflightTasksLabel <> nil then
+  begin
+    PreflightTasksLabel.Caption := TasksText;
+    WizardForm.AdjustLabelHeight(PreflightTasksLabel);
+  end;
+
+  if (PreflightActionHeaderLabel <> nil) and (PreflightActionLabel <> nil) and
+     (PreflightChecksHeaderLabel <> nil) and (PreflightChecksLabel <> nil) and
+     (PreflightTasksHeaderLabel <> nil) and (PreflightTasksLabel <> nil) then
+  begin
+    NextTop := PreflightInfoLabel.Top + PreflightInfoLabel.Height + ScaleY(10);
+
+    PreflightActionHeaderLabel.Top := NextTop;
+    PreflightActionLabel.Top := PreflightActionHeaderLabel.Top + PreflightActionHeaderLabel.Height + ScaleY(2);
+    NextTop := PreflightActionLabel.Top + PreflightActionLabel.Height + ScaleY(8);
+
+    PreflightChecksHeaderLabel.Top := NextTop;
+    PreflightChecksLabel.Top := PreflightChecksHeaderLabel.Top + PreflightChecksHeaderLabel.Height + ScaleY(2);
+    NextTop := PreflightChecksLabel.Top + PreflightChecksLabel.Height + ScaleY(8);
+
+    PreflightTasksHeaderLabel.Top := NextTop;
+    PreflightTasksLabel.Top := PreflightTasksHeaderLabel.Top + PreflightTasksHeaderLabel.Height + ScaleY(2);
+  end;
+end;
+
+function ExtractExePathFromCommand(const CommandLine: string): string;
+var
+  P: Integer;
+  L: string;
+begin
+  Result := '';
+  L := Trim(CommandLine);
+  if L = '' then
+    exit;
+
+  if Copy(L, 1, 1) = '"' then
+  begin
+    Delete(L, 1, 1);
+    P := Pos('"', L);
+    if P > 0 then
+      Result := Copy(L, 1, P - 1);
+  end
+  else
+  begin
+    P := Pos('.exe', LowerCase(L));
+    if P > 0 then
+      Result := Copy(L, 1, P + 3);
+  end;
+end;
+
+function RunExistingUninstaller(SilentMode: Boolean): Boolean;
+var
+  ExePath: string;
+  Params: string;
+  ResultCode: Integer;
+  LowerExe: string;
+begin
+  Result := False;
+  ExePath := ExtractExePathFromCommand(ExistingUninstallCmd);
+  if (ExePath = '') or (not FileExists(ExePath)) then
+  begin
+    MsgBox(
+      'An existing installation was detected, but its uninstaller could not be found.' + #13#10 +
+      'Please uninstall Resistine manually first.',
+      mbError, MB_OK);
+    exit;
+  end;
+
+  LowerExe := LowerCase(ExtractFileName(ExePath));
+  Params := '';
+  if SilentMode then
+  begin
+    if Pos('unins', LowerExe) = 1 then
+      Params := '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+    else if LowerExe = 'uninstall.exe' then
+      Params := '/S';
+  end;
+
+  Log('Running existing uninstaller: ' + ExePath + ' ' + Params);
+  if Exec(ExePath, Params, '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
+  begin
+    Log('Uninstaller exit code: ' + IntToStr(ResultCode));
+    Result := (ResultCode = 0);
+    if not Result then
+      MsgBox('The existing uninstaller returned a non-zero exit code (' + IntToStr(ResultCode) + ').', mbError, MB_OK);
+  end
+  else
+  begin
+    MsgBox('Failed to launch the existing uninstaller.', mbError, MB_OK);
+  end;
+end;
+
+function GetMaintenanceSummaryText: string;
+var
+  CompareResult: Integer;
+  StatusLine: string;
+begin
+  StatusLine := 'Detected an existing Resistine installation.';
+  if ExistingInstallVersion <> '' then
+  begin
+    CompareResult := CompareVersionStrings(ExistingInstallVersion, '{#AppVersion}');
+    if CompareResult < 0 then
+      StatusLine := StatusLine + #13#10 + 'Installed version: ' + ExistingInstallVersion + ' (older than this installer)'
+    else if CompareResult = 0 then
+      StatusLine := StatusLine + #13#10 + 'Installed version: ' + ExistingInstallVersion + ' (same as this installer)'
+    else
+      StatusLine := StatusLine + #13#10 + 'Installed version: ' + ExistingInstallVersion + ' (newer than this installer)';
+  end;
+
+  Result := StatusLine + #13#10 +
+    'Installer version: {#AppVersion}' + #13#10 +
+    'Install location: ' + ExistingInstallDir + #13#10#13#10 +
+    'Choose an action below. A short description is shown under each option.';
+end;
+
+procedure InitializeWizard;
+var
+  NextTop: Integer;
+begin
+  SelectedAction := maInstall;
+  DetectExistingInstall;
+  EvaluateUpdateAvailability;
+
+  if ExistingInstallDetected then
+  begin
+    MaintenancePage := CreateCustomPage(wpWelcome, 'Resistine Is Already Installed', 'Choose how you want to continue');
+
+    MaintenanceInfoLabel := TNewStaticText.Create(MaintenancePage);
+    MaintenanceInfoLabel.Parent := MaintenancePage.Surface;
+    MaintenanceInfoLabel.Left := 0;
+    MaintenanceInfoLabel.Top := 0;
+    MaintenanceInfoLabel.Width := MaintenancePage.SurfaceWidth;
+    MaintenanceInfoLabel.Height := ScaleY(1);
+    MaintenanceInfoLabel.AutoSize := False;
+    MaintenanceInfoLabel.WordWrap := True;
+    MaintenanceInfoLabel.Caption := GetMaintenanceSummaryText;
+    WizardForm.AdjustLabelHeight(MaintenanceInfoLabel);
+    NextTop := MaintenanceInfoLabel.Top + MaintenanceInfoLabel.Height + ScaleY(8);
+
+    MaintenanceActionHeaderLabel := TNewStaticText.Create(MaintenancePage);
+    MaintenanceActionHeaderLabel.Parent := MaintenancePage.Surface;
+    MaintenanceActionHeaderLabel.Left := 0;
+    MaintenanceActionHeaderLabel.Top := NextTop;
+    MaintenanceActionHeaderLabel.Width := MaintenancePage.SurfaceWidth;
+    MaintenanceActionHeaderLabel.Caption := 'Action';
+    NextTop := MaintenanceActionHeaderLabel.Top + MaintenanceActionHeaderLabel.Height + ScaleY(2);
+
+    InstallRadio := TRadioButton.Create(MaintenancePage);
+    InstallRadio.Parent := MaintenancePage.Surface;
+    InstallRadio.Left := 0;
+    InstallRadio.Top := NextTop;
+    InstallRadio.Width := MaintenancePage.SurfaceWidth;
+    InstallRadio.Height := ScaleY(22);
+    InstallRadio.Caption := 'Install';
+    InstallRadio.Checked := not UpdateAvailable;
+    InstallRadio.OnClick := @MaintenanceActionChanged;
+    NextTop := InstallRadio.Top + InstallRadio.Height + ScaleY(1);
+
+    UpdateRadio := TRadioButton.Create(MaintenancePage);
+    UpdateRadio.Parent := MaintenancePage.Surface;
+    UpdateRadio.Left := 0;
+    UpdateRadio.Top := NextTop;
+    UpdateRadio.Width := MaintenancePage.SurfaceWidth;
+    UpdateRadio.Height := ScaleY(22);
+    UpdateRadio.Caption := 'Update';
+    UpdateRadio.Enabled := UpdateAvailable;
+    UpdateRadio.Checked := UpdateAvailable;
+    UpdateRadio.OnClick := @MaintenanceActionChanged;
+    NextTop := UpdateRadio.Top + UpdateRadio.Height + ScaleY(1);
+
+    ReinstallRadio := TRadioButton.Create(MaintenancePage);
+    ReinstallRadio.Parent := MaintenancePage.Surface;
+    ReinstallRadio.Left := 0;
+    ReinstallRadio.Top := NextTop;
+    ReinstallRadio.Width := MaintenancePage.SurfaceWidth;
+    ReinstallRadio.Height := ScaleY(22);
+    ReinstallRadio.Caption := 'Repair installation';
+    ReinstallRadio.OnClick := @MaintenanceActionChanged;
+    NextTop := ReinstallRadio.Top + ReinstallRadio.Height + ScaleY(1);
+
+    UninstallRadio := TRadioButton.Create(MaintenancePage);
+    UninstallRadio.Parent := MaintenancePage.Surface;
+    UninstallRadio.Left := 0;
+    UninstallRadio.Top := NextTop;
+    UninstallRadio.Width := MaintenancePage.SurfaceWidth;
+    UninstallRadio.Height := ScaleY(22);
+    UninstallRadio.Caption := 'Uninstall';
+    UninstallRadio.OnClick := @MaintenanceActionChanged;
+    NextTop := UninstallRadio.Top + UninstallRadio.Height + ScaleY(1);
+
+    MaintenanceActionDetailHeaderLabel := TNewStaticText.Create(MaintenancePage);
+    MaintenanceActionDetailHeaderLabel.Parent := MaintenancePage.Surface;
+    MaintenanceActionDetailHeaderLabel.Left := 0;
+    MaintenanceActionDetailHeaderLabel.Top := NextTop + ScaleY(2);
+    MaintenanceActionDetailHeaderLabel.Width := MaintenancePage.SurfaceWidth;
+    MaintenanceActionDetailHeaderLabel.Caption := 'What this does';
+    NextTop := MaintenanceActionDetailHeaderLabel.Top + MaintenanceActionDetailHeaderLabel.Height + ScaleY(2);
+
+    MaintenanceActionDetailLabel := TNewStaticText.Create(MaintenancePage);
+    MaintenanceActionDetailLabel.Parent := MaintenancePage.Surface;
+    MaintenanceActionDetailLabel.Left := ScaleX(16);
+    MaintenanceActionDetailLabel.Top := NextTop;
+    MaintenanceActionDetailLabel.Width := MaintenancePage.SurfaceWidth - ScaleX(16);
+    MaintenanceActionDetailLabel.AutoSize := False;
+    MaintenanceActionDetailLabel.WordWrap := True;
+    MaintenanceActionDetailLabel.Height := ScaleY(1);
+    MaintenanceActionDetailLabel.Caption := '';
+    WizardForm.AdjustLabelHeight(MaintenanceActionDetailLabel);
+    NextTop := MaintenanceActionDetailLabel.Top + MaintenanceActionDetailLabel.Height + ScaleY(8);
+
+    MaintenanceDataOptionsHeaderLabel := TNewStaticText.Create(MaintenancePage);
+    MaintenanceDataOptionsHeaderLabel.Parent := MaintenancePage.Surface;
+    MaintenanceDataOptionsHeaderLabel.Left := 0;
+    MaintenanceDataOptionsHeaderLabel.Top := NextTop;
+    MaintenanceDataOptionsHeaderLabel.Width := MaintenancePage.SurfaceWidth;
+    MaintenanceDataOptionsHeaderLabel.Caption := 'Options';
+    NextTop := MaintenanceDataOptionsHeaderLabel.Top + MaintenanceDataOptionsHeaderLabel.Height + ScaleY(2);
+
+    MaintenanceDataOptionsEmptyLabel := TNewStaticText.Create(MaintenancePage);
+    MaintenanceDataOptionsEmptyLabel.Parent := MaintenancePage.Surface;
+    MaintenanceDataOptionsEmptyLabel.Left := ScaleX(16);
+    MaintenanceDataOptionsEmptyLabel.Top := NextTop;
+    MaintenanceDataOptionsEmptyLabel.Width := MaintenancePage.SurfaceWidth - ScaleX(16);
+    MaintenanceDataOptionsEmptyLabel.AutoSize := False;
+    MaintenanceDataOptionsEmptyLabel.WordWrap := True;
+    MaintenanceDataOptionsEmptyLabel.Height := ScaleY(1);
+    MaintenanceDataOptionsEmptyLabel.Caption := 'No additional options for this action.';
+    WizardForm.AdjustLabelHeight(MaintenanceDataOptionsEmptyLabel);
+
+    BackupSettingsCheck := TNewCheckBox.Create(MaintenancePage);
+    BackupSettingsCheck.Parent := MaintenancePage.Surface;
+    BackupSettingsCheck.Left := 0;
+    BackupSettingsCheck.Top := NextTop;
+    BackupSettingsCheck.Width := MaintenancePage.SurfaceWidth;
+    BackupSettingsCheck.Height := ScaleY(22);
+    BackupSettingsCheck.Caption := 'Back up data before repair';
+    BackupSettingsCheck.Checked := True;
+    BackupSettingsCheck.Enabled := HasAnyResistineUserData;
+    NextTop := BackupSettingsCheck.Top + BackupSettingsCheck.Height + ScaleY(1);
+
+    BackupHelpLabel := TNewStaticText.Create(MaintenancePage);
+    BackupHelpLabel.Parent := MaintenancePage.Surface;
+    BackupHelpLabel.Left := ScaleX(16);
+    BackupHelpLabel.Top := NextTop;
+    BackupHelpLabel.Width := MaintenancePage.SurfaceWidth - ScaleX(16);
+    BackupHelpLabel.AutoSize := False;
+    BackupHelpLabel.WordWrap := True;
+    BackupHelpLabel.Height := ScaleY(1);
+    if HasAnyResistineUserData then
+      BackupHelpLabel.Caption := 'Recommended for Repair. Backs up settings and VPN data and restores them after reinstall when possible.'
+    else
+      BackupHelpLabel.Caption := 'No Resistine user data was detected to back up.';
+    WizardForm.AdjustLabelHeight(BackupHelpLabel);
+    NextTop := BackupHelpLabel.Top + BackupHelpLabel.Height + ScaleY(6);
+
+    RemoveUserDataCheck := TNewCheckBox.Create(MaintenancePage);
+    RemoveUserDataCheck.Parent := MaintenancePage.Surface;
+    RemoveUserDataCheck.Left := 0;
+    RemoveUserDataCheck.Top := NextTop;
+    RemoveUserDataCheck.Width := MaintenancePage.SurfaceWidth;
+    RemoveUserDataCheck.Height := ScaleY(22);
+    RemoveUserDataCheck.Caption := 'Remove user data on uninstall';
+    RemoveUserDataCheck.Checked := False;
+    RemoveUserDataCheck.Enabled := HasAnyResistineUserData;
+    NextTop := RemoveUserDataCheck.Top + RemoveUserDataCheck.Height + ScaleY(1);
+
+    RemoveUserDataHelpLabel := TNewStaticText.Create(MaintenancePage);
+    RemoveUserDataHelpLabel.Parent := MaintenancePage.Surface;
+    RemoveUserDataHelpLabel.Left := ScaleX(16);
+    RemoveUserDataHelpLabel.Top := NextTop;
+    RemoveUserDataHelpLabel.Width := MaintenancePage.SurfaceWidth - ScaleX(16);
+    RemoveUserDataHelpLabel.AutoSize := False;
+    RemoveUserDataHelpLabel.WordWrap := True;
+    RemoveUserDataHelpLabel.Height := ScaleY(1);
+    if HasAnyResistineUserData then
+      RemoveUserDataHelpLabel.Caption := 'Deletes settings, logs, and VPN service data from user and common app-data folders.'
+    else
+      RemoveUserDataHelpLabel.Caption := 'No Resistine user data was detected.';
+    WizardForm.AdjustLabelHeight(RemoveUserDataHelpLabel);
+
+    RefreshMaintenanceSelectionUI;
+
+    if ExistingInstallDir <> '' then
+      WizardForm.DirEdit.Text := ExistingInstallDir;
+  end;
+
+  PreflightPage := CreateCustomPage(wpSelectTasks, 'Pre-install Check', 'Review dependency and action status before installation starts');
+
+  PreflightInfoLabel := TNewStaticText.Create(PreflightPage);
+  PreflightInfoLabel.Parent := PreflightPage.Surface;
+  PreflightInfoLabel.Left := 0;
+  PreflightInfoLabel.Top := 0;
+  PreflightInfoLabel.Width := PreflightPage.SurfaceWidth;
+  PreflightInfoLabel.Height := ScaleY(1);
+  PreflightInfoLabel.AutoSize := False;
+  PreflightInfoLabel.WordWrap := True;
+  PreflightInfoLabel.Caption := 'Review what setup will do before installation starts.';
+  WizardForm.AdjustLabelHeight(PreflightInfoLabel);
+
+  NextTop := PreflightInfoLabel.Top + PreflightInfoLabel.Height + ScaleY(10);
+
+  PreflightActionHeaderLabel := TNewStaticText.Create(PreflightPage);
+  PreflightActionHeaderLabel.Parent := PreflightPage.Surface;
+  PreflightActionHeaderLabel.Left := 0;
+  PreflightActionHeaderLabel.Top := NextTop;
+  PreflightActionHeaderLabel.Width := PreflightPage.SurfaceWidth;
+  PreflightActionHeaderLabel.Caption := 'Install summary';
+
+  PreflightActionLabel := TNewStaticText.Create(PreflightPage);
+  PreflightActionLabel.Parent := PreflightPage.Surface;
+  PreflightActionLabel.Left := ScaleX(16);
+  PreflightActionLabel.Top := PreflightActionHeaderLabel.Top + PreflightActionHeaderLabel.Height + ScaleY(2);
+  PreflightActionLabel.Width := PreflightPage.SurfaceWidth - ScaleX(16);
+  PreflightActionLabel.AutoSize := False;
+  PreflightActionLabel.WordWrap := True;
+  PreflightActionLabel.Height := ScaleY(1);
+  PreflightActionLabel.Caption := '';
+
+  PreflightChecksHeaderLabel := TNewStaticText.Create(PreflightPage);
+  PreflightChecksHeaderLabel.Parent := PreflightPage.Surface;
+  PreflightChecksHeaderLabel.Left := 0;
+  PreflightChecksHeaderLabel.Top := PreflightActionLabel.Top + ScaleY(80);
+  PreflightChecksHeaderLabel.Width := PreflightPage.SurfaceWidth;
+  PreflightChecksHeaderLabel.Caption := 'System checks';
+
+  PreflightChecksLabel := TNewStaticText.Create(PreflightPage);
+  PreflightChecksLabel.Parent := PreflightPage.Surface;
+  PreflightChecksLabel.Left := ScaleX(16);
+  PreflightChecksLabel.Top := PreflightChecksHeaderLabel.Top + PreflightChecksHeaderLabel.Height + ScaleY(2);
+  PreflightChecksLabel.Width := PreflightPage.SurfaceWidth - ScaleX(16);
+  PreflightChecksLabel.AutoSize := False;
+  PreflightChecksLabel.WordWrap := True;
+  PreflightChecksLabel.Height := ScaleY(1);
+  PreflightChecksLabel.Caption := '';
+
+  PreflightTasksHeaderLabel := TNewStaticText.Create(PreflightPage);
+  PreflightTasksHeaderLabel.Parent := PreflightPage.Surface;
+  PreflightTasksHeaderLabel.Left := 0;
+  PreflightTasksHeaderLabel.Top := PreflightChecksLabel.Top + ScaleY(120);
+  PreflightTasksHeaderLabel.Width := PreflightPage.SurfaceWidth;
+  PreflightTasksHeaderLabel.Caption := 'Selected options';
+
+  PreflightTasksLabel := TNewStaticText.Create(PreflightPage);
+  PreflightTasksLabel.Parent := PreflightPage.Surface;
+  PreflightTasksLabel.Left := ScaleX(16);
+  PreflightTasksLabel.Top := PreflightTasksHeaderLabel.Top + PreflightTasksHeaderLabel.Height + ScaleY(2);
+  PreflightTasksLabel.Width := PreflightPage.SurfaceWidth - ScaleX(16);
+  PreflightTasksLabel.AutoSize := False;
+  PreflightTasksLabel.WordWrap := True;
+  PreflightTasksLabel.Height := ScaleY(1);
+  PreflightTasksLabel.Caption := '';
+
+  RefreshPreflightSummary;
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  ConfirmText: string;
+  WantsRemoveData: Boolean;
+  ExistingIsInno: Boolean;
+begin
+  Result := True;
+
+  if ExistingInstallDetected then
+  if CurPageID = MaintenancePage.ID then
+  begin
+    RefreshMaintenanceSelectionUI;
+
+    if InstallRadio.Checked then
+    begin
+      SelectedAction := maInstall;
+      RemoveUserDataAfterUninstall := False;
+      exit;
+    end;
+
+    if UpdateRadio.Checked then
+    begin
+      SelectedAction := maUpdate;
+      RemoveUserDataAfterUninstall := False;
+      exit;
+    end;
+
+    if ReinstallRadio.Checked then
+    begin
+      SelectedAction := maReinstall;
+
+      RemoveUserDataAfterUninstall := False;
+      if not BackupDataForReinstall then
+      begin
+        Result := False;
+        exit;
+      end;
+
+      ExistingIsInno := ExistingUninstallerLooksLikeInno;
+      if ExistingIsInno then
+        SetInstallerUninstallInteropFlags(False);
+      Result := RunExistingUninstaller(True);
+      if not Result and ExistingIsInno then
+        ClearInstallerUninstallInteropFlags;
+      if Result then
+        Sleep(1000);
+      exit;
+    end;
+
+    if UninstallRadio.Checked then
+    begin
+      SelectedAction := maUninstall;
+      WantsRemoveData := (RemoveUserDataCheck <> nil) and RemoveUserDataCheck.Checked;
+      RemoveUserDataAfterUninstall := WantsRemoveData;
+
+      ConfirmText :=
+        'This will uninstall the existing Resistine installation and close setup.' + #13#10#13#10 +
+        'What will be removed:' + #13#10 +
+        '- Application files in: ' + ExistingInstallDir + #13#10 +
+        '- Start Menu / desktop shortcuts' + #13#10;
+
+      if WantsRemoveData then
+        ConfirmText := ConfirmText + '- User data: settings, logs, and VPN service data' + #13#10 +
+          '  (' + GetResistineUserDataDir + ' and ' + GetResistineCommonDataDir + ')' + #13#10
+      else
+        ConfirmText := ConfirmText + '- User data will be preserved' + #13#10 +
+          '  (' + GetResistineUserDataDir + ' and ' + GetResistineCommonDataDir + ')' + #13#10;
+
+      ConfirmText := ConfirmText + #13#10 + 'Continue?';
+
+      if MsgBox(ConfirmText, mbConfirmation, MB_YESNO) = IDYES then
+      begin
+        ExistingIsInno := ExistingUninstallerLooksLikeInno;
+        if ExistingIsInno then
+          SetInstallerUninstallInteropFlags(WantsRemoveData);
+        if RunExistingUninstaller(False) then
+        begin
+          if WantsRemoveData and (not ExistingIsInno) then
+            DeleteResistineUserData;
+
+          if WantsRemoveData then
+            MsgBox('Uninstall completed and user data was removed. Setup will now exit.', mbInformation, MB_OK)
+          else
+            MsgBox('Uninstall completed. User data was preserved. Setup will now exit.', mbInformation, MB_OK);
+          WizardForm.Close;
+        end;
+        if ExistingIsInno then
+          ClearInstallerUninstallInteropFlags;
+      end;
+      Result := False;
+      exit;
+    end;
+  end;
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := False;
+
+  if ExistingInstallDetected and (SelectedAction = maUninstall) and
+     ((PageID = wpSelectTasks) or (PageID = wpReady) or (PageID = wpInstalling) or
+      ((PreflightPage <> nil) and (PageID = PreflightPage.ID))) then
+    Result := True;
+end;
+
+function ShouldPerformInstallAction: Boolean;
+begin
+  Result := SelectedAction <> maUninstall;
+end;
+
+function NeedWireGuardInstall: Boolean;
+begin
+  Result := ShouldPerformInstallAction and
+    (not FileExists('C:\Program Files\WireGuard\wireguard.exe'));
+end;
+
+function NeedGtkRuntimeInstall: Boolean;
+begin
+  Result := ShouldPerformInstallAction and
+    (not FileExists('C:\Program Files\GTK3-Runtime Win64\bin\libcairo-2.dll'));
+end;
+
+function ShouldInstallWireGuard: Boolean;
+begin
+  Result := NeedWireGuardInstall;
+end;
+
+function ShouldInstallGtkRuntime: Boolean;
+begin
+  Result := NeedGtkRuntimeInstall;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if (MaintenancePage <> nil) and (CurPageID = MaintenancePage.ID) then
+    RefreshMaintenanceSelectionUI;
+
+  if (PreflightPage <> nil) and (CurPageID = PreflightPage.ID) then
+    RefreshPreflightSummary;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := '';
+  if not EnsureResistineClosedForInstall then
+    Result := 'Resistine must be closed before installation can continue.';
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep <> ssPostInstall then
+    exit;
+
+  if not ShouldPerformInstallAction then
+    exit;
+
+  RestoreDataAfterReinstallIfNeeded;
+  ApplyStartupTaskSelection;
+  InstallMissingDependenciesWithFeedback;
+  RunVpnServiceSetupRequired;
+end;
+
+function InitializeUninstall(): Boolean;
+var
+  Summary: string;
+  Response: Integer;
+begin
+  Result := True;
+  LoadInstallerUninstallInteropFlags;
+
+  if MaintenanceUninstallByInstaller then
+    exit;
+
+  Summary :=
+    'This will uninstall Resistine from:' + #13#10 +
+    ExpandConstant('{app}') + #13#10#13#10 +
+    'By default, your user data is preserved:' + #13#10 +
+    '- ' + GetResistineUserDataDir + #13#10 +
+    '- ' + GetResistineCommonDataDir + #13#10#13#10 +
+    'Continue?';
+
+  Response := MsgBox(Summary, mbConfirmation, MB_YESNO);
+  if Response <> IDYES then
+  begin
+    Result := False;
+    exit;
+  end;
+
+  if HasAnyResistineUserData then
+  begin
+    Response := MsgBox(
+      'Do you also want to remove Resistine user data (settings, logs, and VPN service data)?' + #13#10#13#10 +
+      GetResistineUserDataDir + #13#10 + GetResistineCommonDataDir,
+      mbConfirmation, MB_YESNO);
+    StandaloneUninstallRemoveUserData := (Response = IDYES);
+  end
+  else
+    StandaloneUninstallRemoveUserData := False;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usPostUninstall then
+  begin
+    if StandaloneUninstallRemoveUserData then
+      DeleteResistineUserData;
+  end;
+end;
