@@ -14,11 +14,39 @@ $ ./install.sh
 
 This will install and run Resistine AI EDR
 
+These scripts are for source/dev installs. For packaged installers, see "Windows Installer (.exe)" below.
+
 ## Running Resistine
 
 $ ./run.sh
 
 This will update the dependencies and run Resistine EndPoint
+
+## Windows Installer (`.exe`)
+
+Windows packaging uses Inno Setup and PyInstaller.
+
+### What gets installed automatically
+
+- Python dependencies are bundled into the packaged app via PyInstaller.
+- The installer attempts to install missing `WireGuard` and `GTK3 runtime` via `winget` (best effort).
+- The installer installs/repairs the required Resistine VPN Windows service during setup.
+
+### Installer actions (maintenance mode)
+
+- Fresh install: normal install flow
+- Existing install detected: `Install` (overwrite), `Update` (if installer is newer), `Reinstall (Fix)`, or `Uninstall`
+
+### Build the Windows installer
+
+```powershell
+.\build-windows-installer.ps1
+```
+
+Requirements for the build machine:
+
+- `python` on PATH
+- Inno Setup 6 (`ISCC.exe`) installed
 
 ## Command Line Arguments
 

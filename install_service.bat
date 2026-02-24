@@ -6,6 +6,11 @@
 
 setlocal EnableDelayedExpansion
 
+set NO_PAUSE=
+for %%A in (%*) do (
+    if /I "%%~A"=="/quiet" set NO_PAUSE=1
+)
+
 :: ---- Config ----
 set SERVICE_NAME=ResistineVPN
 set SCRIPT_DIR=%~dp0
@@ -23,7 +28,7 @@ net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo ERROR: This script must be run as Administrator.
     echo Right-click install_service.bat and select "Run as administrator"
-    pause
+    call :pause_if_needed
     exit /b 1
 )
 echo       OK - Running as Administrator
@@ -70,14 +75,14 @@ if not defined PYTHON_FULL (
 if not defined PYTHON_FULL (
     echo ERROR: Could not find a real Python installation.
     echo Please install Python 3.10+ from https://www.python.org/downloads/
-    pause
+    call :pause_if_needed
     exit /b 1
 )
 
 "%PYTHON_FULL%" --version >nul 2>&1
 if %errorlevel% neq 0 (
     echo ERROR: Python at %PYTHON_FULL% failed to run.
-    pause
+    call :pause_if_needed
     exit /b 1
 )
 
@@ -92,7 +97,7 @@ echo [3/6] Checking WireGuard installation...
 if not exist "%PROGRAMFILES%\WireGuard\wireguard.exe" (
     echo ERROR: WireGuard not found.
     echo Please install from https://www.wireguard.com/install/
-    pause
+    call :pause_if_needed
     exit /b 1
 )
 echo       OK - WireGuard found
@@ -111,7 +116,7 @@ for %%d in (%SERVICE_DEPS%) do (
     "%PYTHON_FULL%" -m pip install --quiet %%d
     if !errorlevel! neq 0 (
         echo ERROR: Failed to install %%d
-        pause
+        call :pause_if_needed
         exit /b 1
     )
 )
@@ -159,7 +164,7 @@ echo       Registering service...
 "%PYTHON_FULL%" "%SERVICE_SCRIPT%" --startup auto install
 if %errorlevel% neq 0 (
     echo ERROR: Failed to install service.
-    pause
+    call :pause_if_needed
     exit /b 1
 )
 
@@ -185,5 +190,10 @@ echo  Config dir : %PROGRAMDATA_DIR%
 echo  Log file   : %LOG_DIR%\vpn_service.log
 echo ============================================================
 echo.
-pause
+call :pause_if_needed
 exit /b 0
+
+:pause_if_needed
+if defined NO_PAUSE goto :eof
+pause
+goto :eof
