@@ -6,10 +6,8 @@
 
 setlocal EnableDelayedExpansion
 
-set NO_PAUSE=
-for %%A in (%*) do (
-    if /I "%%~A"=="/quiet" set NO_PAUSE=1
-)
+set "QUIET_MODE="
+if /I "%~1"=="/quiet" set "QUIET_MODE=1"
 
 :: ---- Config ----
 set SERVICE_NAME=ResistineVPN
@@ -17,8 +15,20 @@ set SCRIPT_DIR=%~dp0
 if "%SCRIPT_DIR:~-1%"=="\" set SCRIPT_DIR=%SCRIPT_DIR:~0,-1%
 
 set SERVICE_SCRIPT=%SCRIPT_DIR%\plugins\vpn\wireguard\windows_vpn_service.py
+if not exist "%SERVICE_SCRIPT%" if exist "%SCRIPT_DIR%\services\windows_vpn_service.py" set SERVICE_SCRIPT=%SCRIPT_DIR%\services\windows_vpn_service.py
 set PROGRAMDATA_DIR=%PROGRAMDATA%\Resistine\wireguard
 set LOG_DIR=%PROGRAMDATA%\Resistine
+set SERVICE_SETUP_LOG=%LOG_DIR%\vpn_service_install.log
+
+if not exist "%SERVICE_SCRIPT%" (
+    echo ERROR: Service script not found.
+    echo Expected: %SCRIPT_DIR%\plugins\vpn\wireguard\windows_vpn_service.py
+    echo.
+    echo If you are running an installed copy, the installer package may be missing the service script.
+    echo Rebuild the installer after bundling windows_vpn_service.py, or run this script from the project root.
+    call :pause_if_needed
+    exit /b 1
+)
 
 :: ============================================================
 :: 1. Check Admin
@@ -123,10 +133,26 @@ for %%d in (%SERVICE_DEPS%) do (
 
 :: pywin32 post-install
 echo       Running pywin32 post-install...
-for /f "tokens=*" %%p in ('"%PYTHON_FULL%" -c "import sys; print(sys.prefix)"') do (
-    if exist "%%p\Scripts\pywin32_postinstall.py" (
-        "%PYTHON_FULL%" "%%p\Scripts\pywin32_postinstall.py" -install >nul 2>&1
+set "PYWIN32_POSTINSTALL_OK="
+"%PYTHON_FULL%" -m pywin32_postinstall -install >nul 2>&1
+if !errorlevel! equ 0 (
+    set "PYWIN32_POSTINSTALL_OK=1"
+) else (
+    "%PYTHON_FULL%" -c "import sys, pathlib; p = pathlib.Path(sys.prefix) / 'Scripts' / 'pywin32_postinstall.py'; print(p)" > "%TEMP%\resistine_pywin32_postinstall_path.txt" 2>nul
+    if exist "%TEMP%\resistine_pywin32_postinstall_path.txt" (
+        set /p PYWIN32_POSTINSTALL_SCRIPT=<"%TEMP%\resistine_pywin32_postinstall_path.txt"
+        del "%TEMP%\resistine_pywin32_postinstall_path.txt" >nul 2>&1
+        if exist "%PYWIN32_POSTINSTALL_SCRIPT%" (
+            "%PYTHON_FULL%" "%PYWIN32_POSTINSTALL_SCRIPT%" -install >nul 2>&1
+            if !errorlevel! equ 0 set "PYWIN32_POSTINSTALL_OK=1"
+        )
     )
+)
+if defined PYWIN32_POSTINSTALL_OK (
+    echo       OK - pywin32 post-install complete
+) else (
+    echo WARNING: pywin32 post-install step failed or was not found.
+    echo          The service may still work, but if it fails to start, rerun this script.
 )
 echo       OK - Dependencies installed
 
@@ -156,24 +182,42 @@ if %errorlevel% equ 0 (
     timeout /t 3 /nobreak >nul
     echo       Removing existing service...
     "%PYTHON_FULL%" "%SERVICE_SCRIPT%" remove >nul 2>&1
-    timeout /t 2 /nobreak >nul
+    call :wait_for_service_absent
 )
 
 :: Install
 echo       Registering service...
-"%PYTHON_FULL%" "%SERVICE_SCRIPT%" --startup auto install
-if %errorlevel% neq 0 (
-    echo ERROR: Failed to install service.
+if exist "%SERVICE_SETUP_LOG%" del "%SERVICE_SETUP_LOG%" >nul 2>&1
+set "SERVICE_INSTALL_EXIT="
+set /a INSTALL_ATTEMPT=1
+:install_service_retry
+"%PYTHON_FULL%" "%SERVICE_SCRIPT%" --startup auto install > "%SERVICE_SETUP_LOG%" 2>&1
+if !errorlevel! neq 0 (
+    set "SERVICE_INSTALL_EXIT=!errorlevel!"
+    if !INSTALL_ATTEMPT! lss 4 (
+        echo       Install attempt !INSTALL_ATTEMPT! failed ^(exit !SERVICE_INSTALL_EXIT!^), retrying...
+        timeout /t 3 /nobreak >nul
+        set /a INSTALL_ATTEMPT+=1
+        goto :install_service_retry
+    )
+    echo ERROR: Failed to install service ^(exit !SERVICE_INSTALL_EXIT!^).
+    echo       Check: %SERVICE_SETUP_LOG%
+    echo       Common cause: previous service instance is still being removed by Windows.
     call :pause_if_needed
     exit /b 1
+) else (
+    echo       OK - Service registered
 )
 
 :: Start
 echo       Starting service...
 sc start %SERVICE_NAME% >nul 2>&1
+timeout /t 2 /nobreak >nul
+sc query %SERVICE_NAME% | findstr "RUNNING" >nul 2>&1
 if %errorlevel% neq 0 (
     echo WARNING: Service installed but failed to start.
     echo          Check: %LOG_DIR%\vpn_service.log
+    echo          Setup log: %SERVICE_SETUP_LOG%
 ) else (
     echo       OK - Service started
 )
@@ -188,12 +232,22 @@ echo  Python     : %PYTHON_FULL%
 echo  Service    : %SERVICE_NAME%
 echo  Config dir : %PROGRAMDATA_DIR%
 echo  Log file   : %LOG_DIR%\vpn_service.log
+echo  Setup log  : %SERVICE_SETUP_LOG%
 echo ============================================================
 echo.
 call :pause_if_needed
 exit /b 0
 
+:wait_for_service_absent
+set /a _svc_wait=0
+:wait_for_service_absent_loop
+sc query %SERVICE_NAME% >nul 2>&1
+if %errorlevel% neq 0 exit /b 0
+if %_svc_wait% geq 15 exit /b 1
+timeout /t 1 /nobreak >nul
+set /a _svc_wait+=1
+goto :wait_for_service_absent_loop
+
 :pause_if_needed
-if defined NO_PAUSE goto :eof
-pause
-goto :eof
+if not defined QUIET_MODE pause
+exit /b 0

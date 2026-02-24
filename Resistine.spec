@@ -11,6 +11,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
 block_cipher = None
 IS_MACOS = sys.platform == "darwin"
+IS_WINDOWS = sys.platform == "win32"
 
 # Application metadata
 APP_NAME = 'Resistine'
@@ -104,6 +105,8 @@ exe_kwargs = dict(
 )
 if IS_MACOS:
     exe_kwargs['entitlements_file'] = 'Resistine.entitlements'
+if IS_WINDOWS:
+    exe_kwargs['icon'] = os.path.join('resources', 'icons', 'icon.ico')
 
 exe = EXE(
     pyz,

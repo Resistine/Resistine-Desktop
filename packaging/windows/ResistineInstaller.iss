@@ -36,6 +36,7 @@ WizardStyle=modern
 DisableDirPage=auto
 DisableReadyPage=yes
 DisableProgramGroupPage=yes
+SetupIconFile=..\..\resources\icons\icon.ico
 UninstallDisplayIcon={app}\Resistine.exe
 SetupLogging=yes
 
@@ -49,6 +50,7 @@ Name: "startup"; Description: "Start Resistine when I sign in"; Flags: unchecked
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "..\..\install_service.bat"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\plugins\vpn\wireguard\windows_vpn_service.py"; DestDir: "{app}\plugins\vpn\wireguard"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#AppName}\{#AppName}"; Filename: "{app}\Resistine.exe"
@@ -107,6 +109,16 @@ var
   LastDependencyPreflightText: string;
   StandaloneUninstallRemoveUserData: Boolean;
   MaintenanceUninstallByInstaller: Boolean;
+
+function InitializeSetup(): Boolean;
+begin
+  Result := True;
+  if not IsAdminInstallMode then
+  begin
+    MsgBox('This installer must be run as Administrator.', mbError, MB_OK);
+    Result := False;
+  end;
+end;
 
 function PopVersionPart(var S: string): Integer;
 var
@@ -621,7 +633,7 @@ begin
   end;
 
   if not Exec(ExpandConstant('{cmd}'),
-    '/C ""' + ScriptPath + '" /quiet""',
+    '/D /C call ' + QuotePath(ScriptPath) + ' /quiet',
     ExpandConstant('{app}'),
     SW_SHOW, ewWaitUntilTerminated, ResultCode) then
   begin
@@ -636,7 +648,8 @@ begin
   begin
     MsgBox(
       'Resistine installed, but required VPN service setup failed (exit code ' + IntToStr(ResultCode) + ').' + #13#10 +
-      'Check: C:\ProgramData\Resistine\vpn_service.log' + #13#10 +
+      'Check: C:\ProgramData\Resistine\vpn_service_install.log' + #13#10 +
+      'If service registration succeeded but startup failed, also check: C:\ProgramData\Resistine\vpn_service.log' + #13#10 +
       'Then rerun install_service.bat as Administrator.',
       mbError, MB_OK);
   end;
@@ -1031,8 +1044,9 @@ begin
     InstallRadio.Top := NextTop;
     InstallRadio.Width := MaintenancePage.SurfaceWidth;
     InstallRadio.Height := ScaleY(22);
-    InstallRadio.Caption := 'Install';
-    InstallRadio.Checked := not UpdateAvailable;
+    InstallRadio.Caption := 'Install (not available)';
+    InstallRadio.Enabled := False;
+    InstallRadio.Checked := False;
     InstallRadio.OnClick := @MaintenanceActionChanged;
     NextTop := InstallRadio.Top + InstallRadio.Height + ScaleY(1);
 
@@ -1055,6 +1069,7 @@ begin
     ReinstallRadio.Width := MaintenancePage.SurfaceWidth;
     ReinstallRadio.Height := ScaleY(22);
     ReinstallRadio.Caption := 'Repair installation';
+    ReinstallRadio.Checked := not UpdateAvailable;
     ReinstallRadio.OnClick := @MaintenanceActionChanged;
     NextTop := ReinstallRadio.Top + ReinstallRadio.Height + ScaleY(1);
 
