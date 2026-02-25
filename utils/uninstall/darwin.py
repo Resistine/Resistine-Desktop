@@ -2,12 +2,13 @@
 macOS Uninstaller Backend.
 
 Performs full cleanup in order:
+0. Stop and remove Wazuh SIEM agent (if installed)
 1. Stop VPN tunnel (if running)
 2. Deactivate the system extension
-3. Remove WireGuard config files
-4. Remove app config directory
-5. Remove keychain items
-6. Remove app bundle from /Applications
+3. Remove keychain items
+4. Remove app bundle from /Applications
+5. Remove WireGuard config files        (late — prevents recreation by running code)
+6. Remove app config directory           (late — prevents recreation by settings module)
 7. Quit the application
 
 Author: Resistine Team
@@ -41,55 +42,26 @@ def run_uninstall(app, progress_callback=None):
             except Exception:
                 pass
 
+    # Steps run in order; later steps are deliberately last to prevent
+    # recreation by code/settings modules still running.
+    steps = [
+        ("Removing Wazuh agent...",        "Wazuh agent",           _remove_wazuh_agent),
+        ("Stopping VPN tunnel...",         "VPN stop",              _stop_vpn_tunnel),
+        ("Deactivating system extension...","Extension deactivation",_deactivate_system_extension),
+        ("Removing keychain items...",     "Keychain",              _remove_keychain_items),
+        ("Removing application...",        "App bundle",            _remove_app_bundle),
+        ("Removing VPN configurations...", "WG configs",            _remove_wireguard_configs),
+        ("Removing application data...",   "App config",            _remove_app_config),
+    ]
+
     errors = []
-
-    # --- Step 1: Stop VPN tunnel ---
-    _progress("Stopping VPN tunnel...")
-    try:
-        _stop_vpn_tunnel()
-    except Exception as e:
-        logger.error(f"[UNINSTALL] Failed to stop VPN: {e}")
-        errors.append(f"VPN stop: {e}")
-
-    # --- Step 2: Deactivate system extension ---
-    _progress("Deactivating system extension...")
-    try:
-        _deactivate_system_extension()
-    except Exception as e:
-        logger.error(f"[UNINSTALL] Failed to deactivate extension: {e}")
-        errors.append(f"Extension deactivation: {e}")
-
-    # --- Step 3: Remove WireGuard configs ---
-    _progress("Removing VPN configurations...")
-    try:
-        _remove_wireguard_configs()
-    except Exception as e:
-        logger.error(f"[UNINSTALL] Failed to remove WG configs: {e}")
-        errors.append(f"WG configs: {e}")
-
-    # --- Step 4: Remove app config directory ---
-    _progress("Removing application data...")
-    try:
-        _remove_app_config()
-    except Exception as e:
-        logger.error(f"[UNINSTALL] Failed to remove app config: {e}")
-        errors.append(f"App config: {e}")
-
-    # --- Step 5: Remove keychain items ---
-    _progress("Removing keychain items...")
-    try:
-        _remove_keychain_items()
-    except Exception as e:
-        logger.error(f"[UNINSTALL] Failed to remove keychain items: {e}")
-        errors.append(f"Keychain: {e}")
-
-    # --- Step 6: Remove app bundle ---
-    _progress("Removing application...")
-    try:
-        _remove_app_bundle()
-    except Exception as e:
-        logger.error(f"[UNINSTALL] Failed to remove app bundle: {e}")
-        errors.append(f"App bundle: {e}")
+    for message, label, func in steps:
+        _progress(message)
+        try:
+            func()
+        except Exception as e:
+            logger.error(f"[UNINSTALL] Failed — {label}: {e}")
+            errors.append(f"{label}: {e}")
 
     if errors:
         return (False, f"Completed with errors: {'; '.join(errors)}")
@@ -99,6 +71,52 @@ def run_uninstall(app, progress_callback=None):
 # ---------------------------------------------------------------------------
 # Cleanup helpers
 # ---------------------------------------------------------------------------
+
+
+def _remove_wazuh_agent():
+    """Stop and remove the Wazuh SIEM agent if installed.
+
+    Delegates to the Wazuh plugin's ``remove_agent()`` when available.
+    Falls back to an inline script if the plugin module cannot be imported
+    (e.g. the plugin was already uninstalled).
+    """
+    try:
+        from plugins.wazuh.agent.wazuh_functions_darwin import remove_agent
+        remove_agent()
+        return
+    except ImportError:
+        logger.info("[UNINSTALL] Wazuh plugin not available, using inline removal")
+
+    # Fallback: inline removal when the plugin module is missing
+    wazuh_control = "/Library/Ossec/bin/wazuh-control"
+    wazuh_plist = "/Library/LaunchDaemons/com.wazuh.agent.plist"
+    ossec_dir = "/Library/Ossec"
+
+    if not os.path.exists(ossec_dir) and not os.path.exists(wazuh_plist):
+        logger.info("[UNINSTALL] Wazuh agent not installed, skipping")
+        return
+
+    script = (
+        f"'{wazuh_control}' stop 2>/dev/null; "
+        f"launchctl bootout system '{wazuh_plist}' 2>/dev/null; "
+        f"rm -rf '{ossec_dir}'; "
+        f"rm -f '{wazuh_plist}'"
+    )
+    escaped = script.replace("\\", "\\\\").replace('"', '\\"')
+    cmd = [
+        "osascript", "-e",
+        f'do shell script "{escaped}" with administrator privileges',
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.returncode == 0:
+            logger.info("[UNINSTALL] Wazuh agent removed successfully")
+        else:
+            logger.warning(f"[UNINSTALL] Wazuh removal returned non-zero: {result.stderr}")
+    except subprocess.TimeoutExpired:
+        logger.warning("[UNINSTALL] Wazuh removal timed out")
+    except Exception as e:
+        logger.error(f"[UNINSTALL] Wazuh removal error: {e}")
 
 
 def _stop_vpn_tunnel():
@@ -168,15 +186,48 @@ def _deactivate_system_extension():
 
 
 def _remove_wireguard_configs():
-    """Remove WireGuard configuration directory."""
+    """Remove WireGuard configuration directory.
+
+    Group Containers are sandbox-protected on macOS, so ``shutil.rmtree``
+    often fails with *Operation not permitted*.  We try ``rm -rf`` first
+    and fall back to an admin-privileged removal via ``osascript``.
+    """
     wg_dir = os.path.expanduser(
         "~/Library/Group Containers/group.Resistine.WireguardTest"
     )
-    if os.path.exists(wg_dir):
+    if not os.path.exists(wg_dir):
+        logger.info("[UNINSTALL] WireGuard config dir not found, skipping")
+        return
+
+    # Try unprivileged removal first
+    try:
         shutil.rmtree(wg_dir)
         logger.info(f"[UNINSTALL] Removed {wg_dir}")
+        return
+    except OSError:
+        logger.info("[UNINSTALL] shutil.rmtree failed, trying rm -rf")
+
+    # Try rm -rf (handles some sandbox cases shutil cannot)
+    subprocess.run(["rm", "-rf", wg_dir], capture_output=True, text=True)
+    if not os.path.exists(wg_dir):
+        logger.info(f"[UNINSTALL] Removed {wg_dir} via rm -rf")
+        return
+
+    # Fall back to admin-privileged removal
+    logger.info("[UNINSTALL] rm -rf failed, requesting admin privileges")
+    script = f"rm -rf '{wg_dir}'"
+    escaped = script.replace("\\", "\\\\").replace('"', '\\"')
+    cmd = [
+        "osascript", "-e",
+        f'do shell script "{escaped}" with administrator privileges',
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if result.returncode == 0:
+        logger.info(f"[UNINSTALL] Removed {wg_dir} with admin privileges")
     else:
-        logger.info("[UNINSTALL] WireGuard config dir not found, skipping")
+        raise OSError(
+            f"Failed to remove WireGuard configs: {result.stderr.strip()}"
+        )
 
 
 def _remove_app_config():
@@ -217,10 +268,9 @@ def _remove_app_bundle():
         logger.info("[UNINSTALL] Not a frozen app, skipping bundle removal")
         return
 
-    # sys.executable = /Applications/Resistine.app/Contents/MacOS/Resistine
-    app_bundle = os.path.dirname(
-        os.path.dirname(os.path.dirname(sys.executable))
-    )
+    # sys.executable → .../Resistine.app/Contents/MacOS/Resistine
+    from pathlib import Path
+    app_bundle = str(Path(sys.executable).parents[2])
 
     if not app_bundle.endswith(".app"):
         logger.warning(f"[UNINSTALL] Unexpected bundle path: {app_bundle}")

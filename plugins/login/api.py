@@ -32,7 +32,7 @@ class LoginAPI:
                     message = result.get("message", "")
                     status = result.get("status", "").lower()
 
-                    if status in ["error", "failed", "failure"]:
+                    if status in ["error", "failed", "failure", "no_subscription"]:
                         error_msg = message or result.get("error", "Failed to send OTP")
                         return False, error_msg, result
                     else:

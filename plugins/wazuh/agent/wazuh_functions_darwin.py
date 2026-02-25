@@ -17,14 +17,16 @@ from utils import settings
 from utils.logger import logger
 
 from plugins.wazuh.config import (
-    WAZUH_AGENT_CONTROL,
     WAZUH_BASE_URL,
     WAZUH_ENV_FILE,
+    WAZUH_INSTALL_DIR,
     WAZUH_LAUNCHD_PLIST,
     WAZUH_MANAGER,
     WAZUH_PKG_ARCH_MAP,
     WAZUH_VERSION,
 )
+
+_WAZUH_CONTROL = f"{WAZUH_INSTALL_DIR}/bin/wazuh-control"
 
 
 def get_agent_name():
@@ -50,12 +52,12 @@ def is_agent_installed():
     """Check whether the Wazuh agent is installed.
 
     The agent's /Library/Ossec/ directory is root-owned and not readable by
-    normal users, so ``os.path.exists(WAZUH_AGENT_CONTROL)`` returns False
-    even when the file is present.  Instead we check for the directory itself
-    (os.path.isdir succeeds without read permission) or the launchd plist
-    which is world-readable.
+    normal users, so checking for files inside it returns False even when
+    they exist.  Instead we check for the directory itself (os.path.isdir
+    succeeds without read permission) or the launchd plist which is
+    world-readable.
     """
-    return os.path.isdir("/Library/Ossec") or os.path.exists(WAZUH_LAUNCHD_PLIST)
+    return os.path.isdir(WAZUH_INSTALL_DIR) or os.path.exists(WAZUH_LAUNCHD_PLIST)
 
 
 def get_agent_status():
@@ -108,12 +110,9 @@ def _run_privileged(script, timeout=120):
             "osascript", "-e",
             f'do shell script "{escaped}" with administrator privileges',
         ]
-        logger.info("_run_privileged: executing osascript")
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        stdout = result.stdout.strip()
-        stderr = result.stderr.strip()
-        logger.info(f"_run_privileged: returncode={result.returncode} stdout={stdout!r} stderr={stderr!r}")
-        output = stdout or stderr
+        output = result.stdout.strip() or result.stderr.strip()
+        logger.info(f"_run_privileged: rc={result.returncode} output={output!r}")
         return (result.returncode == 0, output)
     except subprocess.TimeoutExpired:
         logger.error("Privileged command timed out")
@@ -170,23 +169,6 @@ def write_env_file(agent_name, agent_group):
         return False
 
 
-def install_package(pkg_path, progress_callback=None):
-    """Install the .pkg with admin privileges.
-
-    Returns True on success.
-    """
-    if progress_callback:
-        progress_callback("Installing Wazuh agent (admin password required)...")
-
-    script = f"installer -pkg '{pkg_path}' -target /"
-    success, output = _run_privileged(script)
-    if not success:
-        logger.error(f"Installation failed: {output}")
-    else:
-        logger.info("Wazuh agent installed successfully")
-    return success
-
-
 def _is_service_loaded():
     """Check whether the Wazuh launchd service is already bootstrapped."""
     try:
@@ -200,44 +182,87 @@ def _is_service_loaded():
 
 
 def start_agent():
-    """Start the Wazuh agent and ensure the launchd service is loaded.
+    """Start the Wazuh agent via launchd.
 
-    Bootstraps the launchd plist (if not already loaded) so the agent
-    auto-starts on reboot, then starts the agent via wazuh-control.
+    Uses ``launchctl bootstrap`` to load the plist and let launchd
+    manage all child processes.  This ensures that ``bootout`` can
+    cleanly terminate the entire process tree later, avoiding orphans.
+
+    We intentionally do NOT call ``wazuh-control start`` because it
+    spawns processes outside launchd's supervision, which causes
+    orphaned processes when ``bootout`` is used to stop the agent.
     """
-    parts = []
+    if _is_service_loaded():
+        logger.info("Wazuh launchd service already loaded, nothing to do")
+        return True
 
-    # Ensure the launchd service is registered for auto-start on reboot
-    if not _is_service_loaded():
-        parts.append(f"launchctl bootstrap system '{WAZUH_LAUNCHD_PLIST}' 2>/dev/null")
-
-    # Start the agent processes
-    parts.append(f"'{WAZUH_AGENT_CONTROL}' start")
-
-    script = "; ".join(parts)
+    script = f"launchctl bootstrap system '{WAZUH_LAUNCHD_PLIST}'"
     success, output = _run_privileged(script)
     if success:
-        logger.info("Wazuh agent started (launchd service ensured)")
+        logger.info("Wazuh agent started via launchd")
     else:
         logger.error(f"Failed to start agent: {output}")
     return success
 
 
+def _has_running_processes():
+    """Return True if any wazuh-* daemon processes are running."""
+    try:
+        result = subprocess.run(
+            ["pgrep", "-x", "wazuh-agentd"],
+            capture_output=True, timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
 def stop_agent():
-    """Stop the Wazuh agent via wazuh-control or launchctl bootout."""
-    if is_agent_installed():
-        script = f"'{WAZUH_AGENT_CONTROL}' stop"
-    elif _is_service_loaded():
-        script = f"launchctl bootout system '{WAZUH_LAUNCHD_PLIST}'"
-    else:
-        logger.info("Wazuh agent service is not loaded, nothing to stop")
+    """Stop the Wazuh agent completely.
+
+    Uses a two-phase approach:
+      1. ``launchctl bootout`` to unload the launchd service (if loaded).
+      2. ``wazuh-control stop`` to terminate any daemon processes that
+         were spawned outside launchd (e.g. by a previous install or
+         manual ``wazuh-control start``).
+
+    ``launchctl bootstrap`` does NOT adopt already-running processes,
+    so bootout alone cannot kill orphaned daemons.  ``wazuh-control stop``
+    reads the PID files in /Library/Ossec/var/run/ and sends SIGTERM
+    directly to each daemon, which handles both cases reliably.
+    """
+    if not is_agent_installed():
+        logger.info("Wazuh agent not installed, nothing to stop")
         return True
+
+    # Phase 1: unload launchd service (prevents auto-restart)
+    parts = []
+    if _is_service_loaded():
+        parts.append(f"launchctl bootout system '{WAZUH_LAUNCHD_PLIST}' 2>/dev/null")
+
+    # Phase 2: wazuh-control stop kills daemons via their PID files,
+    # then wait briefly for processes to exit after SIGTERM
+    parts.append(f"'{_WAZUH_CONTROL}' stop 2>/dev/null")
+    parts.append("sleep 2")
+    # Ensure the script always exits 0 — we verify via _has_running_processes
+    parts.append("true")
+
+    script = "; ".join(parts)
     success, output = _run_privileged(script)
-    if success:
-        logger.info("Wazuh agent stopped")
+    logger.info(f"stop_agent: privileged script returned success={success} output={output!r}")
+
+    # Verify processes are actually gone
+    if _has_running_processes():
+        logger.warning("Wazuh processes still running after stop, force-killing")
+        kill_script = "pkill -9 -f '/Library/Ossec/bin/wazuh-' 2>/dev/null; true"
+        _run_privileged(kill_script)
+
+    stopped = not _has_running_processes()
+    if stopped:
+        logger.info("Wazuh agent stopped successfully")
     else:
-        logger.error(f"Failed to stop agent: {output}")
-    return success
+        logger.error("Failed to stop all Wazuh processes")
+    return stopped
 
 
 def remove_agent():
@@ -249,11 +274,13 @@ def remove_agent():
         logger.info("Wazuh agent not installed, nothing to remove")
         return True
 
-    # Stop the agent, unload the service, delete the install directory and plist
+    # Stop all processes (launchd + wazuh-control + force-kill),
+    # then delete the install directory and plist.
     script = (
-        f"'{WAZUH_AGENT_CONTROL}' stop 2>/dev/null; "
         f"launchctl bootout system '{WAZUH_LAUNCHD_PLIST}' 2>/dev/null; "
-        "rm -rf /Library/Ossec; "
+        f"'{_WAZUH_CONTROL}' stop 2>/dev/null; "
+        f"pkill -9 -f '/Library/Ossec/bin/wazuh-' 2>/dev/null; "
+        f"rm -rf '{WAZUH_INSTALL_DIR}'; "
         f"rm -f '{WAZUH_LAUNCHD_PLIST}'"
     )
     success, output = _run_privileged(script)
@@ -290,20 +317,18 @@ def full_install(progress_callback=None):
     # 3. Install the package AND start the agent in a single privileged call.
     #    This avoids a second osascript password dialog.  The script:
     #      a) Runs the installer — if this fails we capture INSTALL_FAIL
-    #      b) Starts the agent (harmless if postinstall already started it)
-    #      c) Prints a status marker so we can parse the outcome from stdout
-    #    We intentionally end with `echo` so the overall exit code is 0 and
-    #    osascript does not report a spurious failure from wazuh-control.
+    #      b) Bootstraps the launchd plist so launchd manages all processes
+    #    We use launchctl bootstrap (not wazuh-control start) so that all
+    #    agent processes live under launchd's supervision.  This ensures
+    #    bootout can cleanly terminate them later without orphans.
     if progress_callback:
         progress_callback("Installing Wazuh agent (admin password required)...")
 
-    ctrl = WAZUH_AGENT_CONTROL
     plist = WAZUH_LAUNCHD_PLIST
     install_and_start_script = (
         f"installer -pkg '{pkg_path}' -target / || echo INSTALL_FAIL; "
+        f"launchctl bootout system '{plist}' 2>/dev/null; "
         f"launchctl bootstrap system '{plist}' 2>/dev/null; "
-        f"'{ctrl}' start 2>/dev/null; "
-        f"'{ctrl}' status 2>/dev/null; "
         f"echo DONE"
     )
     logger.info("Running privileged install+start script")
@@ -330,14 +355,13 @@ def full_install(progress_callback=None):
             progress_callback("Installation failed")
         return False
 
-    # The agent is installed.  Check if it's running from wazuh-control
-    # status output embedded in the combined stdout.
-    if "is running" in output.lower():
-        logger.info("Wazuh agent installed and running (single privileged call)")
+    # Verify the agent is actually running via launchd
+    if get_agent_status() == "Running":
+        logger.info("Wazuh agent installed and running via launchd")
         if progress_callback:
             progress_callback("Wazuh agent installed and running")
     else:
-        logger.warning(f"Agent installed, start may have failed: {output}")
+        logger.warning("Agent installed but not yet running")
         if progress_callback:
             progress_callback("Wazuh agent installed (agent may need manual start)")
 
