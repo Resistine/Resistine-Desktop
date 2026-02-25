@@ -23,7 +23,7 @@ base_path = os.path.abspath('.')
 datas = [
     ('resources', 'resources'),
     ('plugins', 'plugins'),
-    ('plugins_user', 'plugins_user'),
+
     ('gui', 'gui'),
     ('utils', 'utils'),
     ('docs', 'docs'),

@@ -117,9 +117,18 @@ class Plugin(BasePlugin):
         # Store remote data for restoration after uninstall
         self.remote_data_map = {rp["id"]: rp for rp in available_remote}
         
+        # Plugins hidden from the Store (still available in sidebar if installed)
+        HIDDEN_FROM_STORE = {"001", "003", "004", "009", "010", "100"}  # Dashboard, Endpoint, Store, Help, Settings, Calculator
+        HIDDEN_NAMES = {"template"}  # Also hide by name for remote-only plugins
+        plugins = [
+            p for p in plugins
+            if p.id not in HIDDEN_FROM_STORE
+            and getattr(p, 'name', '').lower() not in HIDDEN_NAMES
+        ]
+
         # Sort by name for the store
         plugins = sorted(plugins, key=lambda x: x.get_name())
-        
+
         # Deduplicate list by ID to be absolutely safe
         unique_plugins = []
         seen_store_ids = set()

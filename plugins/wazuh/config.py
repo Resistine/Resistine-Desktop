@@ -20,6 +20,6 @@ WAZUH_PKG_ARCH_MAP = {
 WAZUH_MANAGER = "dashboard.resisti.net"
 
 # --- macOS Paths ---
+WAZUH_INSTALL_DIR = "/Library/Ossec"
 WAZUH_LAUNCHD_PLIST = "/Library/LaunchDaemons/com.wazuh.agent.plist"
-WAZUH_AGENT_CONTROL = "/Library/Ossec/bin/wazuh-control"
 WAZUH_ENV_FILE = "/tmp/wazuh_envs"
