@@ -1,87 +1,112 @@
 body {
   margin: 0;
-  padding: 14px 16px;
-  background-color: transparent;
-  color: #e0e0e0;
+  padding: 18px 18px;
+  background-color: #2A2A2C;
+  color: #ECECEC;
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: 15px;
+  line-height: 1.75;
   word-wrap: break-word;
   overflow-wrap: break-word;
   max-width: 100%;
   box-sizing: border-box;
+  overflow-x: hidden;
 }
-h1, h2, h3 {
-  color: #ffffff;
+
+h1,
+h2,
+h3 {
+  color: #FFFFFF;
   margin-top: 0.8em;
   margin-bottom: 0.4em;
+  font-weight: 700;
 }
-h1 { font-size: 1.4em; }
-h2 { font-size: 1.2em; }
-h3 { font-size: 1.05em; }
+
+h1 {
+  font-size: 1.47em;
+}
+
+h2 {
+  font-size: 1.27em;
+}
+
+h3 {
+  font-size: 1.13em;
+}
+
 p {
-  margin: 0.4em 0;
+  margin: 0.35em 0;
 }
+
 a {
   color: #60A5FA;
   text-decoration: none;
 }
+
 a:hover {
   text-decoration: underline;
 }
+
 pre {
   background-color: #1A1A1C;
-  color: #d4d4d4;
-  padding: 12px;
-  border-radius: 8px;
-  border: 1px solid #2A2A2C;
+  color: #E0E0E0;
+  padding: 14px 16px;
+  border-radius: 10px;
+  border: 1px solid #3A3A3C;
   overflow-x: auto;
   white-space: pre-wrap;
   word-wrap: break-word;
   max-width: 100%;
-  font-size: 0.9em;
-  line-height: 1.5;
+  font-size: 0.88em;
+  line-height: 1.6;
+  margin: 0.8em 0;
 }
+
 code {
   background-color: #1A1A1C;
-  color: #d4d4d4;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 0.9em;
+  color: #E0E0E0;
+  padding: 3px 7px;
+  border-radius: 5px;
+  font-size: 0.88em;
   white-space: pre-wrap;
   word-wrap: break-word;
 }
-ul, ol {
-  padding-left: 1.5em;
-  margin: 0.4em 0;
+
+ul,
+ol {
+  padding-left: 1.4em;
+  margin: 0.35em 0;
 }
+
 li {
-  margin: 0.2em 0;
+  margin: 0.15em 0;
 }
+
 table {
   width: 100%;
-  table-layout: auto;
+  table-layout: fixed;
   border-collapse: collapse;
-  margin: 0.6em 0;
-  border-radius: 8px;
-  overflow: hidden;
+  margin: 0.5em 0;
 }
-th, td {
-  border: 1px solid #2A2A2C;
-  padding: 10px 14px;
+
+th,
+td {
+  border: 1px solid #3F3F46;
+  padding: 7px 10px;
   text-align: left;
-  word-wrap: break-word;
 }
+
 th {
-  background-color: #1A1A1C;
+  background-color: #1E1E20;
   font-weight: 600;
+  color: #F4F4F5;
 }
-tr:nth-child(even) td {
-  background-color: #161618;
-}
+
 blockquote {
-  border-left: 3px solid #0D5394;
-  margin: 0.6em 0;
-  padding: 4px 12px;
+  border-left: 4px solid #0D5394;
+  margin: 1em 0;
+  padding: 12px 18px;
   color: #9CA3AF;
+  background-color: rgba(13, 83, 148, 0.1);
+  border-radius: 8px;
 }
