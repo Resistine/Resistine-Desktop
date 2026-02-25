@@ -35,6 +35,9 @@ def ensure_wireguard_app_installed():
     """Check if WireGuard is installed."""
     return find_wireguard_exe() is not None
 
+def check_wireguard_installed():
+    """Check if WireGuard is installed and accessible."""
+    return ensure_wireguard_app_installed()
 
 def can_manage_tunnels_without_admin():
     """
