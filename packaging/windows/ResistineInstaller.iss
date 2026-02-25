@@ -58,7 +58,7 @@ Name: "{autoprograms}\{#AppName}\Uninstall {#AppName}"; Filename: "{uninstallexe
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\Resistine.exe"; Tasks: desktopicon
 
 [Registry]
-Root: HKLM64; Subkey: "Software\Resistine"; ValueType: string; ValueName: "InstallDir"; ValueData: "{app}"; Flags: uninsdeletekeyifempty
+Root: HKLM64; Subkey: "Software\Resistine"; ValueType: string; ValueName: "InstallDir"; ValueData: "{app}"; Flags: uninsdeletevalue uninsdeletekeyifempty
 Root: HKLM64; Subkey: "Software\Resistine"; ValueType: string; ValueName: "Version"; ValueData: "{#AppVersion}"; Flags: uninsdeletevalue
 Root: HKLM64; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Resistine"; ValueData: """{app}\Resistine.exe"""; Tasks: startup; Flags: uninsdeletevalue
 
@@ -74,6 +74,8 @@ var
   ExistingInstallDir: string;
   ExistingInstallVersion: string;
   ExistingUninstallCmd: string;
+  ExistingAppExecutableAvailable: Boolean;
+  ExistingUninstallerAvailable: Boolean;
   MaintenancePage: TWizardPage;
   MaintenanceInfoLabel: TNewStaticText;
   InstallRadio: TRadioButton;
@@ -109,6 +111,7 @@ var
   LastDependencyPreflightText: string;
   StandaloneUninstallRemoveUserData: Boolean;
   MaintenanceUninstallByInstaller: Boolean;
+  CloseAfterMaintenanceUninstall: Boolean;
 
 function InitializeSetup(): Boolean;
 begin
@@ -340,6 +343,8 @@ begin
   ExistingInstallDir := '';
   ExistingInstallVersion := '';
   ExistingUninstallCmd := '';
+  ExistingAppExecutableAvailable := False;
+  ExistingUninstallerAvailable := False;
 
   GetRegistryString64('InstallDir', ExistingInstallDir);
   GetRegistryString64('Version', ExistingInstallVersion);
@@ -941,6 +946,63 @@ begin
   end;
 end;
 
+procedure NormalizeExistingInstallState;
+var
+  UninstallerExePath: string;
+  AppExePath: string;
+begin
+  ExistingAppExecutableAvailable := False;
+  ExistingUninstallerAvailable := False;
+
+  if ExistingInstallDir <> '' then
+  begin
+    AppExePath := AddBackslash(ExistingInstallDir) + 'Resistine.exe';
+    ExistingAppExecutableAvailable := FileExists(AppExePath);
+  end;
+
+  if ExistingUninstallCmd <> '' then
+  begin
+    UninstallerExePath := ExtractExePathFromCommand(ExistingUninstallCmd);
+    if (UninstallerExePath <> '') and FileExists(UninstallerExePath) then
+      ExistingUninstallerAvailable := True
+    else
+      ExistingUninstallCmd := '';
+  end;
+
+  if (not ExistingUninstallerAvailable) and (ExistingInstallDir <> '') then
+  begin
+    if FileExists(AddBackslash(ExistingInstallDir) + 'unins000.exe') then
+    begin
+      ExistingUninstallCmd := QuotePath(AddBackslash(ExistingInstallDir) + 'unins000.exe');
+      ExistingUninstallerAvailable := True;
+    end
+    else if FileExists(AddBackslash(ExistingInstallDir) + 'Uninstall.exe') then
+    begin
+      ExistingUninstallCmd := QuotePath(AddBackslash(ExistingInstallDir) + 'Uninstall.exe');
+      ExistingUninstallerAvailable := True;
+    end;
+  end;
+
+  if (not ExistingUninstallerAvailable) and (not ExistingAppExecutableAvailable) then
+  begin
+    if (ExistingInstallDir <> '') or (ExistingInstallVersion <> '') then
+      Log('Ignoring stale install metadata (no app exe and no uninstaller found).');
+
+    ExistingInstallDetected := False;
+    ExistingInstallDir := '';
+    ExistingInstallVersion := '';
+    ExistingUninstallCmd := '';
+
+    RegDeleteValue(HKLM64, 'Software\Resistine', 'InstallDir');
+    RegDeleteValue(HKLM64, 'Software\Resistine', 'Version');
+    RegDeleteValue(HKLM, 'Software\Resistine', 'InstallDir');
+    RegDeleteValue(HKLM, 'Software\Resistine', 'Version');
+    exit;
+  end;
+
+  ExistingInstallDetected := ExistingUninstallerAvailable or ExistingAppExecutableAvailable;
+end;
+
 function RunExistingUninstaller(SilentMode: Boolean): Boolean;
 var
   ExePath: string;
@@ -1000,6 +1062,9 @@ begin
       StatusLine := StatusLine + #13#10 + 'Installed version: ' + ExistingInstallVersion + ' (newer than this installer)';
   end;
 
+  if ExistingInstallDetected and (not ExistingUninstallerAvailable) then
+    StatusLine := StatusLine + #13#10 + 'Uninstaller not found. Some maintenance actions are unavailable.';
+
   Result := StatusLine + #13#10 +
     'Installer version: {#AppVersion}' + #13#10 +
     'Install location: ' + ExistingInstallDir + #13#10#13#10 +
@@ -1011,7 +1076,9 @@ var
   NextTop: Integer;
 begin
   SelectedAction := maInstall;
+  CloseAfterMaintenanceUninstall := False;
   DetectExistingInstall;
+  NormalizeExistingInstallState;
   EvaluateUpdateAvailability;
 
   if ExistingInstallDetected then
@@ -1044,9 +1111,18 @@ begin
     InstallRadio.Top := NextTop;
     InstallRadio.Width := MaintenancePage.SurfaceWidth;
     InstallRadio.Height := ScaleY(22);
-    InstallRadio.Caption := 'Install (not available)';
-    InstallRadio.Enabled := False;
-    InstallRadio.Checked := False;
+    if ExistingUninstallerAvailable then
+    begin
+      InstallRadio.Caption := 'Install (not available)';
+      InstallRadio.Enabled := False;
+      InstallRadio.Checked := False;
+    end
+    else
+    begin
+      InstallRadio.Caption := 'Install';
+      InstallRadio.Enabled := True;
+      InstallRadio.Checked := not UpdateAvailable;
+    end;
     InstallRadio.OnClick := @MaintenanceActionChanged;
     NextTop := InstallRadio.Top + InstallRadio.Height + ScaleY(1);
 
@@ -1069,7 +1145,8 @@ begin
     ReinstallRadio.Width := MaintenancePage.SurfaceWidth;
     ReinstallRadio.Height := ScaleY(22);
     ReinstallRadio.Caption := 'Repair installation';
-    ReinstallRadio.Checked := not UpdateAvailable;
+    ReinstallRadio.Enabled := ExistingUninstallerAvailable;
+    ReinstallRadio.Checked := ExistingUninstallerAvailable and (not UpdateAvailable);
     ReinstallRadio.OnClick := @MaintenanceActionChanged;
     NextTop := ReinstallRadio.Top + ReinstallRadio.Height + ScaleY(1);
 
@@ -1080,6 +1157,7 @@ begin
     UninstallRadio.Width := MaintenancePage.SurfaceWidth;
     UninstallRadio.Height := ScaleY(22);
     UninstallRadio.Caption := 'Uninstall';
+    UninstallRadio.Enabled := ExistingUninstallerAvailable;
     UninstallRadio.OnClick := @MaintenanceActionChanged;
     NextTop := UninstallRadio.Top + UninstallRadio.Height + ScaleY(1);
 
@@ -1328,10 +1406,15 @@ begin
           if WantsRemoveData and (not ExistingIsInno) then
             DeleteResistineUserData;
 
-          if WantsRemoveData then
-            MsgBox('Uninstall completed and user data was removed. Setup will now exit.', mbInformation, MB_OK)
-          else
-            MsgBox('Uninstall completed. User data was preserved. Setup will now exit.', mbInformation, MB_OK);
+          if not ExistingIsInno then
+          begin
+            if WantsRemoveData then
+              MsgBox('Uninstall completed and user data was removed. Setup will now exit.', mbInformation, MB_OK)
+            else
+              MsgBox('Uninstall completed. User data was preserved. Setup will now exit.', mbInformation, MB_OK);
+          end;
+
+          CloseAfterMaintenanceUninstall := True;
           WizardForm.Close;
         end;
         if ExistingIsInno then
@@ -1340,6 +1423,15 @@ begin
       Result := False;
       exit;
     end;
+  end;
+end;
+
+procedure CancelButtonClick(CurPageID: Integer; var Cancel, Confirm: Boolean);
+begin
+  if CloseAfterMaintenanceUninstall then
+  begin
+    Cancel := True;
+    Confirm := False;
   end;
 end;
 
