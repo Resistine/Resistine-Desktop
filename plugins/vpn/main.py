@@ -245,8 +245,12 @@ class Plugin(BasePlugin):
 
             # Stop VPN if running before switching to imported config
             if my_vpn_status == "Running" and active_client_name:
-                old_config_path = os.path.join(wireguard_folder, f"{active_client_name}.conf")
-                stop_vpn(old_config_path)
+                #old_config_path = os.path.join(wireguard_folder, f"{active_client_name}.conf")
+                #stop_vpn(old_config_path)
+                stop_vpn(
+                        active_client_name if IS_WINDOWS
+                        else os.path.join(wireguard_folder, f"{active_client_name}.conf")
+                    )
                 my_vpn_status = "Stopped"
                 active_client_name = None
 
