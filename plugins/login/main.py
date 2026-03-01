@@ -417,11 +417,15 @@ class Plugin(BasePlugin):
 
         # Phase 1: Generate VPN keys (never raises — returns None on failure)
         public_key = setup_vpn_keys()
+
+
         if not public_key:
             msg = "Failed to generate encryption keys"
             self.update_status(msg, "red")
             self.app.show_notification(msg, type="error")
             return
+        
+        print(f"Generated VPN public key: {public_key}")  # Debug: Print generated public key
 
         # Phase 2: Verify OTP via API (never raises — returns tuple)
         success, message, result = self.api.verify_otp(

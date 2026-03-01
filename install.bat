@@ -1,8 +1,6 @@
 @echo off
 :: ============================================================
 :: Resistine VPN — Full Installer
-:: Handles everything: Python check, venv, deps,
-:: WireGuard, service (admin) and app (user) in one file
 :: ============================================================
 setlocal EnableDelayedExpansion
 
@@ -17,7 +15,7 @@ set ICON=%SCRIPT_DIR%\resources\icons\icon.ico
 set VENV_DIR=%SCRIPT_DIR%\venv
 set VENV_PYTHON=%VENV_DIR%\Scripts\python.exe
 set VENV_PIP=%VENV_DIR%\Scripts\pip.exe
-set REQUIREMENTS=%SCRIPT_DIR%\requirements.txt
+set REQUIREMENTS=%SCRIPT_DIR%\libraries\requirements-windows.txt
 set APPDATA_DIR=%APPDATA%\Resistine
 set WG_DIR=%APPDATA_DIR%\wireguard
 set PROGRAMDATA_DIR=%PROGRAMDATA%\Resistine
@@ -105,7 +103,7 @@ for /f "tokens=*" %%i in ('"%PYTHON_FULL%" --version') do echo       %%i
 echo       Path: %PYTHON_FULL%
 echo       OK
 
-:: ---- Step 2: Create or reuse venv ----
+:: ---- Step 2: Create or reuse venv (GUI + tray only) ----
 echo [2/6] Setting up virtual environment...
 if not exist "%VENV_PYTHON%" (
     echo       Creating venv...
@@ -119,18 +117,17 @@ if not exist "%VENV_PYTHON%" (
     echo       OK - existing venv found
 )
 
-:: ---- Step 3: Install dependencies ----
+:: ---- Step 3: Install GUI/tray dependencies into venv ----
 echo [3/6] Installing dependencies...
-
 echo       Upgrading pip...
-"%VENV_PIP%" install --quiet --upgrade pip
+"%VENV_PYTHON%" -m pip install --quiet --upgrade pip
 
 if exist "%REQUIREMENTS%" (
-    echo       Installing from requirements.txt...
-    "%VENV_PIP%" install --quiet -r "%REQUIREMENTS%"
+    echo       Installing from requirements-windows.txt...
+    "%VENV_PYTHON%" -m pip install --quiet -r "%REQUIREMENTS%"
 ) else (
-    echo       No requirements.txt found, installing defaults...
-    "%VENV_PIP%" install --quiet ^
+    echo       requirements-windows.txt not found, installing defaults...
+    "%VENV_PYTHON%" -m pip install --quiet ^
         customtkinter ^
         pillow ^
         pystray ^
@@ -138,12 +135,6 @@ if exist "%REQUIREMENTS%" (
         pywin32 ^
         pywin32-ctypes
 )
-
-if %errorlevel% neq 0 (
-    echo ERROR: Failed to install dependencies.
-    pause & exit /b 1
-)
-echo       OK - Dependencies installed
 
 :: ---- Step 4: Create AppData directories ----
 echo [4/6] Creating app directories...
@@ -155,7 +146,7 @@ echo       OK - %APPDATA_DIR%
 echo [5/6] Creating desktop shortcut...
 set VBS=%TEMP%\resistine_shortcut.vbs
 
-> "%VBS%"  echo Set oWS = WScript.CreateObject("WScript.Shell")
+>  "%VBS%" echo Set oWS = WScript.CreateObject("WScript.Shell")
 >> "%VBS%" echo Set oLink = oWS.CreateShortcut("%SHORTCUT%")
 >> "%VBS%" echo oLink.TargetPath = "%VENV_PYTHON%"
 >> "%VBS%" echo oLink.Arguments = """%MAIN_SCRIPT%"""
@@ -189,7 +180,11 @@ if %errorlevel% neq 0 (
 
 :: ============================================================
 :: PART 2 — Service install (elevate to admin)
+:: Write PYTHON_FULL to a temp file so the elevated process can read it
+:: (environment variables do not survive UAC elevation boundary)
 :: ============================================================
+echo %PYTHON_FULL%> "%TEMP%\resistine_python_path.txt"
+
 echo.
 echo Installing Windows service ^(requires Admin^)...
 powershell -Command "Start-Process cmd -ArgumentList '/c \"%~f0\" /service & pause' -Verb RunAs -Wait"
@@ -198,18 +193,18 @@ if %errorlevel% neq 0 (
     echo          VPN toggle will not work until service is installed.
 )
 
+del "%TEMP%\resistine_python_path.txt" >nul 2>&1
+
 :: ---- Launch tray now ----
 echo.
 echo Starting tray icon...
 start "" "%VENV_PYTHON%" "%TRAY_SCRIPT%"
 
-:: ============================================================
-:: Done
-:: ============================================================
 echo.
 echo ============================================================
 echo  Installation complete!
-echo  Python     : %VENV_PYTHON%
+echo  GUI/Tray   : %VENV_PYTHON%  ^(venv^)
+echo  Service    : system Python  ^(no venv^)
 echo  App        : %MAIN_SCRIPT%
 echo  Tray       : auto-starts on login
 echo  Config     : %WG_DIR%
@@ -222,21 +217,43 @@ exit /b 0
 
 :: ============================================================
 :: SERVICE SECTION (runs elevated via /service flag)
+:: Uses system Python — not the venv — so SYSTEM account has no
+:: DLL path issues and pywin32 works without any post-install tricks.
 :: ============================================================
 :install_service
 echo ============================================================
 echo  Installing ResistineVPN Service ^(Admin^)
 echo ============================================================
 
-:: Confirm admin
 net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo ERROR: Not running as Administrator.
     pause & exit /b 1
 )
 
-:: ---- Check network ----
-echo Checking network connectivity...
+:: Read system Python path passed from the user-level section
+set SYS_PYTHON=
+if exist "%TEMP%\resistine_python_path.txt" (
+    set /p SYS_PYTHON= < "%TEMP%\resistine_python_path.txt"
+)
+
+:: Fallback: search for Python again if temp file is missing
+if not defined SYS_PYTHON (
+    for /f "tokens=*" %%i in ('where python 2^>nul') do (
+        echo %%i | findstr /i "WindowsApps" >nul 2>&1
+        if !errorlevel! neq 0 if not defined SYS_PYTHON set SYS_PYTHON=%%i
+    )
+)
+
+if not defined SYS_PYTHON (
+    echo ERROR: Could not locate system Python. Aborting.
+    pause & exit /b 1
+)
+
+echo       Using Python: %SYS_PYTHON%
+
+:: ---- Network check ----
+echo Checking network...
 ping -n 1 8.8.8.8 >nul 2>&1
 if %errorlevel% neq 0 (
     echo WARNING: No network detected. Downloads may fail.
@@ -249,7 +266,7 @@ echo Checking WireGuard...
 if exist "%WG_EXE%" (
     echo       OK - WireGuard already installed
 ) else (
-    echo       WireGuard not found, downloading...
+    echo       Downloading WireGuard...
     powershell -NoProfile -Command ^
         "Invoke-WebRequest -Uri '%WG_URL%' -OutFile '%WG_INSTALLER%' -UseBasicParsing"
 
@@ -277,31 +294,75 @@ if not exist "%PROGRAMDATA_DIR%" mkdir "%PROGRAMDATA_DIR%"
 if not exist "%PROGRAMDATA_WG%"  mkdir "%PROGRAMDATA_WG%"
 echo       OK - %PROGRAMDATA_DIR%
 
-:: ---- pywin32 post-install ----
-echo Running pywin32 post-install...
-for /f "usebackq tokens=*" %%p in (`"%VENV_PYTHON%" -c "import sys; print(sys.prefix)"`) do (
-    if exist "%%p\Scripts\pywin32_postinstall.py" (
-        "%VENV_PYTHON%" "%%p\Scripts\pywin32_postinstall.py" -install >nul 2>&1
-        echo       OK
-    ) else (
-        echo       Skipped - post-install script not found
+:: ---- Install pywin32 into system Python ----
+:: Service runs as SYSTEM using system Python — no venv, no DLL issues.
+echo Installing pywin32 to system Python...
+"%SYS_PYTHON%" -m pip install --quiet pywin32 pywin32-ctypes
+if %errorlevel% neq 0 (
+    echo ERROR: Failed to install pywin32.
+    pause & exit /b 1
+)
+echo       OK
+
+:: ---- Clean up any stale WireGuard tunnel services ----
+:: Stale WireGuardTunnel$ services from a previous install are the most
+:: common cause of reinstall failures. wireguard.exe /installtunnelservice
+:: sees the service already exists and skips re-registering it, leaving
+:: a broken stopped service that never starts.
+echo Cleaning up stale WireGuard tunnels...
+if exist "%WG_EXE%" (
+    :: Remove tunnels listed in ProgramData conf files
+    if exist "%PROGRAMDATA_WG%" (
+        for %%f in ("%PROGRAMDATA_WG%\*.conf") do (
+            set TUNNEL=%%~nf
+            "%WG_EXE%" /uninstalltunnelservice "!TUNNEL!" >nul 2>&1
+            sc stop   "WireGuardTunnel$!TUNNEL!" >nul 2>&1
+            sc delete "WireGuardTunnel$!TUNNEL!" >nul 2>&1
+        )
+    )
+    :: Also sweep for any registered WireGuardTunnel services in case the
+    :: conf was already deleted but the service entry wasn't cleaned up
+    for /f "tokens=2" %%s in ('sc query type^= all state^= all 2^>nul ^| findstr /i "WireGuardTunnel"') do (
+        sc stop   "%%s" >nul 2>&1
+        sc delete "%%s" >nul 2>&1
+        "%WG_EXE%" /uninstalltunnelservice "%%s" >nul 2>&1
     )
 )
+timeout /t 2 /nobreak >nul
+echo       OK
 
-:: ---- Remove existing service if present ----
+:: ---- Remove existing ResistineVPN service ----
 sc query %SERVICE_NAME% >nul 2>&1
 if %errorlevel% equ 0 (
     echo Stopping existing service...
     sc stop %SERVICE_NAME% >nul 2>&1
     timeout /t 3 /nobreak >nul
+
     echo Removing existing service...
-    "%VENV_PYTHON%" "%SERVICE_SCRIPT%" remove >nul 2>&1
-    timeout /t 2 /nobreak >nul
+    "%SYS_PYTHON%" "%SERVICE_SCRIPT%" remove >nul 2>&1
+
+    echo Waiting for service cleanup...
+    set RETRY=0
+    :wait_loop
+    sc query %SERVICE_NAME% >nul 2>&1
+    if %errorlevel% equ 0 (
+        if !RETRY! lss 10 (
+            set /a RETRY+=1
+            echo       Still waiting... ^(!RETRY!/10^)
+            timeout /t 3 /nobreak >nul
+            goto :wait_loop
+        ) else (
+            echo WARNING: Service handle not released.
+            echo          Please restart your PC and run install.bat again.
+            pause & exit /b 1
+        )
+    )
+    echo       OK - Service fully removed
 )
 
-:: ---- Install service ----
+:: ---- Install service using system Python ----
 echo Registering service...
-"%VENV_PYTHON%" "%SERVICE_SCRIPT%" --startup auto install
+"%SYS_PYTHON%" "%SERVICE_SCRIPT%" --startup auto install
 if %errorlevel% neq 0 (
     echo ERROR: Failed to install service.
     pause & exit /b 1
@@ -324,6 +385,7 @@ if %errorlevel% neq 0 (
 echo.
 echo ============================================================
 echo  Service installed successfully!
+echo  Python     : %SYS_PYTHON%
 echo  WireGuard  : %WG_EXE%
 echo  Service    : %SERVICE_NAME%
 echo  Config dir : %PROGRAMDATA_WG%
