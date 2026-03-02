@@ -16,6 +16,7 @@ set VENV_DIR=%SCRIPT_DIR%\venv
 set VENV_PYTHON=%VENV_DIR%\Scripts\python.exe
 set VENV_PIP=%VENV_DIR%\Scripts\pip.exe
 set REQUIREMENTS=%SCRIPT_DIR%\libraries\requirements-windows.txt
+if not exist "%REQUIREMENTS%" set REQUIREMENTS=%SCRIPT_DIR%\requirements.txt
 set APPDATA_DIR=%APPDATA%\Resistine
 set WG_DIR=%APPDATA_DIR%\wireguard
 set PROGRAMDATA_DIR=%PROGRAMDATA%\Resistine
@@ -123,10 +124,10 @@ echo       Upgrading pip...
 "%VENV_PYTHON%" -m pip install --quiet --upgrade pip
 
 if exist "%REQUIREMENTS%" (
-    echo       Installing from requirements-windows.txt...
+    echo       Installing from %REQUIREMENTS%...
     "%VENV_PYTHON%" -m pip install --quiet -r "%REQUIREMENTS%"
 ) else (
-    echo       requirements-windows.txt not found, installing defaults...
+    echo       No requirements file found, installing defaults...
     "%VENV_PYTHON%" -m pip install --quiet ^
         customtkinter ^
         pillow ^
@@ -135,6 +136,12 @@ if exist "%REQUIREMENTS%" (
         pywin32 ^
         pywin32-ctypes
 )
+
+if %errorlevel% neq 0 (
+    echo ERROR: Failed to install dependencies.
+    pause & exit /b 1
+)
+echo       OK - Dependencies installed
 
 :: ---- Step 4: Create AppData directories ----
 echo [4/6] Creating app directories...
@@ -200,6 +207,9 @@ echo.
 echo Starting tray icon...
 start "" "%VENV_PYTHON%" "%TRAY_SCRIPT%"
 
+:: ============================================================
+:: Done
+:: ============================================================
 echo.
 echo ============================================================
 echo  Installation complete!

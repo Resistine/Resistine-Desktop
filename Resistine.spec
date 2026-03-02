@@ -10,6 +10,8 @@ import sys
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
 block_cipher = None
+IS_MACOS = sys.platform == "darwin"
+IS_WINDOWS = sys.platform == "win32"
 
 # Application metadata
 APP_NAME = 'Resistine'
@@ -41,13 +43,6 @@ hiddenimports = [
     'cryptography',
     'keyring',
     'keyring.backends',
-    'keyring.backends.macOS',
-    'pyobjc',
-    'Foundation',
-    'ServiceManagement',
-    'AppKit',
-    'Cocoa',
-    'objc',
     'httpx',
     'openai',
     'markdown',
@@ -55,6 +50,17 @@ hiddenimports = [
     'html2text',
     'loguru',
 ]
+
+if IS_MACOS:
+    hiddenimports.extend([
+        'keyring.backends.macOS',
+        'pyobjc',
+        'Foundation',
+        'ServiceManagement',
+        'AppKit',
+        'Cocoa',
+        'objc',
+    ])
 
 # Analysis
 a = Analysis(
@@ -84,10 +90,7 @@ a = Analysis(
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 # Create executable
-exe = EXE(
-    pyz,
-    a.scripts,
-    [],
+exe_kwargs = dict(
     exclude_binaries=True,
     name=APP_NAME,
     debug=False,
@@ -99,7 +102,17 @@ exe = EXE(
     argv_emulation=False,
     target_arch=None,  # Use native architecture (arm64 on Apple Silicon, x86_64 on Intel)
     codesign_identity=None,
-    entitlements_file='Resistine.entitlements',
+)
+if IS_MACOS:
+    exe_kwargs['entitlements_file'] = 'Resistine.entitlements'
+if IS_WINDOWS:
+    exe_kwargs['icon'] = os.path.join('resources', 'icons', 'icon.ico')
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    **exe_kwargs,
 )
 
 # Collect all files
@@ -114,77 +127,78 @@ coll = COLLECT(
     name=APP_NAME,
 )
 
-# Create .app bundle
-app = BUNDLE(
-    coll,
-    name=f'{APP_NAME}.app',
-    icon='ResistineSheild.png',  # Will be converted to .icns
-    bundle_identifier=BUNDLE_ID,
-    version=VERSION,
-    info_plist={
-        # Basic app info
-        'CFBundleName': APP_NAME,
-        'CFBundleDisplayName': 'Resistine',
-        'CFBundleExecutable': APP_NAME,
-        'CFBundleIdentifier': BUNDLE_ID,
-        'CFBundleVersion': VERSION,
-        'CFBundleShortVersionString': VERSION,
-        'CFBundleInfoDictionaryVersion': '6.0',
-        'CFBundlePackageType': 'APPL',
-        'CFBundleSignature': '????',
+if IS_MACOS:
+    # Create .app bundle only on macOS. Windows/Linux use the COLLECT folder as output.
+    app = BUNDLE(
+        coll,
+        name=f'{APP_NAME}.app',
+        icon='ResistineSheild.png',  # Will be converted to .icns
+        bundle_identifier=BUNDLE_ID,
+        version=VERSION,
+        info_plist={
+            # Basic app info
+            'CFBundleName': APP_NAME,
+            'CFBundleDisplayName': 'Resistine',
+            'CFBundleExecutable': APP_NAME,
+            'CFBundleIdentifier': BUNDLE_ID,
+            'CFBundleVersion': VERSION,
+            'CFBundleShortVersionString': VERSION,
+            'CFBundleInfoDictionaryVersion': '6.0',
+            'CFBundlePackageType': 'APPL',
+            'CFBundleSignature': '????',
 
-        # UI settings
-        'NSHighResolutionCapable': True,
-        'NSRequiresAquaSystemAppearance': False,
-        'LSMinimumSystemVersion': '13.0',
+            # UI settings
+            'NSHighResolutionCapable': True,
+            'NSRequiresAquaSystemAppearance': False,
+            'LSMinimumSystemVersion': '13.0',
 
-        # Permissions (will be expanded with actual entitlements)
-        'NSNetworkClient': True,
-        'NSSystemAdministrationUsageDescription': 'Resistine needs admin access to manage VPN connections.',
+            # Permissions (will be expanded with actual entitlements)
+            'NSNetworkClient': True,
+            'NSSystemAdministrationUsageDescription': 'Resistine needs admin access to manage VPN connections.',
 
-        # XPC Services (will be populated by build script)
-        'NSXPCServices': ['ResistineVPNXPC'],
+            # XPC Services (will be populated by build script)
+            'NSXPCServices': ['ResistineVPNXPC'],
 
-        # Helper registration for privileged operations
-        'SMPrivilegedExecutables': {
-            'com.resistine.vpn.xpc': 'identifier "com.resistine.vpn.xpc" and anchor apple generic and certificate leaf[subject.CN] = "Resistine" and certificate 1[field.1.2.840.113635.100.6.2.1] /* exists */'
-        },
+            # Helper registration for privileged operations
+            'SMPrivilegedExecutables': {
+                'com.resistine.vpn.xpc': 'identifier "com.resistine.vpn.xpc" and anchor apple generic and certificate leaf[subject.CN] = "Resistine" and certificate 1[field.1.2.840.113635.100.6.2.1] /* exists */'
+            },
 
-        # URL schemes (if needed for OAuth, deep links, etc.)
-        'CFBundleURLTypes': [
-            {
-                'CFBundleURLName': BUNDLE_ID,
-                'CFBundleURLSchemes': ['resistine'],
-            }
-        ],
-
-        # Document types (if you want to open .conf files)
-        'CFBundleDocumentTypes': [
-            {
-                'CFBundleTypeName': 'WireGuard Configuration',
-                'CFBundleTypeRole': 'Editor',
-                'LSItemContentTypes': ['com.resistine.wireguard-config'],
-                'LSHandlerRank': 'Owner',
-            }
-        ],
-
-        # Export type for .conf files
-        'UTExportedTypeDeclarations': [
-            {
-                'UTTypeIdentifier': 'com.resistine.wireguard-config',
-                'UTTypeConformsTo': ['public.data', 'public.content'],
-                'UTTypeDescription': 'WireGuard Configuration File',
-                'UTTypeTagSpecification': {
-                    'public.filename-extension': ['conf'],
-                    'public.mime-type': 'text/plain',
+            # URL schemes (if needed for OAuth, deep links, etc.)
+            'CFBundleURLTypes': [
+                {
+                    'CFBundleURLName': BUNDLE_ID,
+                    'CFBundleURLSchemes': ['resistine'],
                 }
-            }
-        ],
+            ],
 
-        # Sparkle Auto-Update
-        'SUFeedURL': 'https://resistine.github.io/appcast.xml',
-        'SUPublicEDKey': '2eiUHVoMgl+qqhEWO8iix5SUcRAKfkWYESh9F7jG6ls=',
-        'SUEnableAutomaticChecks': True,
-        'SUScheduledCheckInterval': 14400,  # 4 hours (base; Python scheduler adds jitter)
-    },
-)
+            # Document types (if you want to open .conf files)
+            'CFBundleDocumentTypes': [
+                {
+                    'CFBundleTypeName': 'WireGuard Configuration',
+                    'CFBundleTypeRole': 'Editor',
+                    'LSItemContentTypes': ['com.resistine.wireguard-config'],
+                    'LSHandlerRank': 'Owner',
+                }
+            ],
+
+            # Export type for .conf files
+            'UTExportedTypeDeclarations': [
+                {
+                    'UTTypeIdentifier': 'com.resistine.wireguard-config',
+                    'UTTypeConformsTo': ['public.data', 'public.content'],
+                    'UTTypeDescription': 'WireGuard Configuration File',
+                    'UTTypeTagSpecification': {
+                        'public.filename-extension': ['conf'],
+                        'public.mime-type': 'text/plain',
+                    }
+                }
+            ],
+
+            # Sparkle Auto-Update
+            'SUFeedURL': 'https://resistine.github.io/appcast.xml',
+            'SUPublicEDKey': '2eiUHVoMgl+qqhEWO8iix5SUcRAKfkWYESh9F7jG6ls=',
+            'SUEnableAutomaticChecks': True,
+            'SUScheduledCheckInterval': 14400,  # 4 hours (base; Python scheduler adds jitter)
+        },
+    )
