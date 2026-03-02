@@ -118,10 +118,26 @@ for %%d in (%SERVICE_DEPS%) do (
 
 :: pywin32 post-install
 echo       Running pywin32 post-install...
-for /f "tokens=*" %%p in ('"%PYTHON_FULL%" -c "import sys; print(sys.prefix)"') do (
-    if exist "%%p\Scripts\pywin32_postinstall.py" (
-        "%PYTHON_FULL%" "%%p\Scripts\pywin32_postinstall.py" -install >nul 2>&1
+set "PYWIN32_POSTINSTALL_OK="
+"%PYTHON_FULL%" -m pywin32_postinstall -install >nul 2>&1
+if !errorlevel! equ 0 (
+    set "PYWIN32_POSTINSTALL_OK=1"
+) else (
+    "%PYTHON_FULL%" -c "import sys, pathlib; p = pathlib.Path(sys.prefix) / 'Scripts' / 'pywin32_postinstall.py'; print(p)" > "%TEMP%\resistine_pywin32_postinstall_path.txt" 2>nul
+    if exist "%TEMP%\resistine_pywin32_postinstall_path.txt" (
+        set /p PYWIN32_POSTINSTALL_SCRIPT=<"%TEMP%\resistine_pywin32_postinstall_path.txt"
+        del "%TEMP%\resistine_pywin32_postinstall_path.txt" >nul 2>&1
+        if exist "%PYWIN32_POSTINSTALL_SCRIPT%" (
+            "%PYTHON_FULL%" "%PYWIN32_POSTINSTALL_SCRIPT%" -install >nul 2>&1
+            if !errorlevel! equ 0 set "PYWIN32_POSTINSTALL_OK=1"
+        )
     )
+)
+if defined PYWIN32_POSTINSTALL_OK (
+    echo       OK - pywin32 post-install complete
+) else (
+    echo WARNING: pywin32 post-install step failed or was not found.
+    echo          The service may still work, but if it fails to start, rerun this script.
 )
 echo       OK - Dependencies installed
 
