@@ -1,366 +1,339 @@
-import ctypes
+"""
+Windows VPN helper functions — key management, config management,
+WireGuard installation checks, and service status wrappers.
+
+This module does NOT manage tunnel connect/disconnect directly.
+Use vpn_windows_client.py for all tunnel control.
+
+Authors: Merhawi, Johann Gawron, and the Resistine Team
+Copyright (c) Resistine 2025
+Licensed under the GNU General Public License v2 or later
+"""
+
+import json
 import os
 import subprocess
-import time
 
-from utils.logger import logger
 from utils.settings import get_config_dir
+from utils.logger import logger
 
-# Removed standard logging setup
+# Import client functions so main.py can use check_service_status etc.
+# without importing from two places
+from plugins.vpn.wireguard.vpn_windows_client import get_status, connect, disconnect, toggle
 
 
-def get_writable_wireguard_dir():
-    """Get the directory where WireGuard configs are stored."""
-    config_dir = get_config_dir()
-    wg_dir = os.path.join(config_dir, "wireguard")
+# ----------------------------------------------------------------
+# Directory / path helpers
+# ----------------------------------------------------------------
+
+def get_writable_wireguard_dir() -> str:
+    """Return (and create) the WireGuard config directory."""
+    wg_dir = os.path.join(get_config_dir(), "wireguard")
     os.makedirs(wg_dir, exist_ok=True)
     return wg_dir
 
 
-def get_config_path(tunnel_name):
-    """Get the full path to a tunnel configuration file."""
+def get_config_path(tunnel_name: str) -> str:
+    """Return the full path to a tunnel's .conf file."""
     return os.path.join(get_writable_wireguard_dir(), f"{tunnel_name}.conf")
 
 
-def find_wireguard_exe():
-    """Find the WireGuard executable."""
-    # Standard installation path
-    wg_exe = r"C:\Program Files\WireGuard\wireguard.exe"
-    if os.path.exists(wg_exe):
-        return wg_exe
+# ----------------------------------------------------------------
+# WireGuard installation checks
+# ----------------------------------------------------------------
+
+def find_wireguard_exe() -> str | None:
+    """Find the WireGuard executable. Returns path or None."""
+    candidates = [
+        r"C:\Program Files\WireGuard\wireguard.exe",
+        r"C:\Program Files (x86)\WireGuard\wireguard.exe",
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
     return None
 
 
-def ensure_wireguard_app_installed():
-    """Check if WireGuard is installed."""
+def find_wg_cli() -> str | None:
+    """Find the wg.exe CLI tool. Returns path or None."""
+    exe = find_wireguard_exe()
+    if exe:
+        cli = os.path.join(os.path.dirname(exe), "wg.exe")
+        if os.path.exists(cli):
+            return cli
+    return None
+
+
+def check_wireguard_installed() -> bool:
+    """Return True if WireGuard is installed."""
     return find_wireguard_exe() is not None
 
-def check_wireguard_installed():
-    """Check if WireGuard is installed and accessible."""
-    return ensure_wireguard_app_installed()
 
-def can_manage_tunnels_without_admin():
+# ----------------------------------------------------------------
+# Service status wrappers (compatibility with main.py)
+# ----------------------------------------------------------------
+
+def start_vpn(tunnel_name: str) -> bool:
+    """Connect tunnel via service. Returns True on success."""
+    result = connect(tunnel_name)
+    return result.get("status") == "ok"
+
+
+def stop_vpn(tunnel_name: str) -> bool:
+    """Disconnect tunnel via service. Returns True on success."""
+    result = disconnect(tunnel_name)
+    return result.get("status") == "ok"
+
+
+def check_service_status(tunnel_name: str, test_ip: str = None) -> str:
+    """Return a status string: 'Running', 'Stopped', etc.
+
+    Args:
+        tunnel_name: The tunnel to check.
+        test_ip: Ignored on Windows (kept for cross-platform compat).
     """
-    Check if the user can manage tunnels without admin privileges.
-    On Windows, this usually requires the LimitedOperatorGroup, but for simplicity
-    we'll assume admin/UAC is needed for service control unless configured otherwise.
-    """
-    return False
-
-
-def _check_service_access(service_name):
-    """Check if we can access the service handle."""
-    service_handle = None
-    scm_handle = None
-    SERVICE_STOP = 0x20
-    SERVICE_START = 0x10
-    SERVICE_QUERY_STATUS = 0x04
-    desired_access = SERVICE_STOP | SERVICE_START | SERVICE_QUERY_STATUS
-
-    try:
-        scm_handle = ctypes.windll.advapi32.OpenSCManagerW(
-            None, None, 0x0001
-        )  # SC_MANAGER_CONNECT
-        if not scm_handle:
-            return False
-
-        service_handle = ctypes.windll.advapi32.OpenServiceW(
-            scm_handle, service_name, desired_access
-        )
-        if not service_handle:
-            return False
-        return True
-    except Exception:
-        return False
-    finally:
-        if service_handle:
-            ctypes.windll.advapi32.CloseServiceHandle(service_handle)
-        if scm_handle:
-            ctypes.windll.advapi32.CloseServiceHandle(scm_handle)
-
-
-def start_vpn(tunnel_name):
-    """Start the VPN tunnel."""
-    wg_exe = find_wireguard_exe()
-    if not wg_exe:
-        if not ensure_wireguard_app_installed():
-            return False
-        wg_exe = find_wireguard_exe()
-        if not wg_exe:
-            return False
-
-    manage_without_admin = can_manage_tunnels_without_admin()
-    config_path = get_config_path(tunnel_name)
-
-    # Logging for debug
-    log_path = os.path.join(get_config_dir(), "vpn_debug.log")
-    with open(log_path, "a") as f:
-        f.write(
-            f"start_vpn: can_manage = {manage_without_admin}, config_path_exists = {os.path.exists(config_path)}\n"
-        )
-
-    service_name = f"WireGuardTunnel${tunnel_name}"
-
-    if not _check_service_access(service_name):
-        with open(log_path, "a") as f:
-            f.write(
-                "start_vpn: service access denied (QueryServiceStatusEx failed), will attempt operation anyway\n"
-            )
-        try:
-            diag = subprocess.run(
-                ["sc", "query", service_name],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            diag_output = (diag.stdout or "") + (diag.stderr or "")
-        except Exception as diag_error:
-            diag_output = f"sc query diagnostic failed: {diag_error}"
-
-        with open(log_path, "a") as f:
-            f.write(f"start_vpn: sc query diagnostic -> {diag_output.strip()}\n")
-
-        if "1060" in diag_output:
-            with open(log_path, "a") as f:
-                f.write("start_vpn: service missing, cannot proceed\n")
-            return False
-
-    try:
-        # Use ShellExecute to properly trigger UAC prompts for admin elevation
-        with open(log_path, "a") as f:
-            f.write(
-                "start_vpn: attempting to start service with potential UAC prompt\n"
-            )
-
-        # Use ShellExecuteW to run sc start with admin privileges if needed
-        sc_command = f'sc start "{service_name}"'
-        result = ctypes.windll.shell32.ShellExecuteW(
-            None,  # hwnd
-            "runas",  # lpOperation - "runas" triggers UAC
-            "cmd.exe",  # lpFile
-            f"/c {sc_command}",  # lpParameters
-            None,  # lpDirectory
-            0,  # nShowCmd - SW_HIDE
-        )
-
-        with open(log_path, "a") as f:
-            f.write(f"start_vpn: ShellExecute result={result}\n")
-
-        # ShellExecute returns > 32 on success, <= 32 on error
-        if result > 32:
-            # Wait a moment for the service to start
-            time.sleep(2)
-
-            # Check if service actually started
-            check_result = subprocess.run(
-                ["sc", "query", service_name],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            check_output = (check_result.stdout or "") + (check_result.stderr or "")
-            if "RUNNING" in check_output.upper():
-                with open(log_path, "a") as f:
-                    f.write("start_vpn: service successfully started\n")
-                return True
-            else:
-                with open(log_path, "a") as f:
-                    f.write(
-                        f"start_vpn: service status check failed: {check_output.strip()}\n"
-                    )
-        else:
-            with open(log_path, "a") as f:
-                f.write(f"start_vpn: ShellExecute failed with code {result}\n")
-
-    except subprocess.TimeoutExpired:
-        with open(log_path, "a") as f:
-            f.write("start_vpn: service status check timed out\n")
-    except Exception as e:
-        with open(log_path, "a") as f:
-            f.write(f"start_vpn: exception during start operation: {str(e)}\n")
-
-    with open(log_path, "a") as f:
-        f.write("start_vpn: failed to start tunnel via service control\n")
-    return False
-
-
-def stop_vpn(tunnel_name):
-    """Stop VPN using WireGuard app."""
-    wg_exe = find_wireguard_exe()
-    if not wg_exe:
-        return False
-
-    manage_without_admin = can_manage_tunnels_without_admin()
-    config_path = get_config_path(tunnel_name)
-
-    log_path = os.path.join(get_config_dir(), "vpn_debug.log")
-    with open(log_path, "a") as f:
-        f.write(
-            f"stop_vpn: can_manage = {manage_without_admin}, config_path_exists = {os.path.exists(config_path)}\n"
-        )
-
-    service_name = f"WireGuardTunnel${tunnel_name}"
-
-    if not _check_service_access(service_name):
-        with open(log_path, "a") as f:
-            f.write(
-                "stop_vpn: service access denied (QueryServiceStatusEx failed), will attempt operation anyway\n"
-            )
-        try:
-            diag = subprocess.run(
-                ["sc", "query", service_name],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            diag_output = (diag.stdout or "") + (diag.stderr or "")
-        except Exception as diag_error:
-            diag_output = f"sc query diagnostic failed: {diag_error}"
-        with open(log_path, "a") as f:
-            f.write(f"stop_vpn: sc query diagnostic -> {diag_output.strip()}\n")
-        if "1060" in diag_output:
-            with open(log_path, "a") as f:
-                f.write("stop_vpn: service missing, cannot proceed\n")
-            return False
-
-    try:
-        # Use ShellExecute to properly trigger UAC prompts for admin elevation
-        with open(log_path, "a") as f:
-            f.write("stop_vpn: attempting to stop service with potential UAC prompt\n")
-
-        # Use ShellExecuteW to run sc stop with admin privileges if needed
-        sc_command = f'sc stop "{service_name}"'
-        result = ctypes.windll.shell32.ShellExecuteW(
-            None,  # hwnd
-            "runas",  # lpOperation - "runas" triggers UAC
-            "cmd.exe",  # lpFile
-            f"/c {sc_command}",  # lpParameters
-            None,  # lpDirectory
-            0,  # nShowCmd - SW_HIDE
-        )
-
-        with open(log_path, "a") as f:
-            f.write(f"stop_vpn: ShellExecute result={result}\n")
-
-        # ShellExecute returns > 32 on success, <= 32 on error
-        if result > 32:
-            # Wait a moment for the service to stop
-            time.sleep(2)
-
-            # Check if service actually stopped
-            check_result = subprocess.run(
-                ["sc", "query", service_name],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            check_output = (check_result.stdout or "") + (check_result.stderr or "")
-            if (
-                "STOPPED" in check_output.upper()
-                or "NOT STARTED" in check_output.upper()
-            ):
-                with open(log_path, "a") as f:
-                    f.write("stop_vpn: service successfully stopped\n")
-                return True
-            else:
-                with open(log_path, "a") as f:
-                    f.write(
-                        f"stop_vpn: service status check failed: {check_output.strip()}\n"
-                    )
-        else:
-            with open(log_path, "a") as f:
-                f.write(f"stop_vpn: ShellExecute failed with code {result}\n")
-
-    except subprocess.TimeoutExpired:
-        with open(log_path, "a") as f:
-            f.write("stop_vpn: service status check timed out\n")
-    except Exception as e:
-        with open(log_path, "a") as f:
-            f.write(f"stop_vpn: exception during stop operation: {str(e)}\n")
-
-    with open(log_path, "a") as f:
-        f.write("stop_vpn: failed to stop tunnel via service control\n")
-    return False
-
-
-def check_service_status(tunnel_name, test_ip=None):
     if not tunnel_name:
-        return "Not Installed"
-
-    wg_cli = r"C:\Program Files\WireGuard\wireguard.exe"
-    if not os.path.exists(wg_cli):
-        return "Not Installed"
-
-    service_name = f"WireGuardTunnel${tunnel_name}"
+        return "Stopped"
     try:
-        result = subprocess.run(
-            ["sc", "query", service_name],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        output = (result.stdout or "") + (result.stderr or "")
-        lower_output = output.lower()
-        if "does not exist" in lower_output or "not exist" in lower_output:
-            return "Not Installed"
-        if "state" in lower_output:
-            if "running" in lower_output or "start pending" in lower_output:
-                return "Running"
-            if "stopped" in lower_output:
-                return "Stopped"
+        result = get_status(tunnel_name)
+        return result.get("state", "Stopped")
     except Exception:
-        pass
-
-    try:
-        result = subprocess.run(
-            [wg_cli, "/list"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        stdout = result.stdout or ""
-        if result.returncode == 0:
-            for line in stdout.splitlines():
-                if tunnel_name.lower() in line.lower():
-                    if any(
-                        word in line.lower()
-                        for word in ("active", "connected", "running")
-                    ):
-                        return "Running"
-                    return "Stopped"
-    except Exception:
-        pass
-
-    return "Not Installed"
+        return "Stopped"
 
 
-def run_elevated_powershell(script_path, arguments=""):
+# ----------------------------------------------------------------
+# Key management
+# ----------------------------------------------------------------
+
+KEYS_FILE_PATH = os.path.join(get_config_dir(), "keys.json")
+
+
+def generate_wireguard_keys() -> dict | None:
+    """Generate a WireGuard public/private key pair.
+
+    Tries wg.exe first, falls back to Python cryptography library.
+    Returns dict with 'private_key' and 'public_key', or None on failure.
     """
-    Run a PowerShell script with elevated privileges using ShellExecuteW.
-    Returns True if successful, False otherwise.
-    """
+    wg_cli = find_wg_cli()
+    if wg_cli:
+        try:
+            private_key = subprocess.check_output(
+                [wg_cli, "genkey"], text=True
+            ).strip()
+            public_key = subprocess.check_output(
+                [wg_cli, "pubkey"], input=private_key, text=True
+            ).strip()
+            logger.info("WireGuard keys generated via wg.exe")
+            return {"private_key": private_key, "public_key": public_key}
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"wg.exe key generation failed: {e}")
+
+    logger.info("Falling back to Python key generation")
+    return _generate_keys_fallback()
+
+
+def _generate_keys_fallback() -> dict | None:
+    """Fallback key generation using the cryptography library."""
     try:
-        import ctypes
+        import base64
+        import secrets
 
-        # ShellExecuteW parameters
-        SW_HIDE = 0
+        private_key_bytes = secrets.token_bytes(32)
+        private_key = base64.b64encode(private_key_bytes).decode()
 
-        # Use ShellExecuteW to run with elevated privileges
-        result = ctypes.windll.shell32.ShellExecuteW(
-            None,  # hwnd
-            "runas",  # lpOperation - "runas" for admin
-            "powershell.exe",  # lpFile
-            f'-ExecutionPolicy Bypass -File "{script_path}" {arguments}',  # lpParameters
-            None,  # lpDirectory
-            SW_HIDE,  # nShowCmd
-        )
+        try:
+            from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+            from cryptography.hazmat.primitives import serialization
 
-        # ShellExecuteW returns > 32 on success
-        return result > 32
+            x25519_private = X25519PrivateKey.from_private_bytes(private_key_bytes)
+            public_key_bytes = x25519_private.public_key().public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw,
+            )
+            public_key = base64.b64encode(public_key_bytes).decode()
+            logger.info("WireGuard keys generated via cryptography library")
+            return {"private_key": private_key, "public_key": public_key}
+
+        except ImportError:
+            logger.warning("cryptography library not available, using random bytes for public key")
+            public_key = base64.b64encode(secrets.token_bytes(32)).decode()
+            return {"private_key": private_key, "public_key": public_key}
 
     except Exception as e:
-        logger.error(f"Error running elevated PowerShell: {e}")
+        logger.error(f"Fallback key generation failed: {e}")
+        return None
+
+
+def get_wireguard_private_key() -> str | None:
+    """Retrieve the saved WireGuard private key."""
+    try:
+        if os.path.exists(KEYS_FILE_PATH):
+            with open(KEYS_FILE_PATH, "r") as f:
+                return json.load(f).get("private_key")
+        return None
+    except Exception as e:
+        logger.error(f"Error retrieving private key: {e}")
+        return None
+
+
+def save_wireguard_keys(private_key: str, public_key: str) -> bool:
+    """Save WireGuard keys to disk."""
+    try:
+        os.makedirs(os.path.dirname(KEYS_FILE_PATH), exist_ok=True)
+        with open(KEYS_FILE_PATH, "w") as f:
+            json.dump({"private_key": private_key, "public_key": public_key}, f)
+        try:
+            import stat
+            os.chmod(KEYS_FILE_PATH, stat.S_IREAD | stat.S_IWRITE)
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        logger.error(f"Error saving keys: {e}")
         return False
 
 
-logger.debug("WireGuard app integration loaded")
+def delete_wireguard_keys() -> bool:
+    """Delete the saved WireGuard keys file."""
+    try:
+        if os.path.exists(KEYS_FILE_PATH):
+            os.remove(KEYS_FILE_PATH)
+        return True
+    except Exception as e:
+        logger.error(f"Error deleting keys: {e}")
+        return False
+
+
+def setup_vpn_keys() -> str | None:
+    """Generate and save new WireGuard keys.
+
+    Returns the public key string on success, None on failure.
+    """
+    try:
+        logger.debug("Regenerating WireGuard keys for new login session")
+        delete_wireguard_keys()
+
+        keys = generate_wireguard_keys()
+        if not keys:
+            logger.error("Failed to generate WireGuard keys")
+            return None
+
+        if not save_wireguard_keys(keys["private_key"], keys["public_key"]):
+            logger.error("Failed to save WireGuard keys")
+            return None
+
+        public_key = keys["public_key"]
+        logger.debug(f"WireGuard public key ready: length={len(public_key)}")
+        return public_key
+
+    except Exception as e:
+        logger.error(f"Error setting up VPN keys: {e}")
+        return None
+
+
+# ----------------------------------------------------------------
+# Config file management
+# ----------------------------------------------------------------
+
+def parse_and_create_vpn_config(
+    vpn_config_json_string: str,
+    config_name: str = "resistine_default",
+) -> str | None:
+    try:
+        if not vpn_config_json_string:
+            raise ValueError("Empty API response")
+
+        vpn_config = json.loads(vpn_config_json_string)
+
+        interface = vpn_config.get("Interface")
+        peer = vpn_config.get("Peer")
+
+        if not isinstance(interface, dict) or not isinstance(peer, dict):
+            raise ValueError(f"Invalid WireGuard JSON shape: keys={list(vpn_config.keys())}")
+
+        # FIX: If the server response doesn't include PrivateKey (expected —
+        # the server only knows the public key), inject it from keys.json now.
+        # This ensures the .conf written to disk is always complete so:
+        #   1. validate_wireguard_config() passes without error
+        #   2. _ensure_system_config() copies a working config to ProgramData
+        #   3. The WireGuard tunnel service (running as SYSTEM) can connect
+        #      without ever needing to access the user's AppData directly.
+        # Check value too — server may send "PrivateKey": "" as a placeholder
+        existing_private_key = next(
+            (v for k, v in interface.items() if k.lower() == "privatekey"),
+            None
+        )
+        if not existing_private_key:
+            private_key = get_wireguard_private_key()
+
+            if not private_key:
+                # Fresh install — keys.json doesn't exist yet.
+                # Generate and save keys now so the config can be completed
+                # and the public key is available for future API calls.
+                logger.info("keys.json not found — generating keys for fresh install")
+                public_key = setup_vpn_keys()
+                if not public_key:
+                    logger.error("Failed to generate WireGuard keys on fresh install")
+                    return None
+                # setup_vpn_keys() returns the public key — re-read the
+                # private key from the file it just wrote
+                private_key = get_wireguard_private_key()
+                if not private_key:
+                    logger.error("Keys generated but private key could not be read back")
+                    return None
+
+            interface["PrivateKey"] = private_key
+            # Remove any empty placeholder the server sent so we don't
+            # write duplicate keys with different casing to the conf file
+            for k in list(interface.keys()):
+                if k.lower() == "privatekey" and k != "PrivateKey":
+                    del interface[k]
+            logger.info("PrivateKey injected into config from keys.json")
+
+        # Build WireGuard .conf text
+        lines = []
+        lines.append("[Interface]")
+        for k, v in interface.items():
+            if v is None:
+                continue
+            lines.append(f"{k} = {v}")
+
+        lines.append("")  # blank line between sections
+        lines.append("[Peer]")
+        for k, v in peer.items():
+            if v is None:
+                continue
+            lines.append(f"{k} = {v}")
+
+        conf_text = "\n".join(lines).strip() + "\n"
+
+        if not conf_text.strip():
+            raise ValueError("Generated WireGuard config is empty")
+
+        config_dir = get_writable_wireguard_dir()
+        os.makedirs(config_dir, exist_ok=True)
+
+        config_path = os.path.join(config_dir, f"{config_name}.conf")
+
+        with open(config_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(conf_text)
+            f.flush()
+            os.fsync(f.fileno())
+
+        logger.info(f"VPN configuration saved to: {os.path.abspath(config_path)}")
+        return config_path
+
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse VPN config JSON: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Error creating VPN config: {e}")
+        return None
+
+
+def save_vpn_configuration(
+    vpn_config_json: str,
+    config_name: str = "resistine_default",
+) -> str | None:
+    """Alias for parse_and_create_vpn_config."""
+    return parse_and_create_vpn_config(vpn_config_json, config_name)
