@@ -126,7 +126,7 @@ class Plugin(BasePlugin):
         self.content_frame.grid_columnconfigure(0, weight=1)
 
         # 1. Shield Logo
-        shield_path = _resource_path("ResistineSheild.png")
+        shield_path = _resource_path(os.path.join("resources", "ResistineSheild.png"))
         try:
             shield_img = Image.open(shield_path)
             shield_ctk = customtkinter.CTkImage(shield_img, size=(250, 250))
