@@ -1,13 +1,15 @@
-## Windows VPN Service for Resistine VPN
-"""Windows Service to manage WireGuard VPN tunnels for Resistine VPN.
-This service listens for IPC commands to control VPN connections.
-Authors: Merhawi
 """
+Windows Service to manage WireGuard VPN tunnels for Resistine VPN.
+Authors: Merhawi
+Copyright (c) Resistine 2025
+This service listens for commands from the GUI and manages WireGuard tunnels
+accordingly. It also auto-starts a default tunnel if present in ProgramData.
+"""
+
 import win32serviceutil
 import win32service
 import win32event
 import servicemanager
-
 import win32con
 
 import socket
@@ -18,200 +20,273 @@ import os
 import logging
 import time
 import sys
-import threading
+import shutil
+
 
 
 # ---------------- Configuration ----------------
 
-SERVICE_NAME = "ResistineVPN"
+SERVICE_NAME         = "ResistineVPN"
 SERVICE_DISPLAY_NAME = "Resistine VPN Service"
+SERVICE_DESCRIPTION  = "Manages WireGuard tunnels for Resistine VPN"
 
 SERVICE_HOST = "127.0.0.1"
 SERVICE_PORT = 51888
-BUFFER_SIZE = 4096
+BUFFER_SIZE  = 4096
 
 IPC_TOKEN = "RESISTINE_INTERNAL_TOKEN_CHANGE_ME"
 
 ALLOWED_COMMANDS = {
-    "status",
-    "start",
-    "connect",
-    "disconnect",
-    "stop",
-    "restart",
-    "health"
+    "status", "connect", "disconnect",
+    "start", "stop", "restart", "health"
 }
 
-
 WIREGUARD_EXE = r"C:\Program Files\WireGuard\wireguard.exe"
-CONFIG_BASE = os.path.join(
-    os.environ.get("PROGRAMDATA", r"C:\ProgramData"),
-    "Resistine",
-    "wireguard"
-)
 
+PROGRAMDATA = os.environ.get("PROGRAMDATA", r"C:\ProgramData")
+CONFIG_BASE = os.path.join(PROGRAMDATA, "Resistine", "wireguard")
 os.makedirs(CONFIG_BASE, exist_ok=True)
+
+
 # ---------------- Logging ----------------
 
-TRACE = 5  # Below DEBUG (10)
+def _get_log_file() -> str:
+    """
+    Use ProgramData if writable (service/admin context).
+    Fall back to AppData when running as regular user (debug mode).
+    """
+    programdata_log = os.path.join(PROGRAMDATA, "Resistine", "vpn_service.log")
+    try:
+        os.makedirs(os.path.dirname(programdata_log), exist_ok=True)
+        with open(programdata_log, "a"):
+            pass
+        return programdata_log
+    except PermissionError:
+        appdata_log = os.path.join(
+            os.environ.get("APPDATA", ""), "Resistine", "vpn_service.log"
+        )
+        os.makedirs(os.path.dirname(appdata_log), exist_ok=True)
+        return appdata_log
+
+
+LOG_FILE = _get_log_file()
+
+TRACE = 5
 logging.addLevelName(TRACE, "TRACE")
 
-def trace(self, message, *args, **kwargs):
+def _trace(self, message, *args, **kwargs):
     if self.isEnabledFor(TRACE):
         self._log(TRACE, message, args, **kwargs)
 
-logging.Logger.trace = trace
+logging.Logger.trace = _trace
 
-LOG_FILE = r"C:\ProgramData\Resistine\vpn_service.log"
 logging.basicConfig(
     filename=LOG_FILE,
     level=logging.DEBUG,
     format="%(asctime)s | %(levelname)s | %(funcName)s:%(lineno)d | %(message)s",
 )
 logger = logging.getLogger("ResistineVPN")
+logger.info(f"Service module loaded. Logging to: {LOG_FILE}")
+
+
+# ---------------- Helpers ----------------
+
+def run_cmd(cmd: list) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+
+
+def wg_service_name(tunnel: str) -> str:
+    return f"WireGuardTunnel${tunnel}"
+
+
+# ---------------- Config discovery ----------------
+
+def find_config(tunnel: str, config_path: str = None) -> str | None:
+    """
+    Find tunnel config file.
+    Priority:
+    1. Explicit path from GUI (user AppData)
+    2. ProgramData fallback
+    """
+    if config_path and os.path.exists(config_path):
+        logger.info(f"Using provided config: {config_path}")
+        return config_path
+
+    fallback = os.path.join(CONFIG_BASE, f"{tunnel}.conf")
+    if os.path.exists(fallback):
+        logger.info(f"Using ProgramData config: {fallback}")
+        return fallback
+
+    logger.warning(f"No config found for tunnel '{tunnel}'")
+    return None
+
+
+def find_default_tunnel() -> str | None:
+    """
+    Discover default tunnel from ProgramData.
+    Prefers 'resistine_default' if present, otherwise first .conf found.
+    """
+    if not os.path.exists(CONFIG_BASE):
+        return None
+
+    confs = [f for f in os.listdir(CONFIG_BASE) if f.endswith(".conf")]
+    if not confs:
+        logger.warning(f"No .conf files in {CONFIG_BASE}")
+        return None
+
+    if "resistine_default.conf" in confs:
+        return "resistine_default"
+
+    name = confs[0].replace(".conf", "")
+    logger.info(f"Auto-detected tunnel: {name}")
+    return name
 
 
 # ---------------- WireGuard helpers ----------------
 
-def wg_service_name(tunnel):
-    return f"WireGuardTunnel${tunnel}"
+def uninstall_tunnel(tunnel: str):
+    svc = wg_service_name(tunnel)
+    result = run_cmd(["sc", "query", svc])
+    if "1060" in (result.stdout + result.stderr):
+        return True, "Not installed"
 
-def find_config(tunnel: str, config_path: str = None) -> str | None:
+    run_cmd(["sc", "stop", svc])
+    time.sleep(1)
+
+    result = run_cmd([WIREGUARD_EXE, "/uninstalltunnelservice", tunnel])
+    logger.info(f"Uninstall '{tunnel}': returncode={result.returncode}")
+    time.sleep(1)
+    return True, "Uninstalled"
+
+
+def _ensure_system_config(tunnel: str, source_conf: str) -> str:
     """
-    Priority:
-    1. Explicit path from GUI request (user's AppData)
-    2. ProgramData (service-installed config from login/installer)
+    Copy the config to ProgramData so the SYSTEM-level WireGuard tunnel
+    service can read it, regardless of where the GUI stored the original.
+
+    WireGuard's /installtunnelservice registers a service that runs as
+    SYSTEM.  SYSTEM has no access to any user's %APPDATA%, so if the .conf
+    lives there the tunnel silently fails to start.  Copying to ProgramData
+    (CONFIG_BASE) fixes this while keeping the user's copy untouched.
+
+    Returns the path that should be passed to /installtunnelservice.
     """
-    if config_path and os.path.exists(config_path):
-        logger.info(f"Using provided config path: {config_path}")
-        return config_path
+    system_conf = os.path.join(CONFIG_BASE, f"{tunnel}.conf")
 
-    programdata_conf = os.path.join(CONFIG_BASE, f"{tunnel}.conf")
-    if os.path.exists(programdata_conf):
-        logger.info(f"Using ProgramData config: {programdata_conf}")
-        return programdata_conf
+    # Already in ProgramData — nothing to do
+    if os.path.abspath(source_conf) == os.path.abspath(system_conf):
+        return system_conf
 
-    logger.warning(f"Config not found for tunnel '{tunnel}' in any known location")
-    return None
+    try:
+        os.makedirs(CONFIG_BASE, exist_ok=True)
+        shutil.copy2(source_conf, system_conf)
+        logger.info(
+            f"Copied config for '{tunnel}' to ProgramData: {system_conf}"
+        )
+    except Exception as e:
+        # Non-fatal: try the original path and let WireGuard report the error
+        logger.warning(
+            f"Could not copy config to ProgramData, using original path. "
+            f"Error: {e}"
+        )
+        return source_conf
+
+    return system_conf
 
 
-def install_tunnel(tunnel, config_path=None):
-    """Install a WireGuard tunnel service.
-    
-    Args:
-        tunnel: Tunnel name.
-        config_path: Full path to .conf file. If not provided,
-                     falls back to CONFIG_BASE (ProgramData).
-    """
+def install_tunnel(tunnel: str, config_path: str = None):
     conf = find_config(tunnel, config_path)
     if not conf:
         return False, f"Config not found for tunnel: {tunnel}"
 
     if not os.path.exists(WIREGUARD_EXE):
-        logger.error(f"WireGuard executable not found: {WIREGUARD_EXE}")
         return False, f"WireGuard not installed at {WIREGUARD_EXE}"
 
-    result = subprocess.run(
-        [WIREGUARD_EXE, "/installtunnelservice", conf],
-        capture_output=True,
-        text=True,
-    )
+    # FIX (VPN not starting): WireGuard tunnel services run as SYSTEM and
+    # cannot read files from a user's %APPDATA%.  Always install from a
+    # ProgramData copy so the SYSTEM account can access the config.
+    conf = _ensure_system_config(tunnel, conf)
 
-    logger.debug(f"Install result: returncode={result.returncode}")
-    logger.debug(f"Install stdout: {result.stdout}")
-    logger.debug(f"Install stderr: {result.stderr}")
+    uninstall_tunnel(tunnel)
+
+    result = run_cmd([WIREGUARD_EXE, "/installtunnelservice", conf])
+    logger.debug(f"Install '{tunnel}': returncode={result.returncode}")
+    logger.debug(f"stdout: {result.stdout.strip()}")
+    logger.debug(f"stderr: {result.stderr.strip()}")
 
     if "already installed" in result.stderr.lower():
         return True, "Already installed"
 
     if result.returncode == 0:
-        logger.info(f"Tunnel '{tunnel}' installed successfully")
+        logger.info(f"Tunnel '{tunnel}' installed")
         time.sleep(1)
         return True, "Installed"
 
-    logger.error(f"Failed to install tunnel '{tunnel}': {result.stderr}")
+    logger.error(f"Failed to install '{tunnel}': {result.stderr}")
     return False, result.stderr.strip()
 
-def start_tunnel(tunnel):
-    svc_name = wg_service_name(tunnel)
-    logger.info(f"Starting tunnel service: {svc_name}")
 
-    result = subprocess.run(
-        ["sc", "start", svc_name],
-        capture_output=True,
-        text=True,
-    )
+def start_tunnel(tunnel: str):
+    svc = wg_service_name(tunnel)
+    logger.info(f"Starting: {svc}")
 
+    result = run_cmd(["sc", "start", svc])
     combined = (result.stdout + result.stderr).lower()
 
     if "already running" in combined:
-        logger.info(f"Tunnel '{tunnel}' is already running")
         return True, "Already running"
-
     if "start_pending" in combined or result.returncode == 1056:
-        logger.info(f"Tunnel '{tunnel}' is starting")
         return True, "Starting"
-
     if result.returncode == 0:
-        logger.info(f"Tunnel '{tunnel}' started successfully")
         return True, "Started"
 
-    logger.error(f"Failed to start tunnel '{tunnel}': {result.stderr}")
+    logger.error(f"Failed to start '{tunnel}': {result.stderr}")
     return False, result.stderr.strip()
 
-def stop_tunnel(tunnel):
-    result = subprocess.run(
-        ["sc", "stop", wg_service_name(tunnel)],
-        capture_output=True,
-        text=True,
-    )
 
-    out = (result.stdout + result.stderr).lower()
-    if "not started" in out:
+def stop_tunnel(tunnel: str):
+    result = run_cmd(["sc", "stop", wg_service_name(tunnel)])
+    combined = (result.stdout + result.stderr).lower()
+
+    if "not started" in combined or "1062" in combined:
         return True, "Already stopped"
 
-    return result.returncode == 0, out.strip()
+    return result.returncode == 0, combined.strip()
 
 
-def status_tunnel(tunnel):
-    result = subprocess.run(
-        ["sc", "query", wg_service_name(tunnel)],
-        capture_output=True,
-        text=True,
-    )
-
+def status_tunnel(tunnel: str) -> str:
+    result = run_cmd(["sc", "query", wg_service_name(tunnel)])
     out = (result.stdout + result.stderr).lower()
 
-    logger.trace(f"Status query for {tunnel}: returncode={result.returncode}")
-    logger.trace(f"Status output: {out.strip()}")
-
     if "1060" in out or "does not exist" in out:
-        logger.warning(f"Tunnel {tunnel} not installed")
-
         return "Not Installed"
     if "running" in out:
         return "Running"
-    if "stopped" in out:
-        return "Stopped"
     if "start_pending" in out:
         return "Starting"
-
     if "stop_pending" in out:
         return "Stopping"
-    
-    logger.warning(f"Unknown status for tunnel {tunnel}: {out.strip()}")
+    if "stopped" in out:
+        return "Stopped"
+
+    logger.warning(f"Unknown status for '{tunnel}': {out.strip()}")
     return "Unknown"
 
 
-# ---------------- IPC HANDLER ----------------
+# ---------------- IPC Handler ----------------
 
-def handle_request(request: dict):
+def handle_request(request: dict) -> dict:
     if request.get("token") != IPC_TOKEN:
         return {"status": "error", "message": "Unauthorized"}
 
-    cmd = request.get("command")
-    tunnel = request.get("tunnel")
-    config_path = request.get("config_path")  # <-- from GUI user's AppData
+    cmd         = request.get("command")
+    tunnel      = request.get("tunnel")
+    config_path = request.get("config_path")
 
     if cmd not in ALLOWED_COMMANDS:
         return {"status": "error", "message": f"Invalid command: {cmd}"}
@@ -225,14 +300,19 @@ def handle_request(request: dict):
 
         if cmd == "connect":
             state = status_tunnel(tunnel)
-
             if state == "Running":
                 return {"status": "ok", "state": "Running", "message": "Already running"}
 
-            if state == "Not Installed":
-                ok, msg = install_tunnel(tunnel, config_path)  # <-- pass path
-                if not ok:
-                    return {"status": "error", "state": "Not Installed", "message": msg}
+            # Always reinstall before starting — even if the tunnel service
+            # exists in "Stopped" state. A stopped WireGuardTunnel$ service
+            # means it previously failed (often exit code 2 = config not found
+            # because SYSTEM couldn't read AppData). Reinstalling copies the
+            # config to ProgramData via _ensure_system_config so SYSTEM can
+            # access it. Skipping install for "Stopped" is the root cause of
+            # the default/first config silently failing to connect.
+            ok, msg = install_tunnel(tunnel, config_path)
+            if not ok:
+                return {"status": "error", "state": status_tunnel(tunnel), "message": msg}
 
             ok, msg = start_tunnel(tunnel)
             actual_state = status_tunnel(tunnel)
@@ -248,37 +328,40 @@ def handle_request(request: dict):
             actual_state = status_tunnel(tunnel)
             return {"status": "ok" if ok else "error", "state": actual_state, "message": msg}
 
+        if cmd == "start":
+            ok, msg = start_tunnel(tunnel)
+            return {"status": "ok" if ok else "error", "message": msg}
+
+        if cmd == "stop":
+            ok, msg = stop_tunnel(tunnel)
+            return {"status": "ok" if ok else "error", "message": msg}
+
         if cmd == "restart":
             stop_tunnel(tunnel)
-            start_tunnel(tunnel)
+            time.sleep(1)
+            ok, msg = start_tunnel(tunnel)
             actual_state = status_tunnel(tunnel)
-            return {"status": "ok", "state": actual_state, "message": "Restarted"}
+            return {"status": "ok" if ok else "error", "state": actual_state, "message": "Restarted"}
 
         if cmd == "health":
             return {
-                "status": "ok",
-                "service": "running",
-                "socket": "listening",
+                "status":    "ok",
+                "service":   "running",
+                "socket":    "listening",
                 "wireguard": status_tunnel(tunnel),
             }
 
-        if cmd == "stop":
-            stop_tunnel(tunnel)
-            return {"status": "ok", "message": "Stopped"}
-
-
     except Exception as e:
-        logger.exception(f"Error handling request: {e}")
+        logger.exception(f"Error handling '{cmd}': {e}")
         return {"status": "error", "message": str(e)}
 
-    return {"status": "error", "message": "Unknown command"}
+    return {"status": "error", "message": "Unhandled command"}
+
 
 # ---------------- Socket Server ----------------
 
 def socket_server(stop_event):
-    servicemanager.LogInfoMsg("Socket server thread starting")
-    
-    # Small delay to ensure service has fully initialized
+    servicemanager.LogInfoMsg("IPC socket thread starting")
     time.sleep(0.2)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -288,153 +371,139 @@ def socket_server(stop_event):
         sock.bind((SERVICE_HOST, SERVICE_PORT))
         sock.listen(5)
         sock.settimeout(1.0)
-        servicemanager.LogInfoMsg(f"VPN IPC socket LISTENING on {SERVICE_HOST}:{SERVICE_PORT}")
+        servicemanager.LogInfoMsg(f"IPC listening on {SERVICE_HOST}:{SERVICE_PORT}")
     except Exception as e:
         servicemanager.LogErrorMsg(f"Socket bind failed: {e}")
         logger.error(f"Socket bind failed: {e}")
         return
 
-    while True:
-        rc = win32event.WaitForSingleObject(stop_event, 0)
-
-        if rc == win32con.WAIT_OBJECT_0:
-            break
-
+    while win32event.WaitForSingleObject(stop_event, 0) != win32con.WAIT_OBJECT_0:
         try:
             conn, _ = sock.accept()
         except socket.timeout:
             continue
         except Exception as e:
-            servicemanager.LogErrorMsg(str(e))
+            logger.error(f"Accept error: {e}")
             break
 
         try:
             data = conn.recv(BUFFER_SIZE)
             if not data:
                 continue
-
-            request = json.loads(data.decode("utf-8"))
+            request  = json.loads(data.decode("utf-8"))
             response = handle_request(request)
-
             conn.sendall(json.dumps(response).encode("utf-8"))
-
         except Exception as e:
-            conn.sendall(json.dumps({"status": "error", "message": str(e) }).encode("utf-8"))
+            logger.error(f"Request error: {e}")
+            try:
+                conn.sendall(
+                    json.dumps({"status": "error", "message": str(e)}).encode("utf-8")
+                )
+            except Exception:
+                pass
         finally:
             conn.close()
 
     sock.close()
-    servicemanager.LogInfoMsg("Socket server thread stopped")
+    servicemanager.LogInfoMsg("IPC socket thread stopped")
+
+
 def run_socket_server(stop_event):
     try:
         socket_server(stop_event)
     except Exception as e:
-        servicemanager.LogErrorMsg(
-            f"Socket server crashed: {repr(e)}"
-        )
+        servicemanager.LogErrorMsg(f"Socket server crashed: {repr(e)}")
+        logger.exception("Socket server crashed")
 
 
 # ---------------- Windows Service ----------------
+
 class ResistineVPNService(win32serviceutil.ServiceFramework):
-    _svc_name_ = "ResistineVPN"
-    _svc_display_name_ = "Resistine VPN Service"
-    _svc_description_ = "Manages WireGuard tunnel for Resistine VPN"
+    _svc_name_         = SERVICE_NAME
+    _svc_display_name_ = SERVICE_DISPLAY_NAME
+    _svc_description_  = SERVICE_DESCRIPTION
 
     def __init__(self, args):
         win32serviceutil.ServiceFramework.__init__(self, args)
-
-        self.hWaitStop = win32event.CreateEvent(
-            None,  
-            0,     
-            0,     
-            None
-        )
-        self.worker = None
+        self.hWaitStop = win32event.CreateEvent(None, 0, 0, None)
 
     def SvcStop(self):
-        servicemanager.LogInfoMsg("ResistineVPN service stopping")
+        servicemanager.LogInfoMsg("ResistineVPN stopping")
         self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
         win32event.SetEvent(self.hWaitStop)
 
     def SvcDoRun(self):
-        servicemanager.LogInfoMsg("ResistineVPN service starting")
-        
-        # CRITICAL: Report running status IMMEDIATELY before any blocking operations
-        # Windows expects service to respond within ~30 seconds
+        servicemanager.LogInfoMsg("ResistineVPN starting")
+
+        # Report RUNNING immediately — SCM requires response within 30s
         self.ReportServiceStatus(win32service.SERVICE_RUNNING)
-        servicemanager.LogInfoMsg("ResistineVPN service reported as RUNNING")
+        servicemanager.LogInfoMsg("ResistineVPN reported RUNNING")
 
-        DEFAULT_TUNNEL = "resistine_default"
-
-        # Start IPC server first in background
-        socket_thread = threading.Thread(
+        # Start IPC socket in background
+        threading.Thread(
             target=run_socket_server,
             args=(self.hWaitStop,),
-            daemon=True
-        )
-        socket_thread.start()
-        servicemanager.LogInfoMsg("Socket server thread started")
-        
-        # Now do auto-start in background (non-blocking)
-        # Give socket server a moment to initialize first
-        time.sleep(0.5)
-        
-        autostart_thread = threading.Thread(
-            target=self.auto_start_vpn,
-            args=(DEFAULT_TUNNEL,),
-            daemon=True
-        )
-        autostart_thread.start()
-        servicemanager.LogInfoMsg("Auto-start thread started")
+            daemon=True,
+        ).start()
+        servicemanager.LogInfoMsg("IPC thread started")
 
-        # Wait for stop signal - this keeps the service alive
-        servicemanager.LogInfoMsg("Service entering main loop, waiting for stop signal")
+        # Auto-start VPN after socket is ready
+        time.sleep(0.5)
+        threading.Thread(
+            target=self._auto_start,
+            daemon=True,
+        ).start()
+
+        # Block until stop signal
         win32event.WaitForSingleObject(self.hWaitStop, win32event.INFINITE)
 
         # Graceful shutdown
-        servicemanager.LogInfoMsg("Stop signal received, shutting down")
+        servicemanager.LogInfoMsg("Shutting down")
         try:
-            stop_tunnel(DEFAULT_TUNNEL)
+            tunnel = find_default_tunnel()
+            if tunnel:
+                stop_tunnel(tunnel)
         except Exception as e:
-            servicemanager.LogWarningMsg(f"Error stopping tunnel during shutdown: {e}")
+            servicemanager.LogWarningMsg(f"Shutdown error: {e}")
 
-        servicemanager.LogInfoMsg("ResistineVPN service stopped")
+        servicemanager.LogInfoMsg("ResistineVPN stopped")
 
-
-    def auto_start_vpn(self, tunnel):
-        """Auto-start VPN in background"""
+    def _auto_start(self):
+        """Auto-start default tunnel on service startup."""
         try:
-            logger.info(f"Config base directory: {CONFIG_BASE}")
-            logger.info(f"WireGuard exe path: {WIREGUARD_EXE}")
-            
+            tunnel = find_default_tunnel()
+            if not tunnel:
+                logger.info("No tunnel config in ProgramData — skipping auto-start")
+                return
+
+            logger.info(f"Auto-start: tunnel='{tunnel}'")
             state = status_tunnel(tunnel)
-            logger.info(f"Auto-start check: {tunnel} = {state}")
+            logger.info(f"Auto-start: state={state}")
 
-            if state in ("Not Installed", "Stopped"):
-                ok, msg = install_tunnel(tunnel)
-                if not ok:
-                    logger.error(f"Failed to install tunnel: {msg}")
-                    servicemanager.LogErrorMsg(f"Failed to install tunnel: {msg}")
-                else:
-                    state = status_tunnel(tunnel)
-                    logger.info(f"Status after installation: {state}")
-                    
-                    if state != "Running":
-                        ok, msg = start_tunnel(tunnel)
-                        if not ok:
-                            logger.error(f"Failed to start tunnel: {msg}")
-                            servicemanager.LogErrorMsg(f"Failed to start tunnel: {msg}")
-                        else:
-                            logger.info(f"Tunnel started: {msg}")
-                    else:
-                        logger.info(f"Tunnel already running after installation")
+            if state == "Running":
+                logger.info("Tunnel already running")
+                return
+
+            ok, msg = install_tunnel(tunnel)
+            if not ok:
+                logger.error(f"Auto-start install failed: {msg}")
+                return
+
+            state = status_tunnel(tunnel)
+            if state == "Running":
+                logger.info("Tunnel running after install")
+                return
+
+            ok, msg = start_tunnel(tunnel)
+            if ok:
+                logger.info(f"Auto-start succeeded: {msg}")
+            else:
+                logger.error(f"Auto-start failed: {msg}")
 
         except Exception as e:
-            logger.exception("Auto-start VPN failed")
-            servicemanager.LogErrorMsg(f"Auto-start VPN failed: {repr(e)}")
-
+            logger.exception("Auto-start exception")
+            servicemanager.LogErrorMsg(f"Auto-start failed: {repr(e)}")
 
 
 if __name__ == "__main__":
     win32serviceutil.HandleCommandLine(ResistineVPNService)
-

@@ -110,6 +110,8 @@ def install_tunnel(tunnel, config_path=None):
     if not os.path.exists(WIREGUARD_EXE):
         logger.error(f"WireGuard executable not found: {WIREGUARD_EXE}")
         return False, f"WireGuard not installed at {WIREGUARD_EXE}"
+    # Always uninstall first to avoid duplicate tunnel services
+   # uninstall_tunnel(tunnel)
 
     result = subprocess.run(
         [WIREGUARD_EXE, "/installtunnelservice", conf],
@@ -131,6 +133,37 @@ def install_tunnel(tunnel, config_path=None):
 
     logger.error(f"Failed to install tunnel '{tunnel}': {result.stderr}")
     return False, result.stderr.strip()
+
+#############################################
+
+def uninstall_tunnel(tunnel):
+    """Remove existing WireGuard tunnel service if present."""
+    svc_name = wg_service_name(tunnel)
+    
+    # Check if it exists first
+    result = subprocess.run(
+        ["sc", "query", svc_name],
+        capture_output=True, text=True
+    )
+    if "1060" in result.stdout + result.stderr:
+        return True, "Not installed"
+
+    # Stop it first
+    subprocess.run(
+        ["sc", "stop", svc_name],
+        capture_output=True, text=True
+    )
+    time.sleep(1)
+
+    # Uninstall via WireGuard
+    result = subprocess.run(
+        [WIREGUARD_EXE, "/uninstalltunnelservice", tunnel],
+        capture_output=True, text=True
+    )
+    logger.info(f"Uninstall tunnel '{tunnel}': {result.returncode}")
+    time.sleep(1)
+    return True, "Uninstalled"
+
 
 def start_tunnel(tunnel):
     svc_name = wg_service_name(tunnel)
