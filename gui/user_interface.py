@@ -581,7 +581,6 @@ class AppUI(customtkinter.CTk):
         self.navigation_frame.grid_columnconfigure(0, weight=1)
 
         # Logo
-        # Logo
         # Try SVG first
         logo_image = None
         

@@ -122,13 +122,20 @@ def setup_logging(level="INFO", log_to_file=True):
     # Remove default Loguru handler
     logger.remove()
 
-    # Add stdout sink
-    logger.add(
-        sys.stdout,
-        level=level,
-        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
-        colorize=True,
-    )
+    # In PyInstaller windowed builds, stdout/stderr can be None.
+    console_sink = sys.stdout if getattr(sys, "stdout", None) is not None else getattr(sys, "stderr", None)
+    if console_sink is not None and hasattr(console_sink, "write"):
+        try:
+            colorize = bool(console_sink.isatty())
+        except Exception:
+            colorize = False
+
+        logger.add(
+            console_sink,
+            level=level,
+            format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+            colorize=colorize,
+        )
 
     # Add file sink
     if log_to_file:
