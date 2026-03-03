@@ -432,7 +432,7 @@ class VPNOnboardingScreen:
             os.path.dirname(
                 os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
             ),
-            "ResistineSheild.png",
+            "resources", "ResistineSheild.png",
         )
         try:
             shield_img = Image.open(shield_path)

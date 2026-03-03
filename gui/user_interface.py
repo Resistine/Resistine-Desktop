@@ -581,7 +581,7 @@ class AppUI(customtkinter.CTk):
         # Logo
         logo_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
-            "ResistineLogoWhiteText.png",
+            "resources", "ResistineLogoWhiteText.png",
         )
         logo_image = None
         if os.path.exists(logo_path):

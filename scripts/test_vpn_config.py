@@ -17,16 +17,7 @@ def create_test_vpn_config():
     
     # Create a basic WireGuard configuration for testing
     # Note: These are example values - replace with real ones from your VPN provider
-    test_config = """[Interface]
-PrivateKey = gGJRP1QH1l3Q3Q2H8E8L8K8L8K8L8K8L8K8L8K8L8KE=
-Address = 10.49.64.0/24
-DNS = 1.1.1.1
-
-[Peer]
-PublicKey = bmXOC+F1FxEMF9dyiK2H38PfPWOpznYdqVqCAdgUoQI=
-AllowedIPs = 0.0.0.0/0
-Endpoint = rfr1.resisti.net:51820
-PersistentKeepalive = 25
+    test_config = """
 """
 
     # Create directory if it doesn't exist
