@@ -126,7 +126,7 @@ class Plugin(BasePlugin):
         self.content_frame.grid_columnconfigure(0, weight=1)
 
         # 1. Shield Logo
-        shield_path = _resource_path("ResistineSheild.png")
+        shield_path = _resource_path(os.path.join("resources", "ResistineSheild.png"))
         try:
             shield_img = Image.open(shield_path)
             shield_ctk = customtkinter.CTkImage(shield_img, size=(250, 250))
@@ -417,11 +417,15 @@ class Plugin(BasePlugin):
 
         # Phase 1: Generate VPN keys (never raises — returns None on failure)
         public_key = setup_vpn_keys()
+
+
         if not public_key:
             msg = "Failed to generate encryption keys"
             self.update_status(msg, "red")
             self.app.show_notification(msg, type="error")
             return
+        
+        print(f"Generated VPN public key: {public_key}")  # Debug: Print generated public key
 
         # Phase 2: Verify OTP via API (never raises — returns tuple)
         success, message, result = self.api.verify_otp(
@@ -444,17 +448,38 @@ class Plugin(BasePlugin):
 
         # Save VPN config if provided (never raises — returns None on failure)
         config_data = result.get("vpn_config") or result.get("data")
+        
+        # Debug: Print full API response to understand what we're getting
+        logger.info(f"API Response keys: {list(result.keys())}")
+        logger.info(f"Full API response: {result}")
+        
         if config_data:
+            logger.info("VPN config found in API response, saving...")
             config_path = save_vpn_configuration(config_data, config_name="resistine_default")
+            print(f"VPN config saved to: {config_path}")
+            #print(f"Config data keys: {config_data}")
+            print(f"Config data sample: {str(config_data)[:500]}")  # Print first 500 chars of config data for debugging    
+
             if config_path:
                 from plugins.vpn.config_manager import VPNConfigManager, RESISTINE_CONFIG_NAME
                 mgr = VPNConfigManager(os.path.dirname(config_path))
                 mgr.register_config(RESISTINE_CONFIG_NAME, source="api")
                 mgr.set_active_config(RESISTINE_CONFIG_NAME)
+                logger.info(f"VPN config saved successfully to {config_path}")
             else:
                 logger.warning("VPN config from API could not be saved")
         else:
             logger.warning("No VPN config in API response (keys: %s)", list(result.keys()))
+            # Try to look for VPN config under different possible key names
+            possible_keys = ["vpn_configuration", "wireguard_config", "tunnel_config", "config"]
+            for key in possible_keys:
+                if key in result:
+                    logger.info(f"Found potential VPN config under key: {key}")
+                    config_data = result[key]
+                    config_path = save_vpn_configuration(config_data, config_name="resistine_default")
+                    if config_path:
+                        logger.info(f"VPN config saved from alternate key {key}")
+                        break
 
         # Phase 4: Transition to next screen
         from utils import settings as app_settings

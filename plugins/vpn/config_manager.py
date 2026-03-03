@@ -85,22 +85,15 @@ class VPNConfigManager:
         return None
 
     def import_config(self, source_path, content):
-        """Import a validated config into the wireguard folder.
-
-        Args:
-            source_path: Original file path (used for filename).
-            content: Validated config file content string.
-
-        Returns:
-            (True, config_name) on success or (False, error_message) on failure.
-        """
         try:
+            if not content or not content.strip():
+                raise ValueError("Config content is empty")
+
             filename = os.path.basename(source_path)
             config_name = self.sanitize_filename(filename)
 
             dest_path = os.path.join(self.wireguard_folder, f"{config_name}.conf")
 
-            # If a config with the same name already exists, append a number
             if os.path.exists(dest_path):
                 base = config_name
                 counter = 2
@@ -110,8 +103,10 @@ class VPNConfigManager:
                 dest_path = os.path.join(self.wireguard_folder, f"{config_name}.conf")
 
             os.makedirs(self.wireguard_folder, exist_ok=True)
-            with open(dest_path, "w") as f:
+
+            with open(dest_path, "w", encoding="utf-8") as f:
                 f.write(content)
+
             os.chmod(dest_path, 0o600)
 
             self.register_config(config_name, source="import")
@@ -214,3 +209,4 @@ class VPNConfigManager:
             for f in os.listdir(self.wireguard_folder)
             if f.endswith(".conf")
         ])
+
