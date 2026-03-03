@@ -87,7 +87,7 @@ def stop_vpn(tunnel_name: str) -> bool:
 
 def check_service_status(tunnel_name: str, test_ip: str = None) -> str:
     """Return a status string: 'Running', 'Stopped', etc.
-    
+
     Args:
         tunnel_name: The tunnel to check.
         test_ip: Ignored on Windows (kept for cross-platform compat).
@@ -110,7 +110,7 @@ KEYS_FILE_PATH = os.path.join(get_config_dir(), "keys.json")
 
 def generate_wireguard_keys() -> dict | None:
     """Generate a WireGuard public/private key pair.
-    
+
     Tries wg.exe first, falls back to Python cryptography library.
     Returns dict with 'private_key' and 'public_key', or None on failure.
     """
@@ -206,7 +206,7 @@ def delete_wireguard_keys() -> bool:
 
 def setup_vpn_keys() -> str | None:
     """Generate and save new WireGuard keys.
-    
+
     Returns the public key string on success, None on failure.
     """
     try:
@@ -234,6 +234,7 @@ def setup_vpn_keys() -> str | None:
 # ----------------------------------------------------------------
 # Config file management
 # ----------------------------------------------------------------
+
 def parse_and_create_vpn_config(
     vpn_config_json_string: str,
     config_name: str = "resistine_default",
@@ -249,6 +250,45 @@ def parse_and_create_vpn_config(
 
         if not isinstance(interface, dict) or not isinstance(peer, dict):
             raise ValueError(f"Invalid WireGuard JSON shape: keys={list(vpn_config.keys())}")
+
+        # FIX: If the server response doesn't include PrivateKey (expected —
+        # the server only knows the public key), inject it from keys.json now.
+        # This ensures the .conf written to disk is always complete so:
+        #   1. validate_wireguard_config() passes without error
+        #   2. _ensure_system_config() copies a working config to ProgramData
+        #   3. The WireGuard tunnel service (running as SYSTEM) can connect
+        #      without ever needing to access the user's AppData directly.
+        # Check value too — server may send "PrivateKey": "" as a placeholder
+        existing_private_key = next(
+            (v for k, v in interface.items() if k.lower() == "privatekey"),
+            None
+        )
+        if not existing_private_key:
+            private_key = get_wireguard_private_key()
+
+            if not private_key:
+                # Fresh install — keys.json doesn't exist yet.
+                # Generate and save keys now so the config can be completed
+                # and the public key is available for future API calls.
+                logger.info("keys.json not found — generating keys for fresh install")
+                public_key = setup_vpn_keys()
+                if not public_key:
+                    logger.error("Failed to generate WireGuard keys on fresh install")
+                    return None
+                # setup_vpn_keys() returns the public key — re-read the
+                # private key from the file it just wrote
+                private_key = get_wireguard_private_key()
+                if not private_key:
+                    logger.error("Keys generated but private key could not be read back")
+                    return None
+
+            interface["PrivateKey"] = private_key
+            # Remove any empty placeholder the server sent so we don't
+            # write duplicate keys with different casing to the conf file
+            for k in list(interface.keys()):
+                if k.lower() == "privatekey" and k != "PrivateKey":
+                    del interface[k]
+            logger.info("PrivateKey injected into config from keys.json")
 
         # Build WireGuard .conf text
         lines = []
@@ -289,6 +329,7 @@ def parse_and_create_vpn_config(
     except Exception as e:
         logger.error(f"Error creating VPN config: {e}")
         return None
+
 
 def save_vpn_configuration(
     vpn_config_json: str,

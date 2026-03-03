@@ -6,14 +6,29 @@
 
 setlocal EnableDelayedExpansion
 
+set "QUIET_MODE="
+if /I "%~1"=="/quiet" set "QUIET_MODE=1"
+
 :: ---- Config ----
 set SERVICE_NAME=ResistineVPN
 set SCRIPT_DIR=%~dp0
 if "%SCRIPT_DIR:~-1%"=="\" set SCRIPT_DIR=%SCRIPT_DIR:~0,-1%
 
 set SERVICE_SCRIPT=%SCRIPT_DIR%\plugins\vpn\wireguard\windows_vpn_service.py
+if not exist "%SERVICE_SCRIPT%" if exist "%SCRIPT_DIR%\services\windows_vpn_service.py" set SERVICE_SCRIPT=%SCRIPT_DIR%\services\windows_vpn_service.py
 set PROGRAMDATA_DIR=%PROGRAMDATA%\Resistine\wireguard
 set LOG_DIR=%PROGRAMDATA%\Resistine
+set SERVICE_SETUP_LOG=%LOG_DIR%\vpn_service_install.log
+
+if not exist "%SERVICE_SCRIPT%" (
+    echo ERROR: Service script not found.
+    echo Expected: %SCRIPT_DIR%\plugins\vpn\wireguard\windows_vpn_service.py
+    echo.
+    echo If you are running an installed copy, the installer package may be missing the service script.
+    echo Rebuild the installer after bundling windows_vpn_service.py, or run this script from the project root.
+    call :pause_if_needed
+    exit /b 1
+)
 
 :: ============================================================
 :: 1. Check Admin
@@ -23,7 +38,7 @@ net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo ERROR: This script must be run as Administrator.
     echo Right-click install_service.bat and select "Run as administrator"
-    pause
+    call :pause_if_needed
     exit /b 1
 )
 echo       OK - Running as Administrator
@@ -70,14 +85,14 @@ if not defined PYTHON_FULL (
 if not defined PYTHON_FULL (
     echo ERROR: Could not find a real Python installation.
     echo Please install Python 3.10+ from https://www.python.org/downloads/
-    pause
+    call :pause_if_needed
     exit /b 1
 )
 
 "%PYTHON_FULL%" --version >nul 2>&1
 if %errorlevel% neq 0 (
     echo ERROR: Python at %PYTHON_FULL% failed to run.
-    pause
+    call :pause_if_needed
     exit /b 1
 )
 
@@ -92,7 +107,7 @@ echo [3/6] Checking WireGuard installation...
 if not exist "%PROGRAMFILES%\WireGuard\wireguard.exe" (
     echo ERROR: WireGuard not found.
     echo Please install from https://www.wireguard.com/install/
-    pause
+    call :pause_if_needed
     exit /b 1
 )
 echo       OK - WireGuard found
@@ -111,7 +126,7 @@ for %%d in (%SERVICE_DEPS%) do (
     "%PYTHON_FULL%" -m pip install --quiet %%d
     if !errorlevel! neq 0 (
         echo ERROR: Failed to install %%d
-        pause
+        call :pause_if_needed
         exit /b 1
     )
 )
@@ -167,24 +182,42 @@ if %errorlevel% equ 0 (
     timeout /t 3 /nobreak >nul
     echo       Removing existing service...
     "%PYTHON_FULL%" "%SERVICE_SCRIPT%" remove >nul 2>&1
-    timeout /t 2 /nobreak >nul
+    call :wait_for_service_absent
 )
 
 :: Install
 echo       Registering service...
-"%PYTHON_FULL%" "%SERVICE_SCRIPT%" --startup auto install
-if %errorlevel% neq 0 (
-    echo ERROR: Failed to install service.
-    pause
+if exist "%SERVICE_SETUP_LOG%" del "%SERVICE_SETUP_LOG%" >nul 2>&1
+set "SERVICE_INSTALL_EXIT="
+set /a INSTALL_ATTEMPT=1
+:install_service_retry
+"%PYTHON_FULL%" "%SERVICE_SCRIPT%" --startup auto install > "%SERVICE_SETUP_LOG%" 2>&1
+if !errorlevel! neq 0 (
+    set "SERVICE_INSTALL_EXIT=!errorlevel!"
+    if !INSTALL_ATTEMPT! lss 4 (
+        echo       Install attempt !INSTALL_ATTEMPT! failed ^(exit !SERVICE_INSTALL_EXIT!^), retrying...
+        timeout /t 3 /nobreak >nul
+        set /a INSTALL_ATTEMPT+=1
+        goto :install_service_retry
+    )
+    echo ERROR: Failed to install service ^(exit !SERVICE_INSTALL_EXIT!^).
+    echo       Check: %SERVICE_SETUP_LOG%
+    echo       Common cause: previous service instance is still being removed by Windows.
+    call :pause_if_needed
     exit /b 1
+) else (
+    echo       OK - Service registered
 )
 
 :: Start
 echo       Starting service...
 sc start %SERVICE_NAME% >nul 2>&1
+timeout /t 2 /nobreak >nul
+sc query %SERVICE_NAME% | findstr "RUNNING" >nul 2>&1
 if %errorlevel% neq 0 (
     echo WARNING: Service installed but failed to start.
     echo          Check: %LOG_DIR%\vpn_service.log
+    echo          Setup log: %SERVICE_SETUP_LOG%
 ) else (
     echo       OK - Service started
 )
@@ -199,7 +232,22 @@ echo  Python     : %PYTHON_FULL%
 echo  Service    : %SERVICE_NAME%
 echo  Config dir : %PROGRAMDATA_DIR%
 echo  Log file   : %LOG_DIR%\vpn_service.log
+echo  Setup log  : %SERVICE_SETUP_LOG%
 echo ============================================================
 echo.
-pause
+call :pause_if_needed
+exit /b 0
+
+:wait_for_service_absent
+set /a _svc_wait=0
+:wait_for_service_absent_loop
+sc query %SERVICE_NAME% >nul 2>&1
+if %errorlevel% neq 0 exit /b 0
+if %_svc_wait% geq 15 exit /b 1
+timeout /t 1 /nobreak >nul
+set /a _svc_wait+=1
+goto :wait_for_service_absent_loop
+
+:pause_if_needed
+if not defined QUIET_MODE pause
 exit /b 0

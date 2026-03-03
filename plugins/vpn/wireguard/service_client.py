@@ -35,6 +35,9 @@ def send_command(command: str, tunnel: str, config_path: str = None) -> dict:
     if config_path:
         print(f"Config path: {config_path}")
 
+    #  initialise sock before the try block so the finally
+    # clause never hits an unbound name if socket.socket() itself raises.
+    sock = None
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(5)
@@ -56,7 +59,8 @@ def send_command(command: str, tunnel: str, config_path: str = None) -> dict:
         logger.exception("Unexpected error communicating with VPN service")
         return {"status": "error", "state": "Stopped", "message": str(e)}
     finally:
-        try:
-            sock.close()
-        except Exception:
-            pass
+        if sock:
+            try:
+                sock.close()
+            except Exception:
+                pass
