@@ -368,6 +368,7 @@ class Plugin(BasePlugin):
 
         else:
             # Logic: 1 = ON Request, 0 = OFF Request
+            is_running = my_vpn_status == "Running"
             if switch_value == 1 and not is_running:
                 # User wants to turn VPN ON and it's currently OFF
                 logger.info(f"🔄 Toggle ON: Starting VPN tunnel: {selected_conf_file}")
