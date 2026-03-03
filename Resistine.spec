@@ -29,8 +29,6 @@ datas = [
     ('gui', 'gui'),
     ('utils', 'utils'),
     ('docs', 'docs'),
-    ('resources/ResistineLogoWhiteText.png', 'resources'),
-    ('resources/ResistineSheild.png', 'resources'),
 ]
 
 # Hidden imports (modules not auto-detected)
@@ -132,7 +130,7 @@ if IS_MACOS:
     app = BUNDLE(
         coll,
         name=f'{APP_NAME}.app',
-        icon='resources/ResistineSheild.png',  # Will be converted to .icns
+        icon='resources/icons/ResistineSheild.png',  # Will be converted to .icns
         bundle_identifier=BUNDLE_ID,
         version=VERSION,
         info_plist={

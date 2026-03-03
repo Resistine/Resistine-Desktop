@@ -17,6 +17,9 @@ import os
 from tkinter import filedialog
 import platform
 import subprocess
+import base64
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+from cryptography.hazmat.primitives import serialization
 # --- Platform Detection (single source of truth) ---
 _PLATFORM = platform.system()
 IS_MACOS = _PLATFORM == "Darwin"
@@ -282,27 +285,56 @@ class Plugin(BasePlugin):
         # Use config manager to get the active config
         return self.config_manager.get_active_config_name()
 
+    def _get_client_public_key(self, private_key_b64):
+        """Derive the WireGuard public key from a private key using pure Python."""
+        try:
+            # Decode the base64 private key
+            private_bytes = base64.b64decode(private_key_b64)
+            if len(private_bytes) != 32:
+                # WireGuard keys are exactly 32 bytes (256 bits)
+                return 'N/A'
+                
+            # Create private key object and get public bytes
+            priv = X25519PrivateKey.from_private_bytes(private_bytes)
+            pub_bytes = priv.public_key().public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw
+            )
+            
+            # Re-encode to base64 for display
+            return base64.b64encode(pub_bytes).decode('utf-8')
+        except Exception as e:
+            logger.warning(f"Could not compute client public key: {e}")
+            return 'N/A'
+
     def get_system_info(self, tunnel_name):
         """Generates the system information dictionary for display."""
         global my_vpn_status
         data = self.get_configuration_values(tunnel_name) if tunnel_name else {}
-        
+
         is_running = my_vpn_status == "Running"
-        protocol = "WireGuard" if is_running else "Disconnected"
-        
+
         # Parse Endpoint for display
-        endpoint = data.get('endpoint', 'Unknown')
-        if endpoint != 'Unknown' and ':' in endpoint:
-            endpoint = endpoint.split(':')[0] # Just show IP/Host
+        endpoint = data.get('endpoint', 'N/A')
+        if endpoint != 'N/A' and ':' in endpoint:
+            endpoint = endpoint.split(':')[0]  # Just show IP/Host
+
+        # Compute client public key from private key (never expose private key)
+        private_key = data.get('private_key', '')
+        client_public_key = self._get_client_public_key(private_key) if private_key else 'N/A'
+
+        # DNS from config or module default
+        dns = data.get('dns', DNS_SERVER)
 
         return {
             "Status": "Secured" if is_running else "Unsecured",
-            "Protocol": protocol,
-            "Tunnel Name": tunnel_name if tunnel_name else "None",
-            "Server IP": endpoint,
-            "Public Key": (data.get('public_key', 'N/A') or 'N/A')[:15] + '...' if data.get('public_key') else 'N/A',
+            "Config Name": tunnel_name if tunnel_name else "None",
+            "System": f"{_PLATFORM} {platform.release()}",
             "Client IP": data.get('client_ip_address', 'N/A'),
-            "System": f"{_PLATFORM} {platform.release()}"
+            "Client Public Key": client_public_key,
+            "Server IP": endpoint,
+            "Server Public Key": data.get('public_key', 'N/A'),
+            "DNS": dns,
         }
 
     def create_main_screen(self):
@@ -389,18 +421,29 @@ class Plugin(BasePlugin):
                 self.update_plugin(self.id)
 
     def display_toggle_screen(self):
-        """Display the modern main screen with toggle and info."""
-        
+        """Display the redesigned VPN dashboard."""
+
         selected_conf_file = self.get_selected_conf_file_name()
-        
+
         self.main_container = customtkinter.CTkFrame(self.app, corner_radius=0, fg_color="transparent")
-        self.main_container.grid_columnconfigure(0, weight=1)
-        self.main_container.grid_rowconfigure(0, weight=1) 
-        
-        scroll_frame = customtkinter.CTkScrollableFrame(self.main_container, corner_radius=0, fg_color="transparent")
-        scroll_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=10)
+        # Three-column layout: left-spacer | content | right-spacer
+        # Equal-weight spacer columns auto-center the content column when the
+        # window is wider than MAX_CONTENT_WIDTH; _do_layout sets col 1's minsize.
+        self.main_container.grid_columnconfigure(0, weight=1)              # left spacer
+        self.main_container.grid_columnconfigure(1, weight=0, minsize=100) # content (updated in _do_layout)
+        self.main_container.grid_columnconfigure(2, weight=1)              # right spacer
+        self.main_container.grid_rowconfigure(0, weight=1)
+
+        scroll_frame = customtkinter.CTkScrollableFrame(
+            self.main_container, 
+            corner_radius=0, 
+            fg_color="transparent"
+        )
+        scroll_frame.grid(row=0, column=1, sticky="nsew", pady=10)
+        # Two equal columns — panels sit directly here; no wrapper frame needed
         scroll_frame.grid_columnconfigure(0, weight=1)
-        
+        scroll_frame.grid_columnconfigure(1, weight=1)
+
         global my_vpn_status
 
         # On Windows, always refresh state from the service
@@ -410,154 +453,391 @@ class Plugin(BasePlugin):
         # On macOS, detect if the extension was disabled after onboarding
         extension_disabled = IS_MACOS and not is_extension_enabled()
         if extension_disabled and my_vpn_status == "Running":
-            # Extension was disabled while we thought VPN was on — correct the state
             my_vpn_status = "Stopped"
             active_client_name = None
 
         is_connected = my_vpn_status == "Running"
 
         if extension_disabled:
-            status_text = "Extension Disabled"
-            status_color = ("#C5221F", "#FF474C")
-            warning_text = (
-                "VPN extension is disabled. Enable it in System Settings > "
-                "General > Login Items & Extensions > Network Extensions"
-            )
-            warning_bg = ("#FDEDEC", "#3E2B2C")
-            warning_fg = ("#C5221F", "#FF474C")
-            is_enabled = False
+            status_text  = "Extension Disabled"
+            status_color = ("#C5221F", "#FF4040")
+            sub_text     = "Enable in System Settings › General › Login Items & Extensions › Network Extensions"
+            card_bg      = ("#FDEDEC", "#3A1A1A")
+            is_enabled   = False
         elif not selected_conf_file:
-            status_text = "No Configuration"
-            status_color = ("#666666", "#aaaaaa")
-            warning_text = "Please log in or add a VPN configuration"
-            warning_bg = ("#F5F5F5", "#2A2A2A")
-            warning_fg = ("#666666", "#aaaaaa")
-            is_enabled = False
+            status_text  = "No Configuration"
+            status_color = ("#666666", "#999999")
+            sub_text     = "Please log in or import a VPN configuration to get started"
+            card_bg      = ("#F5F5F5", "#1A1A1A")
+            is_enabled   = False
         else:
-            status_text = "Connected" if is_connected else "Disconnected"
-            status_color = ("#1E8E3E", "#2CC985") if is_connected else ("#C5221F", "#FF474C")
-            warning_text = "Your connection is secure" if is_connected else "Your connection is not secure"
-            warning_bg = ("#E6F4EA", "#1E3A2F") if is_connected else ("#FDEDEC", "#3E2B2C")
-            warning_fg = ("#1E8E3E", "#2CC985") if is_connected else ("#C5221F", "#FF474C")
-            is_enabled = True
+            status_text  = "Connected" if is_connected else "Disconnected"
+            status_color = ("#1B7A3E", "#2CC985") if is_connected else ("#C5221F", "#FF4040")
+            sub_text     = "All traffic is encrypted and routed securely" if is_connected else "Your internet traffic is not protected"
+            card_bg      = ("#E8F5E9", "#1A2E1F") if is_connected else ("#FDEDEC", "#2E1A1A")
+            is_enabled   = True
 
-        # Get theme corner radius
+
         from customtkinter import ThemeManager
-        corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
-        
-        # --- 1. Connection Status Bar ---
-        status_frame = customtkinter.CTkFrame(scroll_frame, corner_radius=corner_radius, fg_color=("#ffffff", "#141414"), border_width=1, border_color=("#dddddd", "#333333"))
-        status_frame.grid(row=0, column=0, sticky="ew", pady=(10, 5))
-        status_frame.grid_columnconfigure(0, weight=1)
-        status_frame.grid_columnconfigure(1, weight=1)
+        cr = ThemeManager.theme.get("Theme", {}).get("corner_radius", 12)
 
-        disconnected_label = customtkinter.CTkLabel(status_frame, text=status_text, text_color=status_color, font=customtkinter.CTkFont(family="Inter", size=20, weight="bold"))
-        disconnected_label.grid(row=0, column=0, padx=20, pady=10, sticky="w")
-        
-        toggle_initial_value = 1 if is_connected else 0
+        PANEL_BG     = ("#FFFFFF", "#141414")
+        PANEL_BORDER = ("#E0E0E0", "#2A2A2A")
+        LABEL_COLOR  = ("#888888", "#777777")
+        VALUE_COLOR  = ("#111111", "#EEEEEE")
+        ACCENT       = "#3A7EBF"
+
+        next_row = 0
+
+        # ── 1. STATUS CARD (spans both columns) ───────────────────────────
+        status_card = customtkinter.CTkFrame(
+            scroll_frame, corner_radius=cr, fg_color=card_bg, border_width=0
+        )
+        status_card.grid(row=next_row, column=0, columnspan=2, sticky="ew", pady=(10, 6))
+        status_card.grid_columnconfigure(0, weight=1)
+        next_row += 1
+
+        text_col = customtkinter.CTkFrame(status_card, fg_color="transparent")
+        text_col.grid(row=0, column=0, padx=22, pady=20, sticky="w")
+
+        customtkinter.CTkLabel(
+            text_col, text=status_text,
+            font=customtkinter.CTkFont(family="Inter", size=28, weight="bold"),
+            text_color=status_color
+        ).grid(row=0, column=0, sticky="w")
+
+        customtkinter.CTkLabel(
+            text_col, text=sub_text,
+            font=customtkinter.CTkFont(family="Inter", size=12),
+            text_color=("#555555", "#AAAAAA"),
+            wraplength=340, justify="left"
+        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
+
         self.vpn_toggle_switch = customtkinter.CTkSwitch(
-            status_frame, 
-            text="VPN Connection", 
+            status_card, text="",
             command=lambda: self.toggle_vpn_connection(self.vpn_toggle_switch.get()),
-            switch_width=50, 
-            switch_height=25, 
-            onvalue=1, 
-            offvalue=0,
+            switch_width=56, switch_height=28,
+            onvalue=1, offvalue=0,
             state="normal" if is_enabled else "disabled"
         )
-        if toggle_initial_value == 1 and is_enabled:
-            self.vpn_toggle_switch.select() 
+        if is_connected and is_enabled:
+            self.vpn_toggle_switch.select()
         else:
             self.vpn_toggle_switch.deselect()
-            
-        self.vpn_toggle_switch.grid(row=1, column=0, padx=20, pady=(0, 10), sticky="w")
+        self.vpn_toggle_switch.grid(row=0, column=1, padx=22, pady=20)
 
-        # --- 2. Config Selector Dropdown ---
+        # ── 2. CONFIG SELECTOR (spans both columns) ────────────────────────
         configs = self.config_manager.list_configs()
         if len(configs) > 1:
-            selector_frame = customtkinter.CTkFrame(scroll_frame, corner_radius=corner_radius, fg_color=("#ffffff", "#141414"), border_width=1, border_color=("#dddddd", "#333333"))
-            selector_frame.grid(row=1, column=0, sticky="ew", pady=5)
-            selector_frame.grid_columnconfigure(1, weight=1)
+            sel_frame = customtkinter.CTkFrame(
+                scroll_frame, corner_radius=cr,
+                fg_color=PANEL_BG, border_width=1, border_color=PANEL_BORDER
+            )
+            sel_frame.grid(row=next_row, column=0, columnspan=2, sticky="ew", pady=6)
+            sel_frame.grid_columnconfigure(1, weight=1)
+            next_row += 1
 
             customtkinter.CTkLabel(
-                selector_frame, text="Configuration:",
-                font=customtkinter.CTkFont(family="Inter", size=13),
-                text_color=("#666666", "#aaaaaa")
-            ).grid(row=0, column=0, padx=(15, 5), pady=10, sticky="w")
+                sel_frame, text="CONFIGURATION",
+                font=customtkinter.CTkFont(size=12, weight="bold"),
+                text_color=LABEL_COLOR
+            ).grid(row=0, column=0, padx=(16, 8), pady=12, sticky="w")
 
             config_display_names = [c["display_name"] for c in configs]
-            active_display = self.config_manager.get_display_name(selected_conf_file) if selected_conf_file else (config_display_names[0] if config_display_names else "None")
-
+            active_display = (
+                self.config_manager.get_display_name(selected_conf_file)
+                if selected_conf_file else (config_display_names[0] if config_display_names else "None")
+            )
             self.config_selector = customtkinter.CTkOptionMenu(
-                selector_frame,
-                values=config_display_names,
-                command=self._on_config_selected,
-                height=36,
-                corner_radius=8,
+                sel_frame, values=config_display_names,
+                command=self._on_config_selected, height=34, corner_radius=8
             )
             self.config_selector.set(active_display)
-            self.config_selector.grid(row=0, column=1, padx=(5, 10), pady=10, sticky="ew")
+            self.config_selector.grid(row=0, column=1, padx=8, pady=12, sticky="ew")
 
-            # Delete button for user-imported configs
             if selected_conf_file and not self.config_manager.is_resistine_config(selected_conf_file):
-                delete_btn = customtkinter.CTkButton(
-                    selector_frame,
-                    text="Delete",
-                    width=70,
-                    height=36,
-                    corner_radius=8,
-                    fg_color="#C5221F",
-                    hover_color="#A01B18",
-                    command=lambda: self._delete_config(selected_conf_file),
-                )
-                delete_btn.grid(row=0, column=2, padx=(0, 15), pady=10)
+                customtkinter.CTkButton(
+                    sel_frame, text="Delete", width=70, height=34,
+                    corner_radius=8, fg_color="#C5221F", hover_color="#A01B18",
+                    command=lambda: self._delete_config(selected_conf_file)
+                ).grid(row=0, column=2, padx=(0, 12), pady=12)
 
-        # --- 3. Warning / Info Box ---
-        warning_box = customtkinter.CTkFrame(scroll_frame, corner_radius=corner_radius, fg_color=warning_bg)
-        warning_box.grid(row=2, column=0, sticky="ew", pady=5)
+        # ── 3. DETAIL PANELS (only when config is available) ──────────────
+        # Track references for the responsive resize handler
+        client_panel      = None
+        server_panel      = None
+        post_panel_widgets = []   # full-width panels after the two-column section
+        panel_row         = next_row
 
-        warning_label = customtkinter.CTkLabel(
-            warning_box,
-            text=warning_text,
-            text_color=warning_fg,
-            font=customtkinter.CTkFont(size=14, weight="bold")
-        )
-        warning_label.grid(row=0, column=0, padx=10, pady=10, sticky="w")
+        if selected_conf_file:
+            data     = self.get_configuration_values(selected_conf_file)
+            sys_info = self.get_system_info(selected_conf_file)
 
-        # --- 4. System Information ---
-        sys_info_data = self.get_system_info(selected_conf_file)
+            def _section_header(parent, row, title):
+                customtkinter.CTkLabel(
+                    parent, text=title,
+                    font=customtkinter.CTkFont(family="Inter", size=12, weight="bold"),
+                    text_color=ACCENT
+                ).grid(row=row, column=0, columnspan=2, padx=14, pady=(14, 3), sticky="w")
+                customtkinter.CTkFrame(
+                    parent, height=1, fg_color=PANEL_BORDER
+                ).grid(row=row + 1, column=0, columnspan=2, sticky="ew", padx=14, pady=(0, 8))
+                return row + 2
 
-        sys_info_label = customtkinter.CTkLabel(scroll_frame, text="CURRENT VPN STATUS", font=customtkinter.CTkFont(family="Inter", size=16, weight="bold"), text_color="#3a7ebf")
-        sys_info_label.grid(row=3, column=0, sticky="w", pady=(15, 5))
+            def _info_row(parent, row, label, value, mono=False):
+                customtkinter.CTkLabel(
+                    parent, text=label,
+                    font=customtkinter.CTkFont(size=13),
+                    text_color=LABEL_COLOR, anchor="w"
+                ).grid(row=row, column=0, padx=(14, 6), pady=5, sticky="w")
+                customtkinter.CTkLabel(
+                    parent, text=value,
+                    font=customtkinter.CTkFont(
+                        family="Courier New" if mono else "Inter",
+                        size=13, weight="bold"
+                    ),
+                    text_color=VALUE_COLOR, anchor="e"
+                ).grid(row=row, column=1, padx=(4, 14), pady=5, sticky="e")
 
-        info_frame = customtkinter.CTkFrame(scroll_frame, corner_radius=corner_radius, fg_color=("#ffffff", "#141414"), border_width=1, border_color=("#dddddd", "#333333"))
-        info_frame.grid(row=4, column=0, sticky="ew", pady=(0, 10))
-        info_frame.grid_columnconfigure(0, weight=1)
-        info_frame.grid_columnconfigure(1, weight=1)
+            # Left — Client panel placed directly in scroll_frame column 0
+            client_panel = customtkinter.CTkFrame(  # noqa: tracked for responsive layout
+                scroll_frame, corner_radius=cr,
+                fg_color=PANEL_BG, border_width=1, border_color=PANEL_BORDER
+            )
+            client_panel.grid(row=next_row, column=0, sticky="nsew", padx=(0, 4), pady=6)
+            client_panel.grid_columnconfigure(0, weight=0)
+            client_panel.grid_columnconfigure(1, weight=1)
 
-        row_num = 0
-        for key, value in sys_info_data.items():
-            key_label = customtkinter.CTkLabel(info_frame, text=f"{key}:", justify="left", text_color=("#666666", "#aaaaaa"))
-            key_label.grid(row=row_num, column=0, padx=15, pady=5, sticky="w")
+            r = _section_header(client_panel, 0, "CLIENT")
+            _info_row(client_panel, r, "IP Address", data.get('client_ip_address', 'N/A'), mono=True); r += 1
+            _info_row(client_panel, r, "DNS",        sys_info.get("DNS", "N/A"),            mono=True); r += 1
+            _info_row(client_panel, r, "System",     sys_info.get("System", "N/A"));                    r += 1
+            _info_row(client_panel, r, "Status",     sys_info.get("Status", "N/A"));                    r += 1
+            customtkinter.CTkFrame(client_panel, height=12, fg_color="transparent").grid(row=r, column=0)
 
-            value_label = customtkinter.CTkLabel(info_frame, text=value, justify="right", font=customtkinter.CTkFont(family="Inter", size=13, weight="bold"), text_color=("#000000", "#ffffff"))
-            value_label.grid(row=row_num, column=1, padx=15, pady=5, sticky="e")
-            row_num += 1
+            # Right — Server panel placed directly in scroll_frame column 1, same row
+            server_panel = customtkinter.CTkFrame(  # noqa: tracked for responsive layout
+                scroll_frame, corner_radius=cr,
+                fg_color=PANEL_BG, border_width=1, border_color=PANEL_BORDER
+            )
+            server_panel.grid(row=next_row, column=1, sticky="nsew", padx=(4, 0), pady=6)
+            server_panel.grid_columnconfigure(0, weight=0)
+            server_panel.grid_columnconfigure(1, weight=1)
+            next_row += 1  # Advance after both panels share this row
 
-        # --- 5. Import Button ---
-        import_button = customtkinter.CTkButton(
-            scroll_frame,
-            text="Import Configuration",
+            r = _section_header(server_panel, 0, "SERVER / PEER")
+            _info_row(server_panel, r, "IP Address",  sys_info.get("Server IP", "N/A"), mono=True); r += 1
+            _info_row(server_panel, r, "Protocol",    "WireGuard");                                  r += 1
+            _info_row(server_panel, r, "Config Name", sys_info.get("Config Name", "N/A"));           r += 1
+            customtkinter.CTkFrame(server_panel, height=12, fg_color="transparent").grid(row=r, column=0)
+
+            # ── Public Keys (spans both columns) ──────────────────────────
+            keys_panel = customtkinter.CTkFrame(
+                scroll_frame, corner_radius=cr,
+                fg_color=PANEL_BG, border_width=1, border_color=PANEL_BORDER
+            )
+            keys_panel.grid(row=next_row, column=0, columnspan=2, sticky="ew", pady=6)
+            keys_panel.grid_columnconfigure(0, weight=0)
+            keys_panel.grid_columnconfigure(1, weight=1)
+            post_panel_widgets.append(keys_panel)
+            next_row += 1
+
+            kr = _section_header(keys_panel, 0, "PUBLIC KEYS")
+
+            customtkinter.CTkLabel(
+                keys_panel, text="Client",
+                font=customtkinter.CTkFont(size=13), text_color=LABEL_COLOR, anchor="w"
+            ).grid(row=kr, column=0, padx=(14, 10), pady=5, sticky="w")
+            customtkinter.CTkLabel(
+                keys_panel, text=sys_info.get("Client Public Key", "N/A"),
+                font=customtkinter.CTkFont(family="Courier New", size=13, weight="bold"),
+                text_color=VALUE_COLOR, anchor="e", wraplength=420, justify="right"
+            ).grid(row=kr, column=1, padx=(4, 14), pady=5, sticky="e")
+            kr += 1
+
+            customtkinter.CTkLabel(
+                keys_panel, text="Server",
+                font=customtkinter.CTkFont(size=13), text_color=LABEL_COLOR, anchor="w"
+            ).grid(row=kr, column=0, padx=(14, 10), pady=5, sticky="w")
+            customtkinter.CTkLabel(
+                keys_panel, text=data.get('public_key', 'N/A'),
+                font=customtkinter.CTkFont(family="Courier New", size=13, weight="bold"),
+                text_color=VALUE_COLOR, anchor="e", wraplength=420, justify="right"
+            ).grid(row=kr, column=1, padx=(4, 14), pady=5, sticky="e")
+            kr += 1
+            customtkinter.CTkFrame(keys_panel, height=12, fg_color="transparent").grid(row=kr, column=0)
+
+            # ── Allowed IPs (spans both columns) ──────────────────────────
+            allowed_panel = customtkinter.CTkFrame(
+                scroll_frame, corner_radius=cr,
+                fg_color=PANEL_BG, border_width=1, border_color=PANEL_BORDER
+            )
+            allowed_panel.grid(row=next_row, column=0, columnspan=2, sticky="ew", pady=6)
+            allowed_panel.grid_columnconfigure(0, weight=0)
+            allowed_panel.grid_columnconfigure(1, weight=1)
+            post_panel_widgets.append(allowed_panel)
+            next_row += 1
+
+            ar = _section_header(allowed_panel, 0, "ALLOWED IPs")
+            customtkinter.CTkLabel(
+                allowed_panel, text="Routes",
+                font=customtkinter.CTkFont(size=13), text_color=LABEL_COLOR, anchor="w"
+            ).grid(row=ar, column=0, padx=(14, 10), pady=5, sticky="w")
+            customtkinter.CTkLabel(
+                allowed_panel, text=data.get('allowed_ips', 'N/A'),
+                font=customtkinter.CTkFont(family="Courier New", size=13, weight="bold"),
+                text_color=VALUE_COLOR, anchor="e", wraplength=420, justify="right"
+            ).grid(row=ar, column=1, padx=(4, 14), pady=5, sticky="e")
+            ar += 1
+            customtkinter.CTkFrame(allowed_panel, height=12, fg_color="transparent").grid(row=ar, column=0)
+
+        # ── 4. ACTION BUTTONS (spans both columns) ────────────────────────
+        buttons_frame = customtkinter.CTkFrame(scroll_frame, fg_color="transparent")
+        buttons_frame.grid(row=next_row, column=0, columnspan=2, pady=(6, 20), sticky="ew")
+        buttons_frame.grid_columnconfigure(0, weight=1)
+        if selected_conf_file:
+            buttons_frame.grid_columnconfigure(1, weight=1)
+
+        customtkinter.CTkButton(
+            buttons_frame, text="Import Configuration",
             command=self.import_config,
-            fg_color="transparent",
-            border_width=1,
-            border_color=("#3a7ebf", "#1f538d"),
-            text_color=("#3a7ebf", "#3a7ebf"),
-            font=customtkinter.CTkFont(size=13)
-        )
-        import_button.grid(row=5, column=0, pady=20, sticky="ew")
+            fg_color="transparent", border_width=1,
+            border_color=("#3A7EBF", "#1F538D"),
+            text_color=("#3A7EBF", "#3A7EBF"),
+            font=customtkinter.CTkFont(size=13), height=38
+        ).grid(row=0, column=0, padx=(0, 4) if selected_conf_file else 0, sticky="ew")
 
-        # Start polling for extension state changes (macOS only)
+        if selected_conf_file:
+            customtkinter.CTkButton(
+                buttons_frame, text="View Config",
+                command=lambda: self._show_config_dialog(selected_conf_file),
+                fg_color="transparent", border_width=1,
+                border_color=("#3A7EBF", "#1F538D"),
+                text_color=("#3A7EBF", "#3A7EBF"),
+                font=customtkinter.CTkFont(size=13), height=38
+            ).grid(row=0, column=1, padx=(4, 0), sticky="ew")
+
+        # ── 5. RESPONSIVE LAYOUT + MAX-WIDTH CENTERING ────────────────────
+        MAX_CONTENT_WIDTH = 750
+        PANEL_BREAKPOINT  = 600   # content px below which panels stack vertically
+        _stacked          = [False]
+        _resize_job       = [None]
+
+        def _do_layout():
+            """Apply centering and responsive layout based on current app/sidebar widths."""
+            _resize_job[0] = None
+
+            # Safety check: if plugin updated/destroyed, main_container might be gone
+            if not hasattr(self, 'main_container') or not self.main_container.winfo_exists():
+                return
+            
+            # --- Auto-hide Scrollbar Logic ---
+            try:
+                if hasattr(scroll_frame, "_parent_canvas") and hasattr(scroll_frame, "_scrollbar"):
+                    yview = scroll_frame._parent_canvas.yview()
+                    
+                    # Check if currently hidden (hacky check usually works if grid_remove used)
+                    is_mapped = bool(scroll_frame._scrollbar.grid_info())
+                    
+                    # If content fits entirely (0.0 to 1.0)
+                    if yview and (yview[0] <= 0.01 and yview[1] >= 0.99):
+                        if is_mapped:
+                            # Save grid info to restore later if needed, though grid() usually suffices 
+                            # if grid_remove was used. To be safe with CTk internals:
+                            scroll_frame._saved_sb_grid = scroll_frame._scrollbar.grid_info()
+                            scroll_frame._scrollbar.grid_remove()
+                    else:
+                        if not is_mapped:
+                             # Restore
+                             if hasattr(scroll_frame, "_saved_sb_grid") and scroll_frame._saved_sb_grid:
+                                 scroll_frame._scrollbar.grid(**scroll_frame._saved_sb_grid)
+                             else:
+                                 # Default fallback if we somehow didn't save it
+                                 # Standard CTkScrollableFrame layout: row=0, column=1, sticky="ns"
+                                 scroll_frame._scrollbar.grid(row=0, column=1, sticky="ns", pady=0)
+            except Exception:
+                pass
+            # --- End Auto-hide ---
+            try:
+                if not scroll_frame.winfo_exists():
+                    return
+            except Exception:
+                return
+
+            # Content area = total window width minus the fixed sidebar.
+            # Using app.winfo_width() is reliable; main_container.winfo_width()
+            # can be stale or wrong depending on when Configure fires.
+            app_w = self.app.winfo_width()
+            if app_w < 10:
+                return
+            try:
+                nav = getattr(self.app, 'navigation_frame', None)
+                nav_w = nav.winfo_width() if (nav and nav.winfo_exists()) else 200
+                nav_w = max(nav_w, 200)
+            except Exception:
+                nav_w = 200
+            width = app_w - nav_w
+            if width < 10:
+                return
+
+            # — Max-width centering via column widths, not padx —
+            # Column 1 (content) is set to the desired width.
+            # Columns 0 and 2 (spacers, weight=1 each) absorb any surplus equally,
+            # which automatically centers the content column in the available area.
+            if width > MAX_CONTENT_WIDTH + 40:
+                col_w = MAX_CONTENT_WIDTH
+            else:
+                col_w = max(100, width - 40)   # 20px breathing room on each side
+
+            # Ensure main_container still exists and is valid
+            if not hasattr(self, 'main_container') or not self.main_container.winfo_exists():
+                return
+
+            try:
+                self.main_container.grid_columnconfigure(1, weight=0, minsize=col_w)
+            except Exception:
+                return
+
+            # — Responsive panels (only when a config is loaded) —
+            if client_panel is None or server_panel is None:
+                return
+
+            now_stacked = col_w < PANEL_BREAKPOINT
+
+            if now_stacked == _stacked[0]:
+                return   # nothing to change
+
+            _stacked[0] = now_stacked
+            n_post       = len(post_panel_widgets)
+
+            if now_stacked:
+                client_panel.grid_configure(row=panel_row,     column=0, columnspan=2, sticky="ew", padx=0)
+                server_panel.grid_configure(row=panel_row + 1, column=0, columnspan=2, sticky="ew", padx=0)
+                for i, panel in enumerate(post_panel_widgets):
+                    panel.grid_configure(row=panel_row + 2 + i)
+                buttons_frame.grid_configure(row=panel_row + 2 + n_post)
+            else:
+                client_panel.grid_configure(row=panel_row, column=0, columnspan=1, sticky="nsew", padx=(0, 4))
+                server_panel.grid_configure(row=panel_row, column=1, columnspan=1, sticky="nsew", padx=(4, 0))
+                for i, panel in enumerate(post_panel_widgets):
+                    panel.grid_configure(row=panel_row + 1 + i)
+                buttons_frame.grid_configure(row=panel_row + 1 + n_post)
+
+        def _on_resize(event):
+            # Debounce: cancel any pending layout job and schedule a fresh one.
+            # after_idle runs after all pending events are processed, so winfo_width()
+            # will reflect the final settled size rather than an intermediate value.
+            if _resize_job[0] is not None:
+                try:
+                    self.app.after_cancel(_resize_job[0])
+                except Exception:
+                    pass
+            _resize_job[0] = self.app.after_idle(_do_layout)
+
+        self.main_container.bind("<Configure>", _on_resize)
+        # Apply correct initial centering once the widget is fully mapped
+        self.app.after(50, _do_layout)
+
         if IS_MACOS:
             self._start_extension_polling()
 
@@ -608,6 +888,56 @@ class Plugin(BasePlugin):
 
         self.update_plugin(self.id)
 
+    def _show_config_dialog(self, tunnel_name):
+        """Open a modal dialog showing the config file with a copy button."""
+        conf_file_path = os.path.join(wireguard_folder, f"{tunnel_name}.conf")
+
+        if not os.path.exists(conf_file_path):
+            self.app.show_notification("Config file not found", type="error")
+            return
+
+        with open(conf_file_path, 'r') as f:
+            content = f.read()
+
+        dialog = customtkinter.CTkToplevel(self.app)
+        dialog.title(f"{tunnel_name}.conf")
+        dialog.geometry("520x440")
+        dialog.resizable(True, True)
+        dialog.grab_set()
+        dialog.grid_columnconfigure(0, weight=1)
+        dialog.grid_rowconfigure(1, weight=1)
+
+        title_label = customtkinter.CTkLabel(
+            dialog,
+            text=f"{tunnel_name}.conf",
+            font=customtkinter.CTkFont(size=14, weight="bold")
+        )
+        title_label.grid(row=0, column=0, padx=20, pady=(15, 5), sticky="w")
+
+        textbox = customtkinter.CTkTextbox(
+            dialog,
+            font=customtkinter.CTkFont(family="Courier", size=12),
+            wrap="word",
+            state="normal"
+        )
+        textbox.grid(row=1, column=0, padx=20, pady=5, sticky="nsew")
+        textbox.insert("1.0", content)
+        textbox.configure(state="disabled")
+
+        def copy_to_clipboard():
+            dialog.clipboard_clear()
+            dialog.clipboard_append(content)
+            copy_btn.configure(text="Copied!")
+            dialog.after(2000, lambda: copy_btn.configure(text="Copy to Clipboard"))
+
+        copy_btn = customtkinter.CTkButton(
+            dialog,
+            text="Copy to Clipboard",
+            command=copy_to_clipboard,
+            height=36
+        )
+        copy_btn.grid(row=2, column=0, padx=20, pady=(5, 20), sticky="ew")
+
     def _start_extension_polling(self):
         """Poll extension status every 5 seconds to detect enable/disable changes.
         macOS only — no-op on other platforms.
@@ -623,12 +953,27 @@ class Plugin(BasePlugin):
                 self._extension_poll_id = None
                 return
 
-            current_state = is_extension_enabled()
-            if current_state != self._last_extension_state:
-                logger.info(f"Extension state changed: {self._last_extension_state} -> {current_state}")
-                self._last_extension_state = current_state
+            # 1. Check Extension State
+            current_ext_state = is_extension_enabled()
+            if current_ext_state != self._last_extension_state:
+                logger.info(f"Extension state changed: {self._last_extension_state} -> {current_ext_state}")
+                self._last_extension_state = current_ext_state
                 self.update_plugin(self.id)
-                return  # update_plugin rebuilds the screen which restarts polling
+                return  # update_plugin rebuilds screen -> restarts polling
+
+            # 2. Check Connection Status
+            # We also poll the actual tunnel status to detect if it was turned off in System Settings
+            global my_vpn_status, active_client_name
+            current_status = check_service_status(active_client_name or "vpn", DNS_SERVER)
+            if current_status != my_vpn_status:
+                # We only care about sync if the app thinks it's Running but system says Stopped
+                # Or if it was Stopped but now it's Running (e.g. turned on in Settings)
+                # If status is "Connecting", we let the connection logic handle it.
+                if my_vpn_status in ["Running", "Stopped"]:
+                    logger.info(f"VPN Connection status changed externally: {my_vpn_status} -> {current_status}")
+                    my_vpn_status = current_status
+                    self.update_plugin(self.id)
+                    return
 
             self._extension_poll_id = self.app.after(5000, poll)
 
@@ -673,7 +1018,9 @@ class Plugin(BasePlugin):
                         if key == 'privatekey': data['private_key'] = value
                         elif key == 'address': data['client_ip_address'] = value
                         elif key == 'publickey': data['public_key'] = value
-                        elif key == 'endpoint': 
+                        elif key == 'dns': data['dns'] = value
+                        elif key == 'allowedips': data['allowed_ips'] = value
+                        elif key == 'endpoint':
                             data['endpoint'] = value
                             if ':' in value: data['port'] = value.split(':')[-1]
         elif not os.path.exists(wireguard_folder):

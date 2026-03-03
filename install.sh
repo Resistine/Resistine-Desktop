@@ -134,6 +134,13 @@ Darwin*)
 		PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL wireguard-tools"
 	fi
 
+	# Check for Cairo (needed for SVG support)
+	if brew list cairo >/dev/null 2>&1; then
+		echo "Cairo is already installed."
+	else
+		PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL cairo"
+	fi
+
 	# Check for tcl-tk (via tkinter import)
 	if command -v python3 >/dev/null && python3 -c "import tkinter" >/dev/null 2>&1; then
 		echo "tcl-tk (tkinter) is already installed."
