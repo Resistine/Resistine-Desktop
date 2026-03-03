@@ -34,48 +34,10 @@ DEBUG_WINDOW = False
 DEBUG = False
 
 
-def is_admin():
-    try:
-        return ctypes.windll.shell32.IsUserAnAdmin()
-    except Exception:
-        return False
-
-
-def relaunch_as_admin():
-    """
-    Relaunch the current script with admin privileges (Windows only).
-    """
-    params = " ".join([f'"{arg}"' for arg in sys.argv])
-
-    ctypes.windll.shell32.ShellExecuteW(
-        None,
-        "runas",  # Triggers UAC
-        sys.executable,  # python.exe or your packaged exe
-        params,
-        os.getcwd(),
-        1,  # SW_SHOWNORMAL
-    )
-
-
-def was_relaunched():
-    return "--elevated" in sys.argv
-
-
 def resource_path(relative_path: str) -> str:
-    """
-    Get absolute path to resource, works for both dev and PyInstaller bundled app.
-
-    When running from source, returns path relative to the script directory.
-    When running from a PyInstaller bundle, returns path relative to the
-    temporary extraction directory (sys._MEIPASS).
-    """
-    if hasattr(sys, '_MEIPASS'):
-        # Running in PyInstaller bundle
-        return os.path.join(sys._MEIPASS, relative_path)
-    else:
-        # Running from source - use the script's directory
-        return os.path.join(os.path.dirname(os.path.abspath(__file__)), relative_path)
-
+    """Delegates to central utils.functions.get_resource_path."""
+    from utils.functions import get_resource_path
+    return get_resource_path(relative_path)
 
 class App(AppUI):
     """
@@ -162,11 +124,6 @@ class App(AppUI):
 
 if __name__ == "__main__":
 
-    # CHECK: Why is this here?
-    # Check for admin privileges on Windows
-    if sys.platform == "win32" and not is_admin() and not was_relaunched():
-        relaunch_as_admin()
-        sys.exit(0)
 
     # Parse command-line arguments
     parser = argparse.ArgumentParser(

@@ -428,12 +428,8 @@ class VPNOnboardingScreen:
 
     def _add_shield_logo(self, parent, row=0, size=120):
         """Add the Resistine shield logo to the container."""
-        shield_path = os.path.join(
-            os.path.dirname(
-                os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-            ),
-            "ResistineSheild.png",
-        )
+        from utils.functions import get_resource_path
+        shield_path = get_resource_path(os.path.join("resources", "icons", "ResistineSheild.png"))
         try:
             shield_img = Image.open(shield_path)
             shield_ctk = customtkinter.CTkImage(shield_img, size=(size, size))

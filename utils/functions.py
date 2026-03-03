@@ -34,3 +34,23 @@ def is_running_in_ide():
         return "Debugger"
 
     return None
+
+
+def get_resource_path(relative_path: str) -> str:
+    """
+    Get absolute path to resource, works for both dev and PyInstaller bundled app.
+
+    When running from source, returns path relative to the project root.
+    When running from a PyInstaller bundle, returns path relative to the
+    temporary extraction directory (sys._MEIPASS).
+    """
+    if hasattr(sys, '_MEIPASS'):
+        # Running in PyInstaller bundle
+        return os.path.join(sys._MEIPASS, relative_path)
+    else:
+        # Running from source - assume we are in utils/ and the root is one level up
+        # However, for consistency with main.py, let's make it smarter or relative to the actual project root.
+        # If we invoke it from anywhere, we want the project root.
+        # Let's use the directory of this file as a reference.
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return os.path.join(root, relative_path)
