@@ -35,9 +35,14 @@ def get_agent_name():
 
 
 def get_agent_group():
-    """Return the user's email (sanitized) as the agent group."""
+    # This should be reverted once group creation is fixed
+    """
+    Return the user's email (sanitized) as the agent group.
     email = settings.get("auth", "email", "default")
     return email.replace("@", ".")
+    """
+    """Return the agent group."""
+    return "default"
 
 
 def get_package_url():
@@ -367,3 +372,16 @@ def full_install(progress_callback=None):
 
     logger.info("Wazuh full install completed successfully")
     return True
+
+"""
+sudo /Library/Ossec/bin/wazuh-control restart
+Check status:
+
+
+sudo /Library/Ossec/bin/wazuh-control status
+Check logs for the actual error:
+
+
+sudo tail -50 /Library/Ossec/logs/ossec.log
+Run the log command first — paste the output here and I can tell you exactly what's wrong.
+"""
