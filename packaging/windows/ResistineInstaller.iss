@@ -67,7 +67,7 @@ Filename: "{app}\Resistine.exe"; Description: "Launch {#AppName}"; Flags: nowait
 
 [Code]
 type
-  TMaintenanceAction = (maInstall, maUpdate, maReinstall, maUninstall);
+  TMaintenanceAction = (maInstall, maReinstall, maUninstall);
 
 var
   ExistingInstallDetected: Boolean;
@@ -79,7 +79,6 @@ var
   MaintenancePage: TWizardPage;
   MaintenanceInfoLabel: TNewStaticText;
   InstallRadio: TRadioButton;
-  UpdateRadio: TRadioButton;
   ReinstallRadio: TRadioButton;
   UninstallRadio: TRadioButton;
   MaintenanceActionHeaderLabel: TNewStaticText;
@@ -100,7 +99,6 @@ var
   PreflightTasksHeaderLabel: TNewStaticText;
   PreflightTasksLabel: TNewStaticText;
   SelectedAction: TMaintenanceAction;
-  UpdateAvailable: Boolean;
   RemoveUserDataAfterUninstall: Boolean;
   PendingReinstallRestore: Boolean;
   ReinstallBackupRoot: string;
@@ -328,6 +326,31 @@ begin
   DeleteDirectoryIfExists(GetResistineCommonDataDir);
 end;
 
+procedure RemoveResistineVpnServicesAndTunnels;
+var
+  ResultCode: Integer;
+  WireGuardExe: string;
+begin
+  Log('Uninstall cleanup: stopping/removing Resistine VPN Windows service');
+  RunHiddenCmd('sc stop "ResistineVPN" >nul 2>nul', ResultCode);
+  Sleep(400);
+  RunHiddenCmd('sc delete "ResistineVPN" >nul 2>nul', ResultCode);
+
+  Log('Uninstall cleanup: stopping/removing Resistine WireGuard tunnel services');
+  RunHiddenCmd('sc stop "WireGuardTunnel$resistine_default" >nul 2>nul', ResultCode);
+  RunHiddenCmd('sc stop "WireGuardTunnel$resistine_vpn" >nul 2>nul', ResultCode);
+  Sleep(400);
+  RunHiddenCmd('sc delete "WireGuardTunnel$resistine_default" >nul 2>nul', ResultCode);
+  RunHiddenCmd('sc delete "WireGuardTunnel$resistine_vpn" >nul 2>nul', ResultCode);
+
+  WireGuardExe := 'C:\Program Files\WireGuard\wireguard.exe';
+  if FileExists(WireGuardExe) then
+  begin
+    RunHiddenCmd(QuotePath(WireGuardExe) + ' /uninstalltunnelservice resistine_default >nul 2>nul', ResultCode);
+    RunHiddenCmd(QuotePath(WireGuardExe) + ' /uninstalltunnelservice resistine_vpn >nul 2>nul', ResultCode);
+  end;
+end;
+
 function HasAnyResistineUserData: Boolean;
 begin
   Result := DirectoryExistsAndNotEmpty(GetResistineUserDataDir) or
@@ -376,13 +399,6 @@ begin
     ExistingUninstallCmd := QuotePath(AddBackslash(ExistingInstallDir) + 'Uninstall.exe');
 
   ExistingInstallDetected := (ExistingInstallDir <> '') or (ExistingUninstallCmd <> '');
-end;
-
-procedure EvaluateUpdateAvailability;
-begin
-  UpdateAvailable := True;
-  if ExistingInstallVersion <> '' then
-    UpdateAvailable := CompareVersionStrings(ExistingInstallVersion, '{#AppVersion}') < 0;
 end;
 
 function ExtractExePathFromCommand(const CommandLine: string): string; forward;
@@ -700,11 +716,31 @@ begin
   end;
 end;
 
+function EnsureResistineClosedForUninstall: Boolean;
+begin
+  Result := True;
+
+  if not IsResistineRunning then
+    exit;
+
+  Log('Uninstall start: Resistine is running. Forcing process termination.');
+  TryKillResistineProcess(True);
+  Sleep(600);
+
+  if IsResistineRunning then
+  begin
+    MsgBox(
+      'Resistine is still running and could not be closed automatically.' + #13#10 +
+      'Please close it manually and run uninstall again.',
+      mbError, MB_OK);
+    Result := False;
+  end;
+end;
+
 function SelectedActionCaption: string;
 begin
   case SelectedAction of
     maInstall: Result := 'Install';
-    maUpdate: Result := 'Update';
     maReinstall: Result := 'Repair';
     maUninstall: Result := 'Uninstall';
   else
@@ -718,8 +754,6 @@ begin
     Result := maReinstall
   else if (UninstallRadio <> nil) and UninstallRadio.Checked then
     Result := maUninstall
-  else if (UpdateRadio <> nil) and UpdateRadio.Checked then
-    Result := maUpdate
   else
     Result := maInstall;
 end;
@@ -729,11 +763,6 @@ begin
   case ActionValue of
     maInstall:
       Result := 'Installs this version over the current app files. Your settings, logs, and VPN data stay in place.';
-    maUpdate:
-      if UpdateAvailable then
-        Result := 'Recommended when this installer is newer. Updates app files and keeps your existing settings and data.'
-      else
-        Result := 'Update is not available because the installed version is the same as, or newer than, this installer.';
     maReinstall:
       Result := 'Repairs a broken installation by uninstalling and reinstalling Resistine. You can back up data first.';
     maUninstall:
@@ -798,9 +827,7 @@ begin
   if MaintenanceDataOptionsEmptyLabel <> nil then
   begin
     MaintenanceDataOptionsEmptyLabel.Visible := not (ShowBackupOptions or ShowUninstallOptions);
-    if ActionValue = maUpdate then
-      MaintenanceDataOptionsEmptyLabel.Caption := 'No additional options for Update.'
-    else if ActionValue = maInstall then
+    if ActionValue = maInstall then
       MaintenanceDataOptionsEmptyLabel.Caption := 'No additional options for Install.'
     else
       MaintenanceDataOptionsEmptyLabel.Caption := 'No additional options for this action.';
@@ -1079,7 +1106,6 @@ begin
   CloseAfterMaintenanceUninstall := False;
   DetectExistingInstall;
   NormalizeExistingInstallState;
-  EvaluateUpdateAvailability;
 
   if ExistingInstallDetected then
   begin
@@ -1121,22 +1147,10 @@ begin
     begin
       InstallRadio.Caption := 'Install';
       InstallRadio.Enabled := True;
-      InstallRadio.Checked := not UpdateAvailable;
+      InstallRadio.Checked := True;
     end;
     InstallRadio.OnClick := @MaintenanceActionChanged;
     NextTop := InstallRadio.Top + InstallRadio.Height + ScaleY(1);
-
-    UpdateRadio := TRadioButton.Create(MaintenancePage);
-    UpdateRadio.Parent := MaintenancePage.Surface;
-    UpdateRadio.Left := 0;
-    UpdateRadio.Top := NextTop;
-    UpdateRadio.Width := MaintenancePage.SurfaceWidth;
-    UpdateRadio.Height := ScaleY(22);
-    UpdateRadio.Caption := 'Update';
-    UpdateRadio.Enabled := UpdateAvailable;
-    UpdateRadio.Checked := UpdateAvailable;
-    UpdateRadio.OnClick := @MaintenanceActionChanged;
-    NextTop := UpdateRadio.Top + UpdateRadio.Height + ScaleY(1);
 
     ReinstallRadio := TRadioButton.Create(MaintenancePage);
     ReinstallRadio.Parent := MaintenancePage.Surface;
@@ -1146,7 +1160,7 @@ begin
     ReinstallRadio.Height := ScaleY(22);
     ReinstallRadio.Caption := 'Repair installation';
     ReinstallRadio.Enabled := ExistingUninstallerAvailable;
-    ReinstallRadio.Checked := ExistingUninstallerAvailable and (not UpdateAvailable);
+    ReinstallRadio.Checked := ExistingUninstallerAvailable;
     ReinstallRadio.OnClick := @MaintenanceActionChanged;
     NextTop := ReinstallRadio.Top + ReinstallRadio.Height + ScaleY(1);
 
@@ -1346,13 +1360,6 @@ begin
       exit;
     end;
 
-    if UpdateRadio.Checked then
-    begin
-      SelectedAction := maUpdate;
-      RemoveUserDataAfterUninstall := False;
-      exit;
-    end;
-
     if ReinstallRadio.Checked then
     begin
       SelectedAction := maReinstall;
@@ -1385,7 +1392,8 @@ begin
         'This will uninstall the existing Resistine installation and close setup.' + #13#10#13#10 +
         'What will be removed:' + #13#10 +
         '- Application files in: ' + ExistingInstallDir + #13#10 +
-        '- Start Menu / desktop shortcuts' + #13#10;
+        '- Start Menu / desktop shortcuts' + #13#10 +
+        '- VPN services: ResistineVPN, WireGuardTunnel$resistine_default, WireGuardTunnel$resistine_vpn' + #13#10;
 
       if WantsRemoveData then
         ConfirmText := ConfirmText + '- User data: settings, logs, and VPN service data' + #13#10 +
@@ -1510,12 +1518,22 @@ begin
   Result := True;
   LoadInstallerUninstallInteropFlags;
 
+  if not EnsureResistineClosedForUninstall then
+  begin
+    Result := False;
+    exit;
+  end;
+
   if MaintenanceUninstallByInstaller then
     exit;
 
   Summary :=
     'This will uninstall Resistine from:' + #13#10 +
     ExpandConstant('{app}') + #13#10#13#10 +
+    'The uninstaller will also remove Resistine VPN services:' + #13#10 +
+    '- ResistineVPN' + #13#10 +
+    '- WireGuardTunnel$resistine_default' + #13#10 +
+    '- WireGuardTunnel$resistine_vpn' + #13#10#13#10 +
     'By default, your user data is preserved:' + #13#10 +
     '- ' + GetResistineUserDataDir + #13#10 +
     '- ' + GetResistineCommonDataDir + #13#10#13#10 +
@@ -1542,6 +1560,9 @@ end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
+  if CurUninstallStep = usUninstall then
+    RemoveResistineVpnServicesAndTunnels;
+
   if CurUninstallStep = usPostUninstall then
   begin
     if StandaloneUninstallRemoveUserData then

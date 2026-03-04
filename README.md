@@ -35,7 +35,7 @@ Windows packaging uses Inno Setup and PyInstaller.
 ### Installer actions (maintenance mode)
 
 - Fresh install: normal install flow
-- Existing install detected: `Install` (overwrite), `Update` (if installer is newer), `Reinstall (Fix)`, or `Uninstall`
+- Existing install detected: `Install` (overwrite), `Reinstall (Fix)`, or `Uninstall`
 
 ### Build the Windows installer
 
