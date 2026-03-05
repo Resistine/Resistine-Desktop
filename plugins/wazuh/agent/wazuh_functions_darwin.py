@@ -29,9 +29,48 @@ from plugins.wazuh.config import (
 _WAZUH_CONTROL = f"{WAZUH_INSTALL_DIR}/bin/wazuh-control"
 
 
+def _get_hardware_uuid():
+    """Return the macOS hardware UUID, or None on failure.
+
+    The hardware UUID is stable across OS reinstalls and unique per physical
+    machine, making it suitable as a stable disambiguator for agent names.
+    """
+    try:
+        result = subprocess.run(
+            ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in result.stdout.splitlines():
+            if "IOPlatformUUID" in line:
+                # Line format: "IOPlatformUUID" = "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
+                return line.split('"')[-2]
+    except Exception as e:
+        logger.warning(f"Could not read hardware UUID: {e}")
+    return None
+
+
 def get_agent_name():
-    """Return the machine hostname to use as the Wazuh agent name."""
-    return socket.gethostname()
+    """Return a stable, org-unique agent name: hostname + last 8 chars of hardware UUID.
+
+    Using hostname alone causes collisions when multiple machines share a
+    default name (e.g. 'MacBook-Air.local').  Appending a short hardware UUID
+    suffix makes the name unique per physical device while keeping it
+    human-readable on the Wazuh dashboard.
+
+    The result is restricted to alphanumerics, hyphens, and dots to prevent
+    shell injection when the name is interpolated into privileged scripts.
+    """
+    import re
+    hostname = socket.gethostname()
+    uuid = _get_hardware_uuid()
+    if uuid:
+        suffix = uuid.replace("-", "")[-8:].upper()
+        name = f"{hostname}-{suffix}"
+    else:
+        name = hostname
+    # Strip any character that isn't safe in a shell argument or Wazuh agent
+    # name.  Wazuh allows: alphanumerics, hyphens, underscores, dots.
+    return re.sub(r"[^A-Za-z0-9.\-_]", "", name)
 
 
 def get_agent_group():
@@ -270,8 +309,17 @@ def stop_agent():
     return stopped
 
 
+_KEY_BACKUP = "/Library/Application Support/Resistine/wazuh_client.keys"
+_CLIENT_KEYS = f"{WAZUH_INSTALL_DIR}/etc/client.keys"
+
+
 def remove_agent():
     """Stop the Wazuh agent and remove /Library/Ossec/ with admin privileges.
+
+    Before wiping the install directory, the agent's client.keys is backed up
+    to a persistent location outside /Library/Ossec/.  This preserves the
+    manager-issued key so that reinstall can restore it and skip re-enrollment,
+    avoiding duplicate-name conflicts on the manager.
 
     Returns True on success.
     """
@@ -279,12 +327,16 @@ def remove_agent():
         logger.info("Wazuh agent not installed, nothing to remove")
         return True
 
-    # Stop all processes (launchd + wazuh-control + force-kill),
-    # then delete the install directory and plist.
+    backup_dir = os.path.dirname(_KEY_BACKUP)
+    # Stop all processes (launchd + wazuh-control + force-kill), back up
+    # client.keys, then delete the install directory and plist.
     script = (
         f"launchctl bootout system '{WAZUH_LAUNCHD_PLIST}' 2>/dev/null; "
         f"'{_WAZUH_CONTROL}' stop 2>/dev/null; "
         f"pkill -9 -f '/Library/Ossec/bin/wazuh-' 2>/dev/null; "
+        # Preserve the key so reinstall can reconnect without re-enrolling.
+        f"mkdir -p '{backup_dir}' && "
+        f"cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}' 2>/dev/null; "
         f"rm -rf '{WAZUH_INSTALL_DIR}'; "
         f"rm -f '{WAZUH_LAUNCHD_PLIST}'"
     )
@@ -322,16 +374,41 @@ def full_install(progress_callback=None):
     # 3. Install the package AND start the agent in a single privileged call.
     #    This avoids a second osascript password dialog.  The script:
     #      a) Runs the installer — if this fails we capture INSTALL_FAIL
-    #      b) Bootstraps the launchd plist so launchd manages all processes
+    #      b) Directly patches <agent_name> in ossec.conf to our UUID-suffixed
+    #         name.  The installer reads the env file but its behavior is
+    #         unreliable; patching ossec.conf post-install is the authoritative
+    #         way to set the name.
+    #      c) Force-registers with the manager using agent-auth -F 1 to
+    #         populate client.keys and replace any stale duplicate on the
+    #         manager.  When client.keys is populated, wazuh-agentd connects
+    #         directly without going through auto-enrollment.
+    #      d) Bootstraps the launchd plist so launchd manages all processes.
     #    We use launchctl bootstrap (not wazuh-control start) so that all
     #    agent processes live under launchd's supervision.  This ensures
     #    bootout can cleanly terminate them later without orphans.
     if progress_callback:
         progress_callback("Installing Wazuh agent (admin password required)...")
 
+    ossec_conf = f"{WAZUH_INSTALL_DIR}/etc/ossec.conf"
     plist = WAZUH_LAUNCHD_PLIST
+    agent_auth = f"{WAZUH_INSTALL_DIR}/bin/agent-auth"
     install_and_start_script = (
         f"installer -pkg '{pkg_path}' -target / || echo INSTALL_FAIL; "
+        # Patch agent_name directly in ossec.conf — more reliable than the
+        # env file, which the installer may ignore or read inconsistently.
+        f"sed -i '' 's|<agent_name>.*</agent_name>|<agent_name>{agent_name}</agent_name>|' '{ossec_conf}'; "
+        # Restore backed-up client.keys if available.  This reuses the
+        # existing manager-issued key so the agent reconnects without
+        # re-enrolling — no duplicate-name conflicts on the manager.
+        # If no backup exists, fall through to agent-auth enrollment.
+        f"if [ -s '{_KEY_BACKUP}' ]; then "
+        f"  cp '{_KEY_BACKUP}' '{_CLIENT_KEYS}' && "
+        f"  chmod 640 '{_CLIENT_KEYS}' && "
+        f"  chown root:wheel '{_CLIENT_KEYS}' && "
+        f"  echo KEY_RESTORED; "
+        f"else "
+        f"  '{agent_auth}' -m '{WAZUH_MANAGER}' -A '{agent_name}' -F 1 && echo KEY_ENROLLED || echo ENROLL_FAILED; "
+        f"fi; "
         f"launchctl bootout system '{plist}' 2>/dev/null; "
         f"launchctl bootstrap system '{plist}' 2>/dev/null; "
         f"echo DONE"

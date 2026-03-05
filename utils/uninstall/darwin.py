@@ -73,16 +73,38 @@ def run_uninstall(app, progress_callback=None):
 # ---------------------------------------------------------------------------
 
 
+def _delete_key_backup(path):
+    """Remove the Wazuh client.keys backup file if it exists."""
+    try:
+        escaped = path.replace("\\", "\\\\").replace('"', '\\"')
+        cmd = [
+            "osascript", "-e",
+            f'do shell script "rm -f \\"{escaped}\\"" with administrator privileges',
+        ]
+        subprocess.run(cmd, capture_output=True, timeout=15)
+        logger.info(f"[UNINSTALL] Removed Wazuh key backup: {path}")
+    except Exception as e:
+        logger.warning(f"[UNINSTALL] Could not remove key backup: {e}")
+
+
 def _remove_wazuh_agent():
     """Stop and remove the Wazuh SIEM agent if installed.
 
     Delegates to the Wazuh plugin's ``remove_agent()`` when available.
     Falls back to an inline script if the plugin module cannot be imported
     (e.g. the plugin was already uninstalled).
+
+    Also removes the client.keys backup — on full uninstall we want a clean
+    slate, not a preserved key for a future reinstall.
     """
     try:
-        from plugins.wazuh.agent.wazuh_functions_darwin import remove_agent
+        from plugins.wazuh.agent.wazuh_functions_darwin import (
+            _KEY_BACKUP,
+            remove_agent,
+        )
         remove_agent()
+        # Delete the key backup so a future install enrolls fresh.
+        _delete_key_backup(_KEY_BACKUP)
         return
     except ImportError:
         logger.info("[UNINSTALL] Wazuh plugin not available, using inline removal")
@@ -91,6 +113,7 @@ def _remove_wazuh_agent():
     wazuh_control = "/Library/Ossec/bin/wazuh-control"
     wazuh_plist = "/Library/LaunchDaemons/com.wazuh.agent.plist"
     ossec_dir = "/Library/Ossec"
+    key_backup = "/Library/Application Support/Resistine/wazuh_client.keys"
 
     if not os.path.exists(ossec_dir) and not os.path.exists(wazuh_plist):
         logger.info("[UNINSTALL] Wazuh agent not installed, skipping")
@@ -100,7 +123,8 @@ def _remove_wazuh_agent():
         f"'{wazuh_control}' stop 2>/dev/null; "
         f"launchctl bootout system '{wazuh_plist}' 2>/dev/null; "
         f"rm -rf '{ossec_dir}'; "
-        f"rm -f '{wazuh_plist}'"
+        f"rm -f '{wazuh_plist}'; "
+        f"rm -f '{key_backup}'"
     )
     escaped = script.replace("\\", "\\\\").replace('"', '\\"')
     cmd = [
