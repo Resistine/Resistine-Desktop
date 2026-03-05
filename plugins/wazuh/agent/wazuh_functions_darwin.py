@@ -235,18 +235,87 @@ def start_agent():
     We intentionally do NOT call ``wazuh-control start`` because it
     spawns processes outside launchd's supervision, which causes
     orphaned processes when ``bootout`` is used to stop the agent.
+
+    If a client.keys backup exists but client.keys is missing (e.g.
+    after the app was reinstalled), the key is restored in the same
+    privileged call to avoid a second password prompt.
     """
     if _is_service_loaded():
         logger.info("Wazuh launchd service already loaded, nothing to do")
         return True
 
-    script = f"launchctl bootstrap system '{WAZUH_LAUNCHD_PLIST}'"
+    parts = []
+    # Restore client.keys from backup if it's missing — checked unprivileged
+    # first (backup lives outside /Library/Ossec/ so is always readable).
+    if os.path.exists(_KEY_BACKUP):
+        parts.append(
+            f"if [ ! -s '{_CLIENT_KEYS}' ]; then "
+            # Try Keychain first (encrypted at rest), fall back to file.
+            f"KC=$(security find-generic-password -k '{_KEYCHAIN}' -s '{_KC_SERVICE}' -a '{_KC_ACCOUNT}' -w 2>/dev/null); "
+            f"if [ -n \"$KC\" ]; then "
+            f"echo \"$KC\" > '{_CLIENT_KEYS}'; "
+            f"elif [ -s '{_KEY_BACKUP}' ]; then "
+            f"cp '{_KEY_BACKUP}' '{_CLIENT_KEYS}'; "
+            f"fi; "
+            f"if [ -s '{_CLIENT_KEYS}' ]; then "
+            f"chmod 640 '{_CLIENT_KEYS}' && chown root:wazuh '{_CLIENT_KEYS}' && echo KEY_RESTORED; "
+            f"fi; "
+            f"fi"
+        )
+    parts.append(f"launchctl bootstrap system '{WAZUH_LAUNCHD_PLIST}'")
+
+    script = "; ".join(parts)
     success, output = _run_privileged(script)
     if success:
+        if "KEY_RESTORED" in output:
+            logger.info("Restored client.keys from backup before starting agent")
         logger.info("Wazuh agent started via launchd")
     else:
         logger.error(f"Failed to start agent: {output}")
     return success
+
+
+def restore_client_key_if_needed():
+    """Restore client.keys from backup if it is missing, then restart the agent.
+
+    Called when Wazuh is already installed (e.g. after a Resistine app
+    reinstall) but client.keys was lost.  Returns True if the key was
+    already present or was successfully restored; False on failure.
+    """
+    if not os.path.exists(_KEY_BACKUP):
+        logger.info("No client.keys backup found, nothing to restore")
+        return True
+
+    # Only restore and restart if client.keys is actually missing/empty.
+    # Do not touch a running agent if the key is already in place.
+    # Keychain is tried first (encrypted at rest); file backup is the fallback.
+    script = (
+        f"if [ ! -s '{_CLIENT_KEYS}' ]; then "
+        f"  KC=$(security find-generic-password -k '{_KEYCHAIN}' -s '{_KC_SERVICE}' -a '{_KC_ACCOUNT}' -w 2>/dev/null); "
+        f"  if [ -n \"$KC\" ]; then "
+        f"    echo \"$KC\" > '{_CLIENT_KEYS}'; "
+        f"  elif [ -s '{_KEY_BACKUP}' ]; then "
+        f"    cp '{_KEY_BACKUP}' '{_CLIENT_KEYS}'; "
+        f"  fi; "
+        f"  if [ -s '{_CLIENT_KEYS}' ]; then "
+        f"    chmod 640 '{_CLIENT_KEYS}' && chown root:wazuh '{_CLIENT_KEYS}' && "
+        f"    launchctl bootout system '{WAZUH_LAUNCHD_PLIST}' 2>/dev/null; "
+        f"    launchctl bootstrap system '{WAZUH_LAUNCHD_PLIST}' 2>/dev/null; "
+        f"    echo KEY_RESTORED; "
+        f"  fi; "
+        f"else "
+        f"  echo KEY_OK; "
+        f"fi"
+    )
+    success, output = _run_privileged(script)
+    if success:
+        if "KEY_RESTORED" in output:
+            logger.info("Restored client.keys from backup and restarted agent")
+        else:
+            logger.info("client.keys already present, agent untouched")
+        return True
+    logger.error(f"Failed to restore client.keys: {output}")
+    return False
 
 
 def _has_running_processes():
@@ -312,6 +381,13 @@ def stop_agent():
 _KEY_BACKUP = "/Library/Application Support/Resistine/wazuh_client.keys"
 _CLIENT_KEYS = f"{WAZUH_INSTALL_DIR}/etc/client.keys"
 
+# macOS System Keychain — primary secure storage for the agent key.
+# The file backup (_KEY_BACKUP) is kept as a fallback and as an unprivileged
+# sentinel so Python can cheaply decide whether to attempt a privileged restore.
+_KEYCHAIN = "/Library/Keychains/System.keychain"
+_KC_SERVICE = "com.resistine.wazuh.agent"
+_KC_ACCOUNT = "client_key"
+
 
 def remove_agent():
     """Stop the Wazuh agent and remove /Library/Ossec/ with admin privileges.
@@ -334,9 +410,14 @@ def remove_agent():
         f"launchctl bootout system '{WAZUH_LAUNCHD_PLIST}' 2>/dev/null; "
         f"'{_WAZUH_CONTROL}' stop 2>/dev/null; "
         f"pkill -9 -f '/Library/Ossec/bin/wazuh-' 2>/dev/null; "
-        # Preserve the key so reinstall can reconnect without re-enrolling.
+        # Preserve the key in two places so reinstall can reconnect without
+        # re-enrolling.  Keychain is the primary (encrypted at rest); the file
+        # backup is a fallback and unprivileged sentinel for Python checks.
         f"mkdir -p '{backup_dir}' && "
-        f"cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}' 2>/dev/null; "
+        f"cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}' 2>/dev/null && "
+        f"security add-generic-password -U "
+        f"-k '{_KEYCHAIN}' -s '{_KC_SERVICE}' -a '{_KC_ACCOUNT}' "
+        f"-w \"$(cat '{_CLIENT_KEYS}')\" 2>/dev/null; "
         f"rm -rf '{WAZUH_INSTALL_DIR}'; "
         f"rm -f '{WAZUH_LAUNCHD_PLIST}'"
     )
@@ -378,10 +459,11 @@ def full_install(progress_callback=None):
     #         name.  The installer reads the env file but its behavior is
     #         unreliable; patching ossec.conf post-install is the authoritative
     #         way to set the name.
-    #      c) Force-registers with the manager using agent-auth -F 1 to
-    #         populate client.keys and replace any stale duplicate on the
-    #         manager.  When client.keys is populated, wazuh-agentd connects
-    #         directly without going through auto-enrollment.
+    #      c) Registers with the manager using agent-auth to populate
+    #         client.keys.  When client.keys is populated, wazuh-agentd
+    #         connects directly without going through auto-enrollment.
+    #         If a duplicate agent name exists on the manager, delete it
+    #         via the Wazuh REST API before enrolling.
     #      d) Bootstraps the launchd plist so launchd manages all processes.
     #    We use launchctl bootstrap (not wazuh-control start) so that all
     #    agent processes live under launchd's supervision.  This ensures
@@ -401,13 +483,15 @@ def full_install(progress_callback=None):
         # existing manager-issued key so the agent reconnects without
         # re-enrolling — no duplicate-name conflicts on the manager.
         # If no backup exists, fall through to agent-auth enrollment.
-        f"if [ -s '{_KEY_BACKUP}' ]; then "
-        f"  cp '{_KEY_BACKUP}' '{_CLIENT_KEYS}' && "
-        f"  chmod 640 '{_CLIENT_KEYS}' && "
-        f"  chown root:wheel '{_CLIENT_KEYS}' && "
-        f"  echo KEY_RESTORED; "
+        # Restore from Keychain (primary) or file backup (fallback).
+        # If neither exists, enroll fresh via agent-auth.
+        f"KC=$(security find-generic-password -k '{_KEYCHAIN}' -s '{_KC_SERVICE}' -a '{_KC_ACCOUNT}' -w 2>/dev/null); "
+        f"if [ -n \"$KC\" ]; then "
+        f"  echo \"$KC\" > '{_CLIENT_KEYS}' && chmod 640 '{_CLIENT_KEYS}' && chown root:wazuh '{_CLIENT_KEYS}' && echo KEY_RESTORED; "
+        f"elif [ -s '{_KEY_BACKUP}' ]; then "
+        f"  cp '{_KEY_BACKUP}' '{_CLIENT_KEYS}' && chmod 640 '{_CLIENT_KEYS}' && chown root:wazuh '{_CLIENT_KEYS}' && echo KEY_RESTORED; "
         f"else "
-        f"  '{agent_auth}' -m '{WAZUH_MANAGER}' -A '{agent_name}' -F 1 && echo KEY_ENROLLED || echo ENROLL_FAILED; "
+        f"  '{agent_auth}' -m '{WAZUH_MANAGER}' -A '{agent_name}' && echo KEY_ENROLLED || echo ENROLL_FAILED; "
         f"fi; "
         f"launchctl bootout system '{plist}' 2>/dev/null; "
         f"launchctl bootstrap system '{plist}' 2>/dev/null; "
