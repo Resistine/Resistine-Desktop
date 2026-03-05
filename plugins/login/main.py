@@ -418,7 +418,7 @@ class Plugin(BasePlugin):
             self.app.show_notification(msg, type="error")
             return
         
-        print(f"Generated VPN public key: {public_key}")  # Debug: Print generated public key
+        logger.debug("VPN public key generated successfully")
 
         # Phase 2: Verify OTP via API (never raises — returns tuple)
         success, message, result = self.api.verify_otp(
@@ -453,9 +453,7 @@ class Plugin(BasePlugin):
         if config_data:
             logger.info("VPN config found in API response, saving...")
             config_path = save_vpn_configuration(config_data, config_name="resistine_default")
-            print(f"VPN config saved to: {config_path}")
-            #print(f"Config data keys: {config_data}")
-            print(f"Config data sample: {str(config_data)[:500]}")  # Print first 500 chars of config data for debugging    
+            logger.debug(f"VPN config saved to: {config_path}")
 
             if config_path:
                 from plugins.vpn.config_manager import VPNConfigManager, RESISTINE_CONFIG_NAME

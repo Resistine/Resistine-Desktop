@@ -30,6 +30,7 @@ if _PLATFORM == "Darwin":
         get_agent_name,
         get_agent_status,
         is_agent_installed,
+        restore_client_key_if_needed,
         start_agent,
         stop_agent,
     )
@@ -156,6 +157,10 @@ class Plugin(BasePlugin):
 
         if installed:
             self._start_status_polling()
+            # If the agent is stopped, try restoring client.keys from backup
+            # (covers the case where the app was reinstalled and the key was lost).
+            if get_agent_status() != "Running":
+                threading.Thread(target=restore_client_key_if_needed, daemon=True).start()
 
         return self.main_container
 
