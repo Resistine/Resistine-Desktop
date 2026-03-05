@@ -1,6 +1,5 @@
 import unittest
 from unittest.mock import MagicMock, patch
-import json
 import requests
 from plugins.login.api import LoginAPI
 
@@ -77,6 +76,38 @@ class TestLoginAPI(unittest.TestCase):
 
         self.assertFalse(success)
         self.assertIn("OTP verification failed", message)
+
+    @patch('plugins.login.api.requests.post')
+    def test_verify_otp_sends_hostname(self, mock_post):
+        # Mock successful response
+        mock_response = MagicMock()
+        mock_response.ok = True
+        mock_response.json.return_value = {"status": "success", "message": "Verified"}
+        mock_post.return_value = mock_response
+
+        self.api.verify_otp("test@example.com", "123456", "pubkey")
+
+        # Verify hostname is included in the payload
+        call_kwargs = mock_post.call_args
+        payload = call_kwargs.kwargs.get("json") or call_kwargs[1]["json"]
+        self.assertIn("hostname", payload)
+        self.assertIsInstance(payload["hostname"], str)
+        self.assertNotEqual(payload["hostname"], "")
+
+    @patch('plugins.login.api.requests.post')
+    def test_verify_otp_custom_hostname(self, mock_post):
+        # Mock successful response
+        mock_response = MagicMock()
+        mock_response.ok = True
+        mock_response.json.return_value = {"status": "success", "message": "Verified"}
+        mock_post.return_value = mock_response
+
+        self.api.verify_otp("test@example.com", "123456", "pubkey", hostname="my-laptop")
+
+        # Verify the custom hostname is sent
+        call_kwargs = mock_post.call_args
+        payload = call_kwargs.kwargs.get("json") or call_kwargs[1]["json"]
+        self.assertEqual(payload["hostname"], "my-laptop")
 
 if __name__ == '__main__':
     unittest.main()

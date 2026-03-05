@@ -23,16 +23,18 @@ class LoginAPI:
             api_url = f"{self.base_url}/send-otp"
             payload = {"email": email}
 
-            logger.debug(f"Sending OTP to {email}")
+            logger.info(f"[LOGIN] send_otp -> POST {api_url} | email={email}")
             response = requests.post(api_url, json=payload, timeout=90)
+            logger.info(f"[LOGIN] send_otp <- HTTP {response.status_code} | body={response.text}")
 
             if response.ok:
                 try:
                     result = response.json()
                     message = result.get("message", "")
                     status = result.get("status", "").lower()
+                    logger.info(f"[LOGIN] send_otp parsed: status='{status}' message='{message}' keys={list(result.keys())}")
 
-                    if status in ["error", "failed", "failure"]:
+                    if status in ["error", "failed", "failure", "no_subscription"]:
                         error_msg = message or result.get("error", "Failed to send OTP")
                         return False, error_msg, result
                     else:
@@ -43,11 +45,12 @@ class LoginAPI:
                         )
                         return True, success_msg, result
                 except json.JSONDecodeError:
-                    logger.warning("Received non-JSON success response")
+                    logger.warning(f"[LOGIN] send_otp: non-JSON response body: {response.text}")
                     return True, "OTP sent successfully! Check your email.", {}
             else:
                 try:
                     error_data = response.json()
+                    logger.info(f"[LOGIN] send_otp error response: {error_data}")
                     error_msg = error_data.get("message") or error_data.get(
                         "error", f"Server error {response.status_code}"
                     )
@@ -61,7 +64,13 @@ class LoginAPI:
             return False, f"Error sending OTP: {str(e)}", {}
 
     def verify_otp(
-        self, email, otp, public_key, host_url="rfr1.resisti.net", vpn_name="testVPNapi"
+        self,
+        email,
+        otp,
+        public_key,
+        host_url="rfr1.resisti.net",
+        vpn_name="testVPNapi",
+        hostname=None,
     ):
         """
         Verify the OTP and public key.
@@ -70,6 +79,8 @@ class LoginAPI:
         TODO: Remove host_url and vpn_name parameters and get them from tha API instead!!!
         """
         try:
+            import socket
+
             api_url = f"{self.base_url}/verify-otp"
             payload = {
                 "email": email,
@@ -77,20 +88,23 @@ class LoginAPI:
                 "host_url": host_url,
                 "vpn_name": vpn_name,
                 "client_public_key": public_key,
+                "hostname": hostname or socket.gethostname(),
             }
 
-            logger.debug("Sending verify-otp request...")
+            logger.info(f"[LOGIN] verify_otp -> POST {api_url} | email={email} | hostname={payload['hostname']}")
             response = requests.post(api_url, json=payload, timeout=90)
+            logger.info(f"[LOGIN] verify_otp <- HTTP {response.status_code} | body={response.text}")
 
             if response.ok:
                 try:
                     result = response.json()
                 except json.JSONDecodeError:
-                    logger.warning("Received non-JSON success response")
+                    logger.warning(f"[LOGIN] verify_otp: non-JSON response body: {response.text}")
                     result = {}
 
                 status = result.get("status", "").lower()
                 message = result.get("message", "")
+                logger.info(f"[LOGIN] verify_otp parsed: status='{status}' message='{message}' keys={list(result.keys())}")
 
                 if (
                     status == "success"
@@ -108,6 +122,7 @@ class LoginAPI:
             else:
                 try:
                     error_data = response.json()
+                    logger.info(f"[LOGIN] verify_otp error response: {error_data}")
                     error_msg = error_data.get("message") or error_data.get(
                         "error", f"Server error {response.status_code}"
                     )

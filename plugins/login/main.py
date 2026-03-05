@@ -439,6 +439,10 @@ class Plugin(BasePlugin):
         logger.info("Login successful")
         self.app.show_notification("Login successful!", type="info")
 
+        # Persist the authenticated email for other plugins (Settings, Wazuh, etc.)
+        from utils import settings as app_settings
+        app_settings.set("auth", "email", self.email)
+
         # Save VPN config if provided (never raises — returns None on failure)
         config_data = result.get("vpn_config") or result.get("data")
         
