@@ -168,6 +168,25 @@
             "icon_light": "settings_light.png",
             "icon_dark": "settings_dark.png",
             "uninstall_enabled": false
+        },
+        {
+            "id": "011",
+            "order": 5,
+            "name": "Wazuh",
+            "version": "2026.01.04-alpha",
+            "status": "OK",
+            "description": "Install and manage the Wazuh SIEM agent.",
+            "supported_systems": [
+                "Darwin"
+            ],
+            "translations": {
+                "US": "Wazuh",
+                "ES": "Wazuh",
+                "FR": "Wazuh"
+            },
+            "icon_light": "wazuh_light.png",
+            "icon_dark": "wazuh_dark.png",
+            "uninstall_enabled": true
         }
     ]
 }

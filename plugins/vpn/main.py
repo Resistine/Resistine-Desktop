@@ -56,6 +56,11 @@ _interface_cache = {}
 active_client_name = None
 my_vpn_status = "Stopped"
 
+
+def is_vpn_connected():
+    """Return True if VPN is currently connected."""
+    return my_vpn_status == "Running"
+
 # --- Config Manager (module-level for use in init) ---
 from plugins.vpn.config_manager import VPNConfigManager
 _config_manager = VPNConfigManager(wireguard_folder)
