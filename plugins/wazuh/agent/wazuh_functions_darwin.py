@@ -235,18 +235,74 @@ def start_agent():
     We intentionally do NOT call ``wazuh-control start`` because it
     spawns processes outside launchd's supervision, which causes
     orphaned processes when ``bootout`` is used to stop the agent.
+
+    If a client.keys backup exists but client.keys is missing (e.g.
+    after the app was reinstalled), the key is restored in the same
+    privileged call to avoid a second password prompt.
     """
     if _is_service_loaded():
         logger.info("Wazuh launchd service already loaded, nothing to do")
         return True
 
-    script = f"launchctl bootstrap system '{WAZUH_LAUNCHD_PLIST}'"
+    parts = []
+    # Restore client.keys from backup if it's missing — checked unprivileged
+    # first (backup lives outside /Library/Ossec/ so is always readable).
+    if os.path.exists(_KEY_BACKUP):
+        parts.append(
+            f"if [ ! -s '{_CLIENT_KEYS}' ]; then "
+            f"cp '{_KEY_BACKUP}' '{_CLIENT_KEYS}' && "
+            f"chmod 640 '{_CLIENT_KEYS}' && "
+            f"chown root:wazuh '{_CLIENT_KEYS}' && "
+            f"echo KEY_RESTORED; "
+            f"fi"
+        )
+    parts.append(f"launchctl bootstrap system '{WAZUH_LAUNCHD_PLIST}'")
+
+    script = "; ".join(parts)
     success, output = _run_privileged(script)
     if success:
+        if "KEY_RESTORED" in output:
+            logger.info("Restored client.keys from backup before starting agent")
         logger.info("Wazuh agent started via launchd")
     else:
         logger.error(f"Failed to start agent: {output}")
     return success
+
+
+def restore_client_key_if_needed():
+    """Restore client.keys from backup if it is missing, then restart the agent.
+
+    Called when Wazuh is already installed (e.g. after a Resistine app
+    reinstall) but client.keys was lost.  Returns True if the key was
+    already present or was successfully restored; False on failure.
+    """
+    if not os.path.exists(_KEY_BACKUP):
+        logger.info("No client.keys backup found, nothing to restore")
+        return True
+
+    # Only restore and restart if client.keys is actually missing/empty.
+    # Do not touch a running agent if the key is already in place.
+    script = (
+        f"if [ ! -s '{_CLIENT_KEYS}' ]; then "
+        f"  cp '{_KEY_BACKUP}' '{_CLIENT_KEYS}' && "
+        f"  chmod 640 '{_CLIENT_KEYS}' && "
+        f"  chown root:wazuh '{_CLIENT_KEYS}' && "
+        f"  launchctl bootout system '{WAZUH_LAUNCHD_PLIST}' 2>/dev/null; "
+        f"  launchctl bootstrap system '{WAZUH_LAUNCHD_PLIST}' 2>/dev/null; "
+        f"  echo KEY_RESTORED; "
+        f"else "
+        f"  echo KEY_OK; "
+        f"fi"
+    )
+    success, output = _run_privileged(script)
+    if success:
+        if "KEY_RESTORED" in output:
+            logger.info("Restored client.keys from backup and restarted agent")
+        else:
+            logger.info("client.keys already present, agent untouched")
+        return True
+    logger.error(f"Failed to restore client.keys: {output}")
+    return False
 
 
 def _has_running_processes():
@@ -378,10 +434,11 @@ def full_install(progress_callback=None):
     #         name.  The installer reads the env file but its behavior is
     #         unreliable; patching ossec.conf post-install is the authoritative
     #         way to set the name.
-    #      c) Force-registers with the manager using agent-auth -F 1 to
-    #         populate client.keys and replace any stale duplicate on the
-    #         manager.  When client.keys is populated, wazuh-agentd connects
-    #         directly without going through auto-enrollment.
+    #      c) Registers with the manager using agent-auth to populate
+    #         client.keys.  When client.keys is populated, wazuh-agentd
+    #         connects directly without going through auto-enrollment.
+    #         If a duplicate agent name exists on the manager, delete it
+    #         via the Wazuh REST API before enrolling.
     #      d) Bootstraps the launchd plist so launchd manages all processes.
     #    We use launchctl bootstrap (not wazuh-control start) so that all
     #    agent processes live under launchd's supervision.  This ensures
@@ -404,10 +461,10 @@ def full_install(progress_callback=None):
         f"if [ -s '{_KEY_BACKUP}' ]; then "
         f"  cp '{_KEY_BACKUP}' '{_CLIENT_KEYS}' && "
         f"  chmod 640 '{_CLIENT_KEYS}' && "
-        f"  chown root:wheel '{_CLIENT_KEYS}' && "
+        f"  chown root:wazuh '{_CLIENT_KEYS}' && "
         f"  echo KEY_RESTORED; "
         f"else "
-        f"  '{agent_auth}' -m '{WAZUH_MANAGER}' -A '{agent_name}' -F 1 && echo KEY_ENROLLED || echo ENROLL_FAILED; "
+        f"  '{agent_auth}' -m '{WAZUH_MANAGER}' -A '{agent_name}' && echo KEY_ENROLLED || echo ENROLL_FAILED; "
         f"fi; "
         f"launchctl bootout system '{plist}' 2>/dev/null; "
         f"launchctl bootstrap system '{plist}' 2>/dev/null; "
