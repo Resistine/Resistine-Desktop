@@ -30,6 +30,7 @@ if _PLATFORM == "Darwin":
         get_agent_name,
         get_agent_status,
         is_agent_installed,
+        needs_reenrollment,
         restore_client_key_if_needed,
         start_agent,
         stop_agent,
@@ -146,7 +147,9 @@ class Plugin(BasePlugin):
         card.grid_columnconfigure(1, weight=1)
 
         row = 0
-        if installed:
+        if installed and needs_reenrollment():
+            row = self._build_reenroll_section(card, row)
+        elif installed:
             row = self._build_status_section(card, row)
         else:
             row = self._build_install_section(card, row)
@@ -155,7 +158,7 @@ class Plugin(BasePlugin):
             row=row, column=0, columnspan=2
         )
 
-        if installed:
+        if installed and not needs_reenrollment():
             self._start_status_polling()
             # If the agent is stopped, try restoring client.keys from backup
             # (covers the case where the app was reinstalled and the key was lost).
@@ -188,6 +191,56 @@ class Plugin(BasePlugin):
                 font=customtkinter.CTkFont(**_FONT_VALUE),
             ).grid(row=row, column=1, padx=20, pady=(8, 0), sticky="e")
             row += 1
+        return row
+
+    # --- Card: Re-enrollment required (account change) ---
+
+    def _build_reenroll_section(self, card, row):
+        from utils import settings as app_settings
+        enrolled = app_settings.get("wazuh", "enrolled_email", "unknown")
+        current = app_settings.get("auth", "email", "unknown")
+
+        customtkinter.CTkLabel(
+            card,
+            text="Re-enrollment Required",
+            font=customtkinter.CTkFont(**_FONT_TITLE),
+        ).grid(row=row, column=0, columnspan=2, padx=20, pady=(20, 4), sticky="w")
+        row += 1
+
+        customtkinter.CTkLabel(
+            card,
+            text=(
+                f"This agent was enrolled under a different account ({enrolled}).\n"
+                f"Reinstall to register it under the current account ({current})."
+            ),
+            font=customtkinter.CTkFont(size=13),
+            text_color=_COLOR_ERROR,
+            wraplength=460,
+            justify="left",
+        ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 12), sticky="w")
+        row += 1
+
+        row = self._add_separator(card, row)
+
+        self._progress_label = customtkinter.CTkLabel(
+            card,
+            text="",
+            font=customtkinter.CTkFont(size=13),
+            text_color=_COLOR_ACCENT,
+        )
+        self._progress_label.grid(row=row, column=0, columnspan=2, padx=20, pady=(12, 0), sticky="w")
+        row += 1
+
+        customtkinter.CTkButton(
+            card,
+            text="Reinstall Agent",
+            height=40,
+            corner_radius=8,
+            font=customtkinter.CTkFont(size=14, weight="bold"),
+            command=self._start_installation,
+        ).grid(row=row, column=0, columnspan=2, sticky="ew", padx=20, pady=(8, 20))
+        row += 1
+
         return row
 
     # --- Card: Not Installed ---
