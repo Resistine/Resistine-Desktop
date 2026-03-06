@@ -74,14 +74,66 @@ def get_agent_name():
 
 
 def get_agent_group():
-    # This should be reverted once group creation is fixed
+    """Return the user's email (sanitized) as the agent group.
+
+    Replaces '@' with '.' so the group name is a valid Wazuh identifier.
+    Falls back to 'default' if no email is stored.
     """
-    Return the user's email (sanitized) as the agent group.
     email = settings.get("auth", "email", "default")
-    return email.replace("@", ".")
-    """
-    """Return the agent group."""
+    if email and email != "default":
+        return email.replace("@", ".")
     return "default"
+
+
+def needs_reenrollment():
+    """Return True if the agent was enrolled under a different email than the current user.
+
+    This covers: new login with different email, org change, etc.
+    Returns False if no prior enrollment is recorded (safe to proceed normally).
+    """
+    enrolled = settings.get("wazuh", "enrolled_email", "")
+    current = settings.get("auth", "email", "")
+    if enrolled and current and enrolled != current:
+        logger.info(f"[WAZUH] Enrollment mismatch: enrolled={enrolled!r} current={current!r}")
+        return True
+    return False
+
+
+_RESISTINE_API_BASE = "https://validate.resistine.work"
+
+
+def create_wazuh_group(group_name):
+    """Create a Wazuh agent group via the Resistine backend API.
+
+    Calls POST /create-groups?name=<group_name>.  If the group already
+    exists the backend returns a non-200 response with a descriptive
+    message; we treat that as success so the install can proceed normally.
+
+    Returns True if the group is ready to use, False on unexpected error.
+    """
+    import requests
+
+    url = f"{_RESISTINE_API_BASE}/create-groups"
+    try:
+        logger.info(f"[WAZUH] create_wazuh_group -> POST {url} | name={group_name}")
+        response = requests.post(url, params={"name": group_name}, timeout=30)
+        logger.info(f"[WAZUH] create_wazuh_group <- HTTP {response.status_code} | body={response.text!r}")
+
+        if response.status_code == 200:
+            logger.info(f"[WAZUH] Group '{group_name}' created successfully")
+            return True
+
+        # 422 or similar — group may already exist; treat as success
+        body = response.text.lower()
+        if "already" in body or "exist" in body or response.status_code == 409:
+            logger.info(f"[WAZUH] Group '{group_name}' already exists, continuing")
+            return True
+
+        logger.warning(f"[WAZUH] Unexpected response creating group '{group_name}': {response.status_code} {response.text!r}")
+        return False
+    except Exception as e:
+        logger.error(f"[WAZUH] Failed to create group '{group_name}': {e}")
+        return False
 
 
 def get_package_url():
@@ -281,7 +333,16 @@ def restore_client_key_if_needed():
     Called when Wazuh is already installed (e.g. after a Resistine app
     reinstall) but client.keys was lost.  Returns True if the key was
     already present or was successfully restored; False on failure.
+
+    Returns False without touching anything if the current user's email
+    differs from the enrolled email — restoring a stale key from a
+    different account would connect the agent to the wrong group.
+    The caller (UI) is responsible for prompting a reinstall in that case.
     """
+    if needs_reenrollment():
+        logger.info("[WAZUH] Skipping key restore — enrolled under different email, reinstall required")
+        return False
+
     if not os.path.exists(_KEY_BACKUP):
         logger.info("No client.keys backup found, nothing to restore")
         return True
@@ -444,9 +505,16 @@ def full_install(progress_callback=None):
             progress_callback("Download failed")
         return False
 
-    # 2. Write env file (unprivileged — /tmp is world-writable)
+    # 2. Ensure the agent group exists on the manager, then write the env file.
     agent_name = get_agent_name()
     agent_group = get_agent_group()
+
+    if progress_callback:
+        progress_callback(f"Creating agent group '{agent_group}'...")
+    if not create_wazuh_group(agent_group):
+        logger.warning(f"[WAZUH] Could not create group '{agent_group}', falling back to 'default'")
+        agent_group = "default"
+
     if not write_env_file(agent_name, agent_group):
         if progress_callback:
             progress_callback("Failed to write environment file")
@@ -474,24 +542,28 @@ def full_install(progress_callback=None):
     ossec_conf = f"{WAZUH_INSTALL_DIR}/etc/ossec.conf"
     plist = WAZUH_LAUNCHD_PLIST
     agent_auth = f"{WAZUH_INSTALL_DIR}/bin/agent-auth"
+    backup_dir = os.path.dirname(_KEY_BACKUP)
     install_and_start_script = (
         f"installer -pkg '{pkg_path}' -target / || echo INSTALL_FAIL; "
         # Patch agent_name directly in ossec.conf — more reliable than the
         # env file, which the installer may ignore or read inconsistently.
         f"sed -i '' 's|<agent_name>.*</agent_name>|<agent_name>{agent_name}</agent_name>|' '{ossec_conf}'; "
-        # Restore backed-up client.keys if available.  This reuses the
-        # existing manager-issued key so the agent reconnects without
-        # re-enrolling — no duplicate-name conflicts on the manager.
-        # If no backup exists, fall through to agent-auth enrollment.
-        # Restore from Keychain (primary) or file backup (fallback).
-        # If neither exists, enroll fresh via agent-auth.
-        f"KC=$(security find-generic-password -k '{_KEYCHAIN}' -s '{_KC_SERVICE}' -a '{_KC_ACCOUNT}' -w 2>/dev/null); "
-        f"if [ -n \"$KC\" ]; then "
-        f"  echo \"$KC\" > '{_CLIENT_KEYS}' && chmod 640 '{_CLIENT_KEYS}' && chown root:wazuh '{_CLIENT_KEYS}' && echo KEY_RESTORED; "
-        f"elif [ -s '{_KEY_BACKUP}' ]; then "
-        f"  cp '{_KEY_BACKUP}' '{_CLIENT_KEYS}' && chmod 640 '{_CLIENT_KEYS}' && chown root:wazuh '{_CLIENT_KEYS}' && echo KEY_RESTORED; "
-        f"else "
-        f"  '{agent_auth}' -m '{WAZUH_MANAGER}' -A '{agent_name}' && echo KEY_ENROLLED || echo ENROLL_FAILED; "
+        # Always re-enroll with agent-auth so the agent is placed in the
+        # correct group on the manager.  Restoring a stale key would
+        # reconnect with the old enrollment (possibly wrong group), so we
+        # clear it first regardless of whether this is a fresh install or
+        # a reinstall.  This covers every edge case: fresh install,
+        # reinstall after uninstall, and reinstall after app reinstall.
+        f"rm -f '{_CLIENT_KEYS}'; "
+        f"'{agent_auth}' -m '{WAZUH_MANAGER}' -A '{agent_name}' -G '{agent_group}' && echo KEY_ENROLLED || echo ENROLL_FAILED; "
+        # Persist the newly issued key to Keychain + file backup so that
+        # restore_client_key_if_needed() can reconnect after a future app
+        # reinstall without needing another password prompt.
+        f"if [ -s '{_CLIENT_KEYS}' ]; then "
+        f"  mkdir -p '{backup_dir}' && cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}'; "
+        f"  security add-generic-password -U "
+        f"  -k '{_KEYCHAIN}' -s '{_KC_SERVICE}' -a '{_KC_ACCOUNT}' "
+        f"  -w \"$(cat '{_CLIENT_KEYS}')\" 2>/dev/null; "
         f"fi; "
         f"launchctl bootout system '{plist}' 2>/dev/null; "
         f"launchctl bootstrap system '{plist}' 2>/dev/null; "
@@ -530,6 +602,10 @@ def full_install(progress_callback=None):
         logger.warning("Agent installed but not yet running")
         if progress_callback:
             progress_callback("Wazuh agent installed (agent may need manual start)")
+
+    # Record which email this enrollment belongs to so we can detect
+    # account changes (different user / org) on future startups.
+    settings.set("wazuh", "enrolled_email", settings.get("auth", "email", ""))
 
     logger.info("Wazuh full install completed successfully")
     return True
