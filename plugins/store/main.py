@@ -209,20 +209,26 @@ class Plugin(BasePlugin):
         return self.main_frame
     
     def _bind_responsive_resize(self, inject_store_buttons):
-        """Bind a resize handler to rebuild grid when crossing 60% threshold."""
+        """
+        Bind a resize handler to rebuild grid when the column count needs to change.
+
+        Uses a 250ms debounce so the grid is only rebuilt once the user finishes (or
+        pauses) resizing — not on every pixel during a drag.  Position-only Configure
+        events (window moved but not resized) are filtered out immediately so they
+        never queue a rebuild at all.
+        """
         def on_resize(event=None):
             if not hasattr(self, '_store_plugins') or not hasattr(self, '_content_frame'):
                 return
             try:
                 if not self._content_frame.winfo_exists():
                     return
-            except:
+            except Exception:
                 return
 
             screen_width = self._cached_screen_width
             window_width = self.app.winfo_width()
-            
-            # Determine target columns based on width thresholds
+
             if window_width <= screen_width * 0.6:
                 max_cols = 2
                 min_cols = None
@@ -232,24 +238,29 @@ class Plugin(BasePlugin):
             else:
                 max_cols = None
                 min_cols = None
-            
-            # Calculate target columns
-            target_cols = len(self.app.calculate_rows_cols(len(self._store_plugins), max_cols=max_cols, min_cols=min_cols)[1])
-            
-            # Only rebuild if column count changed
-            current = getattr(self, '_current_cols', None)
-            if current == target_cols:
+
+            target_cols = len(self.app.calculate_rows_cols(
+                len(self._store_plugins), max_cols=max_cols, min_cols=min_cols)[1])
+
+            if getattr(self, '_current_cols', None) == target_cols:
                 return
-            
+
             self._rebuild_grid(max_cols, min_cols, inject_store_buttons)
-        
-        # Debounce: trigger quickly but avoid excessive rebuilds
+
         self._resize_after_id = None
-        self._last_threshold_state = None
-        self._cached_screen_width = self.app.winfo_screenwidth()  # Cache screen width
-        
+        # Track the last known window dimensions so we can ignore position-only events.
+        self._last_win_size = [0, 0]
+        self._cached_screen_width = self.app.winfo_screenwidth()
+
         def debounced_resize(event=None):
-            # Skip if store is not visible or destroyed
+            # Filter: ignore Configure events that only changed position, not size.
+            if event:
+                if event.width == self._last_win_size[0] and event.height == self._last_win_size[1]:
+                    return
+                self._last_win_size[0] = event.width
+                self._last_win_size[1] = event.height
+
+            # Skip if store is no longer visible or has been destroyed.
             if not hasattr(self, 'main_frame'):
                 return
             try:
@@ -257,42 +268,21 @@ class Plugin(BasePlugin):
                     return
             except Exception:
                 return
-            
-            # Quick check if we crossed the threshold (no debounce for threshold crossing)
-            screen_width = self._cached_screen_width
-            window_width = self.app.winfo_width()
-            # Track state: 0=narrow (<=60%), 1=normal, 2=wide (>=90%)
-            if window_width <= screen_width * 0.6:
-                threshold_state = 0
-            elif window_width >= screen_width * 0.9:
-                threshold_state = 2
-            else:
-                threshold_state = 1
-            
-            # If threshold state changed, trigger immediately
-            if self._last_threshold_state is not None and self._last_threshold_state != threshold_state:
-                self._last_threshold_state = threshold_state
-                if self._resize_after_id:
-                    self.app.after_cancel(self._resize_after_id)
-                    self._resize_after_id = None
-                on_resize()
-                return
-            
-            self._last_threshold_state = threshold_state
-            
-            # For other resizes, use debounce to avoid excessive rebuilds
+
+            # Always debounce — never fire mid-drag, even on threshold crossings.
+            # Rebuilding the grid while the user is still dragging causes the visible
+            # flash/glitch on Windows; waiting until they pause/stop eliminates it.
             if self._resize_after_id:
                 self.app.after_cancel(self._resize_after_id)
-            self._resize_after_id = self.app.after(100, on_resize)
-        
-        # LEAK PREVENTION: Unbind any existing global handler before adding a new one.
-        # This is critical because create_main_screen() is called on every tab switch.
+            self._resize_after_id = self.app.after(250, on_resize)
+
+        # LEAK PREVENTION: unbind any handler left over from a previous tab visit.
         if hasattr(self, '_resize_handler_id') and self._resize_handler_id:
             try:
                 self.app.unbind("<Configure>", self._resize_handler_id)
-            except:
+            except Exception:
                 pass
-        
+
         self._resize_handler_id = self.app.bind("<Configure>", debounced_resize, add="+")
     
     def destroy(self):
