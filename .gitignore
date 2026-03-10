@@ -136,3 +136,7 @@ provisioning-profiles/
 *.mobileprovision
 *.cert
 *.p12
+
+
+#Claude Code
+.claude/

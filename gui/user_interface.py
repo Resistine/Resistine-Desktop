@@ -1,6 +1,7 @@
 import os
 import sys
 import math
+import platform
 import tkinter as tk
 
 import customtkinter
@@ -125,43 +126,46 @@ class AppUI(customtkinter.CTk):
             border_color=border_color,
         )
         frame._resistine_plugin_card = True
-
-        # Pre-allocation for initial sizing
-        initial_h = getattr(container_frame, "_resistine_target_height", 160)
-        num_cols = getattr(container_frame, "_resistine_num_cols", 1)
-        cont_w = container_frame.winfo_width()
-        if cont_w <= 1:
-            hint = None
-            parent = container_frame.master
-            while parent:
-                if hasattr(parent, "_content_width_hint") and parent._content_width_hint:
-                    hint = parent._content_width_hint
-                    break
-                parent = getattr(parent, "master", None)
-            cont_w = hint if hint else 800
-        initial_w = int(cont_w / num_cols) - 16
-
-        try:
-            frame.configure(width=initial_w, height=initial_h)
-            frame.grid_propagate(False)
-        except Exception:
-            pass
-
         frame.grid(row=row, column=column, padx=8, pady=8, sticky="nsew")
         frame.grid_columnconfigure(0, weight=1)
         frame.grid_rowconfigure(0, weight=0)  # header
         frame.grid_rowconfigure(1, weight=0)  # description
         frame.grid_rowconfigure(2, weight=1)  # spacer / extra buttons
 
-        # --- Header row: icon + title + status badge ---
+        # --- Header: icon (left) + title/badge stack (right) ---
         header = customtkinter.CTkFrame(frame, fg_color="transparent")
         header.grid(row=0, column=0, sticky="new", padx=16, pady=(16, 0))
-        header.grid_columnconfigure(1, weight=1)
+        header.grid_columnconfigure(1, weight=1, minsize=40)
+        header.grid_rowconfigure(0, weight=0)  # title row
+        header.grid_rowconfigure(1, weight=0)  # badge row
+
+        # --- Compute initial wraplength BEFORE creating labels ---
+        # Walk ancestors to find total content-area width and column count so the very
+        # first render uses a realistic wraplength instead of an arbitrary small fallback.
+        _init_tw = 150
+        _init_dw = 200
+        try:
+            _hw, _nc = 0, 0
+            _p = container_frame
+            while _p:
+                if not _hw and hasattr(_p, "_content_width_hint") and _p._content_width_hint:
+                    _hw = _p._content_width_hint
+                if not _nc and hasattr(_p, "_resistine_num_cols"):
+                    _nc = _p._resistine_num_cols
+                if _hw and _nc:
+                    break
+                _p = getattr(_p, "master", None)
+            if _hw > 10 and _nc > 0:
+                _cw = max(100, _hw // _nc - 20)
+                _init_tw = max(80, _cw - 80)
+                _init_dw = max(100, _cw - 40)
+        except Exception:
+            pass
 
         icon_image = plugin.get_icon_large() if hasattr(plugin, 'get_icon_large') else plugin.get_icon()
         if icon_image:
             icon_label = customtkinter.CTkLabel(header, image=icon_image, text="")
-            icon_label.grid(row=0, column=0, sticky="w", padx=(0, 12))
+            icon_label.grid(row=0, column=0, rowspan=2, sticky="nw", padx=(0, 12))
 
         title_label = customtkinter.CTkLabel(
             header,
@@ -169,10 +173,11 @@ class AppUI(customtkinter.CTk):
             font=customtkinter.CTkFont(size=16, weight="bold"),
             text_color=text_primary,
             anchor="w",
+            wraplength=_init_tw,
         )
         title_label.grid(row=0, column=1, sticky="ew")
 
-        # Status badge (pill)
+        # Status badge (pill) — placed below the title so it doesn't squeeze it
         current_status = plugin.get_status()
         if current_status is not None and str(current_status).strip():
             status_key = str(current_status).lower()
@@ -192,9 +197,10 @@ class AppUI(customtkinter.CTk):
                 corner_radius=6,
                 height=22,
             )
-            badge.grid(row=0, column=2, sticky="e", padx=(8, 0))
+            badge.grid(row=1, column=1, sticky="w", pady=(4, 0))
 
         # --- Description ---
+        _desc_lbl = None
         if show_description:
             description = plugin.get_description()
             if truncate and len(description) > 80:
@@ -205,25 +211,58 @@ class AppUI(customtkinter.CTk):
                 text=description,
                 font=customtkinter.CTkFont(size=12),
                 text_color=text_secondary,
-                wraplength=200,
+                wraplength=_init_dw,
                 justify="left",
                 anchor="nw",
             )
             desc_label.grid(row=1, column=0, sticky="new", padx=16, pady=(8, 0))
-
-            if hasattr(container_frame, "_resistine_desc_labels"):
-                container_frame._resistine_desc_labels.append(desc_label)
-                w = container_frame.winfo_width()
-                if w > 1:
-                    nc = getattr(container_frame, "_resistine_num_cols", 1)
-                    col_width = w / nc
-                    desc_label.configure(wraplength=max(100, int(col_width - 60)))
+            _desc_lbl = desc_label
 
         # --- Extra buttons (Store page) ---
         if extra_buttons_func:
             buttons_area = customtkinter.CTkFrame(frame, fg_color="transparent")
             buttons_area.grid(row=2, column=0, sticky="sew", padx=16, pady=(8, 16))
             extra_buttons_func(buttons_area, plugin)
+
+        # --- Wraplength: update once after resize stops ---
+        # During active resize the card fires <Configure> on every layout pass.
+        # We debounce the actual configure(wraplength=…) call so it only runs
+        # once — 150 ms after the card stops changing size.  This eliminates the
+        # N×card label canvas-redraws that happened on every pixel of drag on Win.
+        _wrap_state = [_init_tw, _init_dw]
+        _wrap_job = [None]
+        _tl = title_label
+        _dl = _desc_lbl if show_description else None
+
+        def _apply_wraplength(_f=frame, _tl=_tl, _dl=_dl, _s=_wrap_state, _j=_wrap_job):
+            _j[0] = None
+            try:
+                card_w = _f.winfo_width()
+                if card_w <= 4:
+                    return
+                new_tw = max(80, card_w - 80)
+                new_dw = max(100, card_w - 40)
+                if abs(new_tw - _s[0]) >= 4:
+                    _s[0] = new_tw
+                    _tl.configure(wraplength=new_tw)
+                if _dl and abs(new_dw - _s[1]) >= 4:
+                    _s[1] = new_dw
+                    _dl.configure(wraplength=new_dw)
+            except Exception:
+                pass
+
+        def _schedule_wraplength(event=None, _f=frame, _j=_wrap_job):
+            if _j[0] is not None:
+                try:
+                    _f.after_cancel(_j[0])
+                except Exception:
+                    pass
+            _j[0] = _f.after(150, _apply_wraplength)
+
+        # <Configure> only schedules (cheap); <Map> and the initial after() fire immediately.
+        frame.bind("<Configure>", _schedule_wraplength)
+        frame.bind("<Map>", lambda e: _apply_wraplength())
+        frame.after(1, _apply_wraplength)
 
         # --- Interaction ---
         def on_click(_e=None):
@@ -369,104 +408,48 @@ class AppUI(customtkinter.CTk):
 
         # Optimization properties
         container._resistine_last_w = -1
-        container._resistine_last_height = -1  # Cache last target_height to skip redundant configure calls
-        container._resistine_desc_labels = [] # Centralized wraplength updates
+        container._resistine_last_height = -1
         container._resistine_num_cols = len(cols_tuple)
-        container._resistine_screen_width = None  # Cached screen width for performance
-        container._resistine_resize_job = None  # For debouncing
+        container._resistine_resize_job = None
 
         def update_aspect_ratio(event=None, force_width=None):
-            # Debounce resize events (skip if another update is pending)
             if event and not force_width:
                 if container._resistine_resize_job:
                     try:
                         container.after_cancel(container._resistine_resize_job)
                     except:
                         pass
-                container._resistine_resize_job = container.after(60, lambda: _do_update_aspect_ratio(force_width=None))
+                # 200 ms debounce: matches the CTkScrollableFrame inner-frame freeze so
+                # both the frame snap and the row-height update fire in the same pass,
+                # avoiding a second wave of card redraws shortly after the first.
+                container._resistine_resize_job = container.after(200, lambda: _do_update_aspect_ratio())
                 return
             _do_update_aspect_ratio(force_width=force_width)
-        
+
         def _do_update_aspect_ratio(force_width=None):
             container._resistine_resize_job = None
             try:
                 if not container.winfo_exists():
                     return
-                
-                # Calculate column width directly from force_width or winfo
                 total_width = force_width if force_width else container.winfo_width()
                 if total_width <= 1:
                     return
-                
-                # RECURSION & NOISE CHECK: Skip if width hasn't changed meaningfully
-                # Small changes (1-3px) often happen as window settles or scrollbars appear.
                 if container._resistine_last_w != -1 and abs(total_width - container._resistine_last_w) < 4:
                     return
                 container._resistine_last_w = total_width
-                
                 num_cols = container._resistine_num_cols
                 if num_cols == 0:
                     return
-                    
                 col_width = total_width / num_cols
-                
-                # Height = Width / ratio
-                # Card width is col_width minus padding (10px on each side)
                 card_width = max(1, col_width - 20)
-                target_height = int(card_width / aspect_ratio) + 20 # add padding back
-                
-                # Ensure minimum height for content
-                target_height = max(target_height, 120)
-                
-                # Cap maximum height based on number of columns
-                max_height = 250
-                if num_cols == 2:
-                    target_height = min(target_height, max_height)
-                elif num_cols >= 4:
-                    # For 4+ columns, set minimum height to match what cards would be at 90% width with 3 cols
-                    # Store screen width for performance
-                    if container._resistine_screen_width is None:
-                        container._resistine_screen_width = container.winfo_screenwidth()
-                    screen_w = container._resistine_screen_width
-                    # Estimate content width at 90% (minus sidebar ~200, minus padding ~40)
-                    content_at_90 = screen_w * 0.9 - 240
-                    col_w_at_90 = content_at_90 / 3
-                    card_w_at_90 = col_w_at_90 - 20
-                    min_height_4col = int(card_w_at_90 / aspect_ratio) + 20
-                    target_height = max(target_height, min_height_4col)
-                    target_height = min(target_height, max_height)
-                else:
-                    # max_height = 900
-                    target_height = min(target_height, max_height)
-                
-                # Store for cards created later (pre-allocation)
+                # Raised upper-bound from 220→300 so description text has room and isn't
+                # clipped by the grid row's minsize when text wraps to multiple lines.
+                target_height = max(160, min(300, int(card_width / aspect_ratio) + 20))
                 container._resistine_target_height = target_height
-
-                # Only update card heights and wraplengths if target_height actually changed
                 if target_height != container._resistine_last_height:
                     container._resistine_last_height = target_height
-
-                    # Update row minsize to maintain aspect ratio perfectly
                     for r in rows_tuple:
                         container.grid_rowconfigure(r, minsize=target_height)
-
-                    # ENFORCE CARD HEIGHTS:
-                    # Loop through children and ensure widgets marked with _resistine_plugin_card
-                    # strictly follow the target height. This prevents "jumping" on load.
-                    for child in container.winfo_children():
-                        if getattr(child, "_resistine_plugin_card", False):
-                            try:
-                                child.configure(height=target_height)
-                            except: pass
-
-                # Centralized wraplength update (efficiently loops through registered labels)
-                wrap_val = max(100, int(card_width) - 60)
-                for label in container._resistine_desc_labels:
-                    try:
-                        if label.winfo_exists():
-                            label.configure(wraplength=wrap_val)
-                    except: pass
-
             except (tk.TclError, AttributeError, RuntimeError):
                 pass
 
@@ -678,13 +661,13 @@ class AppUI(customtkinter.CTk):
         try:
             total_w = self.winfo_width()
             if total_w > 1:
-                # Use actual navigation sidebar width if available, fallback to 200
-                nav_w = self.navigation_frame.winfo_width() if hasattr(self, "navigation_frame") else 200
-                if nav_w < 100: nav_w = 200 # Fallback for unmapped frame
-                
-                # Precise subtraction: window width - sidebar - margins/scrollbar padding
-                # (40px accounts for main frame padx(20)*2 + scrollbar allowance)
-                self._content_width_hint = total_w - nav_w - 40
+                # Use actual navigation sidebar width if available, fallback to 250 (sidebar minsize)
+                nav_w = self.navigation_frame.winfo_width() if hasattr(self, "navigation_frame") else 250
+                if nav_w < 100: nav_w = 250  # Fallback for unmapped frame
+
+                # Windows CTkScrollableFrame scrollbar is ~20px wider than macOS overlay scrollbar
+                _scroll_offset = 60 if platform.system() == "Windows" else 40
+                self._content_width_hint = total_w - nav_w - _scroll_offset
         except:
             self._content_width_hint = None
 

@@ -122,6 +122,35 @@ def setup_logging(level="INFO", log_to_file=True):
     # Remove default Loguru handler
     logger.remove()
 
+    # On Windows the default console encoding is cp1252 which cannot encode
+    # emoji characters used in log messages. Force UTF-8 with replacement
+    # so log calls never raise UnicodeEncodeError.
+    import platform as _plat
+    if _plat.system() == "Windows":
+        import io as _io
+        for _attr in ("stdout", "stderr"):
+            _stream = getattr(sys, _attr, None)
+            if _stream is None:
+                continue
+            if getattr(_stream, "encoding", "utf-8").lower() == "utf-8":
+                continue
+            # Wrap the raw buffer — more reliable than reconfigure on Windows
+            if hasattr(_stream, "buffer"):
+                try:
+                    _wrapped = _io.TextIOWrapper(
+                        _stream.buffer, encoding="utf-8", errors="replace", line_buffering=True
+                    )
+                    setattr(sys, _attr, _wrapped)
+                    continue
+                except Exception:
+                    pass
+            # Fallback: reconfigure in-place
+            if hasattr(_stream, "reconfigure"):
+                try:
+                    _stream.reconfigure(encoding="utf-8", errors="replace")
+                except Exception:
+                    pass
+
     # In PyInstaller windowed builds, stdout/stderr can be None.
     console_sink = sys.stdout if getattr(sys, "stdout", None) is not None else getattr(sys, "stderr", None)
     if console_sink is not None and hasattr(console_sink, "write"):
