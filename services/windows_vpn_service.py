@@ -10,6 +10,7 @@ import servicemanager
 
 import win32con
 
+import secrets
 import socket
 import threading
 import json
@@ -30,7 +31,40 @@ SERVICE_HOST = "127.0.0.1"
 SERVICE_PORT = 51888
 BUFFER_SIZE = 4096
 
-IPC_TOKEN = "RESISTINE_INTERNAL_TOKEN_CHANGE_ME"
+_TOKEN_FILE = os.path.join(
+    os.environ.get("PROGRAMDATA", r"C:\ProgramData"),
+    "Resistine",
+    "ipc_token",
+)
+
+
+def _init_ipc_token() -> str:
+    """Load existing token or generate and persist a new one.
+
+    The token file is written once at service startup and shared with the
+    IPC client (service_client.py) so both sides use the same secret without
+    it ever being hardcoded.
+    """
+    if os.path.exists(_TOKEN_FILE):
+        try:
+            with open(_TOKEN_FILE, "r") as f:
+                token = f.read().strip()
+            if token:
+                return token
+        except OSError:
+            pass
+
+    token = secrets.token_hex(32)
+    try:
+        os.makedirs(os.path.dirname(_TOKEN_FILE), exist_ok=True)
+        with open(_TOKEN_FILE, "w") as f:
+            f.write(token)
+    except OSError as exc:
+        logging.error(f"Could not persist IPC token to {_TOKEN_FILE}: {exc}")
+    return token
+
+
+IPC_TOKEN = _init_ipc_token()
 
 ALLOWED_COMMANDS = {
     "status",
