@@ -6,6 +6,8 @@ This service listens for commands from the GUI and manages WireGuard tunnels
 accordingly. It also auto-starts a default tunnel if present in ProgramData.
 """
 
+from __future__ import annotations
+
 import win32serviceutil
 import win32service
 import win32event
