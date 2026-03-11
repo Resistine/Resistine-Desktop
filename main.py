@@ -131,7 +131,6 @@ class App(AppUI):
             f"{window_width}x{window_height}+{position_right}+{position_down}"
         )
         self.minsize(min_width, min_height)
-        self.maxsize(screen_width, screen_height)
 
         # Check if already logged in
         if settings.get("auth", "logged_in", False):
