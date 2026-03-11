@@ -119,8 +119,6 @@ libraries/*/  # Exclude all library directories
 # Windows metadata
 *Zone.Identifier
 
-# Test files (may contain sensitive information)
-tests/
 
 # VPN Apple project artifacts
 vpn-apple/build/
