@@ -139,7 +139,7 @@ class VPNConfigManager:
             # If deleted config was active, switch to resistine_default or first available
             active = app_settings.get(SETTINGS_NAMESPACE, "active_config")
             if active == config_name:
-                fallback = self.get_active_config_name()  # triggers fallback logic
+                self.get_active_config_name()  # triggers fallback logic to set a new active config
 
             logger.info(f"Deleted config: {config_name}")
             return True, ""

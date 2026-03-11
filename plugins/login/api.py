@@ -65,18 +65,16 @@ class LoginAPI:
 
     def verify_otp(
         self,
-        email,
-        otp,
-        public_key,
-        host_url="rfr1.resisti.net",
-        vpn_name="testVPNapi",
-        hostname=None,
-    ):
+        email: str,
+        otp: str,
+        public_key: str,
+        hostname: str = None,
+    ) -> tuple:
         """
-        Verify the OTP and public key.
+        Verify the OTP and send the client public key to receive a WireGuard config.
         Returns a tuple (success, message, data).
 
-        TODO: Remove host_url and vpn_name parameters and get them from tha API instead!!!
+        The server determines VPN assignment from the user's account subscription.
         """
         try:
             import socket
@@ -85,8 +83,6 @@ class LoginAPI:
             payload = {
                 "email": email,
                 "otp": otp,
-                "host_url": host_url,
-                "vpn_name": vpn_name,
                 "client_public_key": public_key,
                 "hostname": hostname or socket.gethostname(),
             }
