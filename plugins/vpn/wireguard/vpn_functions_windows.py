@@ -14,6 +14,7 @@ import json
 import os
 import subprocess
 
+import utils.settings as _settings
 from utils.settings import get_config_dir
 from utils.logger import logger
 
@@ -103,10 +104,10 @@ def check_service_status(tunnel_name: str, test_ip: str = None) -> str:
 
 # ----------------------------------------------------------------
 # Key management
+# Private key is stored encrypted via settings.set_secret() which uses
+# Fernet encryption backed by the Windows Credential Manager (DPAPI).
+# Public key is stored as plaintext since it is not sensitive.
 # ----------------------------------------------------------------
-
-KEYS_FILE_PATH = os.path.join(get_config_dir(), "keys.json")
-
 
 def generate_wireguard_keys() -> dict | None:
     """Generate a WireGuard public/private key pair.
@@ -165,39 +166,34 @@ def _generate_keys_fallback() -> dict | None:
 
 
 def get_wireguard_private_key() -> str | None:
-    """Retrieve the saved WireGuard private key."""
+    """Retrieve the saved WireGuard private key from encrypted settings storage."""
     try:
-        if os.path.exists(KEYS_FILE_PATH):
-            with open(KEYS_FILE_PATH, "r") as f:
-                return json.load(f).get("private_key")
-        return None
+        return _settings.get_secret("vpn", "private_key")
     except Exception as e:
         logger.error(f"Error retrieving private key: {e}")
         return None
 
 
 def save_wireguard_keys(private_key: str, public_key: str) -> bool:
-    """Save WireGuard keys to disk."""
+    """Save WireGuard keys using encrypted settings storage.
+
+    The private key is encrypted at rest via the system keyring (Windows Credential
+    Manager / DPAPI).  The public key is non-sensitive and stored as plaintext.
+    """
     try:
-        os.makedirs(os.path.dirname(KEYS_FILE_PATH), exist_ok=True)
-        with open(KEYS_FILE_PATH, "w") as f:
-            json.dump({"private_key": private_key, "public_key": public_key}, f)
-        try:
-            import stat
-            os.chmod(KEYS_FILE_PATH, stat.S_IREAD | stat.S_IWRITE)
-        except Exception:
-            pass
-        return True
+        ok1 = _settings.set_secret("vpn", "private_key", private_key)
+        ok2 = _settings.set("vpn", "public_key", public_key)
+        return bool(ok1 and ok2)
     except Exception as e:
         logger.error(f"Error saving keys: {e}")
         return False
 
 
 def delete_wireguard_keys() -> bool:
-    """Delete the saved WireGuard keys file."""
+    """Delete the saved WireGuard keys from encrypted settings storage."""
     try:
-        if os.path.exists(KEYS_FILE_PATH):
-            os.remove(KEYS_FILE_PATH)
+        _settings.delete("vpn", "private_key")
+        _settings.delete("vpn", "public_key")
         return True
     except Exception as e:
         logger.error(f"Error deleting keys: {e}")
@@ -267,10 +263,10 @@ def parse_and_create_vpn_config(
             private_key = get_wireguard_private_key()
 
             if not private_key:
-                # Fresh install — keys.json doesn't exist yet.
+                # Fresh install — no key in encrypted storage yet.
                 # Generate and save keys now so the config can be completed
                 # and the public key is available for future API calls.
-                logger.info("keys.json not found — generating keys for fresh install")
+                logger.info("No private key in encrypted storage — generating keys for fresh install")
                 public_key = setup_vpn_keys()
                 if not public_key:
                     logger.error("Failed to generate WireGuard keys on fresh install")
@@ -288,7 +284,7 @@ def parse_and_create_vpn_config(
             for k in list(interface.keys()):
                 if k.lower() == "privatekey" and k != "PrivateKey":
                     del interface[k]
-            logger.info("PrivateKey injected into config from keys.json")
+            logger.info("PrivateKey injected into config from encrypted settings")
 
         def _conf_value(v):
             """Flatten list values to comma-separated strings for WireGuard conf format."""
