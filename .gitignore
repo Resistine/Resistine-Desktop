@@ -136,3 +136,6 @@ provisioning-profiles/
 *.mobileprovision
 *.cert
 *.p12
+# Inno Setup output
+dist/installer/
+*.exe
