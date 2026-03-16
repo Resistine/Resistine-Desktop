@@ -244,6 +244,11 @@ begin
   Result := HiddenCmdSucceeded('sc query "ResistineVPN" >nul 2>nul');
 end;
 
+function ServiceExists(const ServiceName: string): Boolean;
+begin
+  Result := HiddenCmdSucceeded('sc query ' + QuotePath(ServiceName) + ' >nul 2>nul');
+end;
+
 function TryKillResistineProcess(ForceKill: Boolean): Boolean;
 var
   ResultCode: Integer;
@@ -326,29 +331,134 @@ begin
   DeleteDirectoryIfExists(GetResistineCommonDataDir);
 end;
 
-procedure RemoveResistineVpnServicesAndTunnels;
+function WaitForServiceAbsent(const ServiceName: string; Attempts, DelayMs: Integer): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to Attempts - 1 do
+  begin
+    if not ServiceExists(ServiceName) then
+    begin
+      Result := True;
+      exit;
+    end;
+    Sleep(DelayMs);
+  end;
+  Result := not ServiceExists(ServiceName);
+end;
+
+function WaitForServiceStoppedOrAbsent(const ServiceName: string; Attempts, DelayMs: Integer): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to Attempts - 1 do
+  begin
+    if (not ServiceExists(ServiceName)) or
+       HiddenCmdSucceeded('sc query ' + QuotePath(ServiceName) + ' | find /I "STOPPED" >nul 2>nul') then
+    begin
+      Result := True;
+      exit;
+    end;
+    Sleep(DelayMs);
+  end;
+
+  Result := (not ServiceExists(ServiceName)) or
+    HiddenCmdSucceeded('sc query ' + QuotePath(ServiceName) + ' | find /I "STOPPED" >nul 2>nul');
+end;
+
+procedure RemoveLegacyStartupArtifacts;
+begin
+  RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'ResistineVPNTray');
+  RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'ResistineVPN');
+  RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Resistine');
+  RegDeleteValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'ResistineVPNTray');
+  RegDeleteValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'ResistineVPN');
+  RegDeleteValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Resistine');
+  RegDeleteValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Run', 'ResistineVPNTray');
+  RegDeleteValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Run', 'ResistineVPN');
+  RegDeleteValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Resistine');
+
+  DeleteFile(ExpandConstant('{userdesktop}\Resistine VPN.lnk'));
+end;
+
+function RunBundledServiceCleanupScript: Boolean;
+var
+  ResultCode: Integer;
+  ScriptPath: string;
+begin
+  Result := False;
+
+  ScriptPath := ExpandConstant('{app}\install_service.bat');
+  if not FileExists(ScriptPath) then
+    exit;
+
+  Log('Uninstall cleanup: invoking bundled service cleanup script');
+  if Exec(
+    ExpandConstant('{cmd}'),
+    '/C call ' + QuotePath(ScriptPath) + ' /uninstallquiet',
+    ExpandConstant('{app}'),
+    SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    Log('Bundled service cleanup exit code: ' + IntToStr(ResultCode));
+    Result := ResultCode = 0;
+  end
+  else
+    Log('Bundled service cleanup script failed to launch');
+end;
+
+procedure StopAndDeleteService(const ServiceName: string);
+var
+  I: Integer;
+  ResultCode: Integer;
+begin
+  if not ServiceExists(ServiceName) then
+    exit;
+
+  RunHiddenCmd('sc stop ' + QuotePath(ServiceName) + ' >nul 2>nul', ResultCode);
+  WaitForServiceStoppedOrAbsent(ServiceName, 10, 1000);
+
+  for I := 0 to 4 do
+  begin
+    RunHiddenCmd('sc delete ' + QuotePath(ServiceName) + ' >nul 2>nul', ResultCode);
+    if WaitForServiceAbsent(ServiceName, 3, 1000) then
+      exit;
+    Sleep(500);
+  end;
+end;
+
+procedure RemoveNamedWireGuardTunnel(const TunnelName: string);
 var
   ResultCode: Integer;
   WireGuardExe: string;
+  ServiceName: string;
 begin
+  ServiceName := 'WireGuardTunnel$' + TunnelName;
+  WireGuardExe := 'C:\Program Files\WireGuard\wireguard.exe';
+
+  if ServiceExists(ServiceName) then
+  begin
+    RunHiddenCmd('sc stop ' + QuotePath(ServiceName) + ' >nul 2>nul', ResultCode);
+    WaitForServiceStoppedOrAbsent(ServiceName, 10, 1000);
+  end;
+
+  if FileExists(WireGuardExe) then
+    RunHiddenCmd(QuotePath(WireGuardExe) + ' /uninstalltunnelservice ' + TunnelName + ' >nul 2>nul', ResultCode);
+
+  StopAndDeleteService(ServiceName);
+end;
+
+procedure RemoveResistineVpnServicesAndTunnels;
+begin
+  RemoveLegacyStartupArtifacts;
+
+  RunBundledServiceCleanupScript;
+
   Log('Uninstall cleanup: stopping/removing Resistine VPN Windows service');
-  RunHiddenCmd('sc stop "ResistineVPN" >nul 2>nul', ResultCode);
-  Sleep(400);
-  RunHiddenCmd('sc delete "ResistineVPN" >nul 2>nul', ResultCode);
+  StopAndDeleteService('ResistineVPN');
 
   Log('Uninstall cleanup: stopping/removing Resistine WireGuard tunnel services');
-  RunHiddenCmd('sc stop "WireGuardTunnel$resistine_default" >nul 2>nul', ResultCode);
-  RunHiddenCmd('sc stop "WireGuardTunnel$resistine_vpn" >nul 2>nul', ResultCode);
-  Sleep(400);
-  RunHiddenCmd('sc delete "WireGuardTunnel$resistine_default" >nul 2>nul', ResultCode);
-  RunHiddenCmd('sc delete "WireGuardTunnel$resistine_vpn" >nul 2>nul', ResultCode);
-
-  WireGuardExe := 'C:\Program Files\WireGuard\wireguard.exe';
-  if FileExists(WireGuardExe) then
-  begin
-    RunHiddenCmd(QuotePath(WireGuardExe) + ' /uninstalltunnelservice resistine_default >nul 2>nul', ResultCode);
-    RunHiddenCmd(QuotePath(WireGuardExe) + ' /uninstalltunnelservice resistine_vpn >nul 2>nul', ResultCode);
-  end;
+  RemoveNamedWireGuardTunnel('resistine_default');
+  RemoveNamedWireGuardTunnel('resistine_vpn');
 end;
 
 function HasAnyResistineUserData: Boolean;
