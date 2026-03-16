@@ -64,7 +64,7 @@ def get_agent_name():
     hostname = socket.gethostname()
     uuid = _get_hardware_uuid()
     if uuid:
-        suffix = uuid.replace("-", "")[-8:].upper()
+        suffix = uuid.replace("-", "")[-12:].upper()
         name = f"{hostname}-{suffix}"
     else:
         name = hostname
@@ -527,11 +527,10 @@ def full_install(progress_callback=None):
     #         name.  The installer reads the env file but its behavior is
     #         unreliable; patching ossec.conf post-install is the authoritative
     #         way to set the name.
-    #      c) Registers with the manager using agent-auth to populate
-    #         client.keys.  When client.keys is populated, wazuh-agentd
-    #         connects directly without going through auto-enrollment.
-    #         If a duplicate agent name exists on the manager, delete it
-    #         via the Wazuh REST API before enrolling.
+    #      c) If a key backup exists for this account (same email), restores it
+    #         so the agent reconnects as the same agent on the manager (avoids
+    #         creating a duplicate "NewAgent" entry on reinstall).  Only if no
+    #         backup is available does it call agent-auth for fresh enrollment.
     #      d) Bootstraps the launchd plist so launchd manages all processes.
     #    We use launchctl bootstrap (not wazuh-control start) so that all
     #    agent processes live under launchd's supervision.  This ensures
@@ -543,29 +542,60 @@ def full_install(progress_callback=None):
     plist = WAZUH_LAUNCHD_PLIST
     agent_auth = f"{WAZUH_INSTALL_DIR}/bin/agent-auth"
     backup_dir = os.path.dirname(_KEY_BACKUP)
+
+    # Prefer restoring the existing enrollment key so the agent reconnects as
+    # the same agent on the manager instead of registering a new one.
+    # Skip restore if the backup belongs to a different account.
+    can_restore = (not needs_reenrollment()) and os.path.exists(_KEY_BACKUP)
+
+    if can_restore:
+        logger.info("[WAZUH] Key backup found — will restore existing enrollment on reinstall")
+        if progress_callback:
+            progress_callback("Restoring previous Wazuh enrollment...")
+        enrollment_script = (
+            # Try Keychain first (encrypted at rest); fall back to file backup.
+            f"KC=$(security find-generic-password -k '{_KEYCHAIN}' -s '{_KC_SERVICE}' -a '{_KC_ACCOUNT}' -w 2>/dev/null); "
+            f"if [ -n \"$KC\" ]; then "
+            f"  printf '%s' \"$KC\" > '{_CLIENT_KEYS}'; "
+            f"elif [ -s '{_KEY_BACKUP}' ]; then "
+            f"  cp '{_KEY_BACKUP}' '{_CLIENT_KEYS}'; "
+            f"fi; "
+            f"if [ -s '{_CLIENT_KEYS}' ]; then "
+            f"  chmod 640 '{_CLIENT_KEYS}' && chown root:wazuh '{_CLIENT_KEYS}' && echo KEY_RESTORED; "
+            f"else "
+            # Backup was inaccessible — fall through to fresh enrollment.
+            f"  rm -f '{_CLIENT_KEYS}'; "
+            f"  '{agent_auth}' -m '{WAZUH_MANAGER}' -A '{agent_name}' -G '{agent_group}' && echo KEY_ENROLLED || echo ENROLL_FAILED; "
+            f"  if [ -s '{_CLIENT_KEYS}' ]; then "
+            f"    mkdir -p '{backup_dir}' && cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}'; "
+            f"    security add-generic-password -U "
+            f"    -k '{_KEYCHAIN}' -s '{_KC_SERVICE}' -a '{_KC_ACCOUNT}' "
+            f"    -w \"$(cat '{_CLIENT_KEYS}')\" 2>/dev/null; "
+            f"  fi; "
+            f"fi"
+        )
+    else:
+        logger.info("[WAZUH] No key backup — performing fresh enrollment with agent-auth")
+        enrollment_script = (
+            f"rm -f '{_CLIENT_KEYS}'; "
+            f"'{agent_auth}' -m '{WAZUH_MANAGER}' -A '{agent_name}' -G '{agent_group}' && echo KEY_ENROLLED || echo ENROLL_FAILED; "
+            # Persist the newly issued key to Keychain + file backup so that
+            # future reinstalls can restore it and skip re-enrollment.
+            f"if [ -s '{_CLIENT_KEYS}' ]; then "
+            f"  mkdir -p '{backup_dir}' && cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}'; "
+            f"  security add-generic-password -U "
+            f"  -k '{_KEYCHAIN}' -s '{_KC_SERVICE}' -a '{_KC_ACCOUNT}' "
+            f"  -w \"$(cat '{_CLIENT_KEYS}')\" 2>/dev/null; "
+            f"fi"
+        )
+
     install_and_start_script = (
         f"installer -pkg '{pkg_path}' -target / || echo INSTALL_FAIL; "
         # Patch agent_name directly in ossec.conf — more reliable than the
         # env file, which the installer may ignore or read inconsistently.
         f"sed -i '' 's|<agent_name>.*</agent_name>|<agent_name>{agent_name}</agent_name>|' '{ossec_conf}'; "
-        # Always re-enroll with agent-auth so the agent is placed in the
-        # correct group on the manager.  Restoring a stale key would
-        # reconnect with the old enrollment (possibly wrong group), so we
-        # clear it first regardless of whether this is a fresh install or
-        # a reinstall.  This covers every edge case: fresh install,
-        # reinstall after uninstall, and reinstall after app reinstall.
-        f"rm -f '{_CLIENT_KEYS}'; "
-        f"'{agent_auth}' -m '{WAZUH_MANAGER}' -A '{agent_name}' -G '{agent_group}' && echo KEY_ENROLLED || echo ENROLL_FAILED; "
-        # Persist the newly issued key to Keychain + file backup so that
-        # restore_client_key_if_needed() can reconnect after a future app
-        # reinstall without needing another password prompt.
-        f"if [ -s '{_CLIENT_KEYS}' ]; then "
-        f"  mkdir -p '{backup_dir}' && cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}'; "
-        f"  security add-generic-password -U "
-        f"  -k '{_KEYCHAIN}' -s '{_KC_SERVICE}' -a '{_KC_ACCOUNT}' "
-        f"  -w \"$(cat '{_CLIENT_KEYS}')\" 2>/dev/null; "
-        f"fi; "
-        f"launchctl bootout system '{plist}' 2>/dev/null; "
+        + enrollment_script +
+        f"; launchctl bootout system '{plist}' 2>/dev/null; "
         f"launchctl bootstrap system '{plist}' 2>/dev/null; "
         f"echo DONE"
     )
@@ -592,6 +622,14 @@ def full_install(progress_callback=None):
         if progress_callback:
             progress_callback("Installation failed")
         return False
+
+    # Log enrollment outcome for diagnostics
+    if "KEY_RESTORED" in output:
+        logger.info("[WAZUH] Existing enrollment key restored — agent will reconnect as same agent")
+    elif "KEY_ENROLLED" in output:
+        logger.info("[WAZUH] Fresh enrollment succeeded — new agent registered on manager")
+    elif "ENROLL_FAILED" in output:
+        logger.warning("[WAZUH] agent-auth enrollment failed — agent may connect via auto-enrollment")
 
     # Verify the agent is actually running via launchd
     if get_agent_status() == "Running":
