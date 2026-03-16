@@ -11,7 +11,7 @@ It uses a hybrid approach:
 import json
 import os
 import platform
-from threading import Lock
+from threading import RLock
 from typing import Any, Dict, List, Optional
 
 import keyring
@@ -27,8 +27,11 @@ MASTER_KEY_SERVICE = "resistine-master-key"
 MASTER_KEY_USERNAME = "master-key"
 ENCRYPTED_PREFIX = "ENC:"
 
-# Thread-safe lock for file operations
-_lock = Lock()
+# Thread-safe lock for file operations.
+# RLock (reentrant) allows the same thread to acquire the lock multiple times,
+# which is needed because set() holds the lock while calling _save_json() which
+# also acquires it.
+_lock = RLock()
 
 
 def get_config_dir() -> str:
@@ -179,9 +182,10 @@ def set(namespace: str, key: str, value: Any) -> bool:
         key: The setting key.
         value: The value to store (must be JSON serializable).
     """
-    data = _load_json(namespace)
-    data[key] = value
-    return _save_json(namespace, data)
+    with _lock:
+        data = _load_json(namespace)
+        data[key] = value
+        return _save_json(namespace, data)
 
 
 def get(namespace: str, key: str, default: Any = None) -> Any:
@@ -201,10 +205,11 @@ def delete(namespace: str, key: str) -> bool:
     """
     Delete a configuration value.
     """
-    data = _load_json(namespace)
-    if key in data:
-        del data[key]
-        return _save_json(namespace, data)
+    with _lock:
+        data = _load_json(namespace)
+        if key in data:
+            del data[key]
+            return _save_json(namespace, data)
     return True
 
 

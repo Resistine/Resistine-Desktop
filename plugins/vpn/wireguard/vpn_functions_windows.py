@@ -291,21 +291,21 @@ def parse_and_create_vpn_config(
         def _conf_value(v):
             """Flatten list values to comma-separated strings for WireGuard conf format."""
             if isinstance(v, list):
-                return ", ".join(str(x) for x in v)
+                return ", ".join(str(x).strip() for x in v)
             return v
 
         # Build WireGuard .conf text
         lines = []
         lines.append("[Interface]")
         for k, v in interface.items():
-            if v is None:
+            if v is None or v == "" or v == []:
                 continue
             lines.append(f"{k} = {_conf_value(v)}")
 
         lines.append("")  # blank line between sections
         lines.append("[Peer]")
         for k, v in peer.items():
-            if v is None:
+            if v is None or v == "" or v == []:
                 continue
             lines.append(f"{k} = {_conf_value(v)}")
 
