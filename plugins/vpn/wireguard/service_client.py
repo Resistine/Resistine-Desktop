@@ -15,7 +15,7 @@ SERVICE_PORT = 51888
 # Token file is written by the service on first start and shared via ProgramData.
 # Both the service (SYSTEM) and the GUI (current user) can access ProgramData.
 _PROGRAMDATA = os.environ.get("PROGRAMDATA", r"C:\ProgramData")
-_IPC_TOKEN_FILE = os.path.join(_PROGRAMDATA, "Resistine", "wireguard", ".ipc_token")
+_IPC_TOKEN_FILE = os.path.join(_PROGRAMDATA, "Resistine", "ipc_token")
 
 
 def _load_ipc_token() -> str:
@@ -30,7 +30,8 @@ def _load_ipc_token() -> str:
         logger.warning("IPC token file not found at %s — is the VPN service installed?", _IPC_TOKEN_FILE)
     except OSError as e:
         logger.error("Failed to load IPC token: %s", e)
-    return ""
+    # Fallback: allow override via environment (useful for CI / testing)
+    return os.environ.get("RESISTINE_IPC_TOKEN", "")
 
 
 def _recv_response(sock: socket.socket) -> bytes:

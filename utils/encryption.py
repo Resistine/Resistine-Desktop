@@ -74,12 +74,13 @@ def get_or_create_key():
 
     key = keyring.get_password("resistine", "encryption_key")
     if key is None:
-        key = Fernet.generate_key()
-        keyring.set_password("resistine", "encryption_key", key.decode())
+        new_key = Fernet.generate_key()  # already bytes
+        keyring.set_password("resistine", "encryption_key", new_key.decode())
         logger.info("Key securely stored in system keyring.")
+        return new_key
     else:
         logger.info("Key retrieved from system keyring.")
-    return key.encode()
+        return key.encode()  # keyring returns a string; encode to bytes
 
 
 def retrieve_key():
