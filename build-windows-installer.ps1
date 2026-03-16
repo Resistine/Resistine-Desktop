@@ -19,14 +19,16 @@ function Get-AppVersion {
 }
 
 function Resolve-InnoCompiler {
-    $candidates = @(
-        (Get-Command iscc.exe -ErrorAction SilentlyContinue | ForEach-Object Path),
-        (Get-Command iscc -ErrorAction SilentlyContinue | ForEach-Object Path),
+    $fromPath = Get-Command iscc.exe -ErrorAction SilentlyContinue
+    if ($fromPath -and (Test-Path $fromPath.Path)) {
+        return $fromPath.Path
+    }
+
+    $searchPaths = @(
         "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
         "C:\Program Files\Inno Setup 6\ISCC.exe"
-    ) | Where-Object { $_ } | Select-Object -Unique
-
-    foreach ($candidate in $candidates) {
+    )
+    foreach ($candidate in $searchPaths) {
         if (Test-Path $candidate) {
             return $candidate
         }
