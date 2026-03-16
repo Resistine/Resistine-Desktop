@@ -1,21 +1,48 @@
 """
 IPC client for the ResistineVPN Windows service.
-Authors: Merhawi 
+Authors: Merhawi
 Copyright (c) Resistine 2025
 """
+import os
 import socket
 import json
 from utils.logger import logger
 
+
 SERVICE_HOST = "127.0.0.1"
 SERVICE_PORT = 51888
 BUFFER_SIZE = 4096
-IPC_TOKEN = "RESISTINE_INTERNAL_TOKEN_CHANGE_ME"
+
+# Path to the token file written by the service at startup.
+# Both service and client read from this location so the token is never
+# hardcoded and is unique per installation.
+_TOKEN_FILE = os.path.join(
+    os.environ.get("PROGRAMDATA", r"C:\ProgramData"),
+    "Resistine",
+    "ipc_token",
+)
+
+
+def _load_ipc_token() -> str:
+    """Load the IPC token from the shared token file or environment variable."""
+    if os.path.exists(_TOKEN_FILE):
+        try:
+            with open(_TOKEN_FILE, "r") as f:
+                token = f.read().strip()
+            if token:
+                return token
+        except OSError:
+            pass
+    # Fallback: allow override via environment (useful for CI / testing)
+    return os.environ.get("RESISTINE_IPC_TOKEN", "")
+
+
+IPC_TOKEN = _load_ipc_token()
 
 
 def send_command(command: str, tunnel: str, config_path: str = None) -> dict:
     """Send a command to the ResistineVPN service via IPC socket.
-    
+
     Args:
         command: The command to send (status, connect, disconnect, etc.)
         tunnel: The tunnel name.

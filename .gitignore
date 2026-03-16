@@ -119,8 +119,10 @@ libraries/*/  # Exclude all library directories
 # Windows metadata
 *Zone.Identifier
 
-# Test files (may contain sensitive information)
-tests/
+# Test coverage artifacts
+.coverage
+htmlcov/
+.pytest_cache/
 
 # VPN Apple project artifacts
 vpn-apple/build/
