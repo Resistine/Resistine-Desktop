@@ -452,7 +452,7 @@ class Plugin(BasePlugin):
         
         if config_data:
             logger.info("VPN config found in API response, saving...")
-            config_path = save_vpn_configuration(config_data, config_name="resistine_default")
+            config_path = save_vpn_configuration(config_data, config_name="resdef")
             logger.debug(f"VPN config saved to: {config_path}")
 
             if config_path:
@@ -471,7 +471,7 @@ class Plugin(BasePlugin):
                 if key in result:
                     logger.info(f"Found potential VPN config under key: {key}")
                     config_data = result[key]
-                    config_path = save_vpn_configuration(config_data, config_name="resistine_default")
+                    config_path = save_vpn_configuration(config_data, config_name="resdef")
                     if config_path:
                         logger.info(f"VPN config saved from alternate key {key}")
                         break
