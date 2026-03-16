@@ -139,8 +139,8 @@ def find_default_tunnel() -> str | None:
         logger.warning(f"No .conf files in {CONFIG_BASE}")
         return None
 
-    if "resistine_default.conf" in confs:
-        return "resistine_default"
+    if "resdef.conf" in confs:
+        return "resdef"
 
     name = confs[0].replace(".conf", "")
     logger.info(f"Auto-detected tunnel: {name}")
