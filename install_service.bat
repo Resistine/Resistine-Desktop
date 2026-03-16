@@ -114,13 +114,16 @@ echo       OK
 :: 3. Check WireGuard
 :: ============================================================
 echo [3/6] Checking WireGuard installation...
-if not exist "%PROGRAMFILES%\WireGuard\wireguard.exe" (
+set "WG_EXE="
+if exist "%PROGRAMFILES%\WireGuard\wireguard.exe" set "WG_EXE=%PROGRAMFILES%\WireGuard\wireguard.exe"
+if not defined WG_EXE if exist "%PROGRAMFILES(x86)%\WireGuard\wireguard.exe" set "WG_EXE=%PROGRAMFILES(x86)%\WireGuard\wireguard.exe"
+if not defined WG_EXE (
     echo ERROR: WireGuard not found.
     echo Please install from https://www.wireguard.com/install/
     call :pause_if_needed
     exit /b 1
 )
-echo       OK - WireGuard found
+echo       OK - WireGuard found at %WG_EXE%
 
 :: ============================================================
 :: 4. Install Python dependencies
@@ -343,10 +346,13 @@ exit /b 0
 :remove_wireguard_tunnel_service
 set "_tunnel_name=%~1"
 if not defined _tunnel_name exit /b 0
-if exist "%PROGRAMFILES%\WireGuard\wireguard.exe" (
+set "_wg_exe="
+if exist "%PROGRAMFILES%\WireGuard\wireguard.exe" set "_wg_exe=%PROGRAMFILES%\WireGuard\wireguard.exe"
+if not defined _wg_exe if exist "%PROGRAMFILES(x86)%\WireGuard\wireguard.exe" set "_wg_exe=%PROGRAMFILES(x86)%\WireGuard\wireguard.exe"
+if defined _wg_exe (
     sc stop "WireGuardTunnel$!_tunnel_name!" >nul 2>&1
     timeout /t 1 /nobreak >nul
-    "%PROGRAMFILES%\WireGuard\wireguard.exe" /uninstalltunnelservice "!_tunnel_name!" >nul 2>&1
+    "!_wg_exe!" /uninstalltunnelservice "!_tunnel_name!" >nul 2>&1
     sc delete "WireGuardTunnel$!_tunnel_name!" >nul 2>&1
     call :wait_for_named_service_absent "WireGuardTunnel$!_tunnel_name!" 10
 )
