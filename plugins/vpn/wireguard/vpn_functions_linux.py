@@ -219,13 +219,13 @@ def delete_wireguard_keys():
         return False
 
 
-def parse_and_create_vpn_config(vpn_config_json_string, config_name="resistine_default"):
+def parse_and_create_vpn_config(vpn_config_json_string, config_name="resdef"):
     """
     Parse VPN configuration from server response and create WireGuard config file.
 
     Args:
         vpn_config_json_string: JSON string containing VPN config from server
-        config_name: Name for the config file (default: "wg0")
+        config_name: Name for the config file (default: "resdef")
 
     Returns:
         str: Path to created config file, or None if failed
@@ -436,7 +436,7 @@ def setup_vpn_keys():
         return None
 
 
-def save_vpn_configuration(vpn_config_json, config_name="resistine_default"):
+def save_vpn_configuration(vpn_config_json, config_name="resdef"):
     """
     Parse and save the VPN configuration.
     Returns the path to the saved config file if successful, None otherwise.
