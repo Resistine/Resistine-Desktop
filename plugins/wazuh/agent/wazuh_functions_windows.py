@@ -275,39 +275,46 @@ def _install_sysmon(progress_callback=None):
     if progress_callback:
         progress_callback("Setting up Sysmon...")
 
-    os.makedirs(_SYSMON_DIR, exist_ok=True)
+    # Download and extract to a temp directory first (no admin needed)
+    tmp_sysmon = os.path.join(tempfile.gettempdir(), "resistine_sysmon")
+    os.makedirs(tmp_sysmon, exist_ok=True)
 
     # Download Sysmon zip
-    sysmon_zip = os.path.join(_SYSMON_DIR, "Sysmon.zip")
+    sysmon_zip = os.path.join(tmp_sysmon, "Sysmon.zip")
     if not _download_file(WINDOWS_SYSMON_ZIP_URL, sysmon_zip, progress_callback, "Downloading Sysmon..."):
         return False
 
     # Extract
     try:
         with zipfile.ZipFile(sysmon_zip, "r") as zf:
-            zf.extractall(_SYSMON_DIR)
-        logger.info(f"Extracted Sysmon to {_SYSMON_DIR}")
+            zf.extractall(tmp_sysmon)
+        logger.info(f"Extracted Sysmon to {tmp_sysmon}")
     except Exception as e:
         logger.error(f"Failed to extract Sysmon: {e}")
         return False
 
     # Determine correct Sysmon executable (64-bit or 32-bit)
-    if not os.path.exists(_SYSMON_EXE):
-        sysmon32 = os.path.join(_SYSMON_DIR, "Sysmon.exe")
-        if not os.path.exists(sysmon32):
+    tmp_sysmon_exe = os.path.join(tmp_sysmon, "Sysmon64.exe")
+    if not os.path.exists(tmp_sysmon_exe):
+        tmp_sysmon_exe = os.path.join(tmp_sysmon, "Sysmon.exe")
+        if not os.path.exists(tmp_sysmon_exe):
             logger.error("Sysmon executable not found after extraction")
             return False
 
     # Download SwiftOnSecurity config
-    if not _download_file(WINDOWS_SYSMON_CONFIG_URL, _SYSMON_CONFIG, progress_callback, "Downloading Sysmon config..."):
+    tmp_sysmon_config = os.path.join(tmp_sysmon, "sysmonconfig-export.xml")
+    if not _download_file(WINDOWS_SYSMON_CONFIG_URL, tmp_sysmon_config, progress_callback, "Downloading Sysmon config..."):
         return False
 
-    # Install Sysmon with config (requires admin)
+    # Install Sysmon with config (requires admin) and copy files to Program Files
     if progress_callback:
         progress_callback("Installing Sysmon service...")
 
-    sysmon_exe = _SYSMON_EXE if os.path.exists(_SYSMON_EXE) else os.path.join(_SYSMON_DIR, "Sysmon.exe")
-    install_cmd = f"& '{sysmon_exe}' -accepteula -i '{_SYSMON_CONFIG}'"
+    install_cmd = (
+        f"New-Item -ItemType Directory -Path '{_SYSMON_DIR}' -Force | Out-Null; "
+        f"Copy-Item -Path '{tmp_sysmon}\\*' -Destination '{_SYSMON_DIR}' -Recurse -Force; "
+        f"& '{tmp_sysmon_exe}' -accepteula -i '{tmp_sysmon_config}'"
+    )
     success, output = _run_privileged(install_cmd)
 
     if not success and not _is_sysmon_installed():
