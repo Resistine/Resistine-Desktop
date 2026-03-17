@@ -49,9 +49,22 @@ elif _PLATFORM == "Linux":
         stop_agent,
     )
     _platform_supported = True
+elif _PLATFORM == "Windows":
+    from    plugins.wazuh.agent.wazuh_functions_windows import (
+        full_install,
+        get_agent_group,
+        get_agent_name,
+        get_agent_status,
+        is_agent_installed,
+        needs_reenrollment,
+        restore_client_key_if_needed,
+        start_agent,
+        stop_agent,
+    )
+    _platform_supported = True
 
 # Shared UI constants
-_COLOR_MUTED = ("#666666", "#aaaaaa")
+_COLOR_MUTED = ("#070404", "#aaaaaa")
 _COLOR_ERROR = ("#C5221F", "#FF474C")
 _COLOR_OK = ("#1E8E3E", "#2CC985")
 _COLOR_ACCENT = ("#3a7ebf", "#5b9bd5")

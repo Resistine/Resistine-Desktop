@@ -34,7 +34,7 @@ def _load_ipc_token() -> str:
         except OSError:
             pass
     # Fallback: allow override via environment (useful for CI / testing)
-    return os.environ.get("RESISTINE_IPC_TOKEN", "")
+    return os.environ.get("RESISTINE_IPC_TOKEN", "RESISTINE_INTERNAL_TOKEN_CHANGE_ME")
 
 
 IPC_TOKEN = _load_ipc_token()
