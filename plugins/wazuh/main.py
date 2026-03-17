@@ -36,6 +36,19 @@ if _PLATFORM == "Darwin":
         stop_agent,
     )
     _platform_supported = True
+elif _PLATFORM == "Linux":
+    from plugins.wazuh.agent.wazuh_functions_linux import (
+        full_install,
+        get_agent_group,
+        get_agent_name,
+        get_agent_status,
+        is_agent_installed,
+        needs_reenrollment,
+        restore_client_key_if_needed,
+        start_agent,
+        stop_agent,
+    )
+    _platform_supported = True
 
 # Shared UI constants
 _COLOR_MUTED = ("#666666", "#aaaaaa")
@@ -62,7 +75,7 @@ class Plugin(BasePlugin):
             name="Wazuh",
             status=None,
             description="Install and manage the Wazuh SIEM agent.",
-            supported_systems=["Darwin"],
+            supported_systems=["Darwin", "Linux"],
             translations={"US": "Wazuh", "ES": "Wazuh", "FR": "Wazuh"},
             icon_light_path=os.path.join(_PLUGIN_DIR, "wazuh_light.png"),
             icon_dark_path=os.path.join(_PLUGIN_DIR, "wazuh_dark.png"),
