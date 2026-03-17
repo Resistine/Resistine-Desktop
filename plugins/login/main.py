@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 # @file plugins/login/main.py
 # @namespace plugins.login.main
@@ -425,8 +426,6 @@ class Plugin(BasePlugin):
             email=self.email,
             otp=otp,
             public_key=public_key,
-            host_url="rfr1.resisti.net",  # TODO: Move to config
-            vpn_name="testVPNapi"         # TODO: Move to config
         )
 
         if not success:
@@ -443,38 +442,23 @@ class Plugin(BasePlugin):
         from utils import settings as app_settings
         app_settings.set("auth", "email", self.email)
 
-        # Save VPN config if provided (never raises — returns None on failure)
-        config_data = result.get("vpn_config") or result.get("data")
-        
-        # Debug: Print full API response to understand what we're getting
-        logger.info(f"API Response keys: {list(result.keys())}")
-        logger.info(f"Full API response: {result}")
-        
-        if config_data:
-            logger.info("VPN config found in API response, saving...")
-            config_path = save_vpn_configuration(config_data, config_name="resdef")
-            logger.debug(f"VPN config saved to: {config_path}")
+        # Save VPN config from API response (server returns it under 'vpn_config')
+        _CONFIG_KEYS = ("vpn_config", "data", "vpn_configuration", "wireguard_config")
+        config_data = next((result[k] for k in _CONFIG_KEYS if k in result), None)
 
+        if config_data:
+            logger.info("Saving VPN config from API response...")
+            config_path = save_vpn_configuration(config_data, config_name="resistine_default")
             if config_path:
                 from plugins.vpn.config_manager import VPNConfigManager, RESISTINE_CONFIG_NAME
                 mgr = VPNConfigManager(os.path.dirname(config_path))
                 mgr.register_config(RESISTINE_CONFIG_NAME, source="api")
                 mgr.set_active_config(RESISTINE_CONFIG_NAME)
-                logger.info(f"VPN config saved successfully to {config_path}")
+                logger.info("VPN config registered: %s", config_path)
             else:
-                logger.warning("VPN config from API could not be saved")
+                logger.warning("Failed to save VPN config from API response")
         else:
             logger.warning("No VPN config in API response (keys: %s)", list(result.keys()))
-            # Try to look for VPN config under different possible key names
-            possible_keys = ["vpn_configuration", "wireguard_config", "tunnel_config", "config"]
-            for key in possible_keys:
-                if key in result:
-                    logger.info(f"Found potential VPN config under key: {key}")
-                    config_data = result[key]
-                    config_path = save_vpn_configuration(config_data, config_name="resdef")
-                    if config_path:
-                        logger.info(f"VPN config saved from alternate key {key}")
-                        break
 
         # Phase 4: Transition to next screen
         from utils import settings as app_settings

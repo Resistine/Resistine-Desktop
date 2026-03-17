@@ -25,6 +25,7 @@ more-itertools
 openai
 packaging
 pillow
+pystray
 pycparser
 pydantic
 pydantic_core
