@@ -44,16 +44,18 @@ echo.
 echo [1/6] Locating Python...
 set PYTHON_FULL=
 
-for /f "tokens=*" %%i in ('where python 2^>nul') do (
-    echo %%i | findstr /i "WindowsApps" >nul 2>&1
-    if !errorlevel! neq 0 (
-        if not defined PYTHON_FULL set PYTHON_FULL=%%i
-    )
+:: Try py launcher first — it returns the newest installed version
+for /f "tokens=*" %%i in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do (
+    if not defined PYTHON_FULL set PYTHON_FULL=%%i
 )
 
+:: Fall back to PATH if py launcher not available
 if not defined PYTHON_FULL (
-    for /f "tokens=*" %%i in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do (
-        set PYTHON_FULL=%%i
+    for /f "tokens=*" %%i in ('where python 2^>nul') do (
+        echo %%i | findstr /i "WindowsApps" >nul 2>&1
+        if !errorlevel! neq 0 (
+            if not defined PYTHON_FULL set PYTHON_FULL=%%i
+        )
     )
 )
 
@@ -248,6 +250,11 @@ if exist "%TEMP%\resistine_python_path.txt" (
 )
 
 :: Fallback: search for Python again if temp file is missing
+if not defined SYS_PYTHON (
+    for /f "tokens=*" %%i in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do (
+        if not defined SYS_PYTHON set SYS_PYTHON=%%i
+    )
+)
 if not defined SYS_PYTHON (
     for /f "tokens=*" %%i in ('where python 2^>nul') do (
         echo %%i | findstr /i "WindowsApps" >nul 2>&1

@@ -7,7 +7,15 @@
 setlocal EnableDelayedExpansion
 
 set "QUIET_MODE="
-if /I "%~1"=="/quiet" set "QUIET_MODE=1"
+set "UNINSTALL_MODE="
+for %%A in (%*) do (
+    if /I "%%~A"=="/quiet" set "QUIET_MODE=1"
+    if /I "%%~A"=="/uninstall" set "UNINSTALL_MODE=1"
+    if /I "%%~A"=="/uninstallquiet" (
+        set "UNINSTALL_MODE=1"
+        set "QUIET_MODE=1"
+    )
+)
 
 :: ---- Config ----
 set SERVICE_NAME=ResistineVPN
@@ -30,6 +38,8 @@ if not exist "%SERVICE_SCRIPT%" (
     exit /b 1
 )
 
+if defined UNINSTALL_MODE goto :uninstall_service
+
 :: ============================================================
 :: 1. Check Admin
 :: ============================================================
@@ -49,18 +59,18 @@ echo       OK - Running as Administrator
 echo [2/6] Locating Python installation...
 set PYTHON_FULL=
 
-for /f "tokens=*" %%i in ('where python 2^>nul') do (
-    echo %%i | findstr /i "WindowsApps" >nul 2>&1
-    if !errorlevel! neq 0 (
-        if not defined PYTHON_FULL (
-            set PYTHON_FULL=%%i
-        )
-    )
+:: Try py launcher first — it returns the newest installed version
+for /f "tokens=*" %%i in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do (
+    if not defined PYTHON_FULL set PYTHON_FULL=%%i
 )
 
+:: Fall back to PATH if py launcher not available
 if not defined PYTHON_FULL (
-    for /f "tokens=*" %%i in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do (
-        set PYTHON_FULL=%%i
+    for /f "tokens=*" %%i in ('where python 2^>nul') do (
+        echo %%i | findstr /i "WindowsApps" >nul 2>&1
+        if !errorlevel! neq 0 (
+            if not defined PYTHON_FULL set PYTHON_FULL=%%i
+        )
     )
 )
 
@@ -104,13 +114,16 @@ echo       OK
 :: 3. Check WireGuard
 :: ============================================================
 echo [3/6] Checking WireGuard installation...
-if not exist "%PROGRAMFILES%\WireGuard\wireguard.exe" (
+set "WG_EXE="
+if exist "%PROGRAMFILES%\WireGuard\wireguard.exe" set "WG_EXE=%PROGRAMFILES%\WireGuard\wireguard.exe"
+if not defined WG_EXE if exist "%PROGRAMFILES(x86)%\WireGuard\wireguard.exe" set "WG_EXE=%PROGRAMFILES(x86)%\WireGuard\wireguard.exe"
+if not defined WG_EXE (
     echo ERROR: WireGuard not found.
     echo Please install from https://www.wireguard.com/install/
     call :pause_if_needed
     exit /b 1
 )
-echo       OK - WireGuard found
+echo       OK - WireGuard found at %WG_EXE%
 
 :: ============================================================
 :: 4. Install Python dependencies
@@ -182,7 +195,7 @@ if %errorlevel% equ 0 (
     timeout /t 3 /nobreak >nul
     echo       Removing existing service...
     "%PYTHON_FULL%" "%SERVICE_SCRIPT%" remove >nul 2>&1
-    call :wait_for_service_absent
+    call :wait_for_named_service_absent %SERVICE_NAME% 15
 )
 
 :: Install
@@ -238,15 +251,140 @@ echo.
 call :pause_if_needed
 exit /b 0
 
-:wait_for_service_absent
-set /a _svc_wait=0
-:wait_for_service_absent_loop
+:uninstall_service
+echo [1/4] Checking administrator privileges...
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+    echo ERROR: This script must be run as Administrator.
+    call :pause_if_needed
+    exit /b 1
+)
+echo       OK - Running as Administrator
+
+echo [2/4] Locating Python installation...
+set PYTHON_FULL=
+
+for /f "tokens=*" %%i in ('where python 2^>nul') do (
+    echo %%i | findstr /i "WindowsApps" >nul 2>&1
+    if !errorlevel! neq 0 (
+        if not defined PYTHON_FULL (
+            set PYTHON_FULL=%%i
+        )
+    )
+)
+
+if not defined PYTHON_FULL (
+    for /f "tokens=*" %%i in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do (
+        set PYTHON_FULL=%%i
+    )
+)
+
+if not defined PYTHON_FULL (
+    for %%v in (313 312 311 310) do (
+        if not defined PYTHON_FULL (
+            for %%p in (
+                "%LOCALAPPDATA%\Programs\Python\Python%%v\python.exe"
+                "%PROGRAMFILES%\Python%%v\python.exe"
+                "%PROGRAMFILES(x86)%\Python%%v\python.exe"
+            ) do (
+                if exist %%p (
+                    if not defined PYTHON_FULL (
+                        set PYTHON_FULL=%%~p
+                    )
+                )
+            )
+        )
+    )
+)
+
+if defined PYTHON_FULL (
+    echo       Path: %PYTHON_FULL%
+    echo       OK
+) else (
+    echo WARNING: Python not found, will use service-manager fallback only.
+)
+
+echo [3/4] Removing startup entries...
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "ResistineVPNTray" /f >nul 2>&1
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "ResistineVPN" /f >nul 2>&1
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "Resistine" /f >nul 2>&1
+reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "ResistineVPNTray" /f >nul 2>&1
+reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "ResistineVPN" /f >nul 2>&1
+reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "Resistine" /f >nul 2>&1
+echo       OK
+
+echo [4/4] Removing VPN services...
+call :remove_wireguard_tunnel_service resistine_default
+call :remove_wireguard_tunnel_service resistine_vpn
+
 sc query %SERVICE_NAME% >nul 2>&1
-if %errorlevel% neq 0 exit /b 0
-if %_svc_wait% geq 15 exit /b 1
+if %errorlevel% equ 0 (
+    echo       Stopping ResistineVPN...
+    sc stop %SERVICE_NAME% >nul 2>&1
+    call :wait_for_named_service_stopped_or_absent %SERVICE_NAME% 15
+
+    if defined PYTHON_FULL (
+        echo       Removing ResistineVPN via service script...
+        "%PYTHON_FULL%" "%SERVICE_SCRIPT%" remove >nul 2>&1
+    )
+
+    sc delete %SERVICE_NAME% >nul 2>&1
+    call :wait_for_named_service_absent %SERVICE_NAME% 15
+    if !errorlevel! neq 0 (
+        echo WARNING: ResistineVPN is still registered.
+        call :pause_if_needed
+        exit /b 1
+    )
+    echo       OK - ResistineVPN removed
+) else (
+    echo       ResistineVPN not found, skipping
+)
+
+call :pause_if_needed
+exit /b 0
+
+:remove_wireguard_tunnel_service
+set "_tunnel_name=%~1"
+if not defined _tunnel_name exit /b 0
+set "_wg_exe="
+if exist "%PROGRAMFILES%\WireGuard\wireguard.exe" set "_wg_exe=%PROGRAMFILES%\WireGuard\wireguard.exe"
+if not defined _wg_exe if exist "%PROGRAMFILES(x86)%\WireGuard\wireguard.exe" set "_wg_exe=%PROGRAMFILES(x86)%\WireGuard\wireguard.exe"
+if defined _wg_exe (
+    sc stop "WireGuardTunnel$!_tunnel_name!" >nul 2>&1
+    timeout /t 1 /nobreak >nul
+    "!_wg_exe!" /uninstalltunnelservice "!_tunnel_name!" >nul 2>&1
+    sc delete "WireGuardTunnel$!_tunnel_name!" >nul 2>&1
+    call :wait_for_named_service_absent "WireGuardTunnel$!_tunnel_name!" 10
+)
+exit /b 0
+
+:wait_for_named_service_stopped_or_absent
+set "_svc_name=%~1"
+set "_svc_limit=%~2"
+if not defined _svc_limit set "_svc_limit=15"
+set /a _svc_wait=0
+:wait_for_named_service_stopped_or_absent_loop
+sc query "!_svc_name!" >nul 2>&1
+if !errorlevel! neq 0 exit /b 0
+sc query "!_svc_name!" | findstr /I "STOPPED" >nul 2>&1
+if !errorlevel! equ 0 exit /b 0
+if !_svc_wait! geq !_svc_limit! exit /b 1
 timeout /t 1 /nobreak >nul
 set /a _svc_wait+=1
-goto :wait_for_service_absent_loop
+goto :wait_for_named_service_stopped_or_absent_loop
+
+:wait_for_named_service_absent
+set "_svc_name=%~1"
+set "_svc_limit=%~2"
+if not defined _svc_limit set "_svc_limit=15"
+set /a _svc_wait=0
+:wait_for_named_service_absent_loop
+sc query "!_svc_name!" >nul 2>&1
+if !errorlevel! neq 0 exit /b 0
+if !_svc_wait! geq !_svc_limit! exit /b 1
+timeout /t 1 /nobreak >nul
+set /a _svc_wait+=1
+goto :wait_for_named_service_absent_loop
 
 :pause_if_needed
 if not defined QUIET_MODE pause

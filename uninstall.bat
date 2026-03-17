@@ -64,13 +64,13 @@ if exist "%SHORTCUT%" (
 :: must also use system Python. Pass the path across the UAC boundary
 :: via a temp file, same pattern as install.bat.
 set PYTHON_FULL=
-for /f "tokens=*" %%i in ('where python 2^>nul') do (
-    echo %%i | findstr /i "WindowsApps" >nul 2>&1
-    if !errorlevel! neq 0 if not defined PYTHON_FULL set PYTHON_FULL=%%i
+for /f "tokens=*" %%i in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do (
+    if not defined PYTHON_FULL set PYTHON_FULL=%%i
 )
 if not defined PYTHON_FULL (
-    for /f "tokens=*" %%i in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do (
-        set PYTHON_FULL=%%i
+    for /f "tokens=*" %%i in ('where python 2^>nul') do (
+        echo %%i | findstr /i "WindowsApps" >nul 2>&1
+        if !errorlevel! neq 0 if not defined PYTHON_FULL set PYTHON_FULL=%%i
     )
 )
 

@@ -22,6 +22,63 @@ def _patched_check(self, widget):
     return _orig_check(self, widget)
 _sf.CTkScrollableFrame.check_if_master_is_canvas = _patched_check
 
+# ── Windows resize performance patch ────────────────────────────────────────
+# ROOT CAUSE of the resize glitching on Windows:
+#
+#   _fit_frame_dimensions_to_canvas is bound to the canvas <Configure> event
+#   with NO debounce at all.  Every pixel of window resize fires it.
+#   Each call does canvas.itemconfigure(inner_frame_id, width=N) which forces
+#   a full Tk geometry-manager layout pass for every widget inside the frame.
+#   Each CTkWidget in that tree fires its own <Configure>, which calls
+#   CTkBaseClass._update_dimensions_event → _draw(no_color_updates=True) →
+#   draw_rounded_rect_with_border() → canvas.delete(...) then canvas.create_...
+#   That delete-before-redraw gap is the "blank / pixelated" flash users see.
+#
+#   With ~8 cards × ~7 CTk widgets each ≈ 56 _draw() calls per pixel on GDI.
+#   On macOS the Quartz compositor hides these intermediate states; on Windows
+#   every half-drawn frame is visible immediately via GDI.
+#
+# FIX: freeze the inner frame during the entire drag (200 ms debounce).
+#   While dragging the inner-frame content stays at the old width (may be
+#   clipped or show a small gap at the edge — standard Windows "deferred
+#   resize" behavior).  Only the 2-3 outer chrome frames (nav sidebar, scroll
+#   frame border) redraw during drag — fast.  200 ms after dragging stops,
+#   everything snaps to the new size in one coordinated GDI pass:
+#     t+200 ms → inner frame snaps (56 redraws, once)
+#     t+250 ms → grid rebuild if column count changed
+#   Zero intermediate flicker.
+if sys.platform.startswith("win"):
+    _orig_fit = _sf.CTkScrollableFrame._fit_frame_dimensions_to_canvas
+
+    def _throttled_fit(self, event):
+        if not hasattr(self, "_fit_job"):
+            self._fit_job = None
+        if self._fit_job is not None:
+            try:
+                self._parent_canvas.after_cancel(self._fit_job)
+            except Exception:
+                pass
+
+        def _do_fit(inst=self):
+            inst._fit_job = None
+            if inst._orientation == "horizontal":
+                inst._parent_canvas.itemconfigure(
+                    inst._create_window_id,
+                    height=inst._parent_canvas.winfo_height(),
+                )
+            elif inst._orientation == "vertical":
+                inst._parent_canvas.itemconfigure(
+                    inst._create_window_id,
+                    width=inst._parent_canvas.winfo_width(),
+                )
+
+        # 200 ms: long enough to span any normal drag event burst so the inner
+        # frame never updates mid-drag, only once when the drag stops.
+        self._fit_job = self._parent_canvas.after(200, _do_fit)
+
+    _sf.CTkScrollableFrame._fit_frame_dimensions_to_canvas = _throttled_fit
+# ────────────────────────────────────────────────────────────────────────────
+
 # DEPRECATED: Debug Window - controlled by command-line arguments
 from gui.debug_window import DebugWindow
 from gui.inspector import RuntimeInspector
@@ -66,8 +123,8 @@ class App(AppUI):
         screen_height = self.winfo_screenheight()
         window_width = int(screen_width * 0.7)
         window_height = int(screen_height * 0.7)
-        min_width = int(screen_width * 0.5)
-        min_height = int(screen_height * 0.5)
+        min_width = 750
+        min_height = 350
         position_right = int(screen_width / 2 - window_width / 2)
         position_down = int(screen_height / 2 - window_height / 2)
         self.geometry(

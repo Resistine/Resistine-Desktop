@@ -6,12 +6,15 @@ This service listens for commands from the GUI and manages WireGuard tunnels
 accordingly. It also auto-starts a default tunnel if present in ProgramData.
 """
 
+from __future__ import annotations
+
 import win32serviceutil
 import win32service
 import win32event
 import servicemanager
 import win32con
 
+import secrets as _secrets
 import socket
 import threading
 import json
@@ -23,7 +26,6 @@ import sys
 import shutil
 
 
-
 # ---------------- Configuration ----------------
 
 SERVICE_NAME         = "ResistineVPN"
@@ -32,20 +34,64 @@ SERVICE_DESCRIPTION  = "Manages WireGuard tunnels for Resistine VPN"
 
 SERVICE_HOST = "127.0.0.1"
 SERVICE_PORT = 51888
-BUFFER_SIZE  = 4096
-
-IPC_TOKEN = "RESISTINE_INTERNAL_TOKEN_CHANGE_ME"
+RECV_BUFFER  = 65536
 
 ALLOWED_COMMANDS = {
     "status", "connect", "disconnect",
     "start", "stop", "restart", "health"
 }
 
-WIREGUARD_EXE = r"C:\Program Files\WireGuard\wireguard.exe"
-
 PROGRAMDATA = os.environ.get("PROGRAMDATA", r"C:\ProgramData")
 CONFIG_BASE = os.path.join(PROGRAMDATA, "Resistine", "wireguard")
 os.makedirs(CONFIG_BASE, exist_ok=True)
+
+# IPC token — generated once on first service start and shared via ProgramData
+# so the GUI client (running as the current user) can authenticate requests.
+IPC_TOKEN_FILE = os.path.join(CONFIG_BASE, ".ipc_token")
+
+
+def _get_or_create_ipc_token() -> str:
+    """Return the IPC auth token, generating and persisting it if needed."""
+    if os.path.exists(IPC_TOKEN_FILE):
+        try:
+            with open(IPC_TOKEN_FILE, "r") as fh:
+                token = fh.read().strip()
+            if len(token) >= 32:
+                return token
+        except OSError:
+            pass
+
+    token = _secrets.token_hex(32)
+    try:
+        os.makedirs(os.path.dirname(IPC_TOKEN_FILE), exist_ok=True)
+        with open(IPC_TOKEN_FILE, "w") as fh:
+            fh.write(token)
+    except OSError as e:
+        logging.getLogger("ResistineVPN").error("Could not persist IPC token: %s", e)
+    return token
+
+
+IPC_TOKEN = _get_or_create_ipc_token()
+
+
+def _find_wireguard_exe() -> str:
+    """Locate the WireGuard executable, checking both Program Files paths."""
+    candidates = [
+        r"C:\Program Files\WireGuard\wireguard.exe",
+        r"C:\Program Files (x86)\WireGuard\wireguard.exe",
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    # Fallback to PATH lookup
+    found = shutil.which("wireguard")
+    if found:
+        return found
+    # Return the default path so error messages are meaningful
+    return candidates[0]
+
+
+WIREGUARD_EXE = _find_wireguard_exe()
 
 
 # ---------------- Logging ----------------
@@ -387,7 +433,7 @@ def socket_server(stop_event):
             break
 
         try:
-            data = conn.recv(BUFFER_SIZE)
+            data = conn.recv(RECV_BUFFER)
             if not data:
                 continue
             request  = json.loads(data.decode("utf-8"))
@@ -446,13 +492,6 @@ class ResistineVPNService(win32serviceutil.ServiceFramework):
             daemon=True,
         ).start()
         servicemanager.LogInfoMsg("IPC thread started")
-
-        # Auto-start VPN after socket is ready
-        time.sleep(0.5)
-        threading.Thread(
-            target=self._auto_start,
-            daemon=True,
-        ).start()
 
         # Block until stop signal
         win32event.WaitForSingleObject(self.hWaitStop, win32event.INFINITE)
