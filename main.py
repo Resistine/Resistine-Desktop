@@ -95,9 +95,18 @@ if sys.platform.startswith("linux"):
             self._canvas.create_polygon((0,0,0,0), tags=("progress_line_1", "progress_parts"), width=0, outline="")
             requires_recoloring = True
         inner_r = max(0, r - bw)
-        if v1 == v2:
-            self._canvas.coords("progress_line_1", (0, 0, 0, 0))
+        
+        # Visibility Guard: If values are essentially equal (e.g. at 0), hide the part completely
+        if abs(v1 - v2) < 0.0001:
+            if self._canvas.itemcget("progress_line_1", "state") != "hidden":
+                self._canvas.itemconfig("progress_parts", state="hidden")
+                requires_recoloring = True
             return requires_recoloring
+        else:
+            if self._canvas.itemcget("progress_line_1", "state") != "normal":
+                self._canvas.itemconfig("progress_parts", state="normal")
+                requires_recoloring = True
+
         if orientation in ["horizontal", "w", "e"]:
             usable_w = max(0, width - 2 * bw)
             x_start, x_end = bw + usable_w * v1, bw + usable_w * v2
