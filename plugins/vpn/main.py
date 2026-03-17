@@ -62,7 +62,6 @@ my_vpn_status = "Stopped"
 
 def is_vpn_connected():
     """Return True if VPN is currently connected."""
-    print(f"Checking VPN connection status: {my_vpn_status}")
     return my_vpn_status == "Running"
 
 # --- Config Manager (module-level for use in init) ---
@@ -104,11 +103,8 @@ def initialize_vpn_status():
     elif IS_WINDOWS:
         try:
             active_name = _config_manager.get_active_config_name()
-            print(f"Active VPN config: {active_name}")
-
             if active_name:
                 state = check_service_status(active_name)
-                print(f"VPN service status for {active_name}: {state}")
                 if state == "Running":
                     active_client_name = active_name
                     my_vpn_status = "Running"

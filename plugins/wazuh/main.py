@@ -50,7 +50,7 @@ elif _PLATFORM == "Linux":
     )
     _platform_supported = True
 elif _PLATFORM == "Windows":
-    from    plugins.wazuh.agent.wazuh_functions_windows import (
+    from plugins.wazuh.agent.wazuh_functions_windows import (
         full_install,
         get_agent_group,
         get_agent_name,
@@ -64,7 +64,7 @@ elif _PLATFORM == "Windows":
     _platform_supported = True
 
 # Shared UI constants
-_COLOR_MUTED = ("#070404", "#aaaaaa")
+_COLOR_MUTED = ("#666666", "#aaaaaa")
 _COLOR_ERROR = ("#C5221F", "#FF474C")
 _COLOR_OK = ("#1E8E3E", "#2CC985")
 _COLOR_ACCENT = ("#3a7ebf", "#5b9bd5")
@@ -88,7 +88,7 @@ class Plugin(BasePlugin):
             name="Wazuh",
             status=None,
             description="Install and manage the Wazuh SIEM agent.",
-            supported_systems=["Darwin", "Linux"],
+            supported_systems=["Darwin", "Linux", "Windows"],
             translations={"US": "Wazuh", "ES": "Wazuh", "FR": "Wazuh"},
             icon_light_path=os.path.join(_PLUGIN_DIR, "wazuh_light.png"),
             icon_dark_path=os.path.join(_PLUGIN_DIR, "wazuh_dark.png"),
@@ -505,5 +505,5 @@ class Plugin(BasePlugin):
         self.create_main_screen().grid(row=0, column=1, sticky="nsew")
 
     def destroy(self):
-        """Clean up polling. Agent removal is handled by utils/uninstall/darwin.py."""
+        """Clean up polling. Agent removal is handled by platform-specific uninstallers."""
         self._stop_status_polling()
