@@ -326,7 +326,11 @@ def _install_sysmon(progress_callback=None):
 
 
 def _inject_sysmon_config():
-    """Add Sysmon eventchannel monitoring to ossec.conf if not already present."""
+    """Add Sysmon eventchannel monitoring to ossec.conf if not already present.
+
+    ossec.conf lives in Program Files and requires admin to write.
+    Uses a temp file + privileged copy to avoid a direct open() on a protected path.
+    """
     if not os.path.exists(_OSSEC_CONF):
         logger.warning("ossec.conf not found, cannot inject Sysmon config")
         return False
@@ -334,27 +338,44 @@ def _inject_sysmon_config():
     try:
         with open(_OSSEC_CONF, "r", encoding="utf-8") as f:
             content = f.read()
-
-        if "Microsoft-Windows-Sysmon/Operational" in content:
-            logger.info("Sysmon monitoring already configured in ossec.conf")
-            return True
-
-        # Insert before closing </ossec_config>
-        if "</ossec_config>" in content:
-            content = content.replace(
-                "</ossec_config>",
-                f"{_SYSMON_LOCALFILE_BLOCK}\n</ossec_config>",
-            )
-            with open(_OSSEC_CONF, "w", encoding="utf-8") as f:
-                f.write(content)
-            logger.info("Injected Sysmon monitoring config into ossec.conf")
-            return True
-
-        logger.error("Could not find </ossec_config> tag")
-        return False
     except Exception as e:
-        logger.error(f"Failed to inject Sysmon config: {e}")
+        logger.error(f"Failed to read ossec.conf: {e}")
         return False
+
+    if "Microsoft-Windows-Sysmon/Operational" in content:
+        logger.info("Sysmon monitoring already configured in ossec.conf")
+        return True
+
+    if "</ossec_config>" not in content:
+        logger.error("Could not find </ossec_config> tag in ossec.conf")
+        return False
+
+    updated = content.replace(
+        "</ossec_config>",
+        f"{_SYSMON_LOCALFILE_BLOCK}\n</ossec_config>",
+    )
+
+    # Write to temp file first, then copy into Program Files with elevation
+    try:
+        tmp_conf = os.path.join(tempfile.gettempdir(), "resistine_ossec.conf")
+        with open(tmp_conf, "w", encoding="utf-8") as f:
+            f.write(updated)
+    except Exception as e:
+        logger.error(f"Failed to write temp ossec.conf: {e}")
+        return False
+
+    copy_cmd = f"Copy-Item -Path '{tmp_conf}' -Destination '{_OSSEC_CONF}' -Force"
+    success, output = _run_privileged(copy_cmd)
+    try:
+        os.unlink(tmp_conf)
+    except Exception:
+        pass
+
+    if success:
+        logger.info("Injected Sysmon monitoring config into ossec.conf")
+    else:
+        logger.error(f"Failed to copy updated ossec.conf: {output}")
+    return success
 
 
 def download_package(progress_callback=None):

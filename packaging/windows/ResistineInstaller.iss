@@ -1640,10 +1640,12 @@ begin
   Summary :=
     'This will uninstall Resistine from:' + #13#10 +
     ExpandConstant('{app}') + #13#10#13#10 +
-    'The uninstaller will also remove Resistine VPN services:' + #13#10 +
-    '- ResistineVPN' + #13#10 +
+    'The uninstaller will also remove:' + #13#10 +
+    '- ResistineVPN service' + #13#10 +
     '- WireGuardTunnel$resistine_default' + #13#10 +
-    '- WireGuardTunnel$resistine_vpn' + #13#10#13#10 +
+    '- WireGuardTunnel$resistine_vpn' + #13#10 +
+    '- Wazuh agent (WazuhSvc)' + #13#10 +
+    '- Sysmon monitoring service' + #13#10#13#10 +
     'By default, your user data is preserved:' + #13#10 +
     '- ' + GetResistineUserDataDir + #13#10 +
     '- ' + GetResistineCommonDataDir + #13#10#13#10 +
@@ -1668,10 +1670,51 @@ begin
     StandaloneUninstallRemoveUserData := False;
 end;
 
+procedure RemoveWazuhAndSysmon;
+var
+  ResultCode: Integer;
+begin
+  { Stop and uninstall Wazuh agent }
+  if HiddenCmdSucceeded('sc query WazuhSvc >nul 2>nul') then
+  begin
+    Log('Uninstall cleanup: stopping WazuhSvc');
+    RunHiddenCmd('sc stop WazuhSvc >nul 2>nul', ResultCode);
+    WaitForServiceStoppedOrAbsent('WazuhSvc', 10, 1000);
+    RunHiddenCmd(
+      'wmic product where "Name like ''%Wazuh%''" call uninstall /nointeractive >nul 2>nul',
+      ResultCode);
+    Log('Wazuh uninstall exit code: ' + IntToStr(ResultCode));
+  end;
+
+  { Stop and uninstall Sysmon (try 64-bit then 32-bit service name) }
+  if HiddenCmdSucceeded('sc query Sysmon64 >nul 2>nul') then
+  begin
+    Log('Uninstall cleanup: removing Sysmon64');
+    RunHiddenCmd(
+      'if exist "%ProgramFiles%\Resistine\Sysmon\Sysmon64.exe" ' +
+      '"%ProgramFiles%\Resistine\Sysmon\Sysmon64.exe" -u force >nul 2>nul',
+      ResultCode);
+  end
+  else if HiddenCmdSucceeded('sc query Sysmon >nul 2>nul') then
+  begin
+    Log('Uninstall cleanup: removing Sysmon');
+    RunHiddenCmd(
+      'if exist "%ProgramFiles%\Resistine\Sysmon\Sysmon.exe" ' +
+      '"%ProgramFiles%\Resistine\Sysmon\Sysmon.exe" -u force >nul 2>nul',
+      ResultCode);
+  end;
+
+  { Remove Resistine Sysmon directory }
+  DeleteDirectoryIfExists(ExpandConstant('{pf}\Resistine\Sysmon'));
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
+  begin
     RemoveResistineVpnServicesAndTunnels;
+    RemoveWazuhAndSysmon;
+  end;
 
   if CurUninstallStep = usPostUninstall then
   begin
