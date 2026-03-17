@@ -67,7 +67,10 @@ def _run_privileged(command, timeout=300):
 
     if _is_admin():
         try:
-            result = subprocess.run(ps_cmd, capture_output=True, text=True, timeout=timeout)
+            result = subprocess.run(
+                ps_cmd, capture_output=True, text=True, timeout=timeout,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
             output = result.stdout.strip() or result.stderr.strip()
             logger.info(f"_run_privileged: rc={result.returncode} output={output!r}")
             return (result.returncode == 0, output)
@@ -85,14 +88,15 @@ def _run_privileged(command, timeout=300):
             f.write(f"catch {{ $_.Exception.Message | Out-File -FilePath '{result_file}' -Encoding utf8 }}\n")
             script_path = f.name
 
-        # Launch elevated process and wait for it
+        # Launch elevated process and wait for it — WindowStyle Hidden suppresses the console
         elevate_cmd = (
-            f"Start-Process powershell -Verb RunAs -Wait "
-            f"-ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','{script_path}'"
+            f"Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden "
+            f"-ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-NonInteractive','-File','{script_path}'"
         )
         subprocess.run(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", elevate_cmd],
             capture_output=True, text=True, timeout=timeout,
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
 
         # Read result
@@ -201,6 +205,7 @@ def get_agent_status():
         result = subprocess.run(
             ["sc", "query", _SERVICE_NAME],
             capture_output=True, text=True, timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
         if "RUNNING" in result.stdout:
             return "Running"
@@ -223,6 +228,7 @@ def _is_sysmon_installed():
         result = subprocess.run(
             ["sc", "query", "Sysmon64"],
             capture_output=True, text=True, timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
         if result.returncode == 0:
             return True
@@ -230,6 +236,7 @@ def _is_sysmon_installed():
         result = subprocess.run(
             ["sc", "query", "Sysmon"],
             capture_output=True, text=True, timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
         return result.returncode == 0
     except Exception:
@@ -250,6 +257,7 @@ def _download_file(url, dest_path, progress_callback=None, label="Downloading...
         result = subprocess.run(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd],
             capture_output=True, text=True, timeout=300,
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
         if result.returncode == 0 and os.path.exists(dest_path):
             logger.info(f"Downloaded to {dest_path}")
