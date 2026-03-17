@@ -14,185 +14,270 @@ import sys
 import customtkinter
 import customtkinter.windows.widgets.ctk_scrollable_frame as _sf
 
-# Linux: use a custom high-poly smooth polygon renderer to avoid both the
-# "blob" artifacts of font_shapes (anti-aliased font) and the "jaggies" of 
-# polygon_shapes (coarse Tkinter rounding). This calculates 40+ points per 
-# rectangle for truly smooth curves on X11.
 if sys.platform.startswith("linux"):
     import math
     import tkinter
+    try:
+        import cairo
+    except ImportError:
+        import cairocffi as cairo
+    from PIL import Image, ImageTk
     from customtkinter.windows.widgets.core_rendering import DrawEngine
+    from customtkinter.windows.widgets.core_rendering import CTkCanvas
 
-    def _get_smooth_points(w, h, r, offset=0, inset=1.0):
-        """Calculates a high-poly path with symmetric precision and explicit endpoints."""
-        r = min(r, (w - 2*inset)/2, (h - 2*inset)/2)
-        if r <= 0:
-            pts = [inset-offset, inset-offset, w-inset+offset, inset-offset, 
-                   w-inset+offset, h-inset+offset, inset-offset, h-inset+offset]
-            pts.extend(pts[:2])
-            return pts
-        pts = []
-        steps = max(24, int(r * 2))
-        for i in range(steps + 1): # TR
-            a = math.radians(270 + 90 * i / steps)
-            pts.extend([w - inset - r + (r + offset) * math.cos(a), inset + r + (r + offset) * math.sin(a)])
-        for i in range(steps + 1): # BR
-            a = math.radians(0 + 90 * i / steps)
-            pts.extend([w - inset - r + (r + offset) * math.cos(a), h - inset - r + (r + offset) * math.sin(a)])
-        for i in range(steps + 1): # BL
-            a = math.radians(90 + 90 * i / steps)
-            pts.extend([inset + r + (r + offset) * math.cos(a), h - inset - r + (r + offset) * math.sin(a)])
-        for i in range(steps + 1): # TL
-            a = math.radians(180 + 90 * i / steps)
-            pts.extend([inset + r + (r + offset) * math.cos(a), inset + r + (r + offset) * math.sin(a)])
-        pts.extend(pts[:2])
-        return pts
+    def _get_rgba(widget, attr_name, default_color="black", alpha=1.0):
+        """Resolves any CTk color (list, hex, name) to Cairo RGBA.
+        
+        Mirrors CTk's own _draw() logic: if the requested attribute is
+        'transparent', fall back to _bg_color (what CTk uses for border_parts
+        when border_color == 'transparent'), not invisible black.
+        """
+        color_val = getattr(widget, attr_name, None)
+        if color_val is None:
+            color_val = default_color
+        if isinstance(color_val, (list, tuple)):
+            color_val = widget._apply_appearance_mode(color_val)
+        
+        # "transparent" means: show whatever is behind this widget — i.e. bg_color
+        if color_val == "transparent":
+            bg = getattr(widget, "_bg_color", None)
+            if bg is None:
+                return (0, 0, 0, 0)
+            if isinstance(bg, (list, tuple)):
+                bg = widget._apply_appearance_mode(bg)
+            color_val = bg
+
+        if color_val is None:
+            return (0, 0, 0, 0)
+            
+        try:
+            r, g, b = widget.winfo_rgb(color_val)
+            return (r/65535.0, g/65535.0, b/65535.0, alpha)
+        except Exception:
+            return (0, 0, 0, 0)
+
+    def _render_cairo_to_tk(self, width, height, draw_func):
+        """Bridge between Cairo rendering and Tkinter PhotoImage."""
+        # Use a small padding to prevent edge clipping during AA
+        w, h = math.ceil(width), math.ceil(height)
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
+        ctx = cairo.Context(surface)
+        draw_func(ctx, w, h)
+        
+        # Convert Cairo surface to PIL Image, then to PhotoImage
+        # Use bytes() as cairocffi buffer doesn't have .tobytes()
+        img = Image.frombuffer("RGBA", (w, h), bytes(surface.get_data()), "raw", "BGRA", 0, 1)
+        photo = ImageTk.PhotoImage(img)
+        
+        # GC Prevention: store the photo on the widget instance
+        if not hasattr(self, "_cairo_photos"): self._cairo_photos = {}
+        return photo
+
+    def _cairo_rounded_rect(ctx, x, y, w, h, r):
+        if r <= 0: ctx.rectangle(x, y, w, h); return
+        r = min(r, w/2, h/2)
+        ctx.new_sub_path()
+        ctx.arc(x + w - r, y + r, r, -0.5 * math.pi, 0)
+        ctx.arc(x + w - r, y + h - r, r, 0, 0.5 * math.pi)
+        ctx.arc(x + r, y + h - r, r, 0.5 * math.pi, math.pi)
+        ctx.arc(x + r, y + r, r, math.pi, 1.5 * math.pi)
+        ctx.close_path()
 
     def _draw_smooth_polygon_shapes(self, width, height, corner_radius, border_width):
-        requires_recoloring = False
-        r, bw = (corner_radius or 0), (border_width or 0)
-        inner_r = max(0, r - bw)
-        if bw > 0:
-            if not self._canvas.find_withtag("border_parts"):
-                self._canvas.create_polygon((0,0,0,0), tags=("border_line_1", "border_parts"), width=0, outline="")
-                requires_recoloring = True
-            self._canvas.coords("border_line_1", *_get_smooth_points(width, height, r))
-        else: self._canvas.delete("border_parts")
-        if not self._canvas.find_withtag("inner_parts"):
-            self._canvas.create_polygon((0,0,0,0), tags=("inner_line_1", "inner_parts"), width=0, outline="")
-            requires_recoloring = True
-        pts = _get_smooth_points(width - 2*bw, height - 2*bw, inner_r)
-        for i in range(0, len(pts), 2): pts[i] += bw; pts[i+1] += bw
-        self._canvas.coords("inner_line_1", *pts)
-        return requires_recoloring
+        master = self._canvas.master
+        def draw(ctx, w, h):
+            r, bw = (corner_radius or 0), (border_width or 0)
+            # Fill entire surface with bg_color first — this is what shows through
+            # at the rounded corners, matching what canvas.configure(bg=_bg_color) does
+            # for the Tk polygon approach. Without this, corners composite against black.
+            ctx.set_source_rgba(*_get_rgba(master, "_bg_color"))
+            ctx.paint()
+            if bw > 0:
+                ctx.set_source_rgba(*_get_rgba(master, "_border_color", default_color="transparent"))
+                _cairo_rounded_rect(ctx, 0, 0, width, height, r)
+                ctx.fill()
+            ctx.set_source_rgba(*_get_rgba(master, "_fg_color"))
+            _cairo_rounded_rect(ctx, bw, bw, width - 2*bw, height - 2*bw, max(0, r - bw))
+            ctx.fill()
+
+        photo = _render_cairo_to_tk(self, width, height, draw)
+        self._cairo_photos["main"] = photo
+        
+        if not self._canvas.find_withtag("cairo_main"):
+            self._canvas.create_image(0, 0, anchor="nw", image=photo, tags=("cairo_main", "inner_parts"))
+        else:
+            self._canvas.itemconfig("cairo_main", image=photo)
+        self._canvas.tag_lower("cairo_main")
+        return False
 
     def _draw_smooth_scrollbar(self, width, height, corner_radius, inner_corner_radius, start_value, end_value, orientation):
-        requires_recoloring = False
-        if not self._canvas.find_withtag("border_parts"):
-            self._canvas.create_rectangle(0, 0, 0, 0, tags=("border_rectangle_1", "border_parts"), width=0, outline="")
-            requires_recoloring = True
-        self._canvas.coords("border_rectangle_1", 0, 0, width, height)
-        if not self._canvas.find_withtag("scrollbar_parts"):
-            self._canvas.create_polygon((0, 0, 0, 0), tags=("scrollbar_polygon_1", "scrollbar_parts"), width=0, outline="")
-            self._canvas.tag_raise("scrollbar_parts", "border_parts")
-            requires_recoloring = True
-        if orientation == "vertical":
-            bar_w, bar_h = width - 2 * corner_radius, (height - 2 * corner_radius) * (end_value - start_value)
-            y_offset, x_offset = (height - 2 * corner_radius) * start_value + corner_radius, corner_radius
+        master = self._canvas.master
+        def draw(ctx, w, h):
+            ctx.set_source_rgba(*_get_rgba(master, "_fg_color")) # Track/BG
+            ctx.rectangle(0, 0, width, height)
+            ctx.fill()
+            ctx.set_source_rgba(*_get_rgba(master, "_button_color")) # Handle
+            if orientation == "vertical":
+                bar_w, bar_h = width - 2 * corner_radius, (height - 2 * corner_radius) * (end_value - start_value)
+                y, x = (height - 2 * corner_radius) * start_value + corner_radius, corner_radius
+            else:
+                bar_w, bar_h = (width - 2 * corner_radius) * (end_value - start_value), height - 2 * corner_radius
+                x, y = (width - 2 * corner_radius) * start_value + corner_radius, corner_radius
+            _cairo_rounded_rect(ctx, x - inner_corner_radius, y - inner_corner_radius, 
+                                bar_w + 2*inner_corner_radius, bar_h + 2*inner_corner_radius, inner_corner_radius)
+            ctx.fill()
+
+        photo = _render_cairo_to_tk(self, width, height, draw)
+        self._cairo_photos["scrollbar"] = photo
+        
+        if not self._canvas.find_withtag("cairo_scrollbar"):
+            self._canvas.create_image(0, 0, anchor="nw", image=photo, tags=("cairo_scrollbar", "scrollbar_parts"))
         else:
-            bar_w, bar_h = (width - 2 * corner_radius) * (end_value - start_value), height - 2 * corner_radius
-            x_offset, y_offset = (width - 2 * corner_radius) * start_value + corner_radius, corner_radius
-        pts = _get_smooth_points(bar_w + 2*inner_corner_radius, bar_h + 2*inner_corner_radius, inner_corner_radius)
-        for i in range(0, len(pts), 2): pts[i] += x_offset - inner_corner_radius; pts[i+1] += y_offset - inner_corner_radius
-        self._canvas.coords("scrollbar_polygon_1", *pts)
-        return requires_recoloring
+            self._canvas.itemconfig("cairo_scrollbar", image=photo)
+        return False
 
     def _draw_smooth_progress_bar(self, width, height, corner_radius, border_width, v1, v2, orientation):
-        r, bw = (corner_radius or 0), (border_width or 0)
-        if r > width / 2 or r > height / 2: r = min(width / 2, height / 2)
-        requires_recoloring = self._draw_smooth_polygon_shapes(width, height, r, bw)
-        if not self._canvas.find_withtag("progress_parts"):
-            self._canvas.create_polygon((0,0,0,0), tags=("progress_line_1", "progress_parts"), width=0, outline="")
-            requires_recoloring = True
-        inner_r = max(0, r - bw)
-        
-        # Visibility Guard: If values are essentially equal (e.g. at 0), hide the part completely
-        if abs(v1 - v2) < 0.0001:
-            if self._canvas.itemcget("progress_line_1", "state") != "hidden":
-                self._canvas.itemconfig("progress_parts", state="hidden")
-                requires_recoloring = True
-            return requires_recoloring
-        else:
-            if self._canvas.itemcget("progress_line_1", "state") != "normal":
-                self._canvas.itemconfig("progress_parts", state="normal")
-                requires_recoloring = True
+        master = self._canvas.master
+        def draw(ctx, w, h):
+            r, bw = (corner_radius or 0), (border_width or 0)
+            inner_r = max(0, r - bw)
+            # Fill corners with bg_color so rounded corners don't composite against black
+            ctx.set_source_rgba(*_get_rgba(master, "_bg_color"))
+            ctx.paint()
+            # 1. Background/Border
+            if bw > 0:
+                ctx.set_source_rgba(*_get_rgba(master, "_border_color", default_color="transparent"))
+                _cairo_rounded_rect(ctx, 0, 0, width, height, r)
+                ctx.fill()
+            ctx.set_source_rgba(*_get_rgba(master, "_fg_color"))
+            _cairo_rounded_rect(ctx, bw, bw, width - 2*bw, height - 2*bw, inner_r)
+            ctx.fill()
 
-        if orientation in ["horizontal", "w", "e"]:
-            usable_w = max(0, width - 2 * bw)
-            x_start, x_end = bw + usable_w * v1, bw + usable_w * v2
-            pts = _get_smooth_points(max(1, x_end - x_start), max(1, height - 2 * bw), inner_r)
-            for i in range(0, len(pts), 2): pts[i] += x_start; pts[i+1] += bw
+            # 2. Progress Fill
+            if abs(v1 - v2) > 0.0001:
+                ctx.set_source_rgba(*_get_rgba(master, "_progress_color"))
+                if orientation in ["horizontal", "w", "e"]:
+                    usable_w = max(0, width - 2 * bw)
+                    x_start, x_end = bw + usable_w * v1, bw + usable_w * v2
+                    _cairo_rounded_rect(ctx, x_start, bw, max(1, x_end - x_start), max(1, height - 2 * bw), inner_r)
+                else:
+                    usable_h = max(0, height - 2 * bw)
+                    y_start, y_end = bw + usable_h * (1 - v2), bw + usable_h * (1 - v1)
+                    _cairo_rounded_rect(ctx, bw, y_start, max(1, width - 2 * bw), max(1, y_end - y_start), inner_r)
+                ctx.fill()
+
+        photo = _render_cairo_to_tk(self, width, height, draw)
+        self._cairo_photos["progress"] = photo
+        if not self._canvas.find_withtag("cairo_progress"):
+            self._canvas.create_image(0, 0, anchor="nw", image=photo, tags=("cairo_progress", "progress_parts"))
         else:
-            usable_h = max(0, height - 2 * bw)
-            y_start, y_end = bw + usable_h * (1 - v2), bw + usable_h * (1 - v1)
-            pts = _get_smooth_points(max(1, width - 2 * bw), max(1, y_end - y_start), inner_r)
-            for i in range(0, len(pts), 2): pts[i] += bw; pts[i+1] += y_start
-        self._canvas.coords("progress_line_1", *pts)
-        self._canvas.tag_raise("progress_parts")
-        return requires_recoloring
+            self._canvas.itemconfig("cairo_progress", image=photo)
+        self._canvas.tag_lower("cairo_progress")
+        return False
 
     def _draw_smooth_slider(self, width, height, corner_radius, border_width, button_length, button_corner_radius, slider_value, orientation):
-        requires_recoloring = self._draw_smooth_progress_bar(width, height, corner_radius, border_width, 0, slider_value, orientation)
-        if not self._canvas.find_withtag("slider_parts"):
-            self._canvas.create_polygon((0,0,0,0), tags=("slider_button_line_1", "slider_parts"), width=0, outline="")
-            requires_recoloring = True
-        r, br = (corner_radius or 0), (button_corner_radius or 0)
-        if r > width / 2 or r > height / 2: r = min(width / 2, height / 2)
-        if br > width / 2 or br > height / 2: br = min(width / 2, height / 2)
-        total_button_w, total_button_h = button_length + 2 * br, button_length + 2 * br
-        if orientation in ["horizontal", "w", "e"]:
-            bx = max(0, width - total_button_w) * slider_value
-            pts = _get_smooth_points(total_button_w, height, br)
-            for i in range(0, len(pts), 2): pts[i] += bx; pts[i+1] += 0
+        master = self._canvas.master
+        def draw(ctx, w, h):
+            r, bw = (corner_radius or 0), (border_width or 0)
+            inner_r = max(0, r - bw)
+            # Fill corners with bg_color so rounded corners don't composite against black
+            ctx.set_source_rgba(*_get_rgba(master, "_bg_color"))
+            ctx.paint()
+            # 1. Background/Border
+            if bw > 0:
+                ctx.set_source_rgba(*_get_rgba(master, "_border_color", default_color="transparent"))
+                _cairo_rounded_rect(ctx, 0, 0, width, height, r)
+                ctx.fill()
+            ctx.set_source_rgba(*_get_rgba(master, "_fg_color"))
+            _cairo_rounded_rect(ctx, bw, bw, width - 2*bw, height - 2*bw, inner_r)
+            ctx.fill()
+
+            # 2. Progress Fill
+            ctx.set_source_rgba(*_get_rgba(master, "_progress_color"))
+            if orientation in ["horizontal", "w", "e"]:
+                usable_w = max(0, width - 2 * bw)
+                _cairo_rounded_rect(ctx, bw, bw, usable_w * slider_value, height - 2 * bw, inner_r)
+            else:
+                usable_h = max(0, height - 2 * bw)
+                _cairo_rounded_rect(ctx, bw, bw + usable_h * (1 - slider_value), width - 2 * bw, usable_h * slider_value, inner_r)
+            ctx.fill()
+
+            # 3. Slider Button
+            ctx.set_source_rgba(*_get_rgba(master, "_button_color"))
+            br = (button_corner_radius or 0)
+            if orientation in ["horizontal", "w", "e"]:
+                if button_length == 0:
+                    # Circular dot: clamp radius to fit inside the track height
+                    dot_r = min(br, (height - 2 * bw) / 2)
+                    # Centre x travels only within [bw+dot_r, width-bw-dot_r] so dot stays inside track
+                    usable_w = max(0, width - 2 * bw - 2 * dot_r)
+                    cx = bw + dot_r + usable_w * slider_value
+                    cy = height / 2
+                    ctx.arc(cx, cy, dot_r, 0, 2 * math.pi)
+                    ctx.fill()
+                else:
+                    bx = (width - button_length) * slider_value
+                    _cairo_rounded_rect(ctx, bx, 0, button_length, height, br)
+                    ctx.fill()
+            else:
+                if button_length == 0:
+                    dot_r = min(br, (width - 2 * bw) / 2)
+                    usable_h = max(0, height - 2 * bw - 2 * dot_r)
+                    cx = width / 2
+                    cy = bw + dot_r + usable_h * (1 - slider_value)
+                    ctx.arc(cx, cy, dot_r, 0, 2 * math.pi)
+                    ctx.fill()
+                else:
+                    by = (height - button_length) * (1 - slider_value)
+                    _cairo_rounded_rect(ctx, 0, by, width, button_length, br)
+                    ctx.fill()
+
+        photo = _render_cairo_to_tk(self, width, height, draw)
+        self._cairo_photos["slider"] = photo
+        if not self._canvas.find_withtag("cairo_slider"):
+            self._canvas.create_image(0, 0, anchor="nw", image=photo, tags=("cairo_slider", "slider_parts"))
         else:
-            by = max(0, height - total_button_h) * (1 - slider_value)
-            pts = _get_smooth_points(width, total_button_h, br)
-            for i in range(0, len(pts), 2): pts[i] += 0; pts[i+1] += by
-        self._canvas.coords("slider_button_line_1", *pts)
-        self._canvas.tag_raise("slider_parts")
-        return requires_recoloring
+            self._canvas.itemconfig("cairo_slider", image=photo)
+        self._canvas.tag_lower("cairo_slider")
+        return False
 
     def _draw_smooth_vertical_split(self, width, height, corner_radius, border_width, left_section_width):
-        requires_recoloring = False
-        r, bw, lw = (corner_radius or 0), (border_width or 0), (left_section_width or 0)
-        inner_r = max(0, r - bw)
-        
-        # 1. Left Section
-        if not self._canvas.find_withtag("left_section_parts"):
-            self._canvas.create_polygon((0,0,0,0), tags=("left_pol_1", "left_section_parts"), width=0, outline="")
-            requires_recoloring = True
-        
-        # Calculate high-poly path for the left half: 
-        # TL (arc), BL (arc), then vertical cut at lw
-        steps = max(24, int(inner_r * 2))
-        pts_l = []
-        for i in range(steps + 1): # BL
-            a = math.radians(90 + 90 * i / steps)
-            pts_l.extend([bw + inner_r + inner_r * math.cos(a), height - bw - inner_r + inner_r * math.sin(a)])
-        for i in range(steps + 1): # TL
-            a = math.radians(180 + 90 * i / steps)
-            pts_l.extend([bw + inner_r + inner_r * math.cos(a), bw + inner_r + inner_r * math.sin(a)])
-        # Close with vertical line at the split
-        pts_l.extend([lw, bw, lw, height - bw])
-        self._canvas.coords("left_pol_1", *pts_l)
+        master = self._canvas.master
+        def draw(ctx, w, h):
+            r, bw, lw = (corner_radius or 0), (border_width or 0), (left_section_width or 0)
+            inner_r = max(0, r - bw)
+            # Fill corners with bg_color so rounded corners don't composite against black
+            ctx.set_source_rgba(*_get_rgba(master, "_bg_color"))
+            ctx.paint()
+            if bw > 0:
+                ctx.set_source_rgba(*_get_rgba(master, "_border_color", default_color="transparent"))
+                _cairo_rounded_rect(ctx, 0, 0, width, height, r)
+                ctx.fill()
+            ctx.set_source_rgba(*_get_rgba(master, "_left_section_color"))
+            ctx.new_sub_path()
+            ctx.arc(bw + inner_r, height - bw - inner_r, inner_r, 0.5 * math.pi, math.pi)
+            ctx.arc(bw + inner_r, bw + inner_r, inner_r, math.pi, 1.5 * math.pi)
+            ctx.line_to(lw, bw)
+            ctx.line_to(lw, height - bw)
+            ctx.close_path()
+            ctx.fill()
+            ctx.set_source_rgba(*_get_rgba(master, "_right_section_color"))
+            ctx.new_sub_path()
+            ctx.move_to(lw, bw)
+            ctx.arc(width - bw - inner_r, bw + inner_r, inner_r, -0.5 * math.pi, 0)
+            ctx.arc(width - bw - inner_r, height - bw - inner_r, inner_r, 0, 0.5 * math.pi)
+            ctx.line_to(lw, height - bw)
+            ctx.close_path()
+            ctx.fill()
 
-        # 2. Right Section
-        if not self._canvas.find_withtag("right_section_parts"):
-            self._canvas.create_polygon((0,0,0,0), tags=("right_pol_1", "right_section_parts"), width=0, outline="")
-            requires_recoloring = True
-            
-        # Path for right half:
-        # vertical cut at lw, then TR (arc), BR (arc)
-        pts_r = [lw, bw]
-        for i in range(steps + 1): # TR
-            a = math.radians(270 + 90 * i / steps)
-            pts_r.extend([width - bw - inner_r + inner_r * math.cos(a), bw + inner_r + inner_r * math.sin(a)])
-        for i in range(steps + 1): # BR
-            a = math.radians(0 + 90 * i / steps)
-            pts_r.extend([width - bw - inner_r + inner_r * math.cos(a), height - bw - inner_r + inner_r * math.sin(a)])
-        pts_r.extend([lw, height - bw])
-        self._canvas.coords("right_pol_1", *pts_r)
+        photo = _render_cairo_to_tk(self, width, height, draw)
+        self._cairo_photos["vertical_split"] = photo
         
-        # 3. Border (Background)
-        if bw > 0:
-            if not self._canvas.find_withtag("border_parts"):
-                self._canvas.create_polygon((0,0,0,0), tags=("border_pol_1", "border_parts"), width=0, outline="")
-                requires_recoloring = True
-            self._canvas.coords("border_pol_1", *_get_smooth_points(width, height, r))
-            self._canvas.tag_lower("border_parts")
-        else: self._canvas.delete("border_parts")
-        
-        return requires_recoloring
+        if not self._canvas.find_withtag("cairo_vertical_split"):
+            self._canvas.create_image(0, 0, anchor="nw", image=photo, tags=("cairo_vertical_split", "inner_parts"))
+        else:
+            self._canvas.itemconfig("cairo_vertical_split", image=photo)
+        return False
 
     DrawEngine._draw_smooth_polygon_shapes = _draw_smooth_polygon_shapes
     DrawEngine._draw_smooth_scrollbar = _draw_smooth_scrollbar
@@ -201,6 +286,7 @@ if sys.platform.startswith("linux"):
     DrawEngine._draw_smooth_vertical_split = _draw_smooth_vertical_split
     _orig_draw, _orig_vertical = DrawEngine.draw_rounded_rect_with_border, DrawEngine.draw_rounded_rect_with_border_vertical_split
     _orig_progress, _orig_slider, _orig_scrollbar = DrawEngine.draw_rounded_progress_bar_with_border, DrawEngine.draw_rounded_slider_with_border_and_button, DrawEngine.draw_rounded_scrollbar
+    
     def _patched_draw(self, w, h, r, bw, meth=None, *args, **kwargs):
         if (meth or self.preferred_drawing_method) == "smooth_polygon_shapes": return self._draw_smooth_polygon_shapes(w, h, r, bw)
         return _orig_draw(self, w, h, r, bw, meth, *args, **kwargs)
@@ -220,9 +306,51 @@ if sys.platform.startswith("linux"):
             r = min(r, w/2, h/2); s = round(s); icr = max(0, r - s)
             return self._draw_smooth_scrollbar(w, h, r, icr, sv, ev, o)
         return _orig_scrollbar(self, w, h, r, s, sv, ev, o, *args, **kwargs)
+    
     DrawEngine.draw_rounded_rect_with_border, DrawEngine.draw_rounded_rect_with_border_vertical_split = _patched_draw, _patched_vertical
     DrawEngine.draw_rounded_progress_bar_with_border, DrawEngine.draw_rounded_slider_with_border_and_button = _patched_progress, _patched_slider
     DrawEngine.draw_rounded_scrollbar, DrawEngine.preferred_drawing_method = _patched_scrollbar, "smooth_polygon_shapes"
+
+    # Patch CTkCanvas to intercept fill/outline recolors on our Cairo images.
+    # CTkButton._on_enter/leave calls itemconfig("inner_parts", fill=hover_color) to
+    # recolor the button background — for Tk polygon shapes that just repaints them,
+    # but our Cairo image ignores fill. We detect that case and re-render the Cairo
+    # image with the new color so hover effects work on the button background too.
+    _orig_canvas_itemconfigure = CTkCanvas.itemconfigure
+    def _patched_canvas_itemconfigure(self, tagOrId, cnf=None, **kwargs):
+        if not kwargs: return _orig_canvas_itemconfigure(self, tagOrId, cnf, **kwargs)
+        items = self.find_withtag(tagOrId)
+        if not items: return _orig_canvas_itemconfigure(self, tagOrId, cnf, **kwargs)
+
+        has_image = any(self.type(i) == "image" for i in items)
+        if not has_image: return _orig_canvas_itemconfigure(self, tagOrId, cnf, **kwargs)
+
+        # If a fill color is being applied to a tag that includes our Cairo image,
+        # re-render it with that color standing in for _fg_color.
+        fill_color = kwargs.get("fill")
+        if fill_color and self.find_withtag("cairo_main") and tagOrId == "inner_parts":
+            master = self.master
+            de = getattr(master, "_draw_engine", None)
+            if de is not None:
+                orig_fg = master._fg_color
+                master._fg_color = fill_color
+                try:
+                    canvas_w = self.winfo_width()
+                    canvas_h = self.winfo_height()
+                    if canvas_w > 1 and canvas_h > 1:
+                        de._draw_smooth_polygon_shapes(canvas_w, canvas_h,
+                            getattr(master, "_corner_radius", 0),
+                            getattr(master, "_border_width", 0))
+                finally:
+                    master._fg_color = orig_fg
+
+        for item in items:
+            item_kwargs = kwargs.copy()
+            if self.type(item) == "image":
+                item_kwargs.pop("fill", None)
+                item_kwargs.pop("outline", None)
+            _orig_canvas_itemconfigure(self, item, cnf, **item_kwargs)
+    CTkCanvas.itemconfigure = CTkCanvas.itemconfig = _patched_canvas_itemconfigure
 
 
 # Patch customtkinter bug where scroll events pass a string instead of a widget
