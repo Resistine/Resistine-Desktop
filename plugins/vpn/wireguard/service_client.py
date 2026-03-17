@@ -15,7 +15,7 @@ SERVICE_PORT = 51888
 # Token file is written by the service on first start and shared via ProgramData.
 # Both the service (SYSTEM) and the GUI (current user) can access ProgramData.
 _PROGRAMDATA = os.environ.get("PROGRAMDATA", r"C:\ProgramData")
-_IPC_TOKEN_FILE = os.path.join(_PROGRAMDATA, "Resistine", "ipc_token")
+_IPC_TOKEN_FILE = os.path.join(_PROGRAMDATA, "Resistine", "wireguard", ".ipc_token")
 
 
 def _load_ipc_token() -> str:
@@ -27,9 +27,9 @@ def _load_ipc_token() -> str:
             return token
         logger.error("IPC token file is empty")
     except FileNotFoundError:
-        logger.warning("IPC token file not found at %s — is the VPN service installed?", _IPC_TOKEN_FILE)
+        logger.warning(f"IPC token file not found at {_IPC_TOKEN_FILE} — is the VPN service installed?")
     except OSError as e:
-        logger.error("Failed to load IPC token: %s", e)
+        logger.error(f"Failed to load IPC token: {e}")
     # Fallback: allow override via environment (useful for CI / testing)
     return os.environ.get("RESISTINE_IPC_TOKEN", "")
 
@@ -72,9 +72,9 @@ def send_command(command: str, tunnel: str, config_path: str = None) -> dict:
     if config_path:
         payload["config_path"] = config_path
 
-    logger.debug("VPN IPC → command=%s tunnel=%s", command, tunnel)
+    logger.debug(f"VPN IPC → command={command} tunnel={tunnel}")
     if config_path:
-        logger.debug("VPN IPC   config_path=%s", config_path)
+        logger.debug(f"VPN IPC   config_path={config_path}")
 
     sock = None
     try:
@@ -85,7 +85,7 @@ def send_command(command: str, tunnel: str, config_path: str = None) -> dict:
 
         data = _recv_response(sock)
         response = json.loads(data.decode("utf-8"))
-        logger.debug("VPN IPC ← %s", response)
+        logger.debug(f"VPN IPC ← {response}")
         return response
 
     except ConnectionRefusedError:

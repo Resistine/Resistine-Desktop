@@ -457,6 +457,18 @@ class Plugin(BasePlugin):
         if not confirmed:
             return
 
+        # Disconnect VPN before clearing auth state
+        try:
+            import platform
+            if platform.system() == "Windows":
+                from plugins.vpn.wireguard.vpn_windows_client import disconnect
+                disconnect("resistine_default")
+            else:
+                from plugins.vpn.wireguard.vpn_functions_darwin import stop_vpn
+                stop_vpn()
+        except Exception as e:
+            logger.warning(f"VPN disconnect on logout failed: {e}")
+
         # Clear auth state
         settings.set("auth", "logged_in", False)
 

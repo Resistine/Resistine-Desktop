@@ -493,13 +493,6 @@ class ResistineVPNService(win32serviceutil.ServiceFramework):
         ).start()
         servicemanager.LogInfoMsg("IPC thread started")
 
-        # Auto-start VPN after socket is ready
-        time.sleep(0.5)
-        threading.Thread(
-            target=self._auto_start,
-            daemon=True,
-        ).start()
-
         # Block until stop signal
         win32event.WaitForSingleObject(self.hWaitStop, win32event.INFINITE)
 
