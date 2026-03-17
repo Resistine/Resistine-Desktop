@@ -138,6 +138,10 @@ provisioning-profiles/
 *.mobileprovision
 *.cert
 *.p12
+
+# Claude Code
+.claude/
+
 # Inno Setup output
 dist/installer/
 *.exe

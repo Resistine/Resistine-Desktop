@@ -1,3 +1,4 @@
+
 """
 VPN Configuration Manager for Resistine Desktop.
 
@@ -11,7 +12,7 @@ import re
 from utils import settings as app_settings
 from utils.logger import logger
 
-RESISTINE_CONFIG_NAME = "resdef"
+RESISTINE_CONFIG_NAME = "resistine_default"
 SETTINGS_NAMESPACE = "vpn"
 
 
@@ -48,7 +49,7 @@ class VPNConfigManager:
     def get_active_config_name(self):
         """Get the name of the currently active config.
 
-        Falls back to resdef, then first found config.
+        Falls back to resistine_default, then first found config.
         Returns None if no configs exist.
         """
         active = app_settings.get(SETTINGS_NAMESPACE, "active_config")
@@ -136,10 +137,10 @@ class VPNConfigManager:
             registry.pop(config_name, None)
             app_settings.set(SETTINGS_NAMESPACE, "config_registry", registry)
 
-            # If deleted config was active, switch to resdef or first available
+            # If deleted config was active, switch to resistine_default or first available
             active = app_settings.get(SETTINGS_NAMESPACE, "active_config")
             if active == config_name:
-                fallback = self.get_active_config_name()  # triggers fallback logic
+                self.get_active_config_name()  # triggers fallback logic to set a new active config
 
             logger.info(f"Deleted config: {config_name}")
             return True, ""

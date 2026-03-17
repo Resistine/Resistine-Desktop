@@ -3,41 +3,51 @@ IPC client for the ResistineVPN Windows service.
 Authors: Merhawi
 Copyright (c) Resistine 2025
 """
+import json
 import os
 import socket
-import json
-from utils.logger import logger
 
+from utils.logger import logger
 
 SERVICE_HOST = "127.0.0.1"
 SERVICE_PORT = 51888
-BUFFER_SIZE = 4096
 
-# Path to the token file written by the service at startup.
-# Both service and client read from this location so the token is never
-# hardcoded and is unique per installation.
-_TOKEN_FILE = os.path.join(
-    os.environ.get("PROGRAMDATA", r"C:\ProgramData"),
-    "Resistine",
-    "ipc_token",
-)
+# Token file is written by the service on first start and shared via ProgramData.
+# Both the service (SYSTEM) and the GUI (current user) can access ProgramData.
+_PROGRAMDATA = os.environ.get("PROGRAMDATA", r"C:\ProgramData")
+_IPC_TOKEN_FILE = os.path.join(_PROGRAMDATA, "Resistine", "wireguard", ".ipc_token")
 
 
 def _load_ipc_token() -> str:
-    """Load the IPC token from the shared token file or environment variable."""
-    if os.path.exists(_TOKEN_FILE):
-        try:
-            with open(_TOKEN_FILE, "r") as f:
-                token = f.read().strip()
-            if token:
-                return token
-        except OSError:
-            pass
+    """Load the IPC authentication token from the shared token file."""
+    try:
+        with open(_IPC_TOKEN_FILE, "r") as fh:
+            token = fh.read().strip()
+        if token:
+            return token
+        logger.error("IPC token file is empty")
+    except FileNotFoundError:
+        logger.warning(f"IPC token file not found at {_IPC_TOKEN_FILE} — is the VPN service installed?")
+    except OSError as e:
+        logger.error(f"Failed to load IPC token: {e}")
     # Fallback: allow override via environment (useful for CI / testing)
     return os.environ.get("RESISTINE_IPC_TOKEN", "RESISTINE_INTERNAL_TOKEN_CHANGE_ME")
 
 
-IPC_TOKEN = _load_ipc_token()
+def _recv_response(sock: socket.socket) -> bytes:
+    """Read the full response.
+
+    The service closes the connection after sending its reply, so we read
+    until we receive an empty chunk (TCP FIN) rather than guessing a fixed
+    buffer size.  This handles arbitrarily-sized responses correctly.
+    """
+    parts = []
+    while True:
+        chunk = sock.recv(65536)
+        if not chunk:
+            break
+        parts.append(chunk)
+    return b"".join(parts)
 
 
 def send_command(command: str, tunnel: str, config_path: str = None) -> dict:
@@ -48,22 +58,24 @@ def send_command(command: str, tunnel: str, config_path: str = None) -> dict:
         tunnel: The tunnel name.
         config_path: Full path to the .conf file (optional, used for connect).
     Returns:
-        dict with at minimum 'status' key.
+        dict with at minimum a 'status' key.
     """
+    token = _load_ipc_token()
+    if not token:
+        return {"status": "error", "state": "Stopped", "message": "IPC token unavailable — VPN service not installed"}
+
     payload = {
-        "token": IPC_TOKEN,
+        "token": token,
         "command": command,
         "tunnel": tunnel,
     }
     if config_path:
         payload["config_path"] = config_path
 
-    print(f"Sending command to VPN service: {command} for tunnel: {tunnel}")
+    logger.debug(f"VPN IPC → command={command} tunnel={tunnel}")
     if config_path:
-        print(f"Config path: {config_path}")
+        logger.debug(f"VPN IPC   config_path={config_path}")
 
-    #  initialise sock before the try block so the finally
-    # clause never hits an unbound name if socket.socket() itself raises.
     sock = None
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -71,9 +83,9 @@ def send_command(command: str, tunnel: str, config_path: str = None) -> dict:
         sock.connect((SERVICE_HOST, SERVICE_PORT))
         sock.sendall(json.dumps(payload).encode("utf-8"))
 
-        data = sock.recv(BUFFER_SIZE)
+        data = _recv_response(sock)
         response = json.loads(data.decode("utf-8"))
-        logger.debug(f"Service response for '{command}': {response}")
+        logger.debug(f"VPN IPC ← {response}")
         return response
 
     except ConnectionRefusedError:
