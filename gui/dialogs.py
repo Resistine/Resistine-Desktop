@@ -87,3 +87,52 @@ def ask_yes_no(master, title: str, message: str, callback: Callable[[bool], None
 def show_info(master, title: str, message: str):
     """Safe replacement for messagebox.showinfo"""
     SafeDialog(master, title, message, options=["OK"])
+
+class CTkPasswordDialog(customtkinter.CTkToplevel):
+    def __init__(self, title: str, text: str, **kwargs):
+        super().__init__(**kwargs)
+        self.title(title)
+        self.lift()
+        self.attributes("-topmost", True)
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        self.result = None
+
+        self.grid_columnconfigure(0, weight=1)
+        self.configure(padx=20, pady=20)
+
+        self.label = customtkinter.CTkLabel(self, text=text, wraplength=350, font=customtkinter.CTkFont(size=14))
+        self.label.grid(row=0, column=0, pady=(0, 20), sticky="nsew", columnspan=2)
+
+        self.entry = customtkinter.CTkEntry(self, show="*")
+        self.entry.grid(row=1, column=0, columnspan=2, pady=(0, 20), sticky="ew")
+        self.entry.bind("<Return>", lambda event: self._on_ok())
+
+        self.button_ok = customtkinter.CTkButton(self, text="OK", command=self._on_ok)
+        self.button_ok.grid(row=2, column=0, padx=5, sticky="e")
+
+        self.button_cancel = customtkinter.CTkButton(self, text="Cancel", fg_color="transparent", border_width=1, command=self._on_cancel)
+        self.button_cancel.grid(row=2, column=1, padx=5, sticky="w")
+
+        # Center on screen
+        self.after(10, self._center_window)
+
+    def _center_window(self):
+        self.update_idletasks()
+        width = self.winfo_width()
+        height = self.winfo_height()
+        x = (self.winfo_screenwidth() // 2) - (width // 2)
+        y = (self.winfo_screenheight() // 2) - (height // 2)
+        self.geometry(f"{width}x{height}+{x}+{y}")
+        self.entry.focus()
+
+    def _on_ok(self):
+        self.result = self.entry.get()
+        self.destroy()
+
+    def _on_cancel(self):
+        self.result = None
+        self.destroy()
+
+    def get_input(self):
+        self.wait_window()
+        return self.result
