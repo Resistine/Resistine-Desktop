@@ -145,28 +145,33 @@ class Plugin(BasePlugin):
         # Store plugins for responsive rebuild
         self._dashboard_plugins = plugins
         
-        # Responsive layout: determine max columns based on window width
-        screen_width = self.app.winfo_screenwidth()
+        # Responsive layout: determine max columns based on content width.
+        # Use absolute pixel thresholds (not screen percentages) so the layout
+        # is consistent regardless of screen size or DPI reporting differences
+        # between winfo_screenwidth() (physical) and winfo_width() (logical).
+        import platform as _plat
+        _sidebar = 250
+        _padding = 60 if _plat.system() == "Windows" else 40
         window_width = self.app.winfo_width()
-        
-        # IMPROVED STARTUP HINT:
-        # If window is not yet mapped (width 1), use a sensible default (70% of screen)
-        # to ensure the first layout pass is reasonably accurate.
         if window_width <= 1:
+            screen_width = self.app.winfo_screenwidth()
             window_width = int(screen_width * 0.7)
-            
+
+        content_width = max(1, window_width - _sidebar - _padding)
         # Set hint for AppUI to use in create_grid synchronously
-        self.app._content_width_hint = window_width - 240 # Approx minus sidebar and padding
-        
-        if window_width <= screen_width * 0.6:
+        self.app._content_width_hint = content_width
+
+        # Column thresholds based on content width:
+        # < 480px  → 1 col  (very narrow, ~750px window)
+        # < 680px  → 2 cols
+        # else     → up to 4 cols (natural sqrt layout)
+        if content_width < 480:
+            max_cols = 1
+        elif content_width < 680:
             max_cols = 2
-            min_cols = None
-        elif window_width >= screen_width * 0.9:
-            max_cols = None
-            min_cols = 4
         else:
-            max_cols = None
-            min_cols = None
+            max_cols = 4
+        min_cols = None
         rows, cols = self.app.calculate_rows_cols(len(plugins), max_cols=max_cols, min_cols=min_cols)
         
         # Store current column count to detect changes
@@ -192,7 +197,7 @@ class Plugin(BasePlugin):
             sticky="nsew",
             max_cols=max_cols,
             min_cols=min_cols,
-            aspect_ratio=1.3
+            aspect_ratio=1.0
         )
 
         def open_plugin(p):
@@ -219,10 +224,12 @@ class Plugin(BasePlugin):
     
     def _bind_responsive_resize(self):
         """
-        Bind a resize handler to rebuild grid when crossing 60% threshold.
-        
-        Uses a feature called debounce that limits the frequency of rebuilds during resizing.
-        30ms debounce delay is used to ensure responsiveness without excessive rebuilds.
+        Bind a resize handler to rebuild grid when the column count needs to change.
+
+        Uses a 250ms debounce so the grid is only rebuilt once the user finishes (or
+        pauses) resizing — not on every pixel during a drag.  Position-only Configure
+        events (window moved but not resized) are filtered out immediately so they
+        never queue a rebuild at all.
         """
         def on_resize(event=None):
             if not hasattr(self, '_dashboard_plugins') or not hasattr(self, '_content_frame'):
@@ -230,85 +237,65 @@ class Plugin(BasePlugin):
             try:
                 if not self._content_frame.winfo_exists():
                     return
-            except:
+            except Exception:
                 return
 
-            screen_width = self._cached_screen_width
             window_width = self.app.winfo_width()
-            
-            # Determine target columns based on width thresholds
-            if window_width <= screen_width * 0.6:
+            content_width = max(1, window_width - 250 - self._padding_offset)
+
+            if content_width < 480:
+                max_cols = 1
+            elif content_width < 680:
                 max_cols = 2
-                min_cols = None
-            elif window_width >= screen_width * 0.9:
-                max_cols = None
-                min_cols = 4
             else:
-                max_cols = None
-                min_cols = None
-            
-            # Calculate target columns
-            target_cols = len(self.app.calculate_rows_cols(len(self._dashboard_plugins), max_cols=max_cols, min_cols=min_cols)[1])
-            
-            # Only rebuild if column count changed
-            current = getattr(self, '_current_cols', None)
-            if current == target_cols:
+                max_cols = 4
+            min_cols = None
+
+            target_cols = len(self.app.calculate_rows_cols(
+                len(self._dashboard_plugins), max_cols=max_cols, min_cols=min_cols)[1])
+
+            if getattr(self, '_current_cols', None) == target_cols:
                 return
-            
+
             self._rebuild_grid(max_cols, min_cols)
-        
-        # Debounce: trigger quickly but avoid excessive rebuilds
+
         self._resize_after_id = None
-        self._last_threshold_state = None
-        self._cached_screen_width = self.app.winfo_screenwidth()  # Cache screen width
-        
+        # Track the last known window dimensions so we can ignore position-only events.
+        self._last_win_size = [0, 0]
+        import platform as _plat
+        self._padding_offset = 60 if _plat.system() == "Windows" else 40
+
         def debounced_resize(event=None):
-            # Skip if dashboard is not visible or destroyed
+            # Filter: ignore Configure events that only changed position, not size.
+            if event:
+                if event.width == self._last_win_size[0] and event.height == self._last_win_size[1]:
+                    return
+                self._last_win_size[0] = event.width
+                self._last_win_size[1] = event.height
+
+            # Skip if dashboard is no longer visible or has been destroyed.
             if not hasattr(self, 'main_frame'):
                 return
             try:
-                # Check if widget still exists and is mapped
                 if not self.main_frame.winfo_exists() or not self.main_frame.winfo_ismapped():
                     return
             except Exception:
-                # Widget has been destroyed, ignore
                 return
-            
-            # Quick check if we crossed the threshold (no debounce for threshold crossing)
-            screen_width = self._cached_screen_width
-            window_width = self.app.winfo_width()
-            # Track state: 0=narrow (<=60%), 1=normal, 2=wide (>=90%)
-            if window_width <= screen_width * 0.6:
-                threshold_state = 0
-            elif window_width >= screen_width * 0.9:
-                threshold_state = 2
-            else:
-                threshold_state = 1
-            
-            # If threshold state changed, trigger immediately
-            if self._last_threshold_state is not None and self._last_threshold_state != threshold_state:
-                self._last_threshold_state = threshold_state
-                if self._resize_after_id:
-                    self.app.after_cancel(self._resize_after_id)
-                    self._resize_after_id = None
-                on_resize()
-                return
-            
-            self._last_threshold_state = threshold_state
-            
-            # For other resizes, use debounce to avoid excessive rebuilds
+
+            # Always debounce — never fire mid-drag, even on threshold crossings.
+            # Rebuilding the grid while the user is still dragging causes the visible
+            # flash/glitch on Windows; waiting until they pause/stop eliminates it.
             if self._resize_after_id:
                 self.app.after_cancel(self._resize_after_id)
-            self._resize_after_id = self.app.after(100, on_resize)
-        
-        # LEAK PREVENTION: Unbind any existing global handler before adding a new one.
-        # This is critical because create_main_screen() is called on every tab switch.
+            self._resize_after_id = self.app.after(250, on_resize)
+
+        # LEAK PREVENTION: unbind any handler left over from a previous tab visit.
         if hasattr(self, '_resize_handler_id') and self._resize_handler_id:
             try:
                 self.app.unbind("<Configure>", self._resize_handler_id)
-            except:
+            except Exception:
                 pass
-        
+
         self._resize_handler_id = self.app.bind("<Configure>", debounced_resize, add="+")
     
     def destroy(self):
@@ -354,7 +341,7 @@ class Plugin(BasePlugin):
             sticky="nsew",
             max_cols=max_cols,
             min_cols=min_cols,
-            aspect_ratio=1.3,
+            aspect_ratio=1.0,
         )
         
         for index, plugin in enumerate(plugins):

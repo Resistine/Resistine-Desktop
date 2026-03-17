@@ -26,6 +26,9 @@ IS_MACOS = _PLATFORM == "Darwin"
 IS_WINDOWS = _PLATFORM == "Windows"
 IS_LINUX = _PLATFORM == "Linux"
 
+# Consolas is more compact and better hinted on Windows than Courier New
+_MONO_FONT = "Consolas" if IS_WINDOWS else "Courier New"
+
 # --- Platform Specific Imports ---
 if IS_WINDOWS:
     from plugins.vpn.wireguard.vpn_functions_windows import (
@@ -602,11 +605,11 @@ class Plugin(BasePlugin):
                 customtkinter.CTkLabel(
                     parent, text=value,
                     font=customtkinter.CTkFont(
-                        family="Courier New" if mono else "Inter",
+                        family=_MONO_FONT if mono else "Inter",
                         size=13, weight="bold"
                     ),
                     text_color=VALUE_COLOR, anchor="e"
-                ).grid(row=row, column=1, padx=(4, 14), pady=5, sticky="e")
+                ).grid(row=row, column=1, padx=(4, 14), pady=5, sticky="ew")
 
             # Left — Client panel placed directly in scroll_frame column 0
             client_panel = customtkinter.CTkFrame(  # noqa: tracked for responsive layout
@@ -615,7 +618,7 @@ class Plugin(BasePlugin):
             )
             client_panel.grid(row=next_row, column=0, sticky="nsew", padx=(0, 4), pady=6)
             client_panel.grid_columnconfigure(0, weight=0)
-            client_panel.grid_columnconfigure(1, weight=1)
+            client_panel.grid_columnconfigure(1, weight=1, minsize=130)
 
             r = _section_header(client_panel, 0, "CLIENT")
             _info_row(client_panel, r, "IP Address", data.get('client_ip_address', 'N/A'), mono=True); r += 1
@@ -631,7 +634,7 @@ class Plugin(BasePlugin):
             )
             server_panel.grid(row=next_row, column=1, sticky="nsew", padx=(4, 0), pady=6)
             server_panel.grid_columnconfigure(0, weight=0)
-            server_panel.grid_columnconfigure(1, weight=1)
+            server_panel.grid_columnconfigure(1, weight=1, minsize=130)
             next_row += 1  # Advance after both panels share this row
 
             r = _section_header(server_panel, 0, "SERVER / PEER")
@@ -647,7 +650,7 @@ class Plugin(BasePlugin):
             )
             keys_panel.grid(row=next_row, column=0, columnspan=2, sticky="ew", pady=6)
             keys_panel.grid_columnconfigure(0, weight=0)
-            keys_panel.grid_columnconfigure(1, weight=1)
+            keys_panel.grid_columnconfigure(1, weight=1, minsize=180)
             post_panel_widgets.append(keys_panel)
             next_row += 1
 
@@ -659,9 +662,9 @@ class Plugin(BasePlugin):
             ).grid(row=kr, column=0, padx=(14, 10), pady=5, sticky="w")
             customtkinter.CTkLabel(
                 keys_panel, text=sys_info.get("Client Public Key", "N/A"),
-                font=customtkinter.CTkFont(family="Courier New", size=13, weight="bold"),
+                font=customtkinter.CTkFont(family=_MONO_FONT, size=13, weight="bold"),
                 text_color=VALUE_COLOR, anchor="e", wraplength=420, justify="right"
-            ).grid(row=kr, column=1, padx=(4, 14), pady=5, sticky="e")
+            ).grid(row=kr, column=1, padx=(4, 14), pady=5, sticky="ew")
             kr += 1
 
             customtkinter.CTkLabel(
@@ -670,9 +673,9 @@ class Plugin(BasePlugin):
             ).grid(row=kr, column=0, padx=(14, 10), pady=5, sticky="w")
             customtkinter.CTkLabel(
                 keys_panel, text=data.get('public_key', 'N/A'),
-                font=customtkinter.CTkFont(family="Courier New", size=13, weight="bold"),
+                font=customtkinter.CTkFont(family=_MONO_FONT, size=13, weight="bold"),
                 text_color=VALUE_COLOR, anchor="e", wraplength=420, justify="right"
-            ).grid(row=kr, column=1, padx=(4, 14), pady=5, sticky="e")
+            ).grid(row=kr, column=1, padx=(4, 14), pady=5, sticky="ew")
             kr += 1
             customtkinter.CTkFrame(keys_panel, height=12, fg_color="transparent").grid(row=kr, column=0)
 
@@ -683,7 +686,7 @@ class Plugin(BasePlugin):
             )
             allowed_panel.grid(row=next_row, column=0, columnspan=2, sticky="ew", pady=6)
             allowed_panel.grid_columnconfigure(0, weight=0)
-            allowed_panel.grid_columnconfigure(1, weight=1)
+            allowed_panel.grid_columnconfigure(1, weight=1, minsize=180)
             post_panel_widgets.append(allowed_panel)
             next_row += 1
 
@@ -694,9 +697,9 @@ class Plugin(BasePlugin):
             ).grid(row=ar, column=0, padx=(14, 10), pady=5, sticky="w")
             customtkinter.CTkLabel(
                 allowed_panel, text=data.get('allowed_ips', 'N/A'),
-                font=customtkinter.CTkFont(family="Courier New", size=13, weight="bold"),
+                font=customtkinter.CTkFont(family=_MONO_FONT, size=13, weight="bold"),
                 text_color=VALUE_COLOR, anchor="e", wraplength=420, justify="right"
-            ).grid(row=ar, column=1, padx=(4, 14), pady=5, sticky="e")
+            ).grid(row=ar, column=1, padx=(4, 14), pady=5, sticky="ew")
             ar += 1
             customtkinter.CTkFrame(allowed_panel, height=12, fg_color="transparent").grid(row=ar, column=0)
 
@@ -781,10 +784,10 @@ class Plugin(BasePlugin):
                 return
             try:
                 nav = getattr(self.app, 'navigation_frame', None)
-                nav_w = nav.winfo_width() if (nav and nav.winfo_exists()) else 200
-                nav_w = max(nav_w, 200)
+                nav_w = nav.winfo_width() if (nav and nav.winfo_exists()) else 250
+                nav_w = max(nav_w, 250)  # sidebar minsize is 250
             except Exception:
-                nav_w = 200
+                nav_w = 250
             width = app_w - nav_w
             if width < 10:
                 return
@@ -793,10 +796,12 @@ class Plugin(BasePlugin):
             # Column 1 (content) is set to the desired width.
             # Columns 0 and 2 (spacers, weight=1 each) absorb any surplus equally,
             # which automatically centers the content column in the available area.
+            # Windows CTkScrollableFrame scrollbar takes more horizontal space than macOS
+            _breathing = 60 if IS_WINDOWS else 40
             if width > MAX_CONTENT_WIDTH + 40:
                 col_w = MAX_CONTENT_WIDTH
             else:
-                col_w = max(100, width - 40)   # 20px breathing room on each side
+                col_w = max(100, width - _breathing)
 
             # Ensure main_container still exists and is valid
             if not hasattr(self, 'main_container') or not self.main_container.winfo_exists():

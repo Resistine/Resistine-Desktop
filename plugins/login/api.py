@@ -65,18 +65,16 @@ class LoginAPI:
 
     def verify_otp(
         self,
-        email,
-        otp,
-        public_key,
-        host_url="rfr1.resisti.net",
-        vpn_name="testVPNapi",
-        hostname=None,
-    ):
+        email: str,
+        otp: str,
+        public_key: str,
+        hostname: str = None,
+        host_url: str = "rfr1.resisti.net",
+        vpn_name: str = "testVPNapi",
+    ) -> tuple:
         """
-        Verify the OTP and public key.
+        Verify the OTP and send the client public key to receive a WireGuard config.
         Returns a tuple (success, message, data).
-
-        TODO: Remove host_url and vpn_name parameters and get them from tha API instead!!!
         """
         try:
             import socket
