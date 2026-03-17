@@ -41,3 +41,13 @@ WAZUH_LAUNCHD_PLIST = "/Library/LaunchDaemons/com.wazuh.agent.plist"
 WAZUH_ENV_FILE = "/tmp/wazuh_envs"
 
 LINUX_WAZUH_DIR = "/var/ossec"
+
+# --- Windows Config ---
+WINDOWS_WAZUH_VERSION = "4.11.0"
+WINDOWS_WAZUH_REVISION = "1"
+WINDOWS_WAZUH_MSI_URL = f"https://packages.wazuh.com/4.x/windows/wazuh-agent-{WINDOWS_WAZUH_VERSION}-{WINDOWS_WAZUH_REVISION}.msi"
+WINDOWS_WAZUH_DIR = r"C:\Program Files (x86)\ossec-agent"
+
+# --- Sysmon ---
+WINDOWS_SYSMON_ZIP_URL = "https://download.sysinternals.com/files/Sysmon.zip"
+WINDOWS_SYSMON_CONFIG_URL = "https://raw.githubusercontent.com/SwiftOnSecurity/sysmon-config/master/sysmonconfig-export.xml"

@@ -1,89 +1,157 @@
 """
 Wazuh Agent Functions for Windows
-Handles download, install, start/stop of the Wazuh SIEM agent.
-Uses the Resistine enrollment API for agent registration.
+Handles download, install, start/stop of the Wazuh SIEM agent and Sysmon
+using PowerShell privilege escalation.
 Author: Resistine Team
 Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
 
+import ctypes
 import os
+import platform
 import re
 import socket
 import subprocess
 import tempfile
-
-import requests
+import winreg
+import zipfile
 
 from utils import settings
 from utils.logger import logger
+
 from plugins.wazuh.config import (
     WAZUH_MANAGER,
-    WAZUH_VERSION,
-    WAZUH_BASE_URL,
+    WINDOWS_WAZUH_MSI_URL,
+    WINDOWS_WAZUH_DIR,
+    WINDOWS_SYSMON_ZIP_URL,
+    WINDOWS_SYSMON_CONFIG_URL,
 )
 
-_INSTALL_DIR = r"C:\Program Files (x86)\ossec-agent"
-_AGENT_EXE = os.path.join(_INSTALL_DIR, "wazuh-agent.exe")
-_CLIENT_KEYS = os.path.join(_INSTALL_DIR, "client.keys")
-_OSSEC_CONF = os.path.join(_INSTALL_DIR, "ossec.conf")
-_KEY_BACKUP = os.path.join(
-    os.environ.get("ProgramData", r"C:\ProgramData"),
-    "Resistine", "wazuh_client.keys"
-)
+_OSSEC_CONF = os.path.join(WINDOWS_WAZUH_DIR, "ossec.conf")
+_CLIENT_KEYS = os.path.join(WINDOWS_WAZUH_DIR, "client.keys")
+_KEY_BACKUP = os.path.join(os.environ.get("APPDATA", ""), "Resistine", "wazuh_client.keys")
+_AGENT_AUTH = os.path.join(WINDOWS_WAZUH_DIR, "agent-auth.exe")
+_SERVICE_NAME = "WazuhSvc"
 
 _RESISTINE_API_BASE = "https://validate.resistine.work"
-_MSI_FILENAME = f"wazuh-agent-{WAZUH_VERSION}-1.msi"
-_MSI_URL = f"{WAZUH_BASE_URL}/{_MSI_FILENAME}"
+
+# Sysmon paths
+_SYSMON_DIR = os.path.join(os.environ.get("PROGRAMFILES", r"C:\Program Files"), "Resistine", "Sysmon")
+_SYSMON_EXE = os.path.join(_SYSMON_DIR, "Sysmon64.exe")
+_SYSMON_CONFIG = os.path.join(_SYSMON_DIR, "sysmonconfig-export.xml")
+
+# Sysmon localfile block to inject into ossec.conf
+_SYSMON_LOCALFILE_BLOCK = """
+  <localfile>
+    <location>Microsoft-Windows-Sysmon/Operational</location>
+    <log_format>eventchannel</log_format>
+  </localfile>"""
 
 
-# --------------------------------------------------
-# Identity helpers
-# --------------------------------------------------
-
-
-def _get_hardware_uuid() -> str | None:
+def _is_admin():
+    """Check if the current process has admin privileges."""
     try:
-        result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "(Get-CimInstance -ClassName Win32_ComputerSystemProduct).UUID"],
-            capture_output=True, text=True, timeout=10,
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except Exception:
+        return False
+
+
+def _run_privileged(command, timeout=300):
+    """Run a PowerShell command with admin privileges.
+
+    If already admin, runs directly. Otherwise uses RunAs elevation.
+    Returns (success, output).
+    """
+    ps_cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command]
+
+    if _is_admin():
+        try:
+            result = subprocess.run(ps_cmd, capture_output=True, text=True, timeout=timeout)
+            output = result.stdout.strip() or result.stderr.strip()
+            logger.info(f"_run_privileged: rc={result.returncode} output={output!r}")
+            return (result.returncode == 0, output)
+        except subprocess.TimeoutExpired:
+            return (False, "Command timed out")
+        except Exception as e:
+            return (False, str(e))
+
+    # Not admin: write script to temp file and elevate via Start-Process -Verb RunAs
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".ps1", delete=False, encoding="utf-8") as f:
+            # Write command output to a result file so we can read it back
+            result_file = f.name + ".result"
+            f.write(f"try {{\n{command}\n'SUCCESS' | Out-File -FilePath '{result_file}' -Encoding utf8\n}}\n")
+            f.write(f"catch {{ $_.Exception.Message | Out-File -FilePath '{result_file}' -Encoding utf8 }}\n")
+            script_path = f.name
+
+        # Launch elevated process and wait for it
+        elevate_cmd = (
+            f"Start-Process powershell -Verb RunAs -Wait "
+            f"-ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','{script_path}'"
         )
-        uuid = result.stdout.strip()
-        if uuid:
-            return uuid
+        subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", elevate_cmd],
+            capture_output=True, text=True, timeout=timeout,
+        )
+
+        # Read result
+        if os.path.exists(result_file):
+            with open(result_file, "r", encoding="utf-8") as rf:
+                output = rf.read().strip()
+            os.unlink(result_file)
+            success = "SUCCESS" in output
+            return (success, output)
+
+        return (False, "No result from elevated process")
+    except subprocess.TimeoutExpired:
+        return (False, "Command timed out")
     except Exception as e:
-        logger.warning(f"Could not read hardware UUID: {e}")
-    return None
+        return (False, str(e))
+    finally:
+        try:
+            os.unlink(script_path)
+        except Exception:
+            pass
 
 
-def get_agent_name() -> str:
-    """Return a stable, org-unique agent name: hostname + last 12 chars of hardware UUID."""
+def _get_machine_guid():
+    """Return the Windows MachineGuid from the registry."""
+    try:
+        key = winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\Cryptography",
+        )
+        guid, _ = winreg.QueryValueEx(key, "MachineGuid")
+        winreg.CloseKey(key)
+        return guid
+    except Exception as e:
+        logger.warning(f"Could not read MachineGuid: {e}")
+        return None
+
+
+def get_agent_name():
+    """Return a stable, unique agent name: hostname + last 12 chars of MachineGuid."""
     hostname = socket.gethostname()
-    uuid = _get_hardware_uuid()
-    if uuid:
-        suffix = uuid.replace("-", "")[-12:].upper()
+    guid = _get_machine_guid()
+    if guid:
+        suffix = guid.replace("-", "")[-12:].upper()
         name = f"{hostname}-{suffix}"
     else:
         name = hostname
-    # Wazuh allows: alphanumerics, hyphens, underscores, dots
     return re.sub(r"[^A-Za-z0-9.\-_]", "", name)
 
 
-def get_agent_group() -> str:
-    """Return the user's email (sanitized) as the agent group.
-
-    Replaces '@' with '.' so the group name is a valid Wazuh identifier.
-    Falls back to 'default' if no email is stored.
-    """
+def get_agent_group():
+    """Return the user's email (sanitized) as the agent group."""
     email = settings.get("auth", "email", "default")
     if email and email != "default":
         return email.replace("@", ".")
     return "default"
 
 
-def needs_reenrollment() -> bool:
-    """Return True if the agent was enrolled under a different email than the current user."""
+def needs_reenrollment():
+    """Return True if the agent was enrolled under a different email."""
     enrolled = settings.get("wazuh", "enrolled_email", "")
     current = settings.get("auth", "email", "")
     if enrolled and current and enrolled != current:
@@ -92,36 +160,10 @@ def needs_reenrollment() -> bool:
     return False
 
 
-# --------------------------------------------------
-# Install state
-# --------------------------------------------------
-
-def is_agent_installed() -> bool:
-    return os.path.isfile(_AGENT_EXE)
-
-
-def get_agent_status() -> str:
-    """Return 'Running', 'Stopped', or 'Not Installed'."""
-    if not is_agent_installed():
-        return "Not Installed"
-    try:
-        result = subprocess.run(
-            ["sc", "query", "WazuhSvc"],
-            capture_output=True, text=True, timeout=10,
-        )
-        if "RUNNING" in result.stdout:
-            return "Running"
-    except Exception as e:
-        logger.warning(f"Could not query WazuhSvc: {e}")
-    return "Stopped"
-
-
-# --------------------------------------------------
-# Group creation via Resistine API
-# --------------------------------------------------
-
-def create_wazuh_group(group_name: str) -> bool:
+def create_wazuh_group(group_name):
     """Create a Wazuh agent group via the Resistine backend API."""
+    import requests
+
     url = f"{_RESISTINE_API_BASE}/create-groups"
     try:
         logger.info(f"[WAZUH] create_wazuh_group -> POST {url} | name={group_name}")
@@ -129,7 +171,6 @@ def create_wazuh_group(group_name: str) -> bool:
         logger.info(f"[WAZUH] create_wazuh_group <- HTTP {response.status_code} | body={response.text!r}")
 
         if response.status_code == 200:
-            logger.info(f"[WAZUH] Group '{group_name}' created successfully")
             return True
 
         body = response.text.lower()
@@ -137,276 +178,408 @@ def create_wazuh_group(group_name: str) -> bool:
             logger.info(f"[WAZUH] Group '{group_name}' already exists, continuing")
             return True
 
-        logger.warning(f"[WAZUH] Unexpected response creating group: {response.status_code} {response.text!r}")
+        logger.warning(f"[WAZUH] Unexpected response creating group: {response.status_code}")
         return False
     except Exception as e:
         logger.error(f"[WAZUH] Failed to create group '{group_name}': {e}")
         return False
 
 
-# --------------------------------------------------
-# Enrollment via Resistine API (replaces agent-auth)
-# --------------------------------------------------
+def is_agent_installed():
+    """Check whether the Wazuh agent is installed on Windows."""
+    return os.path.isdir(WINDOWS_WAZUH_DIR) and os.path.exists(
+        os.path.join(WINDOWS_WAZUH_DIR, "wazuh-agent.exe")
+    )
 
-def _request_enrollment_otp(email: str) -> bool:
-    """Phase 1 — request OTP for the given email."""
-    url = f"{_RESISTINE_API_BASE}/wazuh-agent/request"
+
+def get_agent_status():
+    """Return 'Running', 'Stopped', or 'Not Installed'."""
+    if not is_agent_installed():
+        return "Not Installed"
+
     try:
-        r = requests.post(url, json={"email": email}, timeout=30)
-        if r.status_code == 200:
-            logger.info("[WAZUH] OTP sent successfully")
+        result = subprocess.run(
+            ["sc", "query", _SERVICE_NAME],
+            capture_output=True, text=True, timeout=10,
+        )
+        if "RUNNING" in result.stdout:
+            return "Running"
+        if "STOPPED" in result.stdout:
+            return "Stopped"
+    except Exception as e:
+        logger.warning(f"Could not query {_SERVICE_NAME} service: {e}")
+
+    return "Stopped"
+
+
+def get_package_url():
+    """Return the Wazuh MSI download URL."""
+    return WINDOWS_WAZUH_MSI_URL
+
+
+def _is_sysmon_installed():
+    """Check if Sysmon service is installed."""
+    try:
+        result = subprocess.run(
+            ["sc", "query", "Sysmon64"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
             return True
-        logger.warning(f"[WAZUH] OTP request failed: {r.status_code} {r.text!r}")
+        # Try 32-bit service name
+        result = subprocess.run(
+            ["sc", "query", "Sysmon"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _download_file(url, dest_path, progress_callback=None, label="Downloading..."):
+    """Download a file using PowerShell Invoke-WebRequest."""
+    if progress_callback:
+        progress_callback(label)
+
+    logger.info(f"Downloading {url} -> {dest_path}")
+    try:
+        ps_cmd = (
+            f"[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; "
+            f"Invoke-WebRequest -Uri '{url}' -OutFile '{dest_path}' -UseBasicParsing"
+        )
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd],
+            capture_output=True, text=True, timeout=300,
+        )
+        if result.returncode == 0 and os.path.exists(dest_path):
+            logger.info(f"Downloaded to {dest_path}")
+            return True
+        logger.error(f"Download failed: {result.stderr}")
         return False
     except Exception as e:
-        logger.error(f"[WAZUH] OTP request error: {e}")
+        logger.error(f"Download error: {e}")
         return False
 
 
-def _enroll_device(email: str, otp: str, device_name: str) -> dict | None:
-    """Phase 2 — submit OTP and enroll device. Returns enrollment data or None."""
-    url = f"{_RESISTINE_API_BASE}/wazuh-agent/enroll"
-    try:
-        r = requests.post(url, json={
-            "email": email,
-            "otp": otp,
-            "device_name": device_name,
-            "device_type": "windows",
-        }, timeout=30)
-        if r.status_code == 200:
-            logger.info("[WAZUH] Device enrolled successfully")
-            return r.json()
-        logger.warning(f"[WAZUH] Enrollment failed: {r.status_code} {r.text!r}")
-        return None
-    except Exception as e:
-        logger.error(f"[WAZUH] Enrollment request error: {e}")
-        return None
+def _install_sysmon(progress_callback=None):
+    """Download and install Sysmon with SwiftOnSecurity config.
 
-
-# --------------------------------------------------
-# Key backup / restore
-# --------------------------------------------------
-
-def _backup_client_key() -> None:
-    backup_dir = os.path.dirname(_KEY_BACKUP)
-    os.makedirs(backup_dir, exist_ok=True)
-    try:
-        if os.path.isfile(_CLIENT_KEYS):
-            import shutil
-            shutil.copy2(_CLIENT_KEYS, _KEY_BACKUP)
-            logger.info(f"[WAZUH] Backed up client.keys to {_KEY_BACKUP}")
-    except Exception as e:
-        logger.warning(f"[WAZUH] Could not back up client.keys: {e}")
-
-
-def _restore_client_key() -> bool:
-    """Copy key backup into the install dir. Returns True if restored."""
-    if not os.path.isfile(_KEY_BACKUP):
-        return False
-    try:
-        import shutil
-        shutil.copy2(_KEY_BACKUP, _CLIENT_KEYS)
-        logger.info("[WAZUH] Restored client.keys from backup")
+    Returns True if Sysmon is already installed or was successfully installed.
+    """
+    if _is_sysmon_installed():
+        logger.info("Sysmon already installed, skipping")
+        if progress_callback:
+            progress_callback("Sysmon already installed")
         return True
+
+    if progress_callback:
+        progress_callback("Setting up Sysmon...")
+
+    os.makedirs(_SYSMON_DIR, exist_ok=True)
+
+    # Download Sysmon zip
+    sysmon_zip = os.path.join(_SYSMON_DIR, "Sysmon.zip")
+    if not _download_file(WINDOWS_SYSMON_ZIP_URL, sysmon_zip, progress_callback, "Downloading Sysmon..."):
+        return False
+
+    # Extract
+    try:
+        with zipfile.ZipFile(sysmon_zip, "r") as zf:
+            zf.extractall(_SYSMON_DIR)
+        logger.info(f"Extracted Sysmon to {_SYSMON_DIR}")
     except Exception as e:
-        logger.warning(f"[WAZUH] Could not restore client.keys: {e}")
+        logger.error(f"Failed to extract Sysmon: {e}")
+        return False
+
+    # Determine correct Sysmon executable (64-bit or 32-bit)
+    if not os.path.exists(_SYSMON_EXE):
+        sysmon32 = os.path.join(_SYSMON_DIR, "Sysmon.exe")
+        if not os.path.exists(sysmon32):
+            logger.error("Sysmon executable not found after extraction")
+            return False
+
+    # Download SwiftOnSecurity config
+    if not _download_file(WINDOWS_SYSMON_CONFIG_URL, _SYSMON_CONFIG, progress_callback, "Downloading Sysmon config..."):
+        return False
+
+    # Install Sysmon with config (requires admin)
+    if progress_callback:
+        progress_callback("Installing Sysmon service...")
+
+    sysmon_exe = _SYSMON_EXE if os.path.exists(_SYSMON_EXE) else os.path.join(_SYSMON_DIR, "Sysmon.exe")
+    install_cmd = f"& '{sysmon_exe}' -accepteula -i '{_SYSMON_CONFIG}'"
+    success, output = _run_privileged(install_cmd)
+
+    if not success and not _is_sysmon_installed():
+        logger.error(f"Failed to install Sysmon: {output}")
+        return False
+
+    logger.info("Sysmon installed successfully")
+    return True
+
+
+def _inject_sysmon_config():
+    """Add Sysmon eventchannel monitoring to ossec.conf if not already present."""
+    if not os.path.exists(_OSSEC_CONF):
+        logger.warning("ossec.conf not found, cannot inject Sysmon config")
+        return False
+
+    try:
+        with open(_OSSEC_CONF, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        if "Microsoft-Windows-Sysmon/Operational" in content:
+            logger.info("Sysmon monitoring already configured in ossec.conf")
+            return True
+
+        # Insert before closing </ossec_config>
+        if "</ossec_config>" in content:
+            content = content.replace(
+                "</ossec_config>",
+                f"{_SYSMON_LOCALFILE_BLOCK}\n</ossec_config>",
+            )
+            with open(_OSSEC_CONF, "w", encoding="utf-8") as f:
+                f.write(content)
+            logger.info("Injected Sysmon monitoring config into ossec.conf")
+            return True
+
+        logger.error("Could not find </ossec_config> tag")
+        return False
+    except Exception as e:
+        logger.error(f"Failed to inject Sysmon config: {e}")
         return False
 
 
-def restore_client_key_if_needed() -> bool:
+def download_package(progress_callback=None):
+    """Download the Wazuh MSI to a temporary directory.
+
+    Returns the local path on success, or None on failure.
+    """
+    url = get_package_url()
+    tmp_dir = tempfile.mkdtemp(prefix="wazuh_")
+    msi_path = os.path.join(tmp_dir, "wazuh-agent.msi")
+
+    if _download_file(url, msi_path, progress_callback, "Downloading Wazuh agent..."):
+        return msi_path
+    return None
+
+
+def start_agent():
+    """Start the Wazuh agent Windows service."""
+    if get_agent_status() == "Running":
+        return True
+
+    # Restore key if missing
+    if os.path.exists(_KEY_BACKUP) and not os.path.exists(_CLIENT_KEYS):
+        restore_cmd = (
+            f"Copy-Item -Path '{_KEY_BACKUP}' -Destination '{_CLIENT_KEYS}' -Force"
+        )
+        _run_privileged(restore_cmd)
+
+    success, output = _run_privileged(f"NET START {_SERVICE_NAME}")
+    if success:
+        logger.info("Wazuh agent started")
+    else:
+        logger.error(f"Failed to start agent: {output}")
+    return success
+
+
+def stop_agent():
+    """Stop the Wazuh agent Windows service."""
+    if not is_agent_installed():
+        return True
+
+    success, output = _run_privileged(f"NET STOP {_SERVICE_NAME}")
+
+    # Verify stopped
+    if get_agent_status() == "Running":
+        logger.warning("Service still running after NET STOP, force-stopping")
+        _run_privileged(f"Stop-Service -Name '{_SERVICE_NAME}' -Force")
+
+    stopped = get_agent_status() != "Running"
+    if stopped:
+        logger.info("Wazuh agent stopped")
+    else:
+        logger.error("Failed to stop Wazuh agent")
+    return stopped
+
+
+def restore_client_key_if_needed():
     """Restore client.keys from backup if missing, then restart the agent."""
     if needs_reenrollment():
         logger.info("[WAZUH] Skipping key restore — enrolled under different email")
         return False
-    if not os.path.isfile(_KEY_BACKUP):
+
+    if not os.path.exists(_KEY_BACKUP):
+        logger.info("No client.keys backup found")
         return True
-    if os.path.isfile(_CLIENT_KEYS) and os.path.getsize(_CLIENT_KEYS) > 0:
+
+    # Only restore if missing
+    script = (
+        f"if (-not (Test-Path '{_CLIENT_KEYS}')) {{ "
+        f"  Copy-Item -Path '{_KEY_BACKUP}' -Destination '{_CLIENT_KEYS}' -Force; "
+        f"  Restart-Service -Name '{_SERVICE_NAME}'; "
+        f"  Write-Output 'KEY_RESTORED' "
+        f"}} else {{ "
+        f"  Write-Output 'KEY_OK' "
+        f"}}"
+    )
+    success, output = _run_privileged(script)
+    if success:
+        if "KEY_RESTORED" in output:
+            logger.info("Restored client.keys from backup and restarted agent")
+        else:
+            logger.info("client.keys already present")
+    return success
+
+
+def remove_agent():
+    """Stop and uninstall the Wazuh agent."""
+    if not is_agent_installed():
         return True
-    if _restore_client_key():
-        return start_agent()
-    return False
+
+    backup_dir = os.path.dirname(_KEY_BACKUP)
+    script = (
+        f"NET STOP {_SERVICE_NAME} 2>$null; "
+        f"New-Item -ItemType Directory -Path '{backup_dir}' -Force | Out-Null; "
+        f"if (Test-Path '{_CLIENT_KEYS}') {{ Copy-Item '{_CLIENT_KEYS}' '{_KEY_BACKUP}' -Force }}; "
+        # Uninstall via MSI product code lookup
+        f"$app = Get-WmiObject -Class Win32_Product | Where-Object {{ $_.Name -like '*Wazuh*' }}; "
+        f"if ($app) {{ $app.Uninstall() }}; "
+        # Fallback: remove directory
+        f"if (Test-Path '{WINDOWS_WAZUH_DIR}') {{ Remove-Item -Recurse -Force '{WINDOWS_WAZUH_DIR}' }}"
+    )
+    success, output = _run_privileged(script, timeout=300)
+    if success:
+        logger.info("Wazuh agent removed successfully")
+    else:
+        logger.error(f"Failed to remove agent: {output}")
+    return success
 
 
-# --------------------------------------------------
-# Start / Stop
-# --------------------------------------------------
+def full_install(progress_callback=None):
+    """Orchestrate the complete install flow:
+    1. Download & install Sysmon with SwiftOnSecurity config
+    2. Download Wazuh MSI
+    3. Install Wazuh agent
+    4. Configure ossec.conf (agent name, Sysmon monitoring)
+    5. Enroll or restore keys
+    6. Start the service
+    """
+    # Phase 1: Install Sysmon
+    if progress_callback:
+        progress_callback("Setting up Sysmon...")
+    if not _install_sysmon(progress_callback):
+        logger.warning("Sysmon installation failed, continuing with Wazuh install")
+        # Non-fatal: Wazuh can still work without Sysmon
 
-def _run_elevated(command: str) -> bool:
-    """Run a command elevated via PowerShell Start-Process."""
-    try:
-        result = subprocess.run(
-            [
-                "powershell", "-NoProfile", "-Command",
-                f"Start-Process cmd -ArgumentList '/c {command}' "
-                "-Verb RunAs -Wait -WindowStyle Hidden",
-            ],
-            capture_output=True, text=True, timeout=60,
-        )
-        return result.returncode == 0
-    except Exception as e:
-        logger.error(f"[WAZUH] Elevated command failed: {e}")
+    # Phase 2: Download Wazuh MSI
+    if progress_callback:
+        progress_callback("Downloading Wazuh agent...")
+    msi_path = download_package(progress_callback)
+    if not msi_path:
+        if progress_callback:
+            progress_callback("Download failed")
         return False
 
-
-def start_agent() -> bool:
-    success = _run_elevated("net start WazuhSvc")
-    if success:
-        logger.info("[WAZUH] Agent started")
-    else:
-        logger.error("[WAZUH] Failed to start agent")
-    return success
-
-
-def stop_agent() -> bool:
-    success = _run_elevated("net stop WazuhSvc")
-    if success:
-        logger.info("[WAZUH] Agent stopped")
-    else:
-        logger.error("[WAZUH] Failed to stop agent")
-    return success
-# --------------------------------------------------
-# Full install
-# --------------------------------------------------
-
-def full_install(progress_callback=None, otp_provider=None) -> bool:
-    """Orchestrate the complete install flow for Windows.
-
-    otp_provider: callable() -> str that returns the 6-digit OTP entered
-    by the user (e.g. a dialog prompt in the UI). If None, enrollment
-    is skipped and the agent relies on auto-enrollment via the manager.
-    """
-    email = settings.get("auth", "email", "")
+    # Phase 3: Create agent group
     agent_name = get_agent_name()
     agent_group = get_agent_group()
 
-    # 1. Download MSI
-    if progress_callback:
-        progress_callback("Downloading Wazuh agent...")
-    pkg_path = _download_msi(progress_callback)
-    if not pkg_path:
-        return False
-
-    # 2. Create group via API
     if progress_callback:
         progress_callback(f"Creating agent group '{agent_group}'...")
     if not create_wazuh_group(agent_group):
         logger.warning(f"[WAZUH] Could not create group '{agent_group}', falling back to 'default'")
         agent_group = "default"
 
-    # 3. Install MSI silently
+    # Phase 4: Install Wazuh via MSI (silent install with params)
     if progress_callback:
-        progress_callback("Installing Wazuh agent...")
-    if not _install_msi(pkg_path, agent_name, agent_group, progress_callback):
-        return False
+        progress_callback("Installing Wazuh agent (admin privileges required)...")
 
-    # 4. Enrollment — restore backup key or use API enrollment
-    can_restore = (not needs_reenrollment()) and os.path.isfile(_KEY_BACKUP)
+    install_cmd = (
+        f"msiexec.exe /i '{msi_path}' /qn "
+        f"WAZUH_MANAGER='{WAZUH_MANAGER}' "
+        f"WAZUH_AGENT_NAME='{agent_name}' "
+        f"WAZUH_AGENT_GROUP='{agent_group}'"
+    )
+    success, output = _run_privileged(install_cmd, timeout=300)
 
-    if can_restore:
-        if progress_callback:
-            progress_callback("Restoring previous enrollment key...")
-        if _restore_client_key():
-            logger.info("[WAZUH] Existing enrollment key restored")
-        else:
-            logger.warning("[WAZUH] Key restore failed, falling back to API enrollment")
-            can_restore = False
-
-    if not can_restore and email and otp_provider:
-        if progress_callback:
-            progress_callback("Requesting enrollment code...")
-        if _request_enrollment_otp(email):
-            otp = otp_provider()  # UI prompts the user to enter the OTP
-            if otp:
-                if progress_callback:
-                    progress_callback("Enrolling device...")
-                enrollment = _enroll_device(email, otp, agent_name)
-                if enrollment:
-                    _write_client_key(enrollment.get("agent_id"), enrollment.get("installer"))
-                    _backup_client_key()
-                    logger.info("[WAZUH] API enrollment complete")
-                else:
-                    logger.warning("[WAZUH] API enrollment failed — agent will use auto-enrollment")
-            else:
-                logger.warning("[WAZUH] No OTP provided — agent will use auto-enrollment")
-        else:
-            logger.warning("[WAZUH] OTP request failed — agent will use auto-enrollment")
-
-    # 5. Start the agent
-    if progress_callback:
-        progress_callback("Starting Wazuh agent...")
-    start_agent()
-
-    if get_agent_status() == "Running":
-        if progress_callback:
-            progress_callback("Wazuh agent installed and running")
-        logger.info("[WAZUH] Agent installed and running")
-    else:
-        logger.warning("[WAZUH] Agent installed but not yet running")
-        if progress_callback:
-            progress_callback("Wazuh agent installed (may need manual start)")
-
-    settings.set("wazuh", "enrolled_email", email)
-    return True
-
-
-# --------------------------------------------------
-# Internal helpers
-# --------------------------------------------------
-
-def _download_msi(progress_callback=None) -> str | None:
-    tmp_dir = tempfile.mkdtemp(prefix="wazuh_")
-    msi_path = os.path.join(tmp_dir, _MSI_FILENAME)
-    try:
-        logger.info(f"[WAZUH] Downloading MSI from {_MSI_URL}")
-        with requests.get(_MSI_URL, stream=True, timeout=300) as r:
-            r.raise_for_status()
-            with open(msi_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
-        logger.info(f"[WAZUH] Downloaded MSI to {msi_path}")
-        return msi_path
-    except Exception as e:
-        logger.error(f"[WAZUH] MSI download failed: {e}")
-        if progress_callback:
-            progress_callback("Download failed")
-        return None
-
-
-def _install_msi(msi_path: str, agent_name: str, agent_group: str, progress_callback=None) -> bool:
-    cmd = [
-        "msiexec.exe", "/i", msi_path, "/qn",
-        f"WAZUH_MANAGER={WAZUH_MANAGER}",
-        f"WAZUH_AGENT_NAME={agent_name}",
-        f"WAZUH_AGENT_GROUP={agent_group}",
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        if result.returncode == 0:
-            logger.info("[WAZUH] MSI installed successfully")
-            return True
-        logger.error(f"[WAZUH] MSI install failed: rc={result.returncode} {result.stderr}")
+    if not success and not is_agent_installed():
+        logger.error(f"MSI install failed: {output}")
         if progress_callback:
             progress_callback("Installation failed")
         return False
-    except Exception as e:
-        logger.error(f"[WAZUH] MSI install error: {e}")
+
+    # Phase 5: Patch agent name in ossec.conf
+    if progress_callback:
+        progress_callback("Configuring agent...")
+
+    patch_cmd = (
+        f"(Get-Content '{_OSSEC_CONF}') "
+        f"-replace '<agent_name>.*</agent_name>', '<agent_name>{agent_name}</agent_name>' | "
+        f"Set-Content '{_OSSEC_CONF}'"
+    )
+    _run_privileged(patch_cmd)
+
+    # Phase 6: Inject Sysmon monitoring into ossec.conf
+    _inject_sysmon_config()
+
+    # Phase 7: Enrollment — restore existing key or enroll fresh
+    backup_dir = os.path.dirname(_KEY_BACKUP)
+    can_restore = (not needs_reenrollment()) and os.path.exists(_KEY_BACKUP)
+
+    if can_restore:
         if progress_callback:
-            progress_callback(f"Installation error: {e}")
-        return False
+            progress_callback("Restoring previous enrollment...")
+        restore_cmd = (
+            f"Copy-Item -Path '{_KEY_BACKUP}' -Destination '{_CLIENT_KEYS}' -Force"
+        )
+        success_restore, _ = _run_privileged(restore_cmd)
+        if success_restore:
+            logger.info("[WAZUH] Restored existing enrollment key")
+        else:
+            logger.warning("[WAZUH] Key restore failed, will enroll fresh")
+            can_restore = False
 
+    if not can_restore:
+        if progress_callback:
+            progress_callback("Enrolling agent with manager...")
+        enroll_cmd = (
+            f"& '{_AGENT_AUTH}' -m '{WAZUH_MANAGER}' -A '{agent_name}' -G '{agent_group}'"
+        )
+        enroll_success, enroll_output = _run_privileged(enroll_cmd)
 
-def _write_client_key(agent_id: str | None, installer: str | None) -> None:
-    """Extract and write client.keys from the installer script returned by the API."""
-    if not agent_id or not installer:
-        return
-    try:
-        # The installer script contains $AgentKey = "<key>" — extract it
-        match = re.search(r'\$AgentKey\s*=\s*"([^"]+)"', installer or "")
-        if match:
-            key_line = f"{agent_id} {get_agent_name()} any {match.group(1)}\n"
-            os.makedirs(os.path.dirname(_CLIENT_KEYS), exist_ok=True)
-            with open(_CLIENT_KEYS, "w") as f:
-                f.write(key_line)
-            logger.info("[WAZUH] Wrote client.keys from API enrollment response")
-    except Exception as e:
-        logger.warning(f"[WAZUH] Could not write client.keys: {e}")
+        if enroll_success:
+            logger.info("[WAZUH] Fresh enrollment succeeded")
+        else:
+            logger.warning(f"[WAZUH] agent-auth enrollment failed: {enroll_output}")
+
+        # Backup the new key
+        backup_cmd = (
+            f"New-Item -ItemType Directory -Path '{backup_dir}' -Force | Out-Null; "
+            f"if (Test-Path '{_CLIENT_KEYS}') {{ Copy-Item '{_CLIENT_KEYS}' '{_KEY_BACKUP}' -Force }}"
+        )
+        _run_privileged(backup_cmd)
+
+    # Phase 8: Start the service
+    if progress_callback:
+        progress_callback("Starting Wazuh agent...")
+
+    start_cmd = f"NET START {_SERVICE_NAME}"
+    _run_privileged(start_cmd)
+
+    # Verify
+    if get_agent_status() == "Running":
+        logger.info("Wazuh agent installed and running")
+        if progress_callback:
+            progress_callback("Wazuh agent installed and running")
+    else:
+        logger.warning("Agent installed but not yet running")
+        if progress_callback:
+            progress_callback("Wazuh agent installed (may need manual start)")
+
+    # Record enrollment email
+    settings.set("wazuh", "enrolled_email", settings.get("auth", "email", ""))
+
+    logger.info("Wazuh full install completed successfully")
+    return True
