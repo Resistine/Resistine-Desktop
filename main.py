@@ -14,6 +14,208 @@ import sys
 import customtkinter
 import customtkinter.windows.widgets.ctk_scrollable_frame as _sf
 
+# Linux: use a custom high-poly smooth polygon renderer to avoid both the
+# "blob" artifacts of font_shapes (anti-aliased font) and the "jaggies" of 
+# polygon_shapes (coarse Tkinter rounding). This calculates 40+ points per 
+# rectangle for truly smooth curves on X11.
+if sys.platform.startswith("linux"):
+    import math
+    import tkinter
+    from customtkinter.windows.widgets.core_rendering import DrawEngine
+
+    def _get_smooth_points(w, h, r, offset=0, inset=1.0):
+        """Calculates a high-poly path with symmetric precision and explicit endpoints."""
+        r = min(r, (w - 2*inset)/2, (h - 2*inset)/2)
+        if r <= 0:
+            pts = [inset-offset, inset-offset, w-inset+offset, inset-offset, 
+                   w-inset+offset, h-inset+offset, inset-offset, h-inset+offset]
+            pts.extend(pts[:2])
+            return pts
+        pts = []
+        steps = max(24, int(r * 2))
+        for i in range(steps + 1): # TR
+            a = math.radians(270 + 90 * i / steps)
+            pts.extend([w - inset - r + (r + offset) * math.cos(a), inset + r + (r + offset) * math.sin(a)])
+        for i in range(steps + 1): # BR
+            a = math.radians(0 + 90 * i / steps)
+            pts.extend([w - inset - r + (r + offset) * math.cos(a), h - inset - r + (r + offset) * math.sin(a)])
+        for i in range(steps + 1): # BL
+            a = math.radians(90 + 90 * i / steps)
+            pts.extend([inset + r + (r + offset) * math.cos(a), h - inset - r + (r + offset) * math.sin(a)])
+        for i in range(steps + 1): # TL
+            a = math.radians(180 + 90 * i / steps)
+            pts.extend([inset + r + (r + offset) * math.cos(a), inset + r + (r + offset) * math.sin(a)])
+        pts.extend(pts[:2])
+        return pts
+
+    def _draw_smooth_polygon_shapes(self, width, height, corner_radius, border_width):
+        requires_recoloring = False
+        r, bw = (corner_radius or 0), (border_width or 0)
+        inner_r = max(0, r - bw)
+        if bw > 0:
+            if not self._canvas.find_withtag("border_parts"):
+                self._canvas.create_polygon((0,0,0,0), tags=("border_line_1", "border_parts"), width=0, outline="")
+                requires_recoloring = True
+            self._canvas.coords("border_line_1", *_get_smooth_points(width, height, r))
+        else: self._canvas.delete("border_parts")
+        if not self._canvas.find_withtag("inner_parts"):
+            self._canvas.create_polygon((0,0,0,0), tags=("inner_line_1", "inner_parts"), width=0, outline="")
+            requires_recoloring = True
+        pts = _get_smooth_points(width - 2*bw, height - 2*bw, inner_r)
+        for i in range(0, len(pts), 2): pts[i] += bw; pts[i+1] += bw
+        self._canvas.coords("inner_line_1", *pts)
+        return requires_recoloring
+
+    def _draw_smooth_scrollbar(self, width, height, corner_radius, inner_corner_radius, start_value, end_value, orientation):
+        requires_recoloring = False
+        if not self._canvas.find_withtag("border_parts"):
+            self._canvas.create_rectangle(0, 0, 0, 0, tags=("border_rectangle_1", "border_parts"), width=0, outline="")
+            requires_recoloring = True
+        self._canvas.coords("border_rectangle_1", 0, 0, width, height)
+        if not self._canvas.find_withtag("scrollbar_parts"):
+            self._canvas.create_polygon((0, 0, 0, 0), tags=("scrollbar_polygon_1", "scrollbar_parts"), width=0, outline="")
+            self._canvas.tag_raise("scrollbar_parts", "border_parts")
+            requires_recoloring = True
+        if orientation == "vertical":
+            bar_w, bar_h = width - 2 * corner_radius, (height - 2 * corner_radius) * (end_value - start_value)
+            y_offset, x_offset = (height - 2 * corner_radius) * start_value + corner_radius, corner_radius
+        else:
+            bar_w, bar_h = (width - 2 * corner_radius) * (end_value - start_value), height - 2 * corner_radius
+            x_offset, y_offset = (width - 2 * corner_radius) * start_value + corner_radius, corner_radius
+        pts = _get_smooth_points(bar_w + 2*inner_corner_radius, bar_h + 2*inner_corner_radius, inner_corner_radius)
+        for i in range(0, len(pts), 2): pts[i] += x_offset - inner_corner_radius; pts[i+1] += y_offset - inner_corner_radius
+        self._canvas.coords("scrollbar_polygon_1", *pts)
+        return requires_recoloring
+
+    def _draw_smooth_progress_bar(self, width, height, corner_radius, border_width, v1, v2, orientation):
+        r, bw = (corner_radius or 0), (border_width or 0)
+        if r > width / 2 or r > height / 2: r = min(width / 2, height / 2)
+        requires_recoloring = self._draw_smooth_polygon_shapes(width, height, r, bw)
+        if not self._canvas.find_withtag("progress_parts"):
+            self._canvas.create_polygon((0,0,0,0), tags=("progress_line_1", "progress_parts"), width=0, outline="")
+            requires_recoloring = True
+        inner_r = max(0, r - bw)
+        if v1 == v2:
+            self._canvas.coords("progress_line_1", (0, 0, 0, 0))
+            return requires_recoloring
+        if orientation in ["horizontal", "w", "e"]:
+            usable_w = max(0, width - 2 * bw)
+            x_start, x_end = bw + usable_w * v1, bw + usable_w * v2
+            pts = _get_smooth_points(max(1, x_end - x_start), max(1, height - 2 * bw), inner_r)
+            for i in range(0, len(pts), 2): pts[i] += x_start; pts[i+1] += bw
+        else:
+            usable_h = max(0, height - 2 * bw)
+            y_start, y_end = bw + usable_h * (1 - v2), bw + usable_h * (1 - v1)
+            pts = _get_smooth_points(max(1, width - 2 * bw), max(1, y_end - y_start), inner_r)
+            for i in range(0, len(pts), 2): pts[i] += bw; pts[i+1] += y_start
+        self._canvas.coords("progress_line_1", *pts)
+        self._canvas.tag_raise("progress_parts")
+        return requires_recoloring
+
+    def _draw_smooth_slider(self, width, height, corner_radius, border_width, button_length, button_corner_radius, slider_value, orientation):
+        requires_recoloring = self._draw_smooth_progress_bar(width, height, corner_radius, border_width, 0, slider_value, orientation)
+        if not self._canvas.find_withtag("slider_parts"):
+            self._canvas.create_polygon((0,0,0,0), tags=("slider_button_line_1", "slider_parts"), width=0, outline="")
+            requires_recoloring = True
+        r, br = (corner_radius or 0), (button_corner_radius or 0)
+        if r > width / 2 or r > height / 2: r = min(width / 2, height / 2)
+        if br > width / 2 or br > height / 2: br = min(width / 2, height / 2)
+        total_button_w, total_button_h = button_length + 2 * br, button_length + 2 * br
+        if orientation in ["horizontal", "w", "e"]:
+            bx = max(0, width - total_button_w) * slider_value
+            pts = _get_smooth_points(total_button_w, height, br)
+            for i in range(0, len(pts), 2): pts[i] += bx; pts[i+1] += 0
+        else:
+            by = max(0, height - total_button_h) * (1 - slider_value)
+            pts = _get_smooth_points(width, total_button_h, br)
+            for i in range(0, len(pts), 2): pts[i] += 0; pts[i+1] += by
+        self._canvas.coords("slider_button_line_1", *pts)
+        self._canvas.tag_raise("slider_parts")
+        return requires_recoloring
+
+    def _draw_smooth_vertical_split(self, width, height, corner_radius, border_width, left_section_width):
+        requires_recoloring = False
+        r, bw, lw = (corner_radius or 0), (border_width or 0), (left_section_width or 0)
+        inner_r = max(0, r - bw)
+        
+        # 1. Left Section
+        if not self._canvas.find_withtag("left_section_parts"):
+            self._canvas.create_polygon((0,0,0,0), tags=("left_pol_1", "left_section_parts"), width=0, outline="")
+            requires_recoloring = True
+        
+        # Calculate high-poly path for the left half: 
+        # TL (arc), BL (arc), then vertical cut at lw
+        steps = max(24, int(inner_r * 2))
+        pts_l = []
+        for i in range(steps + 1): # BL
+            a = math.radians(90 + 90 * i / steps)
+            pts_l.extend([bw + inner_r + inner_r * math.cos(a), height - bw - inner_r + inner_r * math.sin(a)])
+        for i in range(steps + 1): # TL
+            a = math.radians(180 + 90 * i / steps)
+            pts_l.extend([bw + inner_r + inner_r * math.cos(a), bw + inner_r + inner_r * math.sin(a)])
+        # Close with vertical line at the split
+        pts_l.extend([lw, bw, lw, height - bw])
+        self._canvas.coords("left_pol_1", *pts_l)
+
+        # 2. Right Section
+        if not self._canvas.find_withtag("right_section_parts"):
+            self._canvas.create_polygon((0,0,0,0), tags=("right_pol_1", "right_section_parts"), width=0, outline="")
+            requires_recoloring = True
+            
+        # Path for right half:
+        # vertical cut at lw, then TR (arc), BR (arc)
+        pts_r = [lw, bw]
+        for i in range(steps + 1): # TR
+            a = math.radians(270 + 90 * i / steps)
+            pts_r.extend([width - bw - inner_r + inner_r * math.cos(a), bw + inner_r + inner_r * math.sin(a)])
+        for i in range(steps + 1): # BR
+            a = math.radians(0 + 90 * i / steps)
+            pts_r.extend([width - bw - inner_r + inner_r * math.cos(a), height - bw - inner_r + inner_r * math.sin(a)])
+        pts_r.extend([lw, height - bw])
+        self._canvas.coords("right_pol_1", *pts_r)
+        
+        # 3. Border (Background)
+        if bw > 0:
+            if not self._canvas.find_withtag("border_parts"):
+                self._canvas.create_polygon((0,0,0,0), tags=("border_pol_1", "border_parts"), width=0, outline="")
+                requires_recoloring = True
+            self._canvas.coords("border_pol_1", *_get_smooth_points(width, height, r))
+            self._canvas.tag_lower("border_parts")
+        else: self._canvas.delete("border_parts")
+        
+        return requires_recoloring
+
+    DrawEngine._draw_smooth_polygon_shapes = _draw_smooth_polygon_shapes
+    DrawEngine._draw_smooth_scrollbar = _draw_smooth_scrollbar
+    DrawEngine._draw_smooth_progress_bar = _draw_smooth_progress_bar
+    DrawEngine._draw_smooth_slider = _draw_smooth_slider
+    DrawEngine._draw_smooth_vertical_split = _draw_smooth_vertical_split
+    _orig_draw, _orig_vertical = DrawEngine.draw_rounded_rect_with_border, DrawEngine.draw_rounded_rect_with_border_vertical_split
+    _orig_progress, _orig_slider, _orig_scrollbar = DrawEngine.draw_rounded_progress_bar_with_border, DrawEngine.draw_rounded_slider_with_border_and_button, DrawEngine.draw_rounded_scrollbar
+    def _patched_draw(self, w, h, r, bw, meth=None, *args, **kwargs):
+        if (meth or self.preferred_drawing_method) == "smooth_polygon_shapes": return self._draw_smooth_polygon_shapes(w, h, r, bw)
+        return _orig_draw(self, w, h, r, bw, meth, *args, **kwargs)
+    def _patched_vertical(self, w, h, r, bw, lw, meth=None, *args, **kwargs):
+        if (meth or self.preferred_drawing_method) == "smooth_polygon_shapes": return self._draw_smooth_vertical_split(w, h, r, bw, lw)
+        return _orig_vertical(self, w, h, r, bw, lw, meth, *args, **kwargs)
+    def _patched_progress(self, w, h, r, bw, v1, v2, o, *args, **kwargs):
+        if self.preferred_drawing_method == "smooth_polygon_shapes": return self._draw_smooth_progress_bar(w, h, r, bw, v1, v2, o)
+        return _orig_progress(self, w, h, r, bw, v1, v2, o, *args, **kwargs)
+    def _patched_slider(self, w, h, r, bw, bl, bcr, sv, o, *args, **kwargs):
+        if self.preferred_drawing_method == "smooth_polygon_shapes": return self._draw_smooth_slider(w, h, r, bw, bl, bcr, sv, o)
+        return _orig_slider(self, w, h, r, bw, bl, bcr, sv, o, *args, **kwargs)
+    def _patched_scrollbar(self, w, h, r, s, sv, ev, o, *args, **kwargs):
+        if self.preferred_drawing_method == "smooth_polygon_shapes":
+            if getattr(self, "_round_width_to_even_numbers", False): w = math.floor(w / 2) * 2
+            if getattr(self, "_round_height_to_even_numbers", False): h = math.floor(h / 2) * 2
+            r = min(r, w/2, h/2); s = round(s); icr = max(0, r - s)
+            return self._draw_smooth_scrollbar(w, h, r, icr, sv, ev, o)
+        return _orig_scrollbar(self, w, h, r, s, sv, ev, o, *args, **kwargs)
+    DrawEngine.draw_rounded_rect_with_border, DrawEngine.draw_rounded_rect_with_border_vertical_split = _patched_draw, _patched_vertical
+    DrawEngine.draw_rounded_progress_bar_with_border, DrawEngine.draw_rounded_slider_with_border_and_button = _patched_progress, _patched_slider
+    DrawEngine.draw_rounded_scrollbar, DrawEngine.preferred_drawing_method = _patched_scrollbar, "smooth_polygon_shapes"
+
+
 # Patch customtkinter bug where scroll events pass a string instead of a widget
 _orig_check = _sf.CTkScrollableFrame.check_if_master_is_canvas
 def _patched_check(self, widget):
