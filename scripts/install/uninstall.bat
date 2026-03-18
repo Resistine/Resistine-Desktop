@@ -6,16 +6,19 @@ setlocal EnableDelayedExpansion
 
 set SCRIPT_DIR=%~dp0
 if "%SCRIPT_DIR:~-1%"=="\" set SCRIPT_DIR=%SCRIPT_DIR:~0,-1%
+:: Project root is two levels up from scripts\install\
+set PROJECT_ROOT=%SCRIPT_DIR%\..\..
+for %%I in ("%PROJECT_ROOT%") do set PROJECT_ROOT=%%~fI
 
 set SERVICE_NAME=ResistineVPN
-set SERVICE_SCRIPT=%SCRIPT_DIR%\plugins\vpn\wireguard\windows_vpn_service.py
-set MAIN_SCRIPT=%SCRIPT_DIR%\main.py
-set TRAY_SCRIPT=%SCRIPT_DIR%\tray.py
-set ICON=%SCRIPT_DIR%\resources\icons\icon.ico
-set VENV_DIR=%SCRIPT_DIR%\venv
+set SERVICE_SCRIPT=%PROJECT_ROOT%\plugins\vpn\wireguard\windows_vpn_service.py
+set MAIN_SCRIPT=%PROJECT_ROOT%\main.py
+set TRAY_SCRIPT=%PROJECT_ROOT%\gui\tray.py
+set ICON=%PROJECT_ROOT%\resources\icons\icon.ico
+set VENV_DIR=%PROJECT_ROOT%\venv
 set VENV_PYTHON=%VENV_DIR%\Scripts\python.exe
 set VENV_PIP=%VENV_DIR%\Scripts\pip.exe
-set REQUIREMENTS=%SCRIPT_DIR%\libraries\requirements-windows.txt
+set REQUIREMENTS=%PROJECT_ROOT%\requirements\requirements-windows.txt
 set APPDATA_DIR=%APPDATA%\Resistine
 set WG_DIR=%APPDATA_DIR%\wireguard
 set PROGRAMDATA_DIR=%PROGRAMDATA%\Resistine

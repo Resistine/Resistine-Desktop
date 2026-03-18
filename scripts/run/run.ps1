@@ -8,16 +8,20 @@
 
 $ErrorActionPreference = "Stop"
 
+# Navigate to project root (two levels up from scripts/run/)
+$ProjectRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+Set-Location $ProjectRoot
+
 # Check if .venv exists, if not run install.bat
 if (-not (Test-Path ".venv")) {
     Write-Host ".venv folder not found. Running install.bat first..."
-    & "$PSScriptRoot\install.bat"
+    & "$ProjectRoot\scripts\install\install.bat"
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     exit 0
 }
 
 # Activate virtual environment
-$activateScript = Join-Path $PSScriptRoot ".venv\Scripts\Activate.ps1"
+$activateScript = Join-Path $ProjectRoot ".venv\Scripts\Activate.ps1"
 if (Test-Path $activateScript) {
     & $activateScript
 } else {
@@ -36,7 +40,7 @@ if (Test-Path $gtkBin) {
 
 # Install/update requirements
 Write-Host "Updating dependencies..."
-$reqFile = Join-Path $PSScriptRoot "libraries\requirements-windows.txt"
+$reqFile = Join-Path $ProjectRoot "requirements\requirements-windows.txt"
 python -m pip install -U -q -r $reqFile
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Failed to install requirements."
@@ -45,7 +49,7 @@ if ($LASTEXITCODE -ne 0) {
 
 # Run the application
 Write-Host "Starting the application..."
-python (Join-Path $PSScriptRoot "main.py") @args
+python (Join-Path $ProjectRoot "main.py") @args
 
 # Deactivate virtual environment
 if (Get-Command deactivate -ErrorAction SilentlyContinue) {

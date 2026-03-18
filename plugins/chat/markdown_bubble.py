@@ -64,7 +64,7 @@ class MarkdownBubble(customtkinter.CTkFrame):
         is_dark = appearance_mode == "Dark"
 
         # --- Color palette — transparent bg like ChatGPT / Claude ---
-        # Colors aligned with plugins/help/styles_dark.css & styles_light.css
+        # Color palette for dark/light mode
         if is_dark:
             bubble_bg    = "transparent"
             text_color   = "#e0e0e0"
