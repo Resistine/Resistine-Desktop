@@ -15,7 +15,10 @@ set -x
 # Exit immediately if a command exits with a non-zero status
 set -e
 
-# Check if the venv folder already exists in the libraries folder
+# Navigate to project root (two levels up from scripts/install/)
+cd "$(dirname "$0")/../.."
+
+# Check if the venv folder already exists
 if [ -d ".venv" ]; then
 	echo ".venv folder already exists. Do you want to delete it? (y/n)"
 	read delete_venv
@@ -205,4 +208,4 @@ esac
 echo ""
 echo "Installation complete! Starting the application..."
 echo ""
-./run.sh
+./scripts/run/run.sh

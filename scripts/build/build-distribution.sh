@@ -12,7 +12,7 @@ echo ""
 
 # Project paths
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PYTHON_UI_PATH="$SCRIPT_DIR"
+PYTHON_UI_PATH="$(cd "$SCRIPT_DIR/../.." && pwd)"
 VPN_PROJECT_PATH="$PYTHON_UI_PATH/vpn-apple"
 
 # Validate paths exist
@@ -131,17 +131,17 @@ fi
 echo "  - Installing dependencies..."
 source .venv/bin/activate
 export MACOSX_DEPLOYMENT_TARGET=13.0  # Ensure compiled extensions target macOS 13+ (Ventura)
-pip install -q -r libraries/requirements-mac.txt
+pip install -q -r requirements/requirements-mac.txt
 
-if [ ! -f "Resistine.spec" ]; then
-    echo "  Error: Resistine.spec not found in $PYTHON_UI_PATH"
+if [ ! -f "packaging/Resistine.spec" ]; then
+    echo "  Error: packaging/Resistine.spec not found in $PYTHON_UI_PATH"
     exit 1
 fi
 
 rm -rf dist/Resistine dist/Resistine.app
 
 echo "  - Building with PyInstaller..."
-pyinstaller Resistine.spec --clean --noconfirm
+pyinstaller packaging/Resistine.spec --clean --noconfirm
 
 echo "  Python UI built"
 
@@ -302,7 +302,7 @@ fi
 
 
 # Locate entitlements files
-ENTITLEMENTS_FILE="$PYTHON_UI_PATH/Resistine.entitlements"
+ENTITLEMENTS_FILE="$PYTHON_UI_PATH/packaging/Resistine.entitlements"
 CLI_ENTITLEMENTS="$VPN_PROJECT_PATH/resistine-vpn-cli/entitlements.plist"
 
 NE_DIST_ENTITLEMENTS="/tmp/ne-distribution.entitlements.plist"
@@ -532,8 +532,8 @@ if [ -f "$PYTHON_UI_PATH/resources/installer-background.png" ]; then
 fi
 
 ICON_FLAG=""
-if [ -f "$PYTHON_UI_PATH/resources/icons/ResistineSheild.png" ]; then
-    ICON_FLAG="--volicon $PYTHON_UI_PATH/resources/icons/ResistineSheild.png"
+if [ -f "$PYTHON_UI_PATH/resources/icons/ResistineShield.png" ]; then
+    ICON_FLAG="--volicon $PYTHON_UI_PATH/resources/icons/ResistineShield.png"
 fi
 
 create-dmg \

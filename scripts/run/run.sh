@@ -14,10 +14,13 @@ set -x
 # Exit immediately if a command exits with a non-zero status
 set -e
 
+# Navigate to project root (two levels up from scripts/run/)
+cd "$(dirname "$0")/../.."
+
 # Check if .venv exists, if not run install.sh
 if [ ! -d ".venv" ]; then
 	echo ".venv folder not found. Running install.sh first..."
-	./install.sh
+	./scripts/install/install.sh
 	exit 0
 fi
 
@@ -36,7 +39,7 @@ OS="$(uname -s)"
 case "$OS" in
 Linux*)
 	# Install/update requirements if needed
-	python3 -m pip install -U -q -r libraries/requirements-linux.txt
+	python3 -m pip install -U -q -r requirements/requirements-linux.txt
 	;;
 
 # MACOS
@@ -55,13 +58,13 @@ Darwin*)
 
 	# Install/update requirements if needed
 	export MACOSX_DEPLOYMENT_TARGET=13.0  # Ensure compiled extensions target macOS 13+ (Ventura)
-	python3 -m pip install -U -q -r libraries/requirements-mac.txt
+	python3 -m pip install -U -q -r requirements/requirements-mac.txt
 	;;
 
 # Windows (Git Bash, Cygwin, MSYS2)
 CYGWIN* | MINGW* | MSYS*)
 	# Install/update requirements if needed
-	python -m pip install -U -q -r libraries/requirements-windows.txt
+	python -m pip install -U -q -r requirements/requirements-windows.txt
 	;;
 
 # Unsupported OS
