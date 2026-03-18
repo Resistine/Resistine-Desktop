@@ -855,7 +855,7 @@ class AppUI(customtkinter.CTk):
                 state["job"] = canvas.after(1, _step)
             return "break"
 
-        # Bind on the canvas + scrollable itself so it works regardless of focus
+        # Bind on the canvas + scrollable frame for direct hover
         for w in (canvas, scrollable):
             try:
                 w.bind("<MouseWheel>", _on_mousewheel, add="+")
@@ -863,6 +863,15 @@ class AppUI(customtkinter.CTk):
                 w.bind("<Button-5>", _on_linux_scroll_down, add="+")
             except Exception:
                 pass
+
+        # Override the built-in _mouse_wheel_all so that the bind_all handler
+        # (which fires for ALL descendants including gaps) uses our smooth
+        # scrolling instead of the default jerky scroll.
+        def _smooth_mouse_wheel_all(event):
+            if scrollable.check_if_master_is_canvas(event.widget):
+                return _on_mousewheel(event)
+
+        scrollable._mouse_wheel_all = _smooth_mouse_wheel_all
 
         # ---- Auto-hide scrollbar when not needed ----
         # IMPORTANT: never change layout width (that causes visible shifting).
