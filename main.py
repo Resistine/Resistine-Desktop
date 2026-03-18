@@ -603,6 +603,30 @@ if sys.platform.startswith("win"):
     _sf.CTkScrollableFrame._fit_frame_dimensions_to_canvas = _throttled_fit
 # ────────────────────────────────────────────────────────────────────────────
 
+# On Linux, Tk binds <Control-a> to "move cursor to line start" (emacs style),
+# overriding the expected select-all. Fix it at the class level so it applies
+# to every Entry and Text widget in the app without needing per-widget binds.
+if sys.platform.startswith("linux"):
+    import tkinter as _tk
+
+    def _select_all_entry(event):
+        event.widget.select_range(0, "end")
+        event.widget.icursor("end")
+        return "break"  # prevent default cursor-move behavior
+
+    def _select_all_text(event):
+        event.widget.tag_add("sel", "1.0", "end")
+        return "break"
+
+    _tk.Entry.bind_class = _tk.Entry.bind_class  # ensure class exists
+    _tk.Entry.bind_all   # no-op ref
+    _root_bind_done = False
+
+    def _patch_ctrl_a(root):
+        root.bind_class("Entry", "<Control-a>", _select_all_entry)
+        root.bind_class("Text",  "<Control-a>", _select_all_text)
+
+
 # DEPRECATED: Debug Window - controlled by command-line arguments
 from gui.debug_window import DebugWindow
 from gui.inspector import RuntimeInspector
@@ -633,6 +657,10 @@ class App(AppUI):
         Check if the email is registered and create the appropriate screen.
         """
         super().__init__()
+
+        # Fix Ctrl+A select-all on Linux (Tk default is cursor-to-start)
+        if sys.platform.startswith("linux"):
+            _patch_ctrl_a(self)
 
         # Theme: fixed Resistine CTk theme; only appearance mode varies (System/Light/Dark)
         customtkinter.set_default_color_theme(resource_path("resources/themes/resistine_ctk.json"))
