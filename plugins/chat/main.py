@@ -537,21 +537,13 @@ class Plugin(BasePlugin):
             fg_color="transparent",
         )
         self.second_frame.grid_columnconfigure(0, weight=1)
-        self.second_frame.grid_rowconfigure(0, weight=1)  # chat area
-        self.second_frame.grid_rowconfigure(1, weight=0)  # input bar
+        self.second_frame.grid_rowconfigure(0, weight=1)
 
-        # --- Chat area (centered, constrained width) ---
-        chat_container = customtkinter.CTkFrame(
+        # --- Chat area ---
+        chat_wrapper = customtkinter.CTkFrame(
             self.second_frame, fg_color="transparent"
         )
-        chat_container.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
-        chat_container.grid_columnconfigure(0, weight=1)
-        chat_container.grid_rowconfigure(0, weight=1)
-
-        chat_wrapper = customtkinter.CTkFrame(chat_container, fg_color="transparent")
-        chat_wrapper.place(
-            relx=0.5, rely=0.5, relwidth=0.97, relheight=1.0, anchor="center"
-        )
+        chat_wrapper.grid(row=0, column=0, sticky="nsew")
         chat_wrapper.grid_columnconfigure(0, weight=1)
         chat_wrapper.grid_rowconfigure(0, weight=1)
 
@@ -621,27 +613,29 @@ class Plugin(BasePlugin):
             else:
                 self._build_no_api_key_screen(chat_wrapper)
 
-        # --- Input bar (bottom, centered) ---
-        input_outer = customtkinter.CTkFrame(
-            self.second_frame, fg_color="transparent"
+        # --- Input bar (overlaid at bottom, full width, solid bg hides content) ---
+        # Use the actual CTk window background color from the theme
+        window_bg = "#111113" if is_dark else "#F5F5F7"
+
+        # Solid backdrop that clips scrolling content below the input bar
+        input_backdrop = tk.Frame(
+            self.second_frame,
+            bg=window_bg,
+            highlightthickness=0,
+            bd=0,
         )
-        input_outer.grid(row=1, column=0, sticky="ew", padx=0, pady=(0, 16))
-        input_outer.grid_columnconfigure(0, weight=1)
+        input_backdrop.place(
+            relx=0, rely=1.0, anchor="sw", relwidth=1.0, height=56
+        )
 
-        # Centered wrapper matching chat width
-        input_center = customtkinter.CTkFrame(input_outer, fg_color="transparent")
-        input_center.place(relx=0.5, rely=0.5, relwidth=0.97, anchor="center")
-        input_center.grid_columnconfigure(0, weight=1)
-
-        # Unified input container (entry + button inside one rounded bar)
         input_bar = customtkinter.CTkFrame(
-            input_center,
+            input_backdrop,
             fg_color=input_bg,
             corner_radius=22,
             border_width=1,
             border_color=border_color,
         )
-        input_bar.grid(row=0, column=0, sticky="ew", padx=4, pady=8)
+        input_bar.pack(fill="x", padx=8, pady=(0, 8))
         input_bar.grid_columnconfigure(0, weight=1)
         input_bar.grid_columnconfigure(1, weight=0)
 
@@ -673,6 +667,9 @@ class Plugin(BasePlugin):
         self.send_button.grid(row=0, column=1, padx=(0, 6), pady=6)
 
         self.chat_entry.bind("<Return>", lambda event: self.send_message())
+
+        # Lift the backdrop above the chat textbox so it clips content
+        input_backdrop.lift()
 
         # Disable input when no API key is configured
         if not has_api_key:
