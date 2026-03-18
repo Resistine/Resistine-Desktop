@@ -119,7 +119,7 @@ class MarkdownBubble(customtkinter.CTkFrame):
             corner_radius=0,
             activate_scrollbars=False,
         )
-        self.text_widget.pack(fill="both", expand=True, padx=16, pady=8)
+        self.text_widget.pack(fill="both", expand=True, padx=16, pady=(2, 8))
 
         # Store colors for later use
         self._colors = {
@@ -350,6 +350,8 @@ class MarkdownBubble(customtkinter.CTkFrame):
         def on_wheel(event):
             if sys.platform == "darwin":
                 _badd(-1 * event.delta * 0.4)
+            elif sys.platform == "win32":
+                _badd(-1 * (event.delta / 120) * 4.0)
             else:
                 _badd(-1 * (event.delta / 120) * 0.4)
             return "break"
