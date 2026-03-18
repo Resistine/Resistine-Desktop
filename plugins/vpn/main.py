@@ -592,12 +592,12 @@ class Plugin(BasePlugin):
                 ).grid(row=row + 1, column=0, columnspan=2, sticky="ew", padx=14, pady=(0, 8))
                 return row + 2
 
-            def _info_row(parent, row, label, value, mono=False):
+            def _info_row(parent, row, label, value, mono=False, pady=5):
                 customtkinter.CTkLabel(
                     parent, text=label,
                     font=customtkinter.CTkFont(size=13),
                     text_color=LABEL_COLOR, anchor="w"
-                ).grid(row=row, column=0, padx=(14, 6), pady=5, sticky="w")
+                ).grid(row=row, column=0, padx=(14, 6), pady=pady, sticky="w")
                 customtkinter.CTkLabel(
                     parent, text=value,
                     font=customtkinter.CTkFont(
@@ -605,7 +605,7 @@ class Plugin(BasePlugin):
                         size=13, weight="bold"
                     ),
                     text_color=VALUE_COLOR, anchor="e"
-                ).grid(row=row, column=1, padx=(4, 14), pady=5, sticky="ew")
+                ).grid(row=row, column=1, padx=(4, 14), pady=pady, sticky="ew")
 
             # Left — Client panel placed directly in scroll_frame column 0
             client_panel = customtkinter.CTkFrame(  # noqa: tracked for responsive layout
@@ -620,8 +620,7 @@ class Plugin(BasePlugin):
             _info_row(client_panel, r, "IP Address", data.get('client_ip_address', 'N/A'), mono=True); r += 1
             _info_row(client_panel, r, "DNS",        sys_info.get("DNS", "N/A"),            mono=True); r += 1
             _info_row(client_panel, r, "System",     sys_info.get("System", "N/A"));                    r += 1
-            _info_row(client_panel, r, "Status",     sys_info.get("Status", "N/A"));                    r += 1
-            customtkinter.CTkFrame(client_panel, height=12, fg_color="transparent").grid(row=r, column=0)
+            _info_row(client_panel, r, "Status",     sys_info.get("Status", "N/A"), pady=(5, 14));       r += 1
 
             # Right — Server panel placed directly in scroll_frame column 1, same row
             server_panel = customtkinter.CTkFrame(  # noqa: tracked for responsive layout
@@ -636,8 +635,7 @@ class Plugin(BasePlugin):
             r = _section_header(server_panel, 0, "SERVER / PEER")
             _info_row(server_panel, r, "IP Address",  sys_info.get("Server IP", "N/A"), mono=True); r += 1
             _info_row(server_panel, r, "Protocol",    "WireGuard");                                  r += 1
-            _info_row(server_panel, r, "Config Name", sys_info.get("Config Name", "N/A"));           r += 1
-            customtkinter.CTkFrame(server_panel, height=12, fg_color="transparent").grid(row=r, column=0)
+            _info_row(server_panel, r, "Config Name", sys_info.get("Config Name", "N/A"), pady=(5, 14)); r += 1
 
             # ── Public Keys (spans both columns) ──────────────────────────
             keys_panel = customtkinter.CTkFrame(
@@ -660,20 +658,19 @@ class Plugin(BasePlugin):
                 keys_panel, text=sys_info.get("Client Public Key", "N/A"),
                 font=customtkinter.CTkFont(family=_MONO_FONT, size=13, weight="bold"),
                 text_color=VALUE_COLOR, anchor="e", wraplength=420, justify="right"
-            ).grid(row=kr, column=1, padx=(4, 14), pady=5, sticky="ew")
+            ).grid(row=kr, column=1, padx=(4, 14), pady=(5, 14), sticky="ew")
             kr += 1
 
             customtkinter.CTkLabel(
                 keys_panel, text="Server",
                 font=customtkinter.CTkFont(size=13), text_color=LABEL_COLOR, anchor="w"
-            ).grid(row=kr, column=0, padx=(14, 10), pady=5, sticky="w")
+            ).grid(row=kr, column=0, padx=(14, 10), pady=(5, 14), sticky="w")
             customtkinter.CTkLabel(
                 keys_panel, text=data.get('public_key', 'N/A'),
                 font=customtkinter.CTkFont(family=_MONO_FONT, size=13, weight="bold"),
                 text_color=VALUE_COLOR, anchor="e", wraplength=420, justify="right"
-            ).grid(row=kr, column=1, padx=(4, 14), pady=5, sticky="ew")
+            ).grid(row=kr, column=1, padx=(4, 14), pady=(5, 14), sticky="ew")
             kr += 1
-            customtkinter.CTkFrame(keys_panel, height=12, fg_color="transparent").grid(row=kr, column=0)
 
             # ── Allowed IPs (spans both columns) ──────────────────────────
             allowed_panel = customtkinter.CTkFrame(
@@ -695,9 +692,8 @@ class Plugin(BasePlugin):
                 allowed_panel, text=data.get('allowed_ips', 'N/A'),
                 font=customtkinter.CTkFont(family=_MONO_FONT, size=13, weight="bold"),
                 text_color=VALUE_COLOR, anchor="e", wraplength=420, justify="right"
-            ).grid(row=ar, column=1, padx=(4, 14), pady=5, sticky="ew")
+            ).grid(row=ar, column=1, padx=(4, 14), pady=(5, 14), sticky="ew")
             ar += 1
-            customtkinter.CTkFrame(allowed_panel, height=12, fg_color="transparent").grid(row=ar, column=0)
 
         # ── 4. ACTION BUTTONS (spans both columns) ────────────────────────
         buttons_frame = customtkinter.CTkFrame(scroll_frame, fg_color="transparent")
@@ -1128,4 +1124,3 @@ class Plugin(BasePlugin):
             
             # Refresh UI
             self.update_plugin(self.id)
-
