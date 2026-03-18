@@ -782,6 +782,11 @@ class AppUI(customtkinter.CTk):
             return
 
         # ---- Smooth scrolling (mouse wheel) ----
+        from utils.scroll import (
+            FRAME_SCROLL_DELTA, FRAME_FEEL, FRAME_VEL_CLAMP,
+            FRAME_VEL_THRESHOLD, FRAME_VEL_DECAY,
+        )
+
         state = {"vel": 0.0, "job": None}
 
         def _normalized_delta(event) -> float:
@@ -800,15 +805,14 @@ class AppUI(customtkinter.CTk):
                 if not canvas.winfo_exists():
                     return
                 v = state["vel"]
-                if abs(v) < 0.01:
+                if abs(v) < FRAME_VEL_THRESHOLD:
                     state["vel"] = 0.0
                     state["job"] = None
                     return
 
                 # Scroll by a fraction of the canvas height for smoothness
                 cur_top, _ = canvas.yview()
-                # 0.01125 is a "feel" constant (smaller = smoother/slower)
-                new_top = cur_top - (v * 0.01125)
+                new_top = cur_top - (v * FRAME_FEEL)
                 new_top = max(0.0, min(1.0, new_top))
                 canvas.yview_moveto(new_top)
 
@@ -821,7 +825,7 @@ class AppUI(customtkinter.CTk):
                     return
 
                 # Decay velocity (gentle for smooth coast-to-stop)
-                state["vel"] *= 0.88
+                state["vel"] *= FRAME_VEL_DECAY
                 state["job"] = canvas.after(8, _step)
             except Exception:
                 state["job"] = None
@@ -835,7 +839,7 @@ class AppUI(customtkinter.CTk):
 
                 state["vel"] += d
                 # Clamp velocity so huge trackpad swipes don't go crazy
-                state["vel"] = max(-8.0, min(8.0, state["vel"]))
+                state["vel"] = max(-FRAME_VEL_CLAMP, min(FRAME_VEL_CLAMP, state["vel"]))
 
                 if state["job"] is None:
                     state["job"] = canvas.after(1, _step)
@@ -844,13 +848,13 @@ class AppUI(customtkinter.CTk):
             return "break"
 
         def _on_linux_scroll_up(_e):
-            state["vel"] = max(-8.0, min(8.0, state["vel"] + 0.125))
+            state["vel"] = max(-FRAME_VEL_CLAMP, min(FRAME_VEL_CLAMP, state["vel"] + FRAME_SCROLL_DELTA))
             if state["job"] is None:
                 state["job"] = canvas.after(1, _step)
             return "break"
 
         def _on_linux_scroll_down(_e):
-            state["vel"] = max(-8.0, min(8.0, state["vel"] - 0.125))
+            state["vel"] = max(-FRAME_VEL_CLAMP, min(FRAME_VEL_CLAMP, state["vel"] - FRAME_SCROLL_DELTA))
             if state["job"] is None:
                 state["job"] = canvas.after(1, _step)
             return "break"
