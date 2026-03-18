@@ -313,6 +313,11 @@ class MarkdownBubble(customtkinter.CTkFrame):
 
     def _bind_scroll_redirect(self, widget):
         """Redirect mouse-wheel events on an inner widget to the outer chat container."""
+        from utils.scroll import (
+            CHAT_SCROLL_DELTA, CHAT_WHEEL_SCALE, CHAT_VEL_CLAMP,
+            CHAT_VEL_THRESHOLD, CHAT_VEL_DECAY,
+        )
+
         parent = self.master
         chat_tw = parent._textbox if hasattr(parent, "_textbox") else parent
 
@@ -325,39 +330,40 @@ class MarkdownBubble(customtkinter.CTkFrame):
                     bstate["job"] = None
                     return
                 v = bstate["vel"]
-                if abs(v) < 0.05:
+                if abs(v) < CHAT_VEL_THRESHOLD:
                     bstate["vel"] = 0.0
                     bstate["job"] = None
                     return
                 before = chat_tw.yview()
-                chat_tw.yview_scroll(int(round(v)) or (1 if v > 0 else -1), "pixels")
+                scroll_px = int(round(v)) or (1 if v > 0 else -1)
+                chat_tw.yview_scroll(scroll_px, "pixels")
                 after = chat_tw.yview()
                 if abs(after[0] - before[0]) < 0.0001:
                     bstate["vel"] = 0.0
                     bstate["job"] = None
                     return
-                bstate["vel"] *= 0.88
+                bstate["vel"] *= CHAT_VEL_DECAY
                 bstate["job"] = chat_tw.after(8, _bstep)
             except Exception:
                 bstate["job"] = None
 
         def _badd(delta):
             bstate["vel"] += delta
-            bstate["vel"] = max(-20.0, min(20.0, bstate["vel"]))
+            bstate["vel"] = max(-CHAT_VEL_CLAMP, min(CHAT_VEL_CLAMP, bstate["vel"]))
             if bstate["job"] is None:
                 bstate["job"] = chat_tw.after(1, _bstep)
 
         def on_wheel(event):
             if sys.platform == "darwin":
-                _badd(-1 * event.delta * 0.4)
+                _badd(-1 * event.delta * CHAT_WHEEL_SCALE)
             else:
-                _badd(-1 * (event.delta / 120) * 0.4)
+                _badd(-1 * (event.delta / 120) * CHAT_WHEEL_SCALE)
             return "break"
 
         widget.bind("<MouseWheel>", on_wheel, add="+")
         if sys.platform != "darwin":
-            widget.bind("<Button-4>", lambda e: (_badd(-0.5), "break")[-1], add="+")
-            widget.bind("<Button-5>", lambda e: (_badd(0.5), "break")[-1], add="+")
+            widget.bind("<Button-4>", lambda e: (_badd(-CHAT_SCROLL_DELTA), "break")[-1], add="+")
+            widget.bind("<Button-5>", lambda e: (_badd(CHAT_SCROLL_DELTA), "break")[-1], add="+")
 
     def _render_code_block(self, tw, code_lines, language=None):
         """Render a code block with copy button and optional syntax highlighting."""
