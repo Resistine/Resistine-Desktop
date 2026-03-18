@@ -259,6 +259,19 @@ class MarkdownBubble(customtkinter.CTkFrame):
 
             stripped = line.strip()
 
+            # --- Box-drawing / ASCII art → auto code block ---
+            if self._is_box_drawing(stripped):
+                box_lines = []
+                while i < len(lines) and self._is_box_drawing(lines[i].strip()):
+                    box_lines.append(lines[i])
+                    i += 1
+                if not first:
+                    tw.insert("end", "\n")
+                first = False
+                self._render_code_block(tw, box_lines, None)
+                tw.insert("end", "\n")
+                continue
+
             # --- Empty line → paragraph break ---
             if not stripped:
                 if not first:
@@ -305,10 +318,14 @@ class MarkdownBubble(customtkinter.CTkFrame):
                 self._insert_inline(tw, stripped[6:], ("bullet",))
                 tw.insert("end", "\n")
 
-            # --- Bullet list ---
-            elif stripped.startswith("- ") or stripped.startswith("* "):
-                tw.insert("end", "  •  ", "bullet")
-                self._insert_inline(tw, stripped[2:], ("bullet",))
+            # --- Bullet list (with indentation support) ---
+            elif re.match(r'^(\s*)([-*])\s', line):
+                m = re.match(r'^(\s*)([-*])\s(.*)', line)
+                indent_level = len(m.group(1)) // 2 if m else 0
+                content = m.group(3) if m else stripped[2:]
+                prefix = "    " * indent_level + "  •  "
+                tw.insert("end", prefix, "bullet")
+                self._insert_inline(tw, content, ("bullet",))
                 tw.insert("end", "\n")
 
             # --- Numbered list ---
@@ -319,10 +336,26 @@ class MarkdownBubble(customtkinter.CTkFrame):
                     self._insert_inline(tw, m.group(2), ("numbered",))
                     tw.insert("end", "\n")
 
-            # --- Blockquote ---
+            # --- Blockquote (collect consecutive lines, handle admonitions) ---
             elif stripped.startswith("> "):
-                self._insert_inline(tw, stripped[2:], ("blockquote",))
-                tw.insert("end", "\n")
+                quote_lines = []
+                while i < len(lines) and lines[i].strip().startswith("> "):
+                    quote_lines.append(lines[i].strip()[2:])
+                    i += 1
+                # Check for GitHub admonitions like > [!IMPORTANT]
+                admonition = None
+                if quote_lines and re.match(r'^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]', quote_lines[0]):
+                    m = re.match(r'^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]', quote_lines[0])
+                    admonition = m.group(1)
+                    quote_lines = quote_lines[1:]  # Remove the admonition marker
+                if admonition:
+                    tw.insert("end", f"  {admonition}  ", ("bold", "blockquote"))
+                    tw.insert("end", "\n")
+                for ql in quote_lines:
+                    if ql.strip():
+                        self._insert_inline(tw, ql, ("blockquote",))
+                    tw.insert("end", "\n")
+                continue  # i already advanced
 
             # --- Table ---
             elif stripped.startswith("|"):
@@ -346,6 +379,17 @@ class MarkdownBubble(customtkinter.CTkFrame):
                 tw.insert("end", "\n")
             self._render_code_block(tw, code_lines, code_language)
             tw.insert("end", "\n")
+
+    # Box-drawing characters that indicate ASCII art diagrams
+    _BOX_CHARS = set("┌┐└┘├┤┬┴┼─│╭╮╯╰╱╲▲▼◄►═║╔╗╚╝╠╣╦╩╬")
+
+    @classmethod
+    def _is_box_drawing(cls, line):
+        """Return True if the line looks like an ASCII art / box diagram."""
+        if not line:
+            return False
+        # If any box-drawing character is present, treat as diagram
+        return bool(cls._BOX_CHARS.intersection(line))
 
     def _render_hr(self, tw):
         """Render a horizontal rule as an embedded thin frame."""
