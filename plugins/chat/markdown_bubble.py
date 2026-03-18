@@ -329,7 +329,13 @@ class MarkdownBubble(customtkinter.CTkFrame):
                     bstate["vel"] = 0.0
                     bstate["job"] = None
                     return
+                before = chat_tw.yview()
                 chat_tw.yview_scroll(int(round(v)) or (1 if v > 0 else -1), "pixels")
+                after = chat_tw.yview()
+                if abs(after[0] - before[0]) < 0.0001:
+                    bstate["vel"] = 0.0
+                    bstate["job"] = None
+                    return
                 bstate["vel"] *= 0.88
                 bstate["job"] = chat_tw.after(8, _bstep)
             except Exception:
@@ -424,8 +430,11 @@ class MarkdownBubble(customtkinter.CTkFrame):
         line_count = len(code_lines)
         widget_height = min(25, max(3, line_count + 1))
         code_widget.configure(state="disabled", height=widget_height)
-        # Redirect scroll so the outer chat container scrolls, not the code block
-        self._bind_scroll_redirect(code_widget)
+        # Redirect scroll from all code block sub-widgets to the chat container
+        for w in (code_frame, header_frame, code_widget):
+            self._bind_scroll_redirect(w)
+        for child in header_frame.winfo_children():
+            self._bind_scroll_redirect(child)
 
         # Embed the frame
         tw.window_create("end", window=code_frame, padx=0, pady=10, stretch=1)
@@ -551,6 +560,13 @@ class MarkdownBubble(customtkinter.CTkFrame):
                 cell_label.pack(padx=14, pady=8, fill="x")
 
         self._tables.append((table_frame, num_cols))
+
+        # Redirect scroll events from all table sub-widgets to the chat container
+        self._bind_scroll_redirect(table_frame)
+        for child in table_frame.winfo_children():
+            self._bind_scroll_redirect(child)
+            for grandchild in child.winfo_children():
+                self._bind_scroll_redirect(grandchild)
 
         tw.insert("end", "\n")
         tw.window_create("end", window=table_frame, padx=0, pady=8, stretch=1)

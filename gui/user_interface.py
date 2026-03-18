@@ -807,10 +807,18 @@ class AppUI(customtkinter.CTk):
 
                 # Scroll by a fraction of the canvas height for smoothness
                 cur_top, _ = canvas.yview()
-                # 0.0075 is a "feel" constant (smaller = smoother/slower)
-                new_top = cur_top - (v * 0.0075)
+                # 0.01125 is a "feel" constant (smaller = smoother/slower)
+                new_top = cur_top - (v * 0.01125)
                 new_top = max(0.0, min(1.0, new_top))
                 canvas.yview_moveto(new_top)
+
+                # Check if scroll position actually changed after moveto;
+                # if not, we've hit a boundary — kill velocity immediately
+                after_top, _ = canvas.yview()
+                if abs(after_top - cur_top) < 0.0001:
+                    state["vel"] = 0.0
+                    state["job"] = None
+                    return
 
                 # Decay velocity (gentle for smooth coast-to-stop)
                 state["vel"] *= 0.88

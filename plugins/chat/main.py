@@ -118,7 +118,13 @@ class Plugin(BasePlugin):
                     state["vel"] = 0.0
                     state["job"] = None
                     return
+                before = widget.yview()
                 widget.yview_scroll(int(round(v)) or (1 if v > 0 else -1), "pixels")
+                after = widget.yview()
+                if abs(after[0] - before[0]) < 0.0001:
+                    state["vel"] = 0.0
+                    state["job"] = None
+                    return
                 state["vel"] *= 0.88
                 state["job"] = widget.after(8, _step)
             except Exception:
