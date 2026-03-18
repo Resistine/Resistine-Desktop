@@ -134,7 +134,7 @@ if IS_MACOS:
     app = BUNDLE(
         coll,
         name=f'{APP_NAME}.app',
-        icon=_src('resources/icons/ResistineSheild.png'),  # Will be converted to .icns
+        icon=_src('resources/icons/ResistineShield.png'),  # Will be converted to .icns
         bundle_identifier=BUNDLE_ID,
         version=VERSION,
         info_plist={
