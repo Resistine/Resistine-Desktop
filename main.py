@@ -138,6 +138,7 @@ if sys.platform.startswith("linux"):
 
     def _draw_smooth_progress_bar(self, width, height, corner_radius, border_width, v1, v2, orientation):
         master = self._canvas.master
+
         def draw(ctx, w, h):
             r, bw = (corner_radius or 0), (border_width or 0)
             inner_r = max(0, r - bw)
@@ -175,45 +176,66 @@ if sys.platform.startswith("linux"):
         self._canvas.tag_lower("cairo_progress")
         return False
 
-    def _draw_smooth_slider(self, width, height, corner_radius, border_width, button_length, button_corner_radius, slider_value, orientation):
+    def _draw_smooth_slider(self, width, height, corner_radius, border_width, button_length, button_corner_radius, slider_value, orientation, button_color=None):
+        """Render track + progress + button into a single Cairo image.
+        button_color: pre-resolved hex string for the button (used on hover/leave).
+        """
         master = self._canvas.master
+
+        # Clamp radii exactly as draw_rounded_slider_with_border_and_button does
+        corner_radius = min(corner_radius, width / 2, height / 2)
+        button_corner_radius = min(button_corner_radius, width / 2, height / 2)
+        # When both are zero the theme wants a circular dot — use half-height
+        if button_length == 0 and button_corner_radius == 0:
+            button_corner_radius = height / 2
+
         def draw(ctx, w, h):
             r, bw = (corner_radius or 0), (border_width or 0)
             inner_r = max(0, r - bw)
-            # Fill corners with bg_color so rounded corners don't composite against black
             ctx.set_source_rgba(*_get_rgba(master, "_bg_color"))
             ctx.paint()
-            # 1. Background/Border
             if bw > 0:
                 ctx.set_source_rgba(*_get_rgba(master, "_border_color", default_color="transparent"))
                 _cairo_rounded_rect(ctx, 0, 0, width, height, r)
                 ctx.fill()
+            # Track
             ctx.set_source_rgba(*_get_rgba(master, "_fg_color"))
             _cairo_rounded_rect(ctx, bw, bw, width - 2*bw, height - 2*bw, inner_r)
             ctx.fill()
-
-            # 2. Progress Fill
+            # Progress fill — uses the same coordinate space as the button dot so
+            # the fill always ends exactly at the button center.
             ctx.set_source_rgba(*_get_rgba(master, "_progress_color"))
+            br_prog = button_corner_radius  # already clamped above
             if orientation in ["horizontal", "w", "e"]:
-                usable_w = max(0, width - 2 * bw)
-                _cairo_rounded_rect(ctx, bw, bw, usable_w * slider_value, height - 2 * bw, inner_r)
+                dot_r_prog = min(br_prog, height / 2)
+                usable_w = max(0, width - 2 * dot_r_prog)
+                fill_w = usable_w * slider_value
+                if fill_w > 0:
+                    _cairo_rounded_rect(ctx, bw, bw, (dot_r_prog - bw) + fill_w, height - 2*bw, inner_r)
+                    ctx.fill()
             else:
-                usable_h = max(0, height - 2 * bw)
-                _cairo_rounded_rect(ctx, bw, bw + usable_h * (1 - slider_value), width - 2 * bw, usable_h * slider_value, inner_r)
-            ctx.fill()
-
-            # 3. Slider Button
-            ctx.set_source_rgba(*_get_rgba(master, "_button_color"))
-            br = (button_corner_radius or 0)
+                dot_r_prog = min(br_prog, width / 2)
+                usable_h = max(0, height - 2 * dot_r_prog)
+                fill_h = usable_h * slider_value
+                if fill_h > 0:
+                    fill_top = dot_r_prog + usable_h * (1 - slider_value)
+                    _cairo_rounded_rect(ctx, bw, fill_top - bw, width - 2*bw, (height - fill_top - bw) + bw, inner_r)
+                    ctx.fill()
+            # Button dot/pill
+            if button_color is not None:
+                try:
+                    r2, g2, b2 = master.winfo_rgb(button_color)
+                    ctx.set_source_rgba(r2/65535.0, g2/65535.0, b2/65535.0, 1.0)
+                except Exception:
+                    ctx.set_source_rgba(*_get_rgba(master, "_button_color"))
+            else:
+                ctx.set_source_rgba(*_get_rgba(master, "_button_color"))
+            br = button_corner_radius
             if orientation in ["horizontal", "w", "e"]:
                 if button_length == 0:
-                    # Circular dot: clamp radius to fit inside the track height
-                    dot_r = min(br, (height - 2 * bw) / 2)
-                    # Centre x travels only within [bw+dot_r, width-bw-dot_r] so dot stays inside track
-                    usable_w = max(0, width - 2 * bw - 2 * dot_r)
-                    cx = bw + dot_r + usable_w * slider_value
-                    cy = height / 2
-                    ctx.arc(cx, cy, dot_r, 0, 2 * math.pi)
+                    dot_r = min(br, height / 2)
+                    usable_w = max(0, width - 2 * dot_r)
+                    ctx.arc(dot_r + usable_w * slider_value, height / 2, dot_r, 0, 2 * math.pi)
                     ctx.fill()
                 else:
                     bx = (width - button_length) * slider_value
@@ -221,11 +243,9 @@ if sys.platform.startswith("linux"):
                     ctx.fill()
             else:
                 if button_length == 0:
-                    dot_r = min(br, (width - 2 * bw) / 2)
-                    usable_h = max(0, height - 2 * bw - 2 * dot_r)
-                    cx = width / 2
-                    cy = bw + dot_r + usable_h * (1 - slider_value)
-                    ctx.arc(cx, cy, dot_r, 0, 2 * math.pi)
+                    dot_r = min(br, width / 2)
+                    usable_h = max(0, height - 2 * dot_r)
+                    ctx.arc(width / 2, dot_r + usable_h * (1 - slider_value), dot_r, 0, 2 * math.pi)
                     ctx.fill()
                 else:
                     by = (height - button_length) * (1 - slider_value)
@@ -253,7 +273,7 @@ if sys.platform.startswith("linux"):
                 ctx.set_source_rgba(*_get_rgba(master, "_border_color", default_color="transparent"))
                 _cairo_rounded_rect(ctx, 0, 0, width, height, r)
                 ctx.fill()
-            ctx.set_source_rgba(*_get_rgba(master, "_left_section_color"))
+            ctx.set_source_rgba(*_get_rgba(master, "_left_section_color" if hasattr(master, "_left_section_color") else "_fg_color"))
             ctx.new_sub_path()
             ctx.arc(bw + inner_r, height - bw - inner_r, inner_r, 0.5 * math.pi, math.pi)
             ctx.arc(bw + inner_r, bw + inner_r, inner_r, math.pi, 1.5 * math.pi)
@@ -261,7 +281,7 @@ if sys.platform.startswith("linux"):
             ctx.line_to(lw, height - bw)
             ctx.close_path()
             ctx.fill()
-            ctx.set_source_rgba(*_get_rgba(master, "_right_section_color"))
+            ctx.set_source_rgba(*_get_rgba(master, "_right_section_color" if hasattr(master, "_right_section_color") else "_button_color"))
             ctx.new_sub_path()
             ctx.move_to(lw, bw)
             ctx.arc(width - bw - inner_r, bw + inner_r, inner_r, -0.5 * math.pi, 0)
@@ -277,7 +297,28 @@ if sys.platform.startswith("linux"):
             self._canvas.create_image(0, 0, anchor="nw", image=photo, tags=("cairo_vertical_split", "inner_parts"))
         else:
             self._canvas.itemconfig("cairo_vertical_split", image=photo)
+        self._canvas.tag_lower("cairo_vertical_split")
+        if self._canvas.find_withtag("dropdown_arrow"):
+            self._canvas.tag_raise("dropdown_arrow")
         return False
+
+    _orig_draw_dropdown_arrow = DrawEngine.draw_dropdown_arrow
+    def _patched_draw_dropdown_arrow(self, x_position, y_position, size):
+        if self.preferred_drawing_method == "smooth_polygon_shapes":
+            # Treat like polygon_shapes — draw a line chevron
+            x_position, y_position, size = round(x_position), round(y_position), round(size)
+            requires_recoloring = False
+            if not self._canvas.find_withtag("dropdown_arrow"):
+                self._canvas.create_line(0, 0, 0, 0, tags="dropdown_arrow", width=round(size / 3), joinstyle=tkinter.ROUND, capstyle=tkinter.ROUND)
+                self._canvas.tag_raise("dropdown_arrow")
+                requires_recoloring = True
+            self._canvas.coords("dropdown_arrow",
+                                x_position - (size / 2), y_position - (size / 5),
+                                x_position,              y_position + (size / 5),
+                                x_position + (size / 2), y_position - (size / 5))
+            return requires_recoloring
+        return _orig_draw_dropdown_arrow(self, x_position, y_position, size)
+    DrawEngine.draw_dropdown_arrow = _patched_draw_dropdown_arrow
 
     DrawEngine._draw_smooth_polygon_shapes = _draw_smooth_polygon_shapes
     DrawEngine._draw_smooth_scrollbar = _draw_smooth_scrollbar
@@ -312,37 +353,94 @@ if sys.platform.startswith("linux"):
     DrawEngine.draw_rounded_scrollbar, DrawEngine.preferred_drawing_method = _patched_scrollbar, "smooth_polygon_shapes"
 
     # Patch CTkCanvas to intercept fill/outline recolors on our Cairo images.
-    # CTkButton._on_enter/leave calls itemconfig("inner_parts", fill=hover_color) to
-    # recolor the button background — for Tk polygon shapes that just repaints them,
-    # but our Cairo image ignores fill. We detect that case and re-render the Cairo
-    # image with the new color so hover effects work on the button background too.
+    # CTkButton._on_enter/leave calls itemconfig("inner_parts", fill=color).
+    # CTkSlider._on_enter/leave calls itemconfig("slider_parts", fill=color).
+    # Both do nothing on Cairo image items — we intercept and re-render instead,
+    # exactly mirroring what CTk does natively on non-Linux with polygon shapes.
+    # No _on_enter/_on_leave monkey-patching needed: CTkSlider's real methods
+    # already fire correctly via the canvas <Enter>/<Leave> bindings; we just
+    # need itemconfig("slider_parts") to actually DO something.
     _orig_canvas_itemconfigure = CTkCanvas.itemconfigure
+    _orig_canvas_itemconfig = CTkCanvas.itemconfig
     def _patched_canvas_itemconfigure(self, tagOrId, cnf=None, **kwargs):
+        if kwargs and "fill" in kwargs and tagOrId not in ("inner_parts", "slider_parts", "progress_parts", "border_parts"):
+            print(f"[ITEMCFG] tagOrId={tagOrId!r} fill={kwargs.get('fill')!r} de={getattr(self.master,'_draw_engine',None) is not None} master={type(self.master).__name__}", flush=True)
+        if tagOrId == "dropdown_arrow" and "fill" in kwargs:
+            print(f"[ARROW] fill={kwargs.get('fill')!r} text_color={getattr(self.master,'_text_color',None)!r} button_color={getattr(self.master,'_button_color',None)!r}", flush=True)
         if not kwargs: return _orig_canvas_itemconfigure(self, tagOrId, cnf, **kwargs)
         items = self.find_withtag(tagOrId)
         if not items: return _orig_canvas_itemconfigure(self, tagOrId, cnf, **kwargs)
 
         has_image = any(self.type(i) == "image" for i in items)
+
+        fill_color = kwargs.get("fill")
+        master = self.master
+        de = getattr(master, "_draw_engine", None)
+
+        # Handle vertical split recolor even though inner_parts_left/right are not image items
+        if fill_color and de is not None and tagOrId in ("inner_parts_left", "inner_parts_right"):
+            print(f"[OPTMENU] tagOrId={tagOrId!r} fill={fill_color!r} cairo_vs={bool(self.find_withtag('cairo_vertical_split'))} all_tags={set(t for i in self.find_all() for t in self.gettags(i))}", flush=True)
+            canvas_w = self.winfo_width()
+            canvas_h = self.winfo_height()
+            if canvas_w > 1 and canvas_h > 1 and self.find_withtag("cairo_vertical_split"):
+                s = master._apply_widget_scaling
+                if tagOrId == "inner_parts_left":
+                    master._left_section_color = fill_color
+                else:
+                    master._right_section_color = fill_color
+                if hasattr(master, "_left_section_color") and hasattr(master, "_right_section_color"):
+                    _lsw = s(master._current_width - master._current_height)
+                    print(f"[OPTMENU] rendering lsw={_lsw} left={master._left_section_color!r} right={master._right_section_color!r}", flush=True)
+                    de._draw_smooth_vertical_split(canvas_w, canvas_h,
+                        s(getattr(master, "_corner_radius", 0)),
+                        s(getattr(master, "_border_width", 0)),
+                        _lsw)
+            return _orig_canvas_itemconfigure(self, tagOrId, cnf, **kwargs)
+
         if not has_image: return _orig_canvas_itemconfigure(self, tagOrId, cnf, **kwargs)
 
-        # If a fill color is being applied to a tag that includes our Cairo image,
-        # re-render it with that color standing in for _fg_color.
-        fill_color = kwargs.get("fill")
-        if fill_color and self.find_withtag("cairo_main") and tagOrId == "inner_parts":
-            master = self.master
-            de = getattr(master, "_draw_engine", None)
-            if de is not None:
-                orig_fg = master._fg_color
-                master._fg_color = fill_color
-                try:
-                    canvas_w = self.winfo_width()
-                    canvas_h = self.winfo_height()
-                    if canvas_w > 1 and canvas_h > 1:
+        if fill_color and de is not None:
+            canvas_w = self.winfo_width()
+            canvas_h = self.winfo_height()
+            if canvas_w > 1 and canvas_h > 1:
+                s = master._apply_widget_scaling
+
+                # Button background hover: "inner_parts" → re-render polygon shape
+                if tagOrId == "inner_parts" and self.find_withtag("cairo_main"):
+                    orig_fg = master._fg_color
+                    master._fg_color = fill_color
+                    try:
                         de._draw_smooth_polygon_shapes(canvas_w, canvas_h,
-                            getattr(master, "_corner_radius", 0),
-                            getattr(master, "_border_width", 0))
-                finally:
-                    master._fg_color = orig_fg
+                            s(getattr(master, "_corner_radius", 0)),
+                            s(getattr(master, "_border_width", 0)))
+                    finally:
+                        master._fg_color = orig_fg
+
+                # OptionMenu/ComboBox left+right sections → re-render vertical split
+                # CTkOptionMenu calls itemconfig("inner_parts_left", fill=fg_color)
+                # and itemconfig("inner_parts_right", fill=button_color) separately.
+                # We intercept both and re-render with the correct color on each side.
+                # Slider hover: "slider_parts" → redraw the whole slider image with
+                # the hover/resting color. Apply the same pre-processing clamps that
+                # draw_rounded_slider_with_border_and_button does before we get called,
+                # since we are bypassing that entry point here.
+                elif tagOrId == "slider_parts" and self.find_withtag("cairo_slider"):
+                    if hasattr(master, "_check_state"):
+                        _val = 1 if master._check_state else 0
+                        _ori = "w"
+                    else:
+                        _val = getattr(master, "_value", 0)
+                        _ori = getattr(master, "_orientation", "horizontal")
+                    _is_hover_on = (fill_color == master._apply_appearance_mode(getattr(master, "_button_hover_color", fill_color)))
+                    _label = "HOVER ON" if _is_hover_on else "HOVER OFF"
+                    de._draw_smooth_slider(
+                        canvas_w, canvas_h,
+                        s(getattr(master, "_corner_radius", 0)),
+                        s(getattr(master, "_border_width", 0)),
+                        s(getattr(master, "_button_length", 0)),
+                        s(getattr(master, "_button_corner_radius", 0)),
+                        _val, _ori,
+                        button_color=fill_color)
 
         for item in items:
             item_kwargs = kwargs.copy()
@@ -350,7 +448,61 @@ if sys.platform.startswith("linux"):
                 item_kwargs.pop("fill", None)
                 item_kwargs.pop("outline", None)
             _orig_canvas_itemconfigure(self, item, cnf, **item_kwargs)
-    CTkCanvas.itemconfigure = CTkCanvas.itemconfig = _patched_canvas_itemconfigure
+    CTkCanvas.itemconfigure = _patched_canvas_itemconfigure
+    def _patched_canvas_itemconfig(self, tag_or_id, *args, **kwargs):
+        return _patched_canvas_itemconfigure(self, tag_or_id, None, **kwargs)
+    CTkCanvas.itemconfig = _patched_canvas_itemconfig
+
+    # CTkButton and CTkSlider _set_cursor() only handles darwin and win32 —
+    # Linux falls through without setting any cursor. Patch both to add Linux.
+    from customtkinter.windows.widgets import CTkButton as _CTkButton
+    from customtkinter.windows.widgets import CTkSlider as _CTkSlider
+
+    _orig_btn_cursor = _CTkButton._set_cursor
+    def _patched_btn_cursor(self):
+        _orig_btn_cursor(self)
+        if sys.platform.startswith("linux") and self._cursor_manipulation_enabled:
+            if self._state == tkinter.DISABLED:
+                self.configure(cursor="arrow")
+            elif self._command is not None:
+                self.configure(cursor="hand2")
+    _CTkButton._set_cursor = _patched_btn_cursor
+
+    _orig_sld_cursor = _CTkSlider._set_cursor
+    def _patched_sld_cursor(self):
+        _orig_sld_cursor(self)
+        if sys.platform.startswith("linux") and self._cursor_manipulation_enabled:
+            if self._state == "normal":
+                self.configure(cursor="hand2")
+            else:
+                self.configure(cursor="arrow")
+    _CTkSlider._set_cursor = _patched_sld_cursor
+
+    # Patch _on_enter/_on_leave to set hand2 cursor on Linux.
+    # These fire on every hover event so the cursor is always correct.
+    _orig_sld_enter = _CTkSlider._on_enter
+    def _patched_sld_enter(self, event=0):
+        _orig_sld_enter(self, event)
+        if sys.platform.startswith("linux") and self._state == "normal":
+            self.configure(cursor="hand2")
+    _CTkSlider._on_enter = _patched_sld_enter
+
+    _orig_sld_leave = _CTkSlider._on_leave
+    def _patched_sld_leave(self, event=0):
+        _orig_sld_leave(self, event)
+        if sys.platform.startswith("linux"):
+            self.configure(cursor="arrow")
+    _CTkSlider._on_leave = _patched_sld_leave
+
+    from customtkinter.windows.widgets import CTkSwitch as _CTkSwitch
+
+    _orig_sw_init = _CTkSwitch.__init__
+    def _patched_sw_init(self, *args, **kwargs):
+        _orig_sw_init(self, *args, **kwargs)
+        if sys.platform.startswith("linux"):
+            self._canvas.bind("<Enter>", lambda e, w=self: w._canvas.tk.call(w._canvas._w, "configure", "-cursor", "hand2"), add=True)
+            self._canvas.bind("<Leave>", lambda e, w=self: w._canvas.tk.call(w._canvas._w, "configure", "-cursor", "arrow"), add=True)
+    _CTkSwitch.__init__ = _patched_sw_init
 
 
 # Patch customtkinter bug where scroll events pass a string instead of a widget
