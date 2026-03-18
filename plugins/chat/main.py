@@ -139,6 +139,8 @@ class Plugin(BasePlugin):
         def on_mousewheel(event):
             if sys.platform == "darwin":
                 _add_velocity(-1 * event.delta * 0.4)
+            elif sys.platform == "win32":
+                _add_velocity(-1 * (event.delta / 120) * 4.0)
             else:
                 _add_velocity(-1 * (event.delta / 120) * 0.4)
             return "break"
@@ -561,9 +563,10 @@ class Plugin(BasePlugin):
             text_color=fg_color,
             corner_radius=0,
             border_width=0,
+            activate_scrollbars=True,
         )
         self.chat_box.grid(row=0, column=0, padx=0, pady=0, sticky="nsew")
-        self.chat_box._textbox.configure(padx=16)
+        self.chat_box._textbox.configure(padx=8)
 
         # Enable mouse wheel scrolling
         self._bind_mousewheel(self.chat_box._textbox)
