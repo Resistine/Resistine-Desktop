@@ -807,14 +807,22 @@ class AppUI(customtkinter.CTk):
 
                 # Scroll by a fraction of the canvas height for smoothness
                 cur_top, _ = canvas.yview()
-                # 0.06 is a "feel" constant (smaller = smoother/slower)
-                new_top = cur_top - (v * 0.06)
+                # 0.01125 is a "feel" constant (smaller = smoother/slower)
+                new_top = cur_top - (v * 0.01125)
                 new_top = max(0.0, min(1.0, new_top))
                 canvas.yview_moveto(new_top)
 
-                # Decay velocity (inertia)
-                state["vel"] *= 0.82
-                state["job"] = canvas.after(12, _step)
+                # Check if scroll position actually changed after moveto;
+                # if not, we've hit a boundary — kill velocity immediately
+                after_top, _ = canvas.yview()
+                if abs(after_top - cur_top) < 0.0001:
+                    state["vel"] = 0.0
+                    state["job"] = None
+                    return
+
+                # Decay velocity (gentle for smooth coast-to-stop)
+                state["vel"] *= 0.88
+                state["job"] = canvas.after(8, _step)
             except Exception:
                 state["job"] = None
 
@@ -836,13 +844,13 @@ class AppUI(customtkinter.CTk):
             return "break"
 
         def _on_linux_scroll_up(_e):
-            state["vel"] = max(-8.0, min(8.0, state["vel"] + 1.0))
+            state["vel"] = max(-8.0, min(8.0, state["vel"] + 0.125))
             if state["job"] is None:
                 state["job"] = canvas.after(1, _step)
             return "break"
 
         def _on_linux_scroll_down(_e):
-            state["vel"] = max(-8.0, min(8.0, state["vel"] - 1.0))
+            state["vel"] = max(-8.0, min(8.0, state["vel"] - 0.125))
             if state["job"] is None:
                 state["job"] = canvas.after(1, _step)
             return "break"
