@@ -643,6 +643,7 @@ class App(AppUI):
             self.debug_window.create_debug_window()
 
         self.title("Resistine")
+        self._set_app_icon()
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         window_width = int(screen_width * 0.7)
@@ -689,14 +690,76 @@ class App(AppUI):
 
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
 
+    def _set_app_icon(self):
+        """Set the window and taskbar icon on Linux and Windows.
+
+        Looks for the icon at resources/icons/app_icon.png (preferred) with
+        fallback to .ico on Windows. Handles all required size variants and
+        gracefully no-ops if the file is missing or PIL is unavailable.
+        """
+        icon_path_png = resource_path("resources/icons/app_icon.png")
+        icon_path_ico = resource_path("resources/icons/app_icon.ico")
+
+        try:
+            if sys.platform.startswith("linux"):
+                # Linux: wm_iconphoto requires Tk PhotoImage objects.
+                # Provide multiple sizes so the WM can pick the best fit for
+                # titlebar, taskbar, Alt-Tab switcher, etc.
+                from PIL import Image, ImageTk
+                img = Image.open(icon_path_png)
+                sizes = [16, 24, 32, 48, 64, 128, 256]
+                photos = []
+                for size in sizes:
+                    resized = img.resize((size, size), Image.LANCZOS)
+                    photos.append(ImageTk.PhotoImage(resized))
+                # Keep references alive — Tk GC will drop them otherwise
+                self._icon_photos = photos
+                # True as first arg makes this the default for all future
+                # toplevels too (dialogs, popups, etc.)
+                self.wm_iconphoto(True, *photos)
+
+            elif sys.platform.startswith("win"):
+                # Windows: iconbitmap() wants a .ico which supports multiple
+                # embedded sizes natively. Fall back to PNG→ICO conversion if
+                # only a PNG is available.
+                import os
+                if os.path.exists(icon_path_ico):
+                    self.iconbitmap(icon_path_ico)
+                else:
+                    # Convert PNG to a temp ICO with standard Windows sizes
+                    from PIL import Image
+                    import tempfile
+                    img = Image.open(icon_path_png)
+                    sizes = [(16, 16), (24, 24), (32, 32), (48, 48),
+                             (64, 64), (128, 128), (256, 256)]
+                    imgs = [img.resize(s, Image.LANCZOS) for s in sizes]
+                    tmp = tempfile.NamedTemporaryFile(suffix=".ico", delete=False)
+                    tmp.close()
+                    imgs[0].save(tmp.name, format="ICO",
+                                 sizes=[(i.width, i.height) for i in imgs],
+                                 append_images=imgs[1:])
+                    self._icon_tmp = tmp.name  # keep ref so we can clean up
+                    self.iconbitmap(tmp.name)
+
+        except FileNotFoundError:
+            logger.warning("App icon not found — skipping icon setup.")
+        except Exception as e:
+            logger.warning(f"Failed to set app icon: {e}")
+
     def _on_closing(self):
         """Clean up resources before closing."""
         try:
             from utils import updates
-
             updates.shutdown()
         except Exception:
             pass
+        # Clean up temp ICO if we created one
+        if hasattr(self, "_icon_tmp"):
+            try:
+                import os
+                os.unlink(self._icon_tmp)
+            except Exception:
+                pass
         self.destroy()
 
 
