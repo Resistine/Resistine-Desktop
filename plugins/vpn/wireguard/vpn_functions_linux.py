@@ -317,10 +317,15 @@ def check_service_status(interface_name, test_ip):
     :return: "Running" if the service is up, "Stopped" otherwise.
     """
     try:
-        # Check if interface exists
-        result = run_privileged_command(["wg", "show", interface_name])
+        # Check if interface exists and is UP — no sudo needed
+        result = subprocess.run(
+            ["ip", "link", "show", interface_name],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
 
-        if not result or result.returncode != 0:
+        if not result or result.returncode != 0 or "UP" not in result.stdout:
             return "Stopped"
 
         # Optional: Check connectivity
