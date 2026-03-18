@@ -316,17 +316,48 @@ class MarkdownBubble(customtkinter.CTkFrame):
         parent = self.master
         chat_tw = parent._textbox if hasattr(parent, "_textbox") else parent
 
+        # Smooth inertia scrolling for chat bubbles
+        bstate = {"vel": 0.0, "job": None}
+
+        def _bstep():
+            try:
+                if not chat_tw.winfo_exists():
+                    bstate["job"] = None
+                    return
+                v = bstate["vel"]
+                if abs(v) < 0.05:
+                    bstate["vel"] = 0.0
+                    bstate["job"] = None
+                    return
+                before = chat_tw.yview()
+                chat_tw.yview_scroll(int(round(v)) or (1 if v > 0 else -1), "pixels")
+                after = chat_tw.yview()
+                if abs(after[0] - before[0]) < 0.0001:
+                    bstate["vel"] = 0.0
+                    bstate["job"] = None
+                    return
+                bstate["vel"] *= 0.88
+                bstate["job"] = chat_tw.after(8, _bstep)
+            except Exception:
+                bstate["job"] = None
+
+        def _badd(delta):
+            bstate["vel"] += delta
+            bstate["vel"] = max(-20.0, min(20.0, bstate["vel"]))
+            if bstate["job"] is None:
+                bstate["job"] = chat_tw.after(1, _bstep)
+
         def on_wheel(event):
             if sys.platform == "darwin":
-                chat_tw.yview_scroll(int(-1 * event.delta), "units")
+                _badd(-1 * event.delta * 0.4)
             else:
-                chat_tw.yview_scroll(int(-1 * (event.delta / 120)), "units")
+                _badd(-1 * (event.delta / 120) * 0.4)
             return "break"
 
         widget.bind("<MouseWheel>", on_wheel, add="+")
         if sys.platform != "darwin":
-            widget.bind("<Button-4>", lambda e: chat_tw.yview_scroll(-1, "units") or "break", add="+")
-            widget.bind("<Button-5>", lambda e: chat_tw.yview_scroll(1, "units") or "break", add="+")
+            widget.bind("<Button-4>", lambda e: (_badd(-0.5), "break")[-1], add="+")
+            widget.bind("<Button-5>", lambda e: (_badd(0.5), "break")[-1], add="+")
 
     def _render_code_block(self, tw, code_lines, language=None):
         """Render a code block with copy button and optional syntax highlighting."""
@@ -399,8 +430,11 @@ class MarkdownBubble(customtkinter.CTkFrame):
         line_count = len(code_lines)
         widget_height = min(25, max(3, line_count + 1))
         code_widget.configure(state="disabled", height=widget_height)
-        # Redirect scroll so the outer chat container scrolls, not the code block
-        self._bind_scroll_redirect(code_widget)
+        # Redirect scroll from all code block sub-widgets to the chat container
+        for w in (code_frame, header_frame, code_widget):
+            self._bind_scroll_redirect(w)
+        for child in header_frame.winfo_children():
+            self._bind_scroll_redirect(child)
 
         # Embed the frame
         tw.window_create("end", window=code_frame, padx=0, pady=10, stretch=1)
@@ -526,6 +560,13 @@ class MarkdownBubble(customtkinter.CTkFrame):
                 cell_label.pack(padx=14, pady=8, fill="x")
 
         self._tables.append((table_frame, num_cols))
+
+        # Redirect scroll events from all table sub-widgets to the chat container
+        self._bind_scroll_redirect(table_frame)
+        for child in table_frame.winfo_children():
+            self._bind_scroll_redirect(child)
+            for grandchild in child.winfo_children():
+                self._bind_scroll_redirect(grandchild)
 
         tw.insert("end", "\n")
         tw.window_create("end", window=table_frame, padx=0, pady=8, stretch=1)

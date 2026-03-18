@@ -105,20 +105,48 @@ class Plugin(BasePlugin):
         return fallback_dark if is_dark else fallback_light
 
     def _bind_mousewheel(self, widget):
-        """Bind mouse wheel scrolling to a text widget."""
+        """Bind mouse wheel scrolling to a text widget with smooth inertia."""
+        state = {"vel": 0.0, "job": None}
+
+        def _step():
+            try:
+                if not widget.winfo_exists():
+                    state["job"] = None
+                    return
+                v = state["vel"]
+                if abs(v) < 0.05:
+                    state["vel"] = 0.0
+                    state["job"] = None
+                    return
+                before = widget.yview()
+                widget.yview_scroll(int(round(v)) or (1 if v > 0 else -1), "pixels")
+                after = widget.yview()
+                if abs(after[0] - before[0]) < 0.0001:
+                    state["vel"] = 0.0
+                    state["job"] = None
+                    return
+                state["vel"] *= 0.88
+                state["job"] = widget.after(8, _step)
+            except Exception:
+                state["job"] = None
+
+        def _add_velocity(delta):
+            state["vel"] += delta
+            state["vel"] = max(-20.0, min(20.0, state["vel"]))
+            if state["job"] is None:
+                state["job"] = widget.after(1, _step)
+
         def on_mousewheel(event):
             if sys.platform == "darwin":
-                widget.yview_scroll(int(-1 * event.delta), "units")
+                _add_velocity(-1 * event.delta * 0.4)
             else:
-                widget.yview_scroll(int(-1 * (event.delta / 120)), "units")
+                _add_velocity(-1 * (event.delta / 120) * 0.4)
             return "break"
 
-        if sys.platform == "darwin":
-            widget.bind("<MouseWheel>", on_mousewheel, add="+")
-        else:
-            widget.bind("<MouseWheel>", on_mousewheel, add="+")
-            widget.bind("<Button-4>", lambda e: widget.yview_scroll(-1, "units"), add="+")
-            widget.bind("<Button-5>", lambda e: widget.yview_scroll(1, "units"), add="+")
+        widget.bind("<MouseWheel>", on_mousewheel, add="+")
+        if sys.platform != "darwin":
+            widget.bind("<Button-4>", lambda e: (_add_velocity(-0.5), "break")[-1], add="+")
+            widget.bind("<Button-5>", lambda e: (_add_velocity(0.5), "break")[-1], add="+")
 
         # Prevent horizontal scrolling
         widget.configure(xscrollcommand=lambda *args: None)
