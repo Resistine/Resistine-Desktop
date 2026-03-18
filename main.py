@@ -266,7 +266,6 @@ if sys.platform.startswith("linux"):
         def draw(ctx, w, h):
             r, bw, lw = (corner_radius or 0), (border_width or 0), (left_section_width or 0)
             inner_r = max(0, r - bw)
-            # Fill corners with bg_color so rounded corners don't composite against black
             ctx.set_source_rgba(*_get_rgba(master, "_bg_color"))
             ctx.paint()
             if bw > 0:
@@ -289,34 +288,39 @@ if sys.platform.startswith("linux"):
             ctx.line_to(lw, height - bw)
             ctx.close_path()
             ctx.fill()
+            # Draw chevron directly into this image — same surface, perfect AA, no transparency issues
+            arrow_attr = "_arrow_color" if hasattr(master, "_arrow_color") else ("_text_color" if hasattr(master, "_text_color") else None)
+            if arrow_attr:
+                ctx.set_source_rgba(*_get_rgba(master, arrow_attr))
+                cx = width - (height / 2)
+                cy = height / 2
+                sz = height / 3
+                lw_arrow = max(1.5, sz / 3)
+                ctx.set_line_width(lw_arrow)
+                ctx.set_line_cap(cairo.LINE_CAP_ROUND)
+                ctx.set_line_join(cairo.LINE_JOIN_ROUND)
+                ctx.move_to(cx - sz / 2, cy - sz / 5)
+                ctx.line_to(cx,          cy + sz / 5)
+                ctx.line_to(cx + sz / 2, cy - sz / 5)
+                ctx.stroke()
 
         photo = _render_cairo_to_tk(self, width, height, draw)
         self._cairo_photos["vertical_split"] = photo
-        
         if not self._canvas.find_withtag("cairo_vertical_split"):
             self._canvas.create_image(0, 0, anchor="nw", image=photo, tags=("cairo_vertical_split", "inner_parts"))
         else:
             self._canvas.itemconfig("cairo_vertical_split", image=photo)
         self._canvas.tag_lower("cairo_vertical_split")
-        if self._canvas.find_withtag("dropdown_arrow"):
-            self._canvas.tag_raise("dropdown_arrow")
         return False
+
+
+
+
 
     _orig_draw_dropdown_arrow = DrawEngine.draw_dropdown_arrow
     def _patched_draw_dropdown_arrow(self, x_position, y_position, size):
         if self.preferred_drawing_method == "smooth_polygon_shapes":
-            # Treat like polygon_shapes — draw a line chevron
-            x_position, y_position, size = round(x_position), round(y_position), round(size)
-            requires_recoloring = False
-            if not self._canvas.find_withtag("dropdown_arrow"):
-                self._canvas.create_line(0, 0, 0, 0, tags="dropdown_arrow", width=round(size / 3), joinstyle=tkinter.ROUND, capstyle=tkinter.ROUND)
-                self._canvas.tag_raise("dropdown_arrow")
-                requires_recoloring = True
-            self._canvas.coords("dropdown_arrow",
-                                x_position - (size / 2), y_position - (size / 5),
-                                x_position,              y_position + (size / 5),
-                                x_position + (size / 2), y_position - (size / 5))
-            return requires_recoloring
+            return False  # chevron is baked into the vertical split Cairo image
         return _orig_draw_dropdown_arrow(self, x_position, y_position, size)
     DrawEngine.draw_dropdown_arrow = _patched_draw_dropdown_arrow
 
@@ -363,39 +367,36 @@ if sys.platform.startswith("linux"):
     _orig_canvas_itemconfigure = CTkCanvas.itemconfigure
     _orig_canvas_itemconfig = CTkCanvas.itemconfig
     def _patched_canvas_itemconfigure(self, tagOrId, cnf=None, **kwargs):
-        if kwargs and "fill" in kwargs and tagOrId not in ("inner_parts", "slider_parts", "progress_parts", "border_parts"):
-            print(f"[ITEMCFG] tagOrId={tagOrId!r} fill={kwargs.get('fill')!r} de={getattr(self.master,'_draw_engine',None) is not None} master={type(self.master).__name__}", flush=True)
-        if tagOrId == "dropdown_arrow" and "fill" in kwargs:
-            print(f"[ARROW] fill={kwargs.get('fill')!r} text_color={getattr(self.master,'_text_color',None)!r} button_color={getattr(self.master,'_button_color',None)!r}", flush=True)
         if not kwargs: return _orig_canvas_itemconfigure(self, tagOrId, cnf, **kwargs)
-        items = self.find_withtag(tagOrId)
-        if not items: return _orig_canvas_itemconfigure(self, tagOrId, cnf, **kwargs)
-
-        has_image = any(self.type(i) == "image" for i in items)
 
         fill_color = kwargs.get("fill")
         master = self.master
         de = getattr(master, "_draw_engine", None)
 
-        # Handle vertical split recolor even though inner_parts_left/right are not image items
-        if fill_color and de is not None and tagOrId in ("inner_parts_left", "inner_parts_right"):
-            print(f"[OPTMENU] tagOrId={tagOrId!r} fill={fill_color!r} cairo_vs={bool(self.find_withtag('cairo_vertical_split'))} all_tags={set(t for i in self.find_all() for t in self.gettags(i))}", flush=True)
+        # Must be before find_withtag/has_image checks — Cairo replaces native polygon
+        # items so find_withtag("inner_parts_right") returns empty.
+        if fill_color and de is not None and tagOrId in ("inner_parts_left", "inner_parts_right", "dropdown_arrow") and self.find_withtag("cairo_vertical_split"):
             canvas_w = self.winfo_width()
             canvas_h = self.winfo_height()
-            if canvas_w > 1 and canvas_h > 1 and self.find_withtag("cairo_vertical_split"):
+            if canvas_w > 1 and canvas_h > 1:
                 s = master._apply_widget_scaling
                 if tagOrId == "inner_parts_left":
                     master._left_section_color = fill_color
-                else:
+                elif tagOrId == "inner_parts_right":
                     master._right_section_color = fill_color
-                if hasattr(master, "_left_section_color") and hasattr(master, "_right_section_color"):
-                    _lsw = s(master._current_width - master._current_height)
-                    print(f"[OPTMENU] rendering lsw={_lsw} left={master._left_section_color!r} right={master._right_section_color!r}", flush=True)
-                    de._draw_smooth_vertical_split(canvas_w, canvas_h,
-                        s(getattr(master, "_corner_radius", 0)),
-                        s(getattr(master, "_border_width", 0)),
-                        _lsw)
+                else:
+                    master._arrow_color = fill_color
+                _lsw = s(master._current_width - master._current_height)
+                de._draw_smooth_vertical_split(canvas_w, canvas_h,
+                    s(getattr(master, "_corner_radius", 0)),
+                    s(getattr(master, "_border_width", 0)),
+                    _lsw)
             return _orig_canvas_itemconfigure(self, tagOrId, cnf, **kwargs)
+
+        items = self.find_withtag(tagOrId)
+        if not items: return _orig_canvas_itemconfigure(self, tagOrId, cnf, **kwargs)
+
+        has_image = any(self.type(i) == "image" for i in items)
 
         if not has_image: return _orig_canvas_itemconfigure(self, tagOrId, cnf, **kwargs)
 
@@ -494,7 +495,26 @@ if sys.platform.startswith("linux"):
             self.configure(cursor="arrow")
     _CTkSlider._on_leave = _patched_sld_leave
 
+    from customtkinter.windows.widgets import CTkOptionMenu as _CTkOptionMenu
     from customtkinter.windows.widgets import CTkSwitch as _CTkSwitch
+
+    _orig_om_enter = _CTkOptionMenu._on_enter
+    def _patched_om_enter(self, event=0):
+        _orig_om_enter(self, event)
+        if sys.platform.startswith("linux") and self._state == "normal":
+            self._canvas.tk.call(self._canvas._w, "configure", "-cursor", "hand2")
+            if self._text_label is not None:
+                self._text_label.tk.call(self._text_label._w, "configure", "-cursor", "hand2")
+    _CTkOptionMenu._on_enter = _patched_om_enter
+
+    _orig_om_leave = _CTkOptionMenu._on_leave
+    def _patched_om_leave(self, event=0):
+        _orig_om_leave(self, event)
+        if sys.platform.startswith("linux"):
+            self._canvas.tk.call(self._canvas._w, "configure", "-cursor", "arrow")
+            if self._text_label is not None:
+                self._text_label.tk.call(self._text_label._w, "configure", "-cursor", "arrow")
+    _CTkOptionMenu._on_leave = _patched_om_leave
 
     _orig_sw_init = _CTkSwitch.__init__
     def _patched_sw_init(self, *args, **kwargs):
