@@ -64,28 +64,33 @@ class MarkdownBubble(customtkinter.CTkFrame):
         is_dark = appearance_mode == "Dark"
 
         # --- Color palette — transparent bg like ChatGPT / Claude ---
+        # Colors aligned with plugins/help/styles_dark.css & styles_light.css
         if is_dark:
             bubble_bg    = "transparent"
-            text_color   = "#E8E8E8"
+            text_color   = "#e0e0e0"
             heading_clr  = "#FFFFFF"
-            code_bg      = "#1A1A1C"
-            code_fg      = "#D4D4D8"
+            bold_clr     = "#FFFFFF"      # strong { color: #ffffff }
+            code_bg      = "#2A2A2C"      # pre/code bg
+            code_fg      = "#d4d4d4"      # pre/code color
             quote_clr    = "#9CA3AF"
             link_clr     = "#60A5FA"
             table_header_bg = "#252528"
             table_row_bg    = "#1E1E20"
             table_border    = "#3A3A3C"
+            hr_clr          = "#2A2A2A"   # hr { border-top color }
         else:
             bubble_bg    = "transparent"
-            text_color   = "#1F2937"
-            heading_clr  = "#111827"
-            code_bg      = "#F0F0F2"
-            code_fg      = "#1F2937"
+            text_color   = "#1a1a1a"
+            heading_clr  = "#111111"
+            bold_clr     = "#000000"      # strong { color: #000000 }
+            code_bg      = "#F5F5F7"      # pre/code bg
+            code_fg      = "#333333"      # pre/code color
             quote_clr    = "#6B7280"
             link_clr     = "#0D5394"
             table_header_bg = "#E8E8EA"
             table_row_bg    = "#F5F5F7"
             table_border    = "#D4D4D8"
+            hr_clr          = "#E5E7EB"   # hr { border-top color }
 
         super().__init__(master, fg_color="transparent", corner_radius=0, **kwargs)
 
@@ -97,8 +102,9 @@ class MarkdownBubble(customtkinter.CTkFrame):
 
         self._tables = []
         try:
-            self._build_native(bubble_bg, text_color, heading_clr,
-                               code_bg, code_fg, quote_clr, link_clr, is_dark)
+            self._build_native(bubble_bg, text_color, heading_clr, bold_clr,
+                               code_bg, code_fg, quote_clr, link_clr, is_dark,
+                               hr_clr)
         except Exception as e:
             logger.warning(f"MarkdownBubble native render failed, using fallback: {e}")
             self._render_fallback()
@@ -107,8 +113,9 @@ class MarkdownBubble(customtkinter.CTkFrame):
     # Native renderer
     # ------------------------------------------------------------------
 
-    def _build_native(self, bubble_bg, text_color, heading_clr,
-                      code_bg, code_fg, quote_clr, link_clr, is_dark):
+    def _build_native(self, bubble_bg, text_color, heading_clr, bold_clr,
+                      code_bg, code_fg, quote_clr, link_clr, is_dark,
+                      hr_clr="#2A2A2A"):
         """Build and populate the native text-based renderer."""
 
         self.text_widget = customtkinter.CTkTextbox(
@@ -128,6 +135,7 @@ class MarkdownBubble(customtkinter.CTkFrame):
             'bubble_bg': bubble_bg,
             'text_color': text_color,
             'heading_clr': heading_clr,
+            'bold_clr': bold_clr,
             'code_bg': code_bg,
             'code_fg': code_fg,
             'quote_clr': quote_clr,
@@ -136,6 +144,7 @@ class MarkdownBubble(customtkinter.CTkFrame):
             'table_header_bg': self._table_header_bg,
             'table_row_bg': self._table_row_bg,
             'table_border': self._table_border,
+            'hr_clr': hr_clr,
         }
 
         tw = self.text_widget._textbox
@@ -151,7 +160,8 @@ class MarkdownBubble(customtkinter.CTkFrame):
         # --- Text tags ---
         mono = ("SF Mono", 13) if sys.platform == "darwin" else ("Consolas", 13)
 
-        tw.tag_configure("bold", font=("Inter", 15, "bold"))
+        tw.tag_configure("bold", font=("Inter", 15, "bold"),
+                         foreground=bold_clr)
         tw.tag_configure("italic", font=("Inter", 15, "italic"))
         tw.tag_configure("code_inline",
                          font=mono, foreground=code_fg, background=code_bg,
@@ -180,7 +190,7 @@ class MarkdownBubble(customtkinter.CTkFrame):
         tw.tag_configure("blockquote", lmargin1=16, lmargin2=16,
                          foreground=quote_clr, spacing1=5, spacing3=5,
                          borderwidth=0, relief="flat")
-        tw.tag_configure("link", foreground=link_clr, underline=True)
+        tw.tag_configure("link", foreground=link_clr, underline=False)
         tw.tag_configure("table_header", font=("Inter", 14, "bold"),
                          foreground=heading_clr)
         tw.tag_configure("table_cell", font=mono, lmargin1=12, lmargin2=12)
@@ -238,7 +248,10 @@ class MarkdownBubble(customtkinter.CTkFrame):
                     in_code_block = False
                     if not first:
                         tw.insert("end", "\n")
-                    self._render_code_block(tw, code_lines, code_language)
+                    # Suppress copy button if code block contains box-drawing chars
+                    has_box = any(self._is_box_drawing(cl) for cl in code_lines)
+                    self._render_code_block(tw, code_lines, code_language,
+                                            show_copy=not has_box)
                     tw.insert("end", "\n")
                     code_lines = []
                     code_language = None
@@ -259,7 +272,7 @@ class MarkdownBubble(customtkinter.CTkFrame):
 
             stripped = line.strip()
 
-            # --- Box-drawing / ASCII art → auto code block ---
+            # --- Box-drawing / ASCII art → auto code block (no copy button) ---
             if self._is_box_drawing(stripped):
                 box_lines = []
                 while i < len(lines) and self._is_box_drawing(lines[i].strip()):
@@ -268,7 +281,7 @@ class MarkdownBubble(customtkinter.CTkFrame):
                 if not first:
                     tw.insert("end", "\n")
                 first = False
-                self._render_code_block(tw, box_lines, None)
+                self._render_code_block(tw, box_lines, None, show_copy=False)
                 tw.insert("end", "\n")
                 continue
 
@@ -380,6 +393,18 @@ class MarkdownBubble(customtkinter.CTkFrame):
             self._render_code_block(tw, code_lines, code_language)
             tw.insert("end", "\n")
 
+    @staticmethod
+    def _strip_inline_md(text):
+        """Strip inline markdown markers, returning plain text for table cells."""
+        # **bold** → bold, *italic* → italic, ~~strike~~ → strike,
+        # `code` → code, [text](url) → text
+        text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+        text = re.sub(r'~~(.+?)~~', r'\1', text)
+        text = re.sub(r'\*(.+?)\*', r'\1', text)
+        text = re.sub(r'`(.+?)`', r'\1', text)
+        text = re.sub(r'\[(.+?)\]\([^)]+\)', r'\1', text)
+        return text
+
     # Box-drawing characters that indicate ASCII art diagrams
     _BOX_CHARS = set("┌┐└┘├┤┬┴┼─│╭╮╯╰╱╲▲▼◄►═║╔╗╚╝╠╣╦╩╬")
 
@@ -395,7 +420,7 @@ class MarkdownBubble(customtkinter.CTkFrame):
         """Render a horizontal rule as an embedded thin frame."""
         hr = customtkinter.CTkFrame(
             tw,
-            fg_color=self._colors.get('table_border', '#3A3A3C'),
+            fg_color=self._colors.get('hr_clr', '#3A3A3C'),
             height=1,
             corner_radius=0,
         )
@@ -471,8 +496,8 @@ class MarkdownBubble(customtkinter.CTkFrame):
             widget.bind("<Button-4>", lambda e: (_badd(-CHAT_SCROLL_DELTA), "break")[-1], add="+")
             widget.bind("<Button-5>", lambda e: (_badd(CHAT_SCROLL_DELTA), "break")[-1], add="+")
 
-    def _render_code_block(self, tw, code_lines, language=None):
-        """Render a code block with copy button and optional syntax highlighting."""
+    def _render_code_block(self, tw, code_lines, language=None, show_copy=True):
+        """Render a code block with optional copy button and syntax highlighting."""
         if not code_lines:
             return
 
@@ -489,42 +514,43 @@ class MarkdownBubble(customtkinter.CTkFrame):
         )
 
         # Header with language label and copy button
-        header_frame = customtkinter.CTkFrame(
-            code_frame,
-            fg_color="transparent"
-        )
-        header_frame.pack(fill="x", padx=14, pady=(10, 0))
-
-        # Language label
-        if language:
-            lang_label = customtkinter.CTkLabel(
-                header_frame,
-                text=language.lower(),
-                font=customtkinter.CTkFont(family="Inter", size=11, weight="bold"),
-                text_color=self._colors['quote_clr'],
-                anchor="w"
+        header_frame = None
+        if show_copy or language:
+            header_frame = customtkinter.CTkFrame(
+                code_frame,
+                fg_color="transparent"
             )
-            lang_label.pack(side="left")
+            header_frame.pack(fill="x", padx=14, pady=(10, 0))
 
-        # Copy button
-        copy_btn = customtkinter.CTkButton(
-            header_frame,
-            text="Copy",
-            width=70,
-            height=26,
-            font=customtkinter.CTkFont(family="Inter", size=11),
-            fg_color="#0D5394" if not self._colors['is_dark'] else "#1565B0",
-            hover_color="#1565B0" if not self._colors['is_dark'] else "#0D5394",
-            text_color="#FFFFFF",
-            corner_radius=6,
-            command=lambda: self._copy_to_clipboard(code_text, copy_btn)
-        )
-        copy_btn.pack(side="right")
+            if language:
+                lang_label = customtkinter.CTkLabel(
+                    header_frame,
+                    text=language.lower(),
+                    font=customtkinter.CTkFont(family="Inter", size=11, weight="bold"),
+                    text_color=self._colors['quote_clr'],
+                    anchor="w"
+                )
+                lang_label.pack(side="left")
 
-        # Code text widget with horizontal scrollbar for long lines
+            if show_copy:
+                copy_btn = customtkinter.CTkButton(
+                    header_frame,
+                    text="Copy",
+                    width=70,
+                    height=26,
+                    font=customtkinter.CTkFont(family="Inter", size=11),
+                    fg_color="#0D5394" if not self._colors['is_dark'] else "#1565B0",
+                    hover_color="#1565B0" if not self._colors['is_dark'] else "#0D5394",
+                    text_color="#FFFFFF",
+                    corner_radius=6,
+                    command=lambda: self._copy_to_clipboard(code_text, copy_btn)
+                )
+                copy_btn.pack(side="right")
+
+        # Code text widget — no wrapping so box diagrams stay aligned
         code_widget = tk.Text(
             code_frame,
-            wrap="char",
+            wrap="none",
             bg=self._colors['code_bg'],
             fg=self._colors['code_fg'],
             font=("SF Mono" if sys.platform == "darwin" else "Consolas", 13),
@@ -543,10 +569,12 @@ class MarkdownBubble(customtkinter.CTkFrame):
         widget_height = min(25, max(3, line_count + 1))
         code_widget.configure(state="disabled", height=widget_height)
         # Redirect scroll from all code block sub-widgets to the chat container
-        for w in (code_frame, header_frame, code_widget):
-            self._bind_scroll_redirect(w)
-        for child in header_frame.winfo_children():
-            self._bind_scroll_redirect(child)
+        self._bind_scroll_redirect(code_frame)
+        self._bind_scroll_redirect(code_widget)
+        if header_frame is not None:
+            self._bind_scroll_redirect(header_frame)
+            for child in header_frame.winfo_children():
+                self._bind_scroll_redirect(child)
 
         # Embed the frame
         tw.window_create("end", window=code_frame, padx=0, pady=10, stretch=1)
@@ -649,9 +677,7 @@ class MarkdownBubble(customtkinter.CTkFrame):
             highlightbackground=border_clr, bd=0,
         )
         for j in range(num_cols):
-            table_frame.grid_columnconfigure(j, weight=1, uniform="col")
-
-        mono = ("SF Mono", 12) if sys.platform == "darwin" else ("Consolas", 12)
+            table_frame.grid_columnconfigure(j, weight=1)
 
         for idx, row in enumerate(rows):
             while len(row) < num_cols:
@@ -659,47 +685,28 @@ class MarkdownBubble(customtkinter.CTkFrame):
 
             is_header = idx == 0
             bg = self._colors['table_header_bg'] if is_header else self._colors['table_row_bg']
-            # Alternate row colors for non-header rows
             if not is_header and idx % 2 == 0:
                 bg = "#17171A" if is_dark else "#FAFAFA"
 
             for j, cell in enumerate(row):
-                # Use a Text widget per cell so inline markdown renders
-                cell_tw = tk.Text(
-                    table_frame, wrap="word",
-                    bg=bg, fg=self._colors['heading_clr'] if is_header else self._colors['text_color'],
+                # Strip inline markdown to plain text for labels
+                plain = self._strip_inline_md(cell)
+                lbl = tk.Label(
+                    table_frame,
+                    text=plain,
+                    bg=bg,
+                    fg=self._colors['heading_clr'] if is_header else self._colors['text_color'],
                     font=("Inter", 13, "bold") if is_header else ("Inter", 13),
-                    borderwidth=0, highlightthickness=0,
-                    padx=12, pady=8, relief="flat",
-                    insertwidth=0, cursor="arrow",
-                    height=1,
+                    padx=10, pady=6,
+                    anchor="w",
+                    justify="left",
                 )
-                cell_tw.grid(
+                lbl.grid(
                     row=idx, column=j, sticky="nsew",
                     padx=(1 if j > 0 else 0, 0),
                     pady=(1 if idx > 0 else 0, 0),
                 )
-
-                # Configure tags for inline markdown in cells
-                cell_tw.tag_configure("bold", font=("Inter", 13, "bold"))
-                cell_tw.tag_configure("italic", font=("Inter", 13, "italic"))
-                cell_tw.tag_configure("strikethrough", overstrike=True)
-                cell_tw.tag_configure("code_inline",
-                                      font=mono, foreground=self._colors['code_fg'],
-                                      background=self._colors['code_bg'])
-                cell_tw.tag_configure("link", foreground=self._colors['link_clr'],
-                                      underline=True)
-
-                # Render inline markdown into the cell
-                self._insert_inline(cell_tw, cell, ())
-                cell_tw.configure(state="disabled")
-
-                # Auto-size height based on content
-                cell_tw.update_idletasks()
-                line_count = int(cell_tw.index("end-1c").split(".")[0])
-                cell_tw.configure(height=max(1, line_count))
-
-                self._bind_scroll_redirect(cell_tw)
+                self._bind_scroll_redirect(lbl)
 
         self._tables.append((table_frame, num_cols))
 
@@ -745,27 +752,20 @@ class MarkdownBubble(customtkinter.CTkFrame):
             self.resize_timer = self.after(50, self._resize_to_fit)
 
     def _update_tables(self, width):
-        """Update wraplength of table cells based on available width and column count."""
+        """Update wraplength of table Label cells when the bubble width changes."""
         if width <= 0:
             return
-            
-        # Reduced width due to padding/margins
+
         usable_width = width - 40
-        
+
         for table_frame, num_cols in self._tables:
             if num_cols == 0:
                 continue
-            
-            # Approximate width per column (minus cell padding)
-            col_width = max(int(usable_width / num_cols) - 30, 50)
-            
+            col_width = max(int(usable_width / num_cols) - 24, 50)
             try:
-                # Iterate through cell frames inside the table frame
                 for child in table_frame.winfo_children():
-                    # Each child is a cell frame containing a label
-                    for grandchild in child.winfo_children():
-                        if isinstance(grandchild, customtkinter.CTkLabel):
-                            grandchild.configure(wraplength=col_width)
+                    if isinstance(child, tk.Label):
+                        child.configure(wraplength=col_width)
             except Exception:
                 pass
 
