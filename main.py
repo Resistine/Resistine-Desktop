@@ -58,18 +58,12 @@ if sys.platform.startswith("linux"):
 
     def _render_cairo_to_tk(self, width, height, draw_func):
         """Bridge between Cairo rendering and Tkinter PhotoImage."""
-        # Use a small padding to prevent edge clipping during AA
         w, h = math.ceil(width), math.ceil(height)
         surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
         ctx = cairo.Context(surface)
         draw_func(ctx, w, h)
-        
-        # Convert Cairo surface to PIL Image, then to PhotoImage
-        # Use bytes() as cairocffi buffer doesn't have .tobytes()
         img = Image.frombuffer("RGBA", (w, h), bytes(surface.get_data()), "raw", "BGRA", 0, 1)
         photo = ImageTk.PhotoImage(img)
-        
-        # GC Prevention: store the photo on the widget instance
         if not hasattr(self, "_cairo_photos"): self._cairo_photos = {}
         return photo
 
@@ -83,8 +77,18 @@ if sys.platform.startswith("linux"):
         ctx.arc(x + r, y + r, r, math.pi, 1.5 * math.pi)
         ctx.close_path()
 
-    def _draw_smooth_polygon_shapes(self, width, height, corner_radius, border_width):
+    def _draw_smooth_polygon_shapes(self, width, height, corner_radius, border_width, _force=False):
         master = self._canvas.master
+        # Cache key uses the arguments passed in plus bg_color (never swapped).
+        # fg_color and border_color are passed as arguments indirectly via the caller
+        # swapping master attrs — so we read them here before any swap occurs.
+        _fg = master._apply_appearance_mode(master._fg_color) if hasattr(master, "_fg_color") else None
+        _bg = master._apply_appearance_mode(master._bg_color) if hasattr(master, "_bg_color") else None
+        _bc = master._apply_appearance_mode(master._border_color) if hasattr(master, "_border_color") else None
+        _cache_key = (width, height, corner_radius, border_width, _fg, _bg, _bc)
+        if not _force and getattr(self, "_poly_cache_key", None) == _cache_key:
+            return False
+        self._poly_cache_key = _cache_key
         def draw(ctx, w, h):
             r, bw = (corner_radius or 0), (border_width or 0)
             # Fill entire surface with bg_color first — this is what shows through
@@ -333,7 +337,12 @@ if sys.platform.startswith("linux"):
     _orig_progress, _orig_slider, _orig_scrollbar = DrawEngine.draw_rounded_progress_bar_with_border, DrawEngine.draw_rounded_slider_with_border_and_button, DrawEngine.draw_rounded_scrollbar
     
     def _patched_draw(self, w, h, r, bw, meth=None, *args, **kwargs):
-        if (meth or self.preferred_drawing_method) == "smooth_polygon_shapes": return self._draw_smooth_polygon_shapes(w, h, r, bw)
+        if (meth or self.preferred_drawing_method) == "smooth_polygon_shapes":
+            self._canvas.master._cairo_drawing = True
+            try:
+                return self._draw_smooth_polygon_shapes(w, h, r, bw)
+            finally:
+                self._canvas.master._cairo_drawing = False
         return _orig_draw(self, w, h, r, bw, meth, *args, **kwargs)
     def _patched_vertical(self, w, h, r, bw, lw, meth=None, *args, **kwargs):
         if (meth or self.preferred_drawing_method) == "smooth_polygon_shapes": return self._draw_smooth_vertical_split(w, h, r, bw, lw)
@@ -406,16 +415,20 @@ if sys.platform.startswith("linux"):
             if canvas_w > 1 and canvas_h > 1:
                 s = master._apply_widget_scaling
 
-                # Button background hover: "inner_parts" → re-render polygon shape
+                # Button background hover: "inner_parts" → re-render polygon shape.
+                # Only rerender if the color actually changed from last render.
                 if tagOrId == "inner_parts" and self.find_withtag("cairo_main"):
-                    orig_fg = master._fg_color
-                    master._fg_color = fill_color
-                    try:
-                        de._draw_smooth_polygon_shapes(canvas_w, canvas_h,
-                            s(getattr(master, "_corner_radius", 0)),
-                            s(getattr(master, "_border_width", 0)))
-                    finally:
-                        master._fg_color = orig_fg
+                    if fill_color != getattr(master, "_cairo_last_fg", None):
+                        master._cairo_last_fg = fill_color
+                        orig_fg = master._fg_color
+                        master._fg_color = fill_color
+                        try:
+                            de._draw_smooth_polygon_shapes(canvas_w, canvas_h,
+                                s(getattr(master, "_corner_radius", 0)),
+                                s(getattr(master, "_border_width", 0)),
+                                _force=True)
+                        finally:
+                            master._fg_color = orig_fg
 
                 # OptionMenu/ComboBox left+right sections → re-render vertical split
                 # CTkOptionMenu calls itemconfig("inner_parts_left", fill=fg_color)
