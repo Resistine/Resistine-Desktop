@@ -272,17 +272,26 @@ class AppUI(customtkinter.CTk):
             if curr:
                 curr.select_frame_by_name(f"frame_{plugin.get_name()}")
 
+        _hovered = [False]
+
         def on_enter(_e):
             try:
-                if frame.winfo_exists():
+                if not _hovered[0] and frame.winfo_exists():
+                    _hovered[0] = True
                     frame.configure(fg_color=hover_bg, corner_radius=corner_radius)
             except (tk.TclError, AttributeError, RuntimeError):
                 pass
 
-        def on_leave(_e):
+        def on_leave(e):
             try:
-                if frame.winfo_exists():
-                    frame.configure(fg_color=card_bg, corner_radius=corner_radius)
+                if not _hovered[0] or not frame.winfo_exists():
+                    return
+                x = e.x_root - frame.winfo_rootx()
+                y = e.y_root - frame.winfo_rooty()
+                if 0 <= x < frame.winfo_width() and 0 <= y < frame.winfo_height():
+                    return  # still inside the frame
+                _hovered[0] = False
+                frame.configure(fg_color=card_bg, corner_radius=corner_radius)
             except (tk.TclError, AttributeError, RuntimeError):
                 pass
 
