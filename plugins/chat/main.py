@@ -106,6 +106,11 @@ class Plugin(BasePlugin):
 
     def _bind_mousewheel(self, widget):
         """Bind mouse wheel scrolling to a text widget with smooth inertia."""
+        from utils.scroll import (
+            CHAT_SCROLL_DELTA, CHAT_WHEEL_SCALE, CHAT_VEL_CLAMP,
+            CHAT_VEL_THRESHOLD, CHAT_VEL_DECAY,
+        )
+
         state = {"vel": 0.0, "job": None}
 
         def _step():
@@ -114,39 +119,40 @@ class Plugin(BasePlugin):
                     state["job"] = None
                     return
                 v = state["vel"]
-                if abs(v) < 0.05:
+                if abs(v) < CHAT_VEL_THRESHOLD:
                     state["vel"] = 0.0
                     state["job"] = None
                     return
                 before = widget.yview()
-                widget.yview_scroll(int(round(v)) or (1 if v > 0 else -1), "pixels")
+                scroll_px = int(round(v)) or (1 if v > 0 else -1)
+                widget.yview_scroll(scroll_px, "pixels")
                 after = widget.yview()
                 if abs(after[0] - before[0]) < 0.0001:
                     state["vel"] = 0.0
                     state["job"] = None
                     return
-                state["vel"] *= 0.88
+                state["vel"] *= CHAT_VEL_DECAY
                 state["job"] = widget.after(8, _step)
             except Exception:
                 state["job"] = None
 
         def _add_velocity(delta):
             state["vel"] += delta
-            state["vel"] = max(-20.0, min(20.0, state["vel"]))
+            state["vel"] = max(-CHAT_VEL_CLAMP, min(CHAT_VEL_CLAMP, state["vel"]))
             if state["job"] is None:
                 state["job"] = widget.after(1, _step)
 
         def on_mousewheel(event):
             if sys.platform == "darwin":
-                _add_velocity(-1 * event.delta * 0.4)
+                _add_velocity(-1 * event.delta * CHAT_WHEEL_SCALE)
             else:
-                _add_velocity(-1 * (event.delta / 120) * 0.4)
+                _add_velocity(-1 * (event.delta / 120) * CHAT_WHEEL_SCALE)
             return "break"
 
         widget.bind("<MouseWheel>", on_mousewheel, add="+")
         if sys.platform != "darwin":
-            widget.bind("<Button-4>", lambda e: (_add_velocity(-0.5), "break")[-1], add="+")
-            widget.bind("<Button-5>", lambda e: (_add_velocity(0.5), "break")[-1], add="+")
+            widget.bind("<Button-4>", lambda e: (_add_velocity(-CHAT_SCROLL_DELTA), "break")[-1], add="+")
+            widget.bind("<Button-5>", lambda e: (_add_velocity(CHAT_SCROLL_DELTA), "break")[-1], add="+")
 
         # Prevent horizontal scrolling
         widget.configure(xscrollcommand=lambda *args: None)
