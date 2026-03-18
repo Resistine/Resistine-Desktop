@@ -158,7 +158,7 @@ class MarkdownBubble(customtkinter.CTkFrame):
         self.pack_propagate(False)
 
         # --- Text tags ---
-        mono = ("SF Mono", 13) if sys.platform == "darwin" else ("Consolas", 13)
+        mono = ("Menlo", 13) if sys.platform == "darwin" else ("Consolas", 13)
 
         tw.tag_configure("bold", font=("Inter", 15, "bold"),
                          foreground=bold_clr)
@@ -553,7 +553,7 @@ class MarkdownBubble(customtkinter.CTkFrame):
             wrap="none",
             bg=self._colors['code_bg'],
             fg=self._colors['code_fg'],
-            font=("SF Mono" if sys.platform == "darwin" else "Consolas", 13),
+            font=("Menlo" if sys.platform == "darwin" else "Consolas", 13),
             borderwidth=0,
             padx=14,
             pady=10,
