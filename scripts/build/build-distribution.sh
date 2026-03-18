@@ -532,8 +532,8 @@ if [ -f "$PYTHON_UI_PATH/resources/installer-background.png" ]; then
 fi
 
 ICON_FLAG=""
-if [ -f "$PYTHON_UI_PATH/resources/icons/ResistineSheild.png" ]; then
-    ICON_FLAG="--volicon $PYTHON_UI_PATH/resources/icons/ResistineSheild.png"
+if [ -f "$PYTHON_UI_PATH/resources/icons/ResistineShield.png" ]; then
+    ICON_FLAG="--volicon $PYTHON_UI_PATH/resources/icons/ResistineShield.png"
 fi
 
 create-dmg \
