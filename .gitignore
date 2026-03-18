@@ -8,6 +8,7 @@ __pycache__/
 *.so
 .Python
 build/
+!scripts/build/
 develop-eggs/
 dist/
 downloads/
@@ -18,6 +19,7 @@ lib64/
 parts/
 sdist/
 *.spec
+!packaging/Resistine.spec
 var/
 wheels/
 pip-wheel-metadata/

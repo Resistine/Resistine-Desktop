@@ -81,15 +81,15 @@ jobs:
         run: |
           python3 -m venv .venv
           source .venv/bin/activate
-          pip install -r libraries/requirements-mac.txt
+          pip install -r requirements/requirements-mac.txt
           brew install create-dmg
 
       # --- Build the app + DMG ---
       - name: Build distribution
         run: |
           source .venv/bin/activate
-          chmod +x build-distribution.sh
-          ./build-distribution.sh
+          chmod +x scripts/build/build-distribution.sh
+          ./scripts/build/build-distribution.sh
 
       # --- Sign DMG with Sparkle EdDSA key ---
       - name: Sign DMG for Sparkle

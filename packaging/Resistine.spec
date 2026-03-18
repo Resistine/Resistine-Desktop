@@ -18,17 +18,21 @@ APP_NAME = 'Resistine'
 BUNDLE_ID = 'com.resistine.desktop'
 VERSION = '1.0.2'
 
-# Paths
-base_path = os.path.abspath('.')
+# Paths — project root is one level up from packaging/
+_spec_dir = os.path.dirname(os.path.abspath(SPEC))
+base_path = os.path.dirname(_spec_dir)
+
+def _src(relpath):
+    """Resolve a project-relative path to an absolute path."""
+    return os.path.join(base_path, relpath)
 
 # Collect data files
 datas = [
-    ('resources', 'resources'),
-    ('plugins', 'plugins'),
-
-    ('gui', 'gui'),
-    ('utils', 'utils'),
-    ('docs', 'docs'),
+    (_src('resources'), 'resources'),
+    (_src('plugins'), 'plugins'),
+    (_src('gui'), 'gui'),
+    (_src('utils'), 'utils'),
+    (_src('docs'), 'docs'),
 ]
 
 # Hidden imports (modules not auto-detected)
@@ -62,7 +66,7 @@ if IS_MACOS:
 
 # Analysis
 a = Analysis(
-    ['main.py'],
+    [_src('main.py')],
     pathex=[base_path],
     binaries=[],
     datas=datas,
@@ -102,9 +106,9 @@ exe_kwargs = dict(
     codesign_identity=None,
 )
 if IS_MACOS:
-    exe_kwargs['entitlements_file'] = 'Resistine.entitlements'
+    exe_kwargs['entitlements_file'] = _src(os.path.join('packaging', 'Resistine.entitlements'))
 if IS_WINDOWS:
-    exe_kwargs['icon'] = os.path.join('resources', 'icons', 'icon.ico')
+    exe_kwargs['icon'] = _src(os.path.join('resources', 'icons', 'icon.ico'))
 
 exe = EXE(
     pyz,
@@ -130,7 +134,7 @@ if IS_MACOS:
     app = BUNDLE(
         coll,
         name=f'{APP_NAME}.app',
-        icon='resources/icons/ResistineSheild.png',  # Will be converted to .icns
+        icon=_src('resources/icons/ResistineSheild.png'),  # Will be converted to .icns
         bundle_identifier=BUNDLE_ID,
         version=VERSION,
         info_plist={

@@ -6,11 +6,11 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$ProjectRoot = Split-Path -Parent $PSCommandPath
+$ProjectRoot = Split-Path (Split-Path (Split-Path -Parent $PSCommandPath) -Parent) -Parent
 Set-Location $ProjectRoot
 
 function Get-AppVersion {
-    $specPath = Join-Path $ProjectRoot "Resistine.spec"
+    $specPath = Join-Path $ProjectRoot "packaging\Resistine.spec"
     $match = Select-String -Path $specPath -Pattern "VERSION\s*=\s*'([^']+)'" | Select-Object -First 1
     if (-not $match) {
         throw "Could not find VERSION in Resistine.spec"
@@ -74,13 +74,13 @@ if (-not (Test-Path $venvPython)) {
 if (-not $SkipDependencyInstall) {
     Write-Host "Installing build/runtime dependencies into .venv..."
     & $venvPython -m pip install --upgrade pip
-    & $venvPython -m pip install -r (Join-Path $ProjectRoot "libraries\requirements-windows.txt")
+    & $venvPython -m pip install -r (Join-Path $ProjectRoot "requirements\requirements-windows.txt")
     & $venvPython -m pip install pyinstaller
 }
 
 if (-not $SkipPyInstaller) {
     Write-Host "Building Windows application bundle with PyInstaller..."
-    & $venvPython -m PyInstaller (Join-Path $ProjectRoot "Resistine.spec") --clean --noconfirm
+    & $venvPython -m PyInstaller (Join-Path $ProjectRoot "packaging\Resistine.spec") --clean --noconfirm
 }
 
 $sourceDir = Join-Path $ProjectRoot "dist\Resistine"
