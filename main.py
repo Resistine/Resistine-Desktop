@@ -533,7 +533,18 @@ if sys.platform.startswith("linux"):
     _CTkSlider._on_leave = _patched_sld_leave
 
     from customtkinter.windows.widgets import CTkOptionMenu as _CTkOptionMenu
+    from customtkinter.windows.widgets import CTkScrollbar as _CTkScrollbar
     from customtkinter.windows.widgets import CTkSwitch as _CTkSwitch
+
+    # On Linux, CTkScrollbar binds click to "border_parts" tag which doesn't
+    # exist in our Cairo renderer — bind directly on the canvas instead.
+    _orig_sb_create_bindings = _CTkScrollbar._create_bindings
+    def _patched_sb_create_bindings(self, sequence=None):
+        _orig_sb_create_bindings(self, sequence)
+        if sys.platform.startswith("linux"):
+            if sequence is None or sequence == "<Button-1>":
+                self._canvas.bind("<Button-1>", self._clicked, add=True)
+    _CTkScrollbar._create_bindings = _patched_sb_create_bindings
 
     _orig_om_enter = _CTkOptionMenu._on_enter
     def _patched_om_enter(self, event=0):
