@@ -415,9 +415,24 @@ if sys.platform.startswith("linux"):
             if canvas_w > 1 and canvas_h > 1:
                 s = master._apply_widget_scaling
 
+                # Scrollbar hover: "scrollbar_parts" → re-render with new button color
+                if tagOrId == "scrollbar_parts" and self.find_withtag("cairo_scrollbar"):
+                    orig_btn = master._button_color
+                    master._button_color = fill_color
+                    try:
+                        de._draw_smooth_scrollbar(
+                            canvas_w, canvas_h,
+                            s(getattr(master, "_corner_radius", 0)),
+                            max(0, s(getattr(master, "_corner_radius", 0)) - s(getattr(master, "_border_spacing", 0))),
+                            getattr(master, "_start_value", 0),
+                            getattr(master, "_end_value", 1),
+                            getattr(master, "_orientation", "vertical"))
+                    finally:
+                        master._button_color = orig_btn
+
                 # Button background hover: "inner_parts" → re-render polygon shape.
                 # Only rerender if the color actually changed from last render.
-                if tagOrId == "inner_parts" and self.find_withtag("cairo_main"):
+                elif tagOrId == "inner_parts" and self.find_withtag("cairo_main"):
                     if fill_color != getattr(master, "_cairo_last_fg", None):
                         master._cairo_last_fg = fill_color
                         orig_fg = master._fg_color
