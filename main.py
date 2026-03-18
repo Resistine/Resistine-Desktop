@@ -360,6 +360,13 @@ if sys.platform.startswith("linux"):
             r = min(r, w/2, h/2); s = round(s); icr = max(0, r - s)
             return self._draw_smooth_scrollbar(w, h, r, icr, sv, ev, o)
         return _orig_scrollbar(self, w, h, r, s, sv, ev, o, *args, **kwargs)
+
+    def _get_corrected_scrollbar_values(master):
+        """Mirror CTkScrollbar._get_scrollbar_values_for_minimum_pixel_size."""
+        try:
+            return master._get_scrollbar_values_for_minimum_pixel_size()
+        except Exception:
+            return master._start_value, master._end_value
     
     DrawEngine.draw_rounded_rect_with_border, DrawEngine.draw_rounded_rect_with_border_vertical_split = _patched_draw, _patched_vertical
     DrawEngine.draw_rounded_progress_bar_with_border, DrawEngine.draw_rounded_slider_with_border_and_button = _patched_progress, _patched_slider
@@ -420,12 +427,14 @@ if sys.platform.startswith("linux"):
                     orig_btn = master._button_color
                     master._button_color = fill_color
                     try:
+                        _cr = s(getattr(master, "_corner_radius", 0))
+                        _bs = s(getattr(master, "_border_spacing", 0))
+                        _sv, _ev = _get_corrected_scrollbar_values(master)
                         de._draw_smooth_scrollbar(
                             canvas_w, canvas_h,
-                            s(getattr(master, "_corner_radius", 0)),
-                            max(0, s(getattr(master, "_corner_radius", 0)) - s(getattr(master, "_border_spacing", 0))),
-                            getattr(master, "_start_value", 0),
-                            getattr(master, "_end_value", 1),
+                            min(_cr, canvas_w / 2, canvas_h / 2),
+                            max(0, min(_cr, canvas_w / 2, canvas_h / 2) - round(_bs)),
+                            _sv, _ev,
                             getattr(master, "_orientation", "vertical"))
                     finally:
                         master._button_color = orig_btn
