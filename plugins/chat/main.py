@@ -157,6 +157,33 @@ class Plugin(BasePlugin):
         # Prevent horizontal scrolling
         widget.configure(xscrollcommand=lambda *args: None)
 
+        # Stash _add_velocity so _bind_scroll_redirect_to_chat can reuse it
+        self._chat_add_velocity = _add_velocity
+
+    def _bind_scroll_redirect_to_chat(self, chat_tw, widget):
+        """Bind scroll events on widget to feed into the main chat scroll state.
+
+        Same velocity / animation loop as _bind_mousewheel — no independent
+        state, so multiple widgets can't stack and double the speed.
+        """
+        add_vel = getattr(self, "_chat_add_velocity", None)
+        if add_vel is None:
+            return
+
+        from utils.scroll import CHAT_SCROLL_DELTA, CHAT_WHEEL_SCALE
+
+        def on_wheel(event):
+            if sys.platform == "darwin":
+                add_vel(-1 * event.delta * CHAT_WHEEL_SCALE)
+            else:
+                add_vel(-1 * (event.delta / 120) * CHAT_WHEEL_SCALE)
+            return "break"
+
+        widget.bind("<MouseWheel>", on_wheel, add="+")
+        if sys.platform != "darwin":
+            widget.bind("<Button-4>", lambda e: (add_vel(-CHAT_SCROLL_DELTA), "break")[-1], add="+")
+            widget.bind("<Button-5>", lambda e: (add_vel(CHAT_SCROLL_DELTA), "break")[-1], add="+")
+
     # ------------------------------------------------------------------
     # Client / API
     # ------------------------------------------------------------------
@@ -334,6 +361,11 @@ class Plugin(BasePlugin):
 
         tw.window_create("end", window=container, padx=0, pady=10)
         tw.insert("end", "\n")
+
+        # Redirect scroll events from user bubble widgets to the chat textbox
+        self._bind_scroll_redirect_to_chat(tw, container)
+        self._bind_scroll_redirect_to_chat(tw, bubble)
+        self._bind_scroll_redirect_to_chat(tw, label)
 
         # Keep container width in sync when window resizes
         def _sync(event, c=container):
