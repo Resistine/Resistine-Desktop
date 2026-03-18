@@ -613,29 +613,27 @@ class Plugin(BasePlugin):
             else:
                 self._build_no_api_key_screen(chat_wrapper)
 
-        # --- Input bar (overlaid at bottom, full width, solid bg hides content) ---
-        # Use the actual CTk window background color from the theme
-        window_bg = "#111113" if is_dark else "#F5F5F7"
-
-        # Solid backdrop that clips scrolling content below the input bar
-        input_backdrop = tk.Frame(
-            self.second_frame,
-            bg=window_bg,
-            highlightthickness=0,
-            bd=0,
+        # --- Bottom strip to hide content below the input bar ---
+        # Match the actual rendered background of the chat textbox
+        chat_bg = self.chat_box._textbox.cget("background")
+        bottom_strip = tk.Frame(
+            self.second_frame, bg=chat_bg, highlightthickness=0, bd=0,
         )
-        input_backdrop.place(
-            relx=0, rely=1.0, anchor="sw", relwidth=1.0, height=56
+        bottom_strip.place(
+            relx=0, rely=1.0, anchor="sw", relwidth=1.0, height=18
         )
 
+        # --- Input bar (overlaid at bottom, full width) ---
         input_bar = customtkinter.CTkFrame(
-            input_backdrop,
+            self.second_frame,
             fg_color=input_bg,
             corner_radius=22,
             border_width=1,
             border_color=border_color,
         )
-        input_bar.pack(fill="x", padx=8, pady=(0, 8))
+        input_bar.place(
+            relx=0.5, rely=1.0, anchor="s", relwidth=0.98, y=-14
+        )
         input_bar.grid_columnconfigure(0, weight=1)
         input_bar.grid_columnconfigure(1, weight=0)
 
@@ -667,9 +665,6 @@ class Plugin(BasePlugin):
         self.send_button.grid(row=0, column=1, padx=(0, 6), pady=6)
 
         self.chat_entry.bind("<Return>", lambda event: self.send_message())
-
-        # Lift the backdrop above the chat textbox so it clips content
-        input_backdrop.lift()
 
         # Disable input when no API key is configured
         if not has_api_key:
