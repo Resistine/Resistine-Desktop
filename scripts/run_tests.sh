@@ -24,7 +24,7 @@ NC='\033[0m'  # No Colour
 
 # ── Project root ─────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+cd "$SCRIPT_DIR/.."
 
 # ── Python / pytest detection ────────────────────────────────────────────────
 PYTHON="${PYTHON:-python3}"
@@ -36,7 +36,7 @@ fi
 # Check pytest installed
 if ! "$PYTHON" -m pytest --version &>/dev/null; then
     echo -e "${YELLOW}pytest not found — installing test dependencies...${NC}"
-    "$PYTHON" -m pip install -r requirements-test.txt
+    "$PYTHON" -m pip install -r requirements/requirements-test.txt
 fi
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

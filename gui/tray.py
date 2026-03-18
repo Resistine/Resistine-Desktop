@@ -25,7 +25,7 @@ except ImportError:
 
 
 # ---- Paths ----
-BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # project root (up from gui/)
 ASSETS_DIR  = os.path.join(BASE_DIR, "resources", "icons")
 ICON_PATH   = os.path.join(ASSETS_DIR, "icon.ico")
 APPDATA_DIR = os.path.join(os.environ.get("APPDATA", ""), "Resistine")

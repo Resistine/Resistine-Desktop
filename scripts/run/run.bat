@@ -1,14 +1,13 @@
 @echo off
 setlocal
 
-:: Change to the directory where this batch file is located
-:: This is crucial when running as administrator, which changes working directory to System32
-cd /d "%~dp0"
+:: Change to the project root (two levels up from scripts\run\)
+cd /d "%~dp0\..\.."
 
 :: Check if .venv exists, if not run install.bat
 if not exist ".venv" (
     echo .venv folder not found. Running install.bat first...
-    call install.bat
+    call scripts\install\install.bat
     exit /b %errorlevel%
 )
 
@@ -30,7 +29,7 @@ if exist "C:\Program Files\GTK3-Runtime Win64\bin" (
 )
 
 echo Updating dependencies...
-python -m pip install -U -q -r libraries\requirements-windows.txt
+python -m pip install -U -q -r requirements\requirements-windows.txt
 if %errorlevel% neq 0 (
     echo Failed to install requirements.
     exit /b 1
