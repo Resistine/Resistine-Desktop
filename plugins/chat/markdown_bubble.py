@@ -316,17 +316,42 @@ class MarkdownBubble(customtkinter.CTkFrame):
         parent = self.master
         chat_tw = parent._textbox if hasattr(parent, "_textbox") else parent
 
+        # Smooth inertia scrolling for chat bubbles
+        bstate = {"vel": 0.0, "job": None}
+
+        def _bstep():
+            try:
+                if not chat_tw.winfo_exists():
+                    bstate["job"] = None
+                    return
+                v = bstate["vel"]
+                if abs(v) < 0.05:
+                    bstate["vel"] = 0.0
+                    bstate["job"] = None
+                    return
+                chat_tw.yview_scroll(int(round(v)) or (1 if v > 0 else -1), "pixels")
+                bstate["vel"] *= 0.88
+                bstate["job"] = chat_tw.after(8, _bstep)
+            except Exception:
+                bstate["job"] = None
+
+        def _badd(delta):
+            bstate["vel"] += delta
+            bstate["vel"] = max(-20.0, min(20.0, bstate["vel"]))
+            if bstate["job"] is None:
+                bstate["job"] = chat_tw.after(1, _bstep)
+
         def on_wheel(event):
             if sys.platform == "darwin":
-                chat_tw.yview_scroll(int(-1 * event.delta), "units")
+                _badd(-1 * event.delta * 0.4)
             else:
-                chat_tw.yview_scroll(int(-1 * (event.delta / 120)), "units")
+                _badd(-1 * (event.delta / 120) * 0.4)
             return "break"
 
         widget.bind("<MouseWheel>", on_wheel, add="+")
         if sys.platform != "darwin":
-            widget.bind("<Button-4>", lambda e: chat_tw.yview_scroll(-1, "units") or "break", add="+")
-            widget.bind("<Button-5>", lambda e: chat_tw.yview_scroll(1, "units") or "break", add="+")
+            widget.bind("<Button-4>", lambda e: (_badd(-0.5), "break")[-1], add="+")
+            widget.bind("<Button-5>", lambda e: (_badd(0.5), "break")[-1], add="+")
 
     def _render_code_block(self, tw, code_lines, language=None):
         """Render a code block with copy button and optional syntax highlighting."""
