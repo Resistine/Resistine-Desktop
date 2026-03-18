@@ -10,6 +10,7 @@ Licensed under the GNU General Public License v2 or later
 import argparse
 import ctypes
 import os
+import signal
 import sys
 import customtkinter
 import customtkinter.windows.widgets.ctk_scrollable_frame as _sf
@@ -883,6 +884,17 @@ if __name__ == "__main__":
 
         # Attach Inspector
         app.inspector = RuntimeInspector(app)
+
+    # Handle Ctrl+C gracefully
+    def _handle_sigint(signum, frame):
+        """Close the app gracefully on Ctrl+C."""
+        try:
+            app.destroy()
+        except Exception:
+            pass
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, _handle_sigint)
 
     # Application loop - run!
     app.mainloop()
