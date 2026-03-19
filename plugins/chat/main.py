@@ -8,8 +8,10 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import os
+import queue
 import random  # noqa: F401 — used for suggestion shuffling
 import sys
+import threading
 import tkinter as tk
 
 import customtkinter
@@ -555,6 +557,11 @@ class Plugin(BasePlugin):
 
     def create_main_screen(self):
         """Create the main screen for the Chat plugin."""
+        # Preserve streaming state — don't reset _response_in_progress here.
+        # If a response is still loading, we'll restore the loading UI below.
+        self._loading_container = None
+        self._loading_dots = None
+
         self.corner_radius = ThemeManager.theme.get("Theme", {}).get(
             "corner_radius", 12
         )
@@ -702,16 +709,122 @@ class Plugin(BasePlugin):
             )
             self.send_button.configure(state="disabled", fg_color="#6B7280")
 
+        # If a pending (completed-while-away) response exists, render it now
+        if getattr(self, "_pending_response", None) is not None:
+            self.chat_box.configure(state="normal")
+            self.render_assistant_bubble_markdown(self._pending_response)
+            self.chat_box.configure(state="disabled")
+            self.chat_box._textbox.see("end")
+            self._pending_response = None
+            self._response_in_progress = False
+        # If a response is still in progress, restore loading UI and keep input locked
+        elif getattr(self, "_response_in_progress", False):
+            self._show_loading_indicator()
+            self.chat_entry.configure(state="disabled")
+            self.send_button.configure(state="disabled", fg_color="#6B7280")
+            # Resume polling against the new chat_box
+            self._poll_stream()
+
         return self.second_frame
 
     # ------------------------------------------------------------------
     # Send message
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Loading indicator
+    # ------------------------------------------------------------------
+
+    def _show_loading_indicator(self):
+        """Show an animated typing indicator while waiting for a response."""
+        tw = self.chat_box._textbox
+        available = self._get_chat_width()
+        is_dark = self._is_dark_mode()
+
+        dot_color = "#9CA3AF" if is_dark else "#6B7280"
+
+        container = tk.Frame(
+            tw, highlightthickness=0, bd=0,
+            width=available, height=40,
+            bg=tw.cget("background"),
+        )
+        container.pack_propagate(False)
+
+        dot_frame = tk.Frame(container, bg=tw.cget("background"))
+        dot_frame.pack(side="left", padx=20, pady=8)
+
+        dots = []
+        for i in range(3):
+            dot = tk.Canvas(
+                dot_frame, width=8, height=8,
+                bg=tw.cget("background"), highlightthickness=0,
+            )
+            dot.create_oval(1, 1, 7, 7, fill=dot_color, outline="", tags="dot")
+            dot.pack(side="left", padx=3)
+            dots.append(dot)
+
+        self.chat_box.configure(state="normal")
+        tw.window_create("end", window=container, padx=0, pady=6)
+        tw.insert("end", "\n")
+        self.chat_box.configure(state="disabled")
+        tw.see("end")
+
+        self._loading_container = container
+        self._loading_dots = dots
+        self._loading_step = 0
+        self._loading_job = None
+        self._animate_dots()
+
+    def _animate_dots(self):
+        """Pulse the loading dots in sequence."""
+        if not hasattr(self, "_loading_dots") or not self._loading_dots:
+            return
+        try:
+            is_dark = self._is_dark_mode()
+            dim = "#4B5563" if is_dark else "#D1D5DB"
+            bright = "#E5E7EB" if is_dark else "#374151"
+
+            for i, dot in enumerate(self._loading_dots):
+                if not dot.winfo_exists():
+                    return
+                color = bright if i == (self._loading_step % 3) else dim
+                dot.itemconfigure("dot", fill=color)
+
+            self._loading_step += 1
+            self._loading_job = self._loading_dots[0].after(400, self._animate_dots)
+        except Exception:
+            pass
+
+    def _remove_loading_indicator(self):
+        """Remove the loading indicator from the chat."""
+        if hasattr(self, "_loading_job") and self._loading_job:
+            try:
+                self._loading_dots[0].after_cancel(self._loading_job)
+            except Exception:
+                pass
+            self._loading_job = None
+
+        if hasattr(self, "_loading_container") and self._loading_container:
+            try:
+                self._loading_container.destroy()
+            except Exception:
+                pass
+            self._loading_container = None
+
+        self._loading_dots = None
+
+    # ------------------------------------------------------------------
+    # Send message (non-blocking)
+    # ------------------------------------------------------------------
+
     def send_message(self):
         """Send a message and render: user bubble + animated assistant reply."""
         user_message = self.chat_entry.get().strip()
         if not user_message:
+            return
+
+        # Prevent sending while a response is in progress
+        if getattr(self, "_response_in_progress", False):
             return
 
         # Remove welcome screen if visible
@@ -725,43 +838,132 @@ class Plugin(BasePlugin):
         # Render User Bubble
         self.render_user_bubble(user_message)
 
-        self.chat_box.update_idletasks()
-        self.chat_box._textbox.see("end")
+        tw = self.chat_box._textbox
+        tw.update_idletasks()
+        tw.see("end")
 
-        # Insert marker for streaming text
-        self.chat_box._textbox.insert("end", "", "assistant")
-        start_index = self.chat_box._textbox.index("end-1c")
+        # Place a persistent mark where streamed text will begin
+        tw.mark_set("stream_start", "end-1c")
+        tw.mark_gravity("stream_start", "left")
 
-        disable_animation = settings.get("chat", "disable_animation", False)
-        full_response = ""
+        self.chat_box.configure(state="disabled")
+
+        # Show loading indicator
+        self._show_loading_indicator()
+
+        # Disable input while waiting
+        self._response_in_progress = True
+        self._streamed_text = ""
+        self.chat_entry.configure(state="disabled")
+        self.send_button.configure(state="disabled", fg_color="#6B7280")
+
+        # Stream response in background thread
+        self._response_queue = queue.Queue()
+        self._stream_thread = threading.Thread(
+            target=self._stream_worker,
+            args=(user_message,),
+            daemon=True,
+        )
+        self._stream_thread.start()
+
+        # Poll for results on the main thread
+        self._poll_stream()
+
+    def _stream_worker(self, user_message):
+        """Background thread: stream chunks into the queue."""
+        try:
+            for chunk in self.send_message_to_chatgpt(user_message):
+                self._response_queue.put(("chunk", chunk))
+            self._response_queue.put(("done", None))
+        except Exception as e:
+            self._response_queue.put(("error", str(e)))
+
+    def _poll_stream(self):
+        """Main-thread poller: drain the queue and update the UI."""
+        # Check if the chat view still exists
+        chat_visible = False
+        try:
+            chat_visible = self.chat_box.winfo_exists()
+        except Exception:
+            pass
 
         try:
-            stream = self.send_message_to_chatgpt(user_message)
+            while True:
+                msg_type, data = self._response_queue.get_nowait()
 
-            for chunk in stream:
-                full_response += chunk
+                if msg_type == "chunk":
+                    self._streamed_text += data
 
-                if not disable_animation:
-                    self.chat_box.configure(state="normal")
-                    self.chat_box._textbox.insert("end", chunk, "assistant")
-                    self.chat_box.configure(state="disabled")
-                    self.chat_box._textbox.see("end")
-                    self.chat_box.update_idletasks()
+                    if chat_visible:
+                        # Remove loading indicator on first chunk
+                        if getattr(self, "_loading_container", None):
+                            self._remove_loading_indicator()
 
-            # Finalize: Replace streamed text with formatted MarkdownBubble
-            self.chat_box.configure(state="normal")
+                        disable_animation = settings.get("chat", "disable_animation", False)
+                        if not disable_animation:
+                            tw = self.chat_box._textbox
+                            self.chat_box.configure(state="normal")
+                            tw.insert("end", data, "assistant")
+                            self.chat_box.configure(state="disabled")
+                            tw.see("end")
 
-            if not disable_animation:
-                end_index = self.chat_box._textbox.index("end-1c")
-                self.chat_box._textbox.delete(start_index, end_index)
+                elif msg_type == "done":
+                    if chat_visible:
+                        self._remove_loading_indicator()
+                        self._finalize_response()
+                    else:
+                        # Response finished while user was on another plugin.
+                        # Save it so create_main_screen can render it on return.
+                        self._pending_response = self._streamed_text
+                        self._response_in_progress = False
+                    return
 
-            self.render_assistant_bubble_markdown(full_response)
+                elif msg_type == "error":
+                    if chat_visible:
+                        self._remove_loading_indicator()
+                        tw = self.chat_box._textbox
+                        self.chat_box.configure(state="normal")
+                        tw.insert("end", f"Error: {data}\n\n\n", "error")
+                        self.chat_box.configure(state="disabled")
+                        tw.see("end")
+                        self._reset_input_state()
+                    else:
+                        self._pending_response = None
+                        self._response_in_progress = False
+                    return
 
-            self.chat_box.configure(state="disabled")
-            self.chat_box._textbox.see("end")
+        except queue.Empty:
+            pass
 
-        except Exception as e:
-            self.chat_box.configure(state="normal")
-            self.chat_box._textbox.insert("end", f"Error: {str(e)}\n\n\n", "error")
-            self.chat_box.configure(state="disabled")
-            self.chat_box._textbox.see("end")
+        # Continue polling every 50ms — use self.app.after so it works
+        # even when chat_box is destroyed (user switched plugins)
+        self.app.after(50, self._poll_stream)
+
+    def _finalize_response(self):
+        """Replace streamed text with formatted MarkdownBubble."""
+        tw = self.chat_box._textbox
+        disable_animation = settings.get("chat", "disable_animation", False)
+
+        self.chat_box.configure(state="normal")
+
+        # Delete the raw streamed text using the persistent mark
+        if not disable_animation:
+            try:
+                tw.delete("stream_start", "end-1c")
+            except tk.TclError:
+                pass
+
+        self.render_assistant_bubble_markdown(self._streamed_text)
+
+        self.chat_box.configure(state="disabled")
+        tw.see("end")
+
+        self._reset_input_state()
+
+    def _reset_input_state(self):
+        """Re-enable the input bar after a response completes."""
+        self._response_in_progress = False
+        resistine_blue = "#0D5394"
+        self.chat_entry.configure(state="normal")
+        self.send_button.configure(state="normal", fg_color=resistine_blue)
+        self.chat_entry.focus_set()

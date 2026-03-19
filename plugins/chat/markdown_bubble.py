@@ -417,14 +417,13 @@ class MarkdownBubble(customtkinter.CTkFrame):
         return bool(cls._BOX_CHARS.intersection(line))
 
     def _render_hr(self, tw):
-        """Render a horizontal rule as an embedded thin frame."""
-        hr = customtkinter.CTkFrame(
-            tw,
-            fg_color=self._colors.get('hr_clr', '#3A3A3C'),
-            height=1,
-            corner_radius=0,
-        )
-        tw.window_create("end", window=hr, padx=0, pady=12, stretch=1)
+        """Render a horizontal rule as a thin visible line."""
+        is_dark = self._colors.get('is_dark', False)
+        hr_color = "#555559" if is_dark else "#C8CCD0"
+        hr = tk.Canvas(tw, height=2, bg=tw.cget("background"),
+                       bd=0, highlightthickness=0)
+        hr.create_line(0, 1, 2000, 1, fill=hr_color, width=1)
+        tw.window_create("end", window=hr, padx=8, pady=6, stretch=1)
 
     def _init_scroll_redirect(self):
         """Lazily create a single shared scroll-redirect state for this bubble.
