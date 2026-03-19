@@ -896,5 +896,31 @@ if __name__ == "__main__":
 
     signal.signal(signal.SIGINT, _handle_sigint)
 
+    # Bring the window to the front on launch
+    app.lift()
+    app.attributes("-topmost", True)
+    app.after(100, lambda: app.attributes("-topmost", False))
+    app.focus_force()
+
+    if sys.platform == "darwin":
+        try:
+            from Foundation import NSBundle
+            bundle = NSBundle.mainBundle()
+            info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
+            if info:
+                info["LSBackgroundOnly"] = "0"
+            from AppKit import NSApplication, NSApp
+            NSApplication.sharedApplication()
+            NSApp.activateIgnoringOtherApps_(True)
+        except ImportError:
+            # pyobjc not available — fall back to osascript
+            import subprocess
+            subprocess.Popen([
+                "osascript", "-e",
+                'tell application "System Events" to set frontmost '
+                'of the first process whose unix id is '
+                f'{os.getpid()} to true'
+            ])
+
     # Application loop - run!
     app.mainloop()
