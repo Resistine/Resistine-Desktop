@@ -557,6 +557,11 @@ class Plugin(BasePlugin):
 
     def create_main_screen(self):
         """Create the main screen for the Chat plugin."""
+        # Preserve streaming state — don't reset _response_in_progress here.
+        # If a response is still loading, we'll restore the loading UI below.
+        self._loading_container = None
+        self._loading_dots = None
+
         self.corner_radius = ThemeManager.theme.get("Theme", {}).get(
             "corner_radius", 12
         )
@@ -704,6 +709,22 @@ class Plugin(BasePlugin):
             )
             self.send_button.configure(state="disabled", fg_color="#6B7280")
 
+        # If a pending (completed-while-away) response exists, render it now
+        if getattr(self, "_pending_response", None) is not None:
+            self.chat_box.configure(state="normal")
+            self.render_assistant_bubble_markdown(self._pending_response)
+            self.chat_box.configure(state="disabled")
+            self.chat_box._textbox.see("end")
+            self._pending_response = None
+            self._response_in_progress = False
+        # If a response is still in progress, restore loading UI and keep input locked
+        elif getattr(self, "_response_in_progress", False):
+            self._show_loading_indicator()
+            self.chat_entry.configure(state="disabled")
+            self.send_button.configure(state="disabled", fg_color="#6B7280")
+            # Resume polling against the new chat_box
+            self._poll_stream()
+
         return self.second_frame
 
     # ------------------------------------------------------------------
@@ -817,8 +838,14 @@ class Plugin(BasePlugin):
         # Render User Bubble
         self.render_user_bubble(user_message)
 
-        self.chat_box.update_idletasks()
-        self.chat_box._textbox.see("end")
+        tw = self.chat_box._textbox
+        tw.update_idletasks()
+        tw.see("end")
+
+        # Place a persistent mark where streamed text will begin
+        tw.mark_set("stream_start", "end-1c")
+        tw.mark_gravity("stream_start", "left")
+
         self.chat_box.configure(state="disabled")
 
         # Show loading indicator
@@ -826,6 +853,7 @@ class Plugin(BasePlugin):
 
         # Disable input while waiting
         self._response_in_progress = True
+        self._streamed_text = ""
         self.chat_entry.configure(state="disabled")
         self.send_button.configure(state="disabled", fg_color="#6B7280")
 
@@ -852,16 +880,12 @@ class Plugin(BasePlugin):
 
     def _poll_stream(self):
         """Main-thread poller: drain the queue and update the UI."""
-        disable_animation = settings.get("chat", "disable_animation", False)
-        tw = self.chat_box._textbox
-
-        if not hasattr(self, "_streamed_text"):
-            self._streamed_text = ""
-            # Insert marker for streaming text
-            self.chat_box.configure(state="normal")
-            tw.insert("end", "", "assistant")
-            self._stream_start_index = tw.index("end-1c")
-            self.chat_box.configure(state="disabled")
+        # Check if the chat view still exists
+        chat_visible = False
+        try:
+            chat_visible = self.chat_box.winfo_exists()
+        except Exception:
+            pass
 
         try:
             while True:
@@ -870,35 +894,50 @@ class Plugin(BasePlugin):
                 if msg_type == "chunk":
                     self._streamed_text += data
 
-                    # Remove loading indicator on first chunk
-                    if self._loading_container:
-                        self._remove_loading_indicator()
+                    if chat_visible:
+                        # Remove loading indicator on first chunk
+                        if getattr(self, "_loading_container", None):
+                            self._remove_loading_indicator()
 
-                    if not disable_animation:
-                        self.chat_box.configure(state="normal")
-                        tw.insert("end", data, "assistant")
-                        self.chat_box.configure(state="disabled")
-                        tw.see("end")
+                        disable_animation = settings.get("chat", "disable_animation", False)
+                        if not disable_animation:
+                            tw = self.chat_box._textbox
+                            self.chat_box.configure(state="normal")
+                            tw.insert("end", data, "assistant")
+                            self.chat_box.configure(state="disabled")
+                            tw.see("end")
 
                 elif msg_type == "done":
-                    self._remove_loading_indicator()
-                    self._finalize_response()
+                    if chat_visible:
+                        self._remove_loading_indicator()
+                        self._finalize_response()
+                    else:
+                        # Response finished while user was on another plugin.
+                        # Save it so create_main_screen can render it on return.
+                        self._pending_response = self._streamed_text
+                        self._response_in_progress = False
                     return
 
                 elif msg_type == "error":
-                    self._remove_loading_indicator()
-                    self.chat_box.configure(state="normal")
-                    tw.insert("end", f"Error: {data}\n\n\n", "error")
-                    self.chat_box.configure(state="disabled")
-                    tw.see("end")
-                    self._reset_input_state()
+                    if chat_visible:
+                        self._remove_loading_indicator()
+                        tw = self.chat_box._textbox
+                        self.chat_box.configure(state="normal")
+                        tw.insert("end", f"Error: {data}\n\n\n", "error")
+                        self.chat_box.configure(state="disabled")
+                        tw.see("end")
+                        self._reset_input_state()
+                    else:
+                        self._pending_response = None
+                        self._response_in_progress = False
                     return
 
         except queue.Empty:
             pass
 
-        # Continue polling every 50ms
-        tw.after(50, self._poll_stream)
+        # Continue polling every 50ms — use self.app.after so it works
+        # even when chat_box is destroyed (user switched plugins)
+        self.app.after(50, self._poll_stream)
 
     def _finalize_response(self):
         """Replace streamed text with formatted MarkdownBubble."""
@@ -907,25 +946,23 @@ class Plugin(BasePlugin):
 
         self.chat_box.configure(state="normal")
 
-        if not disable_animation and hasattr(self, "_stream_start_index"):
-            end_index = tw.index("end-1c")
-            tw.delete(self._stream_start_index, end_index)
+        # Delete the raw streamed text using the persistent mark
+        if not disable_animation:
+            try:
+                tw.delete("stream_start", "end-1c")
+            except tk.TclError:
+                pass
 
         self.render_assistant_bubble_markdown(self._streamed_text)
 
         self.chat_box.configure(state="disabled")
         tw.see("end")
 
-        self._streamed_text = ""
-        if hasattr(self, "_stream_start_index"):
-            del self._stream_start_index
-
         self._reset_input_state()
 
     def _reset_input_state(self):
         """Re-enable the input bar after a response completes."""
         self._response_in_progress = False
-        self._streamed_text = ""
         resistine_blue = "#0D5394"
         self.chat_entry.configure(state="normal")
         self.send_button.configure(state="normal", fg_color=resistine_blue)
