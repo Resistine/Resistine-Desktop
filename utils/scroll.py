@@ -27,21 +27,20 @@ CHAT_VEL_THRESHOLD = 0.5
 # Multiply velocity by this each 8 ms step (lower = faster deceleration).
 CHAT_VEL_DECAY = 0.88
 
-# -- Dashboard / CTkScrollableFrame scrolling (pixel-based via yview_moveto) ----
+# -- Dashboard / CTkScrollableFrame scrolling (fractional via yview_moveto) ----
 
 # Velocity added per discrete scroll notch (Button-4 / Button-5 on Linux).
-FRAME_SCROLL_DELTA = 16.0 if _IS_LINUX else 0.5
+FRAME_SCROLL_DELTA = 0.125
 
-# Multiplier applied to MouseWheel event.delta to get pixel velocity.
-# Mirrors CHAT_WHEEL_SCALE — same feel across the whole app.
-FRAME_WHEEL_SCALE = 0.4 if _IS_MAC else 16.0
+# "Feel" constant: velocity is multiplied by this to get the fractional
+# yview_moveto offset each step.  Lower = slower scroll.
+FRAME_FEEL = 0.01125 if _IS_LINUX else 0.1125
 
-# Velocity is clamped to ±FRAME_VEL_CLAMP (pixels).
-FRAME_VEL_CLAMP = 20.0
+# Velocity is clamped to ±FRAME_VEL_CLAMP.
+FRAME_VEL_CLAMP = 8.0
 
-# Velocity (px) below this threshold stops the animation.
-# Mac trackpad sends small deltas, so need lower threshold to scroll at all.
-FRAME_VEL_THRESHOLD = 0.01 if _IS_MAC else 0.5
+# Velocity below this threshold stops the animation.
+FRAME_VEL_THRESHOLD = 0.01
 
 # Decay factor applied each 8 ms step.
 FRAME_VEL_DECAY = 0.88
