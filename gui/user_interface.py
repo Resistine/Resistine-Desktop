@@ -816,7 +816,9 @@ class AppUI(customtkinter.CTk):
                 if bbox is None:
                     state["job"] = canvas.after(8, _step)
                     return
-                scrollable_px = max(1, bbox[3] - canvas.winfo_height())
+                content_height = bbox[3] - bbox[1]
+                viewport_height = canvas.winfo_height()
+                scrollable_px = max(1, content_height - viewport_height)
                 new_top = cur_top - (v / scrollable_px)
                 new_top = max(0.0, min(1.0, new_top))
                 canvas.yview_moveto(new_top)
@@ -908,11 +910,11 @@ class AppUI(customtkinter.CTk):
         if _is_linux:
             def _bind_all_button4(event):
                 if scrollable.check_if_master_is_canvas(event.widget):
-                    return _on_linux_scroll_up(event, source="bind_all_b4")
+                    return _on_linux_scroll_up(event)
 
             def _bind_all_button5(event):
                 if scrollable.check_if_master_is_canvas(event.widget):
-                    return _on_linux_scroll_down(event, source="bind_all_b5")
+                    return _on_linux_scroll_down(event)
 
             scrollable.bind_all("<Button-4>", _bind_all_button4, add="+")
             scrollable.bind_all("<Button-5>", _bind_all_button5, add="+")
