@@ -60,6 +60,12 @@ def init_updater(app):
 
     Must be called on the main thread after the app window is created.
     The controller is stored on *app* to prevent garbage collection.
+
+    NOTE: No NSRunLoop pump is used.  Tkinter on macOS already integrates
+    with the Cocoa event loop (via the Tk Aqua backend), which processes
+    the mach-port and GCD sources that Sparkle's XPC services rely on.
+    An explicit runUntilDate_ pump causes fatal re-entrant Tk/Python
+    callbacks on Python 3.14 (PyEval_RestoreThread abort).
     """
     global _controller
 
@@ -80,6 +86,7 @@ def init_updater(app):
         )
         app._sparkle_controller = controller
         _controller = controller
+
         logger.info("[SPARKLE] Updater controller initialized")
         return True
     except Exception as e:
@@ -112,6 +119,11 @@ def check_for_updates_in_background():
     except Exception as e:
         logger.error(f"[SPARKLE] Background check failed: {e}")
         return False
+
+
+def stop_runloop_pump():
+    """No-op. Kept for API compatibility with manager.py."""
+    pass
 
 
 def is_available():
