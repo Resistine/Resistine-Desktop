@@ -783,7 +783,7 @@ class AppUI(customtkinter.CTk):
 
         # ---- Smooth scrolling (mouse wheel) ----
         from utils.scroll import (
-            FRAME_SCROLL_DELTA, FRAME_FEEL, FRAME_VEL_CLAMP,
+            FRAME_SCROLL_DELTA, FRAME_WHEEL_SCALE, FRAME_VEL_CLAMP,
             FRAME_VEL_THRESHOLD, FRAME_VEL_DECAY,
         )
 
@@ -810,9 +810,14 @@ class AppUI(customtkinter.CTk):
                     state["job"] = None
                     return
 
-                # Scroll by a fraction of the canvas height for smoothness
+                # Convert pixel velocity to fraction using actual scrollable pixel height
                 cur_top, _ = canvas.yview()
-                new_top = cur_top - (v * FRAME_FEEL)
+                bbox = canvas.bbox("all")
+                if bbox is None:
+                    state["job"] = canvas.after(8, _step)
+                    return
+                scrollable_px = max(1, bbox[3] - canvas.winfo_height())
+                new_top = cur_top - (v / scrollable_px)
                 new_top = max(0.0, min(1.0, new_top))
                 canvas.yview_moveto(new_top)
 
@@ -836,7 +841,7 @@ class AppUI(customtkinter.CTk):
                 if d == 0:
                     return "break"
 
-                state["vel"] += d
+                state["vel"] += d * FRAME_WHEEL_SCALE
                 state["vel"] = max(-FRAME_VEL_CLAMP, min(FRAME_VEL_CLAMP, state["vel"]))
 
                 if state["job"] is None:
