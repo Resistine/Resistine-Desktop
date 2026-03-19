@@ -40,7 +40,8 @@ FRAME_WHEEL_SCALE = 0.4 if _IS_MAC else 16.0
 FRAME_VEL_CLAMP = 20.0
 
 # Velocity (px) below this threshold stops the animation.
-FRAME_VEL_THRESHOLD = 0.5
+# Mac trackpad sends small deltas, so need lower threshold to scroll at all.
+FRAME_VEL_THRESHOLD = 0.01 if _IS_MAC else 0.5
 
 # Decay factor applied each 8 ms step.
 FRAME_VEL_DECAY = 0.88
