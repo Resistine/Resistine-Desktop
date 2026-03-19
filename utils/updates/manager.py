@@ -146,5 +146,7 @@ def is_available():
 
 
 def shutdown():
-    """Stop the scheduler. Call from the app's close handler."""
+    """Stop the scheduler and clean up. Call from the app's close handler."""
     _scheduler.stop()
+    if _backend is not None and hasattr(_backend, 'stop_runloop_pump'):
+        _backend.stop_runloop_pump()

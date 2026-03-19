@@ -434,9 +434,12 @@ if [ -d "$PYTHON_APP/Contents/Frameworks/Sparkle.framework" ]; then
     echo "  - Signing Sparkle.framework internals (inner-to-outer)..."
 
     # Sign XPC services (Downloader.xpc, Installer.xpc)
+    # --preserve-metadata=entitlements: keeps Sparkle's original entitlements intact
     find "$SPARKLE_FW" -name "*.xpc" -type d | while read -r xpc_bundle; do
         codesign --force --sign "$SIGN_IDENTITY" \
-            --options runtime --timestamp "$xpc_bundle" 2>/dev/null || {
+            --options runtime --timestamp \
+            --preserve-metadata=entitlements \
+            "$xpc_bundle" 2>/dev/null || {
             echo "    Warning: Failed to sign: $(basename "$xpc_bundle")"
         }
     done
@@ -444,15 +447,21 @@ if [ -d "$PYTHON_APP/Contents/Frameworks/Sparkle.framework" ]; then
     # Sign Updater.app (Sparkle 2.9+ ships its own updater app)
     find "$SPARKLE_FW" -name "Updater.app" -type d | while read -r updater_app; do
         codesign --force --sign "$SIGN_IDENTITY" \
-            --options runtime --timestamp "$updater_app" 2>/dev/null || {
+            --options runtime --timestamp \
+            --preserve-metadata=entitlements \
+            "$updater_app" 2>/dev/null || {
             echo "    Warning: Failed to sign Updater.app"
         }
     done
 
     # Sign the Autoupdate executable
+    # CRITICAL: Autoupdate has com.apple.application-identifier which it needs
+    # to register mach services for the installer agent connection.
     find "$SPARKLE_FW" -name "Autoupdate" -type f | while read -r autoupdate; do
         codesign --force --sign "$SIGN_IDENTITY" \
-            --options runtime --timestamp "$autoupdate" 2>/dev/null || {
+            --options runtime --timestamp \
+            --preserve-metadata=entitlements \
+            "$autoupdate" 2>/dev/null || {
             echo "    Warning: Failed to sign Autoupdate"
         }
     done

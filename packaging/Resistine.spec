@@ -16,7 +16,7 @@ IS_WINDOWS = sys.platform == "win32"
 # Application metadata
 APP_NAME = 'Resistine'
 BUNDLE_ID = 'com.resistine.desktop'
-VERSION = '1.0.2'
+VERSION = '1.0.6'
 
 # Paths — project root is one level up from packaging/
 _spec_dir = os.path.dirname(os.path.abspath(SPEC))
@@ -134,7 +134,7 @@ if IS_MACOS:
     app = BUNDLE(
         coll,
         name=f'{APP_NAME}.app',
-        icon=_src('resources/icons/ResistineShield.png'),  # Will be converted to .icns
+        icon=_src('resources/icons/icon_mac.icns'),
         bundle_identifier=BUNDLE_ID,
         version=VERSION,
         info_plist={
@@ -199,7 +199,7 @@ if IS_MACOS:
 
             # Sparkle Auto-Update
             'SUFeedURL': 'https://resistine.github.io/appcast.xml',
-            'SUPublicEDKey': '2eiUHVoMgl+qqhEWO8iix5SUcRAKfkWYESh9F7jG6ls=',
+            'SUPublicEDKey': '4jEoaqYZnRhw+LE6vnAqHIiZBznqgT2Se09HS7bkG+0=',
             'SUEnableAutomaticChecks': True,
             'SUScheduledCheckInterval': 14400,  # 4 hours (base; Python scheduler adds jitter)
         },
