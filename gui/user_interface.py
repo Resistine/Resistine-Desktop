@@ -805,9 +805,7 @@ class AppUI(customtkinter.CTk):
                 if not canvas.winfo_exists():
                     return
                 v = state["vel"]
-                print(f"FRAME _step: vel={v}, threshold={FRAME_VEL_THRESHOLD}")
                 if abs(v) < FRAME_VEL_THRESHOLD:
-                    print(f"FRAME _step: velocity below threshold, stopping")
                     state["vel"] = 0.0
                     state["job"] = None
                     return
@@ -816,21 +814,20 @@ class AppUI(customtkinter.CTk):
                 cur_top, _ = canvas.yview()
                 bbox = canvas.bbox("all")
                 if bbox is None:
-                    print(f"FRAME _step: bbox is None")
                     state["job"] = canvas.after(8, _step)
                     return
                 content_height = bbox[3] - bbox[1]
                 viewport_height = canvas.winfo_height()
                 scrollable_px = max(1, content_height - viewport_height)
                 new_top = cur_top - (v / scrollable_px)
-                print(f"FRAME _step: cur_top={cur_top}, content_h={content_height}, viewport_h={viewport_height}, scrollable_px={scrollable_px}, new_top={new_top}")
                 new_top = max(0.0, min(1.0, new_top))
                 canvas.yview_moveto(new_top)
 
                 # Check if scroll position actually changed after moveto;
-                # if not, we've hit a boundary — kill velocity immediately
+                # if not, we've hit a boundary — kill velocity immediately.
+                # Only trigger if new_top was actually clamped to a boundary
                 after_top, _ = canvas.yview()
-                if abs(after_top - cur_top) < 0.0001:
+                if (new_top == 0.0 or new_top == 1.0) and abs(after_top - cur_top) < 0.0001:
                     state["vel"] = 0.0
                     state["job"] = None
                     return
@@ -849,14 +846,11 @@ class AppUI(customtkinter.CTk):
 
                 state["vel"] += d * FRAME_WHEEL_SCALE
                 state["vel"] = max(-FRAME_VEL_CLAMP, min(FRAME_VEL_CLAMP, state["vel"]))
-                print(f"FRAME scroll: delta={d}, wheel_scale={FRAME_WHEEL_SCALE}, vel={state['vel']}")
 
                 if state["job"] is None:
                     state["job"] = canvas.after(1, _step)
-            except Exception as e:
-                print(f"FRAME mousewheel error: {e}")
-                import traceback
-                traceback.print_exc()
+            except Exception:
+                pass
             return "break"
 
         def _on_linux_scroll_up(_e):
@@ -883,16 +877,14 @@ class AppUI(customtkinter.CTk):
 
         for w in (canvas, scrollable):
             try:
-                print(f"FRAME binding to {w}")
                 if _is_linux:
                     w.bind("<Button-4>", _on_linux_scroll_up)
                     w.bind("<Button-5>", _on_linux_scroll_down)
                     w.bind("<MouseWheel>", _on_mousewheel)
                 else:
                     w.bind("<MouseWheel>", _on_mousewheel)
-                print(f"FRAME bind to {w} successful")
-            except Exception as e:
-                print(f"FRAME bind to {w} failed: {e}")
+            except Exception:
+                pass
 
         # Override the built-in _mouse_wheel_all so that the bind_all handler
         # (which fires for ALL descendants including gaps) uses our smooth
@@ -902,24 +894,17 @@ class AppUI(customtkinter.CTk):
         # because bind_all stores a reference to the original bound method.
         # We must patch the original method to redirect to ours.
         def _patched_mouse_wheel_all(event):
-            print(f"FRAME _patched_mouse_wheel_all called, widget={event.widget}")
             if scrollable.check_if_master_is_canvas(event.widget):
-                print(f"FRAME check_if_master_is_canvas returned True")
                 return _on_mousewheel(event)
-            else:
-                print(f"FRAME check_if_master_is_canvas returned False")
 
         # Monkey-patch the bound method's __func__ won't work, so we
         # replace the actual callback in the bind_all registry by
         # unbinding and rebinding.
         try:
-            print(f"FRAME setting up bind_all")
             scrollable.unbind_all("<MouseWheel>")
             scrollable.bind_all("<MouseWheel>", _patched_mouse_wheel_all, add="+")
-            print(f"FRAME bind_all set up successfully")
-        except Exception as e:
+        except Exception:
             # Fallback: at least try the attribute swap
-            print(f"FRAME bind_all failed: {e}, trying attribute swap")
             scrollable._mouse_wheel_all = _patched_mouse_wheel_all
 
         # bind_all for <Button-4>/<Button-5> on Linux so child widgets are covered
