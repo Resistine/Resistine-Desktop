@@ -783,22 +783,16 @@ class AppUI(customtkinter.CTk):
 
         # ---- Smooth scrolling (mouse wheel) ----
         from utils.scroll import (
-            FRAME_SCROLL_DELTA, FRAME_FEEL, FRAME_VEL_CLAMP,
+            FRAME_SCROLL_DELTA, FRAME_WHEEL_SCALE, FRAME_VEL_CLAMP,
             FRAME_VEL_THRESHOLD, FRAME_VEL_DECAY,
         )
 
+        # Enable 1-pixel scroll increments so yview_scroll moves exact pixels
+        canvas.configure(yscrollincrement=1)
+
         state = {"vel": 0.0, "job": None}
 
-        def _normalized_delta(event) -> float:
-            # Windows/Linux: event.delta is usually 120/-120 per notch
-            # macOS: can be much smaller, especially for trackpads
-            d = getattr(event, "delta", 0) or 0
-            if d == 0:
-                return 0.0
-            if abs(d) >= 120:
-                return float(d) / 120.0
-            # trackpad-ish deltas
-            return float(d) / 40.0
+        _is_mac = platform.system() == "Darwin"
 
         def _step():
             try:
@@ -810,21 +804,18 @@ class AppUI(customtkinter.CTk):
                     state["job"] = None
                     return
 
-                # Scroll by a fraction of the canvas height for smoothness
-                cur_top, _ = canvas.yview()
-                new_top = cur_top - (v * FRAME_FEEL)
-                new_top = max(0.0, min(1.0, new_top))
-                canvas.yview_moveto(new_top)
+                # Pixel-based scroll — same approach as chat text widget
+                before = canvas.yview()
+                scroll_px = int(round(v)) or (1 if v > 0 else -1)
+                canvas.yview_scroll(-scroll_px, "units")
+                after = canvas.yview()
 
-                # Check if scroll position actually changed after moveto;
-                # if not, we've hit a boundary — kill velocity immediately
-                after_top, _ = canvas.yview()
-                if abs(after_top - cur_top) < 0.0001:
+                # Hit boundary — stop
+                if abs(after[0] - before[0]) < 0.0001:
                     state["vel"] = 0.0
                     state["job"] = None
                     return
 
-                # Decay velocity (gentle for smooth coast-to-stop)
                 state["vel"] *= FRAME_VEL_DECAY
                 state["job"] = canvas.after(8, _step)
             except Exception:
@@ -832,13 +823,15 @@ class AppUI(customtkinter.CTk):
 
         def _on_mousewheel(event):
             try:
-                # Negative delta scrolls down on many systems; invert to match natural expectation
-                d = _normalized_delta(event)
+                d = getattr(event, "delta", 0) or 0
                 if d == 0:
                     return "break"
 
-                state["vel"] += d
-                # Clamp velocity so huge trackpad swipes don't go crazy
+                # Same delta handling as chat: raw on macOS, normalized on others
+                if _is_mac:
+                    state["vel"] += d * FRAME_WHEEL_SCALE
+                else:
+                    state["vel"] += (d / 120.0) * FRAME_WHEEL_SCALE
                 state["vel"] = max(-FRAME_VEL_CLAMP, min(FRAME_VEL_CLAMP, state["vel"]))
 
                 if state["job"] is None:
@@ -859,23 +852,60 @@ class AppUI(customtkinter.CTk):
                 state["job"] = canvas.after(1, _step)
             return "break"
 
-        # Bind on the canvas + scrollable frame for direct hover
+        # On Linux, a single scroll notch can fire BOTH <Button-4>/<Button-5>
+        # AND <MouseWheel>.  We handle them via separate paths:
+        #   - <Button-4>/<Button-5>: direct bind on canvas + scrollable (no add="+")
+        #   - <MouseWheel>: override _mouse_wheel_all (bind_all path for descendants)
+        # To prevent double-fire, the direct <MouseWheel> bind is set to a no-op
+        # on Linux — _mouse_wheel_all already covers it.  On other platforms
+        # <Button-4>/<Button-5> don't fire, so <MouseWheel> via _mouse_wheel_all
+        # is the only path and no duplication occurs.
+        _is_linux = platform.system() == "Linux"
+
         for w in (canvas, scrollable):
             try:
-                w.bind("<MouseWheel>", _on_mousewheel, add="+")
-                w.bind("<Button-4>", _on_linux_scroll_up, add="+")
-                w.bind("<Button-5>", _on_linux_scroll_down, add="+")
+                if _is_linux:
+                    w.bind("<Button-4>", _on_linux_scroll_up)
+                    w.bind("<Button-5>", _on_linux_scroll_down)
+                    w.bind("<MouseWheel>", _on_mousewheel)
+                else:
+                    w.bind("<MouseWheel>", _on_mousewheel)
             except Exception:
                 pass
 
         # Override the built-in _mouse_wheel_all so that the bind_all handler
         # (which fires for ALL descendants including gaps) uses our smooth
         # scrolling instead of the default jerky scroll.
-        def _smooth_mouse_wheel_all(event):
+        #
+        # NOTE: simply replacing scrollable._mouse_wheel_all does NOT work
+        # because bind_all stores a reference to the original bound method.
+        # We must patch the original method to redirect to ours.
+        def _patched_mouse_wheel_all(event):
             if scrollable.check_if_master_is_canvas(event.widget):
                 return _on_mousewheel(event)
 
-        scrollable._mouse_wheel_all = _smooth_mouse_wheel_all
+        # Monkey-patch the bound method's __func__ won't work, so we
+        # replace the actual callback in the bind_all registry by
+        # unbinding and rebinding.
+        try:
+            scrollable.unbind_all("<MouseWheel>")
+            scrollable.bind_all("<MouseWheel>", _patched_mouse_wheel_all, add="+")
+        except Exception:
+            # Fallback: at least try the attribute swap
+            scrollable._mouse_wheel_all = _patched_mouse_wheel_all
+
+        # bind_all for <Button-4>/<Button-5> on Linux so child widgets are covered
+        if _is_linux:
+            def _bind_all_button4(event):
+                if scrollable.check_if_master_is_canvas(event.widget):
+                    return _on_linux_scroll_up(event)
+
+            def _bind_all_button5(event):
+                if scrollable.check_if_master_is_canvas(event.widget):
+                    return _on_linux_scroll_down(event)
+
+            scrollable.bind_all("<Button-4>", _bind_all_button4, add="+")
+            scrollable.bind_all("<Button-5>", _bind_all_button5, add="+")
 
         # ---- Auto-hide scrollbar when not needed ----
         # IMPORTANT: never change layout width (that causes visible shifting).

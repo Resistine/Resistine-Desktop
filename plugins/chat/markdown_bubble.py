@@ -417,22 +417,24 @@ class MarkdownBubble(customtkinter.CTkFrame):
         return bool(cls._BOX_CHARS.intersection(line))
 
     def _render_hr(self, tw):
-        """Render a horizontal rule as an embedded thin frame."""
-        hr = customtkinter.CTkFrame(
-            tw,
-            fg_color=self._colors.get('hr_clr', '#3A3A3C'),
-            height=1,
-            corner_radius=0,
-        )
-        tw.window_create("end", window=hr, padx=0, pady=12, stretch=1)
+        """Render a horizontal rule as a thin visible line."""
+        is_dark = self._colors.get('is_dark', False)
+        hr_color = "#555559" if is_dark else "#C8CCD0"
+        hr = tk.Canvas(tw, height=2, bg=tw.cget("background"),
+                       bd=0, highlightthickness=0)
+        hr.create_line(0, 1, 2000, 1, fill=hr_color, width=1)
+        tw.window_create("end", window=hr, padx=8, pady=6, stretch=1)
 
-    def _bind_scroll_redirect(self, widget):
-        """Redirect mouse-wheel events on an inner widget to the outer chat container.
+    def _init_scroll_redirect(self):
+        """Lazily create a single shared scroll-redirect state for this bubble.
 
-        When the MarkdownBubble lives inside a CTkScrollableFrame (e.g. Help page)
-        rather than a CTkTextbox (chat), we simply let events propagate so the
-        scrollable frame's own handler takes care of scrolling.
+        All embedded widgets (text, tables, code blocks) share one velocity /
+        animation loop so that overlapping bindings don't stack and double the
+        scroll speed.
         """
+        if hasattr(self, "_scroll_badd"):
+            return  # already initialised
+
         # Walk up to find the scroll target
         chat_tw = None
         parent = self.master
@@ -441,16 +443,45 @@ class MarkdownBubble(customtkinter.CTkFrame):
                 chat_tw = parent._textbox
                 break
             if isinstance(parent, customtkinter.CTkScrollableFrame):
-                # Inside a scrollable frame — don't intercept, let events bubble
+                self._scroll_badd = None  # sentinel: don't intercept
+                # --- BEGIN: forward textbox scroll to parent scrollable frame ---
+                _canvas = parent._parent_canvas
+                tw = self.text_widget._textbox
+
+                def _forward_mousewheel(e, c=_canvas):
+                    try:
+                        c.event_generate("<MouseWheel>", delta=e.delta)
+                    except Exception:
+                        pass
+                    return "break"
+
+                def _forward_button4(e, c=_canvas):
+                    try:
+                        c.event_generate("<Button-4>")
+                    except Exception:
+                        pass
+                    return "break"
+
+                def _forward_button5(e, c=_canvas):
+                    try:
+                        c.event_generate("<Button-5>")
+                    except Exception:
+                        pass
+                    return "break"
+
+                tw.bind("<MouseWheel>", _forward_mousewheel)
+                tw.bind("<Button-4>", _forward_button4)
+                tw.bind("<Button-5>", _forward_button5)
+                # --- END: forward textbox scroll to parent scrollable frame ---
                 return
             parent = getattr(parent, "master", None)
 
         if chat_tw is None:
+            self._scroll_badd = None
             return
 
         from utils.scroll import (
-            CHAT_SCROLL_DELTA, CHAT_WHEEL_SCALE, CHAT_VEL_CLAMP,
-            CHAT_VEL_THRESHOLD, CHAT_VEL_DECAY,
+            CHAT_VEL_CLAMP, CHAT_VEL_THRESHOLD, CHAT_VEL_DECAY,
         )
 
         bstate = {"vel": 0.0, "job": None}
@@ -484,17 +515,36 @@ class MarkdownBubble(customtkinter.CTkFrame):
             if bstate["job"] is None:
                 bstate["job"] = chat_tw.after(1, _bstep)
 
+        self._scroll_badd = _badd
+
+    def _bind_scroll_redirect(self, widget):
+        """Redirect mouse-wheel events on an inner widget to the outer chat container.
+
+        All widgets within this bubble share a single velocity state so that
+        overlapping bindings (e.g. table cell + table frame) don't stack.
+
+        When the MarkdownBubble lives inside a CTkScrollableFrame (e.g. Help page)
+        rather than a CTkTextbox (chat), events are left alone so the scrollable
+        frame's own handler takes care of scrolling.
+        """
+        self._init_scroll_redirect()
+        badd = getattr(self, "_scroll_badd", None)
+        if badd is None:
+            return
+
+        from utils.scroll import CHAT_SCROLL_DELTA, CHAT_WHEEL_SCALE
+
         def on_wheel(event):
             if sys.platform == "darwin":
-                _badd(-1 * event.delta * CHAT_WHEEL_SCALE)
+                badd(-1 * event.delta * CHAT_WHEEL_SCALE)
             else:
-                _badd(-1 * (event.delta / 120) * CHAT_WHEEL_SCALE)
+                badd(-1 * (event.delta / 120) * CHAT_WHEEL_SCALE)
             return "break"
 
         widget.bind("<MouseWheel>", on_wheel, add="+")
         if sys.platform != "darwin":
-            widget.bind("<Button-4>", lambda e: (_badd(-CHAT_SCROLL_DELTA), "break")[-1], add="+")
-            widget.bind("<Button-5>", lambda e: (_badd(CHAT_SCROLL_DELTA), "break")[-1], add="+")
+            widget.bind("<Button-4>", lambda e: (badd(-CHAT_SCROLL_DELTA), "break")[-1], add="+")
+            widget.bind("<Button-5>", lambda e: (badd(CHAT_SCROLL_DELTA), "break")[-1], add="+")
 
     def _render_code_block(self, tw, code_lines, language=None, show_copy=True):
         """Render a code block with optional copy button and syntax highlighting."""
