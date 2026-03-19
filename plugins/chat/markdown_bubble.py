@@ -445,6 +445,35 @@ class MarkdownBubble(customtkinter.CTkFrame):
                 break
             if isinstance(parent, customtkinter.CTkScrollableFrame):
                 self._scroll_badd = None  # sentinel: don't intercept
+                # --- BEGIN: forward textbox scroll to parent scrollable frame ---
+                _canvas = parent._parent_canvas
+                tw = self.text_widget._textbox
+
+                def _forward_mousewheel(e, c=_canvas):
+                    try:
+                        c.event_generate("<MouseWheel>", delta=e.delta)
+                    except Exception:
+                        pass
+                    return "break"
+
+                def _forward_button4(e, c=_canvas):
+                    try:
+                        c.event_generate("<Button-4>")
+                    except Exception:
+                        pass
+                    return "break"
+
+                def _forward_button5(e, c=_canvas):
+                    try:
+                        c.event_generate("<Button-5>")
+                    except Exception:
+                        pass
+                    return "break"
+
+                tw.bind("<MouseWheel>", _forward_mousewheel)
+                tw.bind("<Button-4>", _forward_button4)
+                tw.bind("<Button-5>", _forward_button5)
+                # --- END: forward textbox scroll to parent scrollable frame ---
                 return
             parent = getattr(parent, "master", None)
 

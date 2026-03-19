@@ -593,7 +593,9 @@ class Plugin(BasePlugin):
             border_width=0,
             activate_scrollbars=True,
         )
-        self.chat_box.grid(row=0, column=0, padx=0, pady=0, sticky="nsew")
+        # Bottom padding reserves space so content doesn't render behind
+        # the input bar overlaid at the bottom of second_frame.
+        self.chat_box.grid(row=0, column=0, padx=0, pady=(0, 58), sticky="nsew")
         self.chat_box._textbox.configure(padx=8)
 
         # Enable mouse wheel scrolling
@@ -648,27 +650,6 @@ class Plugin(BasePlugin):
                 self._build_welcome_screen(chat_wrapper)
             else:
                 self._build_no_api_key_screen(chat_wrapper)
-
-        # --- Bottom strip to hide content below the input bar ---
-        # Parented to second_frame so it stacks above chat bubbles (embedded
-        # windows in tk.Text always render above place() children of the Text).
-        # Width is synced to the text area only, so the scrollbar stays visible.
-        chat_bg = self.chat_box._textbox.cget("background")
-        bottom_strip = tk.Frame(
-            self.second_frame, bg=chat_bg, highlightthickness=0, bd=0,
-        )
-        bottom_strip.place(
-            relx=0, rely=1.0, anchor="sw", height=18
-        )
-
-        def _sync_strip_width(_e=None, _s=bottom_strip, _tw=self.chat_box._textbox):
-            try:
-                _s.place_configure(width=_tw.winfo_width())
-            except Exception:
-                pass
-
-        self.chat_box._textbox.bind("<Configure>", _sync_strip_width, add="+")
-        self.chat_box.after(50, _sync_strip_width)
 
         # --- Input bar (overlaid at bottom, full width) ---
         input_bar = customtkinter.CTkFrame(
