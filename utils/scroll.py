@@ -27,20 +27,21 @@ CHAT_VEL_THRESHOLD = 0.5
 # Multiply velocity by this each 8 ms step (lower = faster deceleration).
 CHAT_VEL_DECAY = 0.88
 
-# -- Dashboard / CTkScrollableFrame scrolling (fractional via yview_moveto) ----
+# -- Dashboard / CTkScrollableFrame scrolling (pixel-based, mirrors chat) ------
+# Uses canvas.yview_scroll in pixels (via yscrollincrement=1) so scroll speed
+# is consistent regardless of page length — same constants as chat.
 
 # Velocity added per discrete scroll notch (Button-4 / Button-5 on Linux).
-FRAME_SCROLL_DELTA = 0.125
+FRAME_SCROLL_DELTA = CHAT_SCROLL_DELTA
 
-# "Feel" constant: velocity is multiplied by this to get the fractional
-# yview_moveto offset each step.  Lower = slower scroll.
-FRAME_FEEL = 0.01125 if _IS_LINUX else 0.1125
+# Multiplier applied to MouseWheel event.delta (same as chat).
+FRAME_WHEEL_SCALE = CHAT_WHEEL_SCALE
 
 # Velocity is clamped to ±FRAME_VEL_CLAMP.
-FRAME_VEL_CLAMP = 8.0
+FRAME_VEL_CLAMP = CHAT_VEL_CLAMP
 
 # Velocity below this threshold stops the animation.
-FRAME_VEL_THRESHOLD = 0.01
+FRAME_VEL_THRESHOLD = CHAT_VEL_THRESHOLD
 
 # Decay factor applied each 8 ms step.
-FRAME_VEL_DECAY = 0.88
+FRAME_VEL_DECAY = CHAT_VEL_DECAY

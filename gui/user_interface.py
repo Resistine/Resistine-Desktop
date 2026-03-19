@@ -783,19 +783,16 @@ class AppUI(customtkinter.CTk):
 
         # ---- Smooth scrolling (mouse wheel) ----
         from utils.scroll import (
-            FRAME_SCROLL_DELTA, FRAME_FEEL, FRAME_VEL_CLAMP,
+            FRAME_SCROLL_DELTA, FRAME_WHEEL_SCALE, FRAME_VEL_CLAMP,
             FRAME_VEL_THRESHOLD, FRAME_VEL_DECAY,
         )
 
+        # Enable 1-pixel scroll increments so yview_scroll moves exact pixels
+        canvas.configure(yscrollincrement=1)
+
         state = {"vel": 0.0, "job": None}
 
-        def _normalized_delta(event) -> float:
-            d = getattr(event, "delta", 0) or 0
-            if d == 0:
-                return 0.0
-            if abs(d) >= 120:
-                return float(d) / 120.0
-            return float(d) / 40.0
+        _is_mac = platform.system() == "Darwin"
 
         def _step():
             try:
@@ -807,21 +804,18 @@ class AppUI(customtkinter.CTk):
                     state["job"] = None
                     return
 
-                # Scroll by a fraction of the canvas height for smoothness
-                cur_top, _ = canvas.yview()
-                new_top = cur_top - (v * FRAME_FEEL)
-                new_top = max(0.0, min(1.0, new_top))
-                canvas.yview_moveto(new_top)
+                # Pixel-based scroll — same approach as chat text widget
+                before = canvas.yview()
+                scroll_px = int(round(v)) or (1 if v > 0 else -1)
+                canvas.yview_scroll(-scroll_px, "units")
+                after = canvas.yview()
 
-                # Check if scroll position actually changed after moveto;
-                # if not, we've hit a boundary — kill velocity immediately.
-                after_top, _ = canvas.yview()
-                if abs(after_top - cur_top) < 0.0001:
+                # Hit boundary — stop
+                if abs(after[0] - before[0]) < 0.0001:
                     state["vel"] = 0.0
                     state["job"] = None
                     return
 
-                # Decay velocity (gentle for smooth coast-to-stop)
                 state["vel"] *= FRAME_VEL_DECAY
                 state["job"] = canvas.after(8, _step)
             except Exception:
@@ -829,11 +823,15 @@ class AppUI(customtkinter.CTk):
 
         def _on_mousewheel(event):
             try:
-                d = _normalized_delta(event)
+                d = getattr(event, "delta", 0) or 0
                 if d == 0:
                     return "break"
 
-                state["vel"] += d
+                # Same delta handling as chat: raw on macOS, normalized on others
+                if _is_mac:
+                    state["vel"] += d * FRAME_WHEEL_SCALE
+                else:
+                    state["vel"] += (d / 120.0) * FRAME_WHEEL_SCALE
                 state["vel"] = max(-FRAME_VEL_CLAMP, min(FRAME_VEL_CLAMP, state["vel"]))
 
                 if state["job"] is None:
