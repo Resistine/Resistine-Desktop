@@ -34,7 +34,7 @@ FRAME_SCROLL_DELTA = 0.125
 
 # "Feel" constant: velocity is multiplied by this to get the fractional
 # yview_moveto offset each step.
-FRAME_FEEL = 0.1125
+FRAME_FEEL = 0.01125 if _IS_LINUX else 0.1125
 
 # Velocity is clamped to ±FRAME_VEL_CLAMP.
 FRAME_VEL_CLAMP = 8.0
@@ -43,4 +43,4 @@ FRAME_VEL_CLAMP = 8.0
 FRAME_VEL_THRESHOLD = 0.01
 
 # Decay factor applied each 8 ms step.
-FRAME_VEL_DECAY = 10.88
+FRAME_VEL_DECAY = 0.88
