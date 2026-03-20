@@ -49,8 +49,6 @@ Name: "startup"; Description: "Start Resistine when I sign in"; Flags: unchecked
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
-Source: "..\..\install_service.bat"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\..\plugins\vpn\wireguard\windows_vpn_service.py"; DestDir: "{app}\plugins\vpn\wireguard"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#AppName}\{#AppName}"; Filename: "{app}\Resistine.exe"
@@ -459,6 +457,11 @@ begin
   Log('Uninstall cleanup: stopping/removing Resistine WireGuard tunnel services');
   RemoveNamedWireGuardTunnel('resistine_default');
   RemoveNamedWireGuardTunnel('resistine_vpn');
+
+  { Always delete WireGuard config files on uninstall, not just when user opts-in }
+  Log('Uninstall cleanup: removing WireGuard configuration files');
+  DeleteDirectoryIfExists(ExpandConstant('{userappdata}\Resistine\wireguard'));
+  DeleteDirectoryIfExists(ExpandConstant('{commonappdata}\Resistine\wireguard'));
 end;
 
 function HasAnyResistineUserData: Boolean;
@@ -923,16 +926,11 @@ begin
     BackupHelpLabel.Enabled := ShowBackupOptions;
   end;
 
+  { User data is always removed on uninstall, so hide the checkbox }
   if RemoveUserDataCheck <> nil then
-  begin
-    RemoveUserDataCheck.Visible := ShowUninstallOptions;
-    RemoveUserDataCheck.Enabled := ShowUninstallOptions and HasAnyResistineUserData;
-  end;
+    RemoveUserDataCheck.Visible := False;
   if RemoveUserDataHelpLabel <> nil then
-  begin
-    RemoveUserDataHelpLabel.Visible := ShowUninstallOptions;
-    RemoveUserDataHelpLabel.Enabled := ShowUninstallOptions;
-  end;
+    RemoveUserDataHelpLabel.Visible := False;
 
   if MaintenanceDataOptionsEmptyLabel <> nil then
   begin
@@ -1453,7 +1451,6 @@ end;
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
   ConfirmText: string;
-  WantsRemoveData: Boolean;
   ExistingIsInno: Boolean;
 begin
   Result := True;
@@ -1495,41 +1492,31 @@ begin
     if UninstallRadio.Checked then
     begin
       SelectedAction := maUninstall;
-      WantsRemoveData := (RemoveUserDataCheck <> nil) and RemoveUserDataCheck.Checked;
-      RemoveUserDataAfterUninstall := WantsRemoveData;
+      RemoveUserDataAfterUninstall := True;
 
       ConfirmText :=
         'This will uninstall the existing Resistine installation and close setup.' + #13#10#13#10 +
         'What will be removed:' + #13#10 +
         '- Application files in: ' + ExistingInstallDir + #13#10 +
         '- Start Menu / desktop shortcuts' + #13#10 +
-        '- VPN services: ResistineVPN, WireGuardTunnel$resistine_default, WireGuardTunnel$resistine_vpn' + #13#10;
-
-      if WantsRemoveData then
-        ConfirmText := ConfirmText + '- User data: settings, logs, and VPN service data' + #13#10 +
-          '  (' + GetResistineUserDataDir + ' and ' + GetResistineCommonDataDir + ')' + #13#10
-      else
-        ConfirmText := ConfirmText + '- User data will be preserved' + #13#10 +
-          '  (' + GetResistineUserDataDir + ' and ' + GetResistineCommonDataDir + ')' + #13#10;
-
-      ConfirmText := ConfirmText + #13#10 + 'Continue?';
+        '- VPN services: ResistineVPN, WireGuardTunnel$resistine_default, WireGuardTunnel$resistine_vpn' + #13#10 +
+        '- All user data: settings, email, login, logs, and VPN service data' + #13#10 +
+        '  (' + GetResistineUserDataDir + ' and ' + GetResistineCommonDataDir + ')' + #13#10 + #13#10 +
+        'Continue?';
 
       if MsgBox(ConfirmText, mbConfirmation, MB_YESNO) = IDYES then
       begin
         ExistingIsInno := ExistingUninstallerLooksLikeInno;
         if ExistingIsInno then
-          SetInstallerUninstallInteropFlags(WantsRemoveData);
+          SetInstallerUninstallInteropFlags(True);
         if RunExistingUninstaller(False) then
         begin
-          if WantsRemoveData and (not ExistingIsInno) then
+          if not ExistingIsInno then
             DeleteResistineUserData;
 
           if not ExistingIsInno then
           begin
-            if WantsRemoveData then
-              MsgBox('Uninstall completed and user data was removed. Setup will now exit.', mbInformation, MB_OK)
-            else
-              MsgBox('Uninstall completed. User data was preserved. Setup will now exit.', mbInformation, MB_OK);
+            MsgBox('Uninstall completed and all user data was removed. Setup will now exit.', mbInformation, MB_OK);
           end;
 
           CloseAfterMaintenanceUninstall := True;
@@ -1640,15 +1627,15 @@ begin
   Summary :=
     'This will uninstall Resistine from:' + #13#10 +
     ExpandConstant('{app}') + #13#10#13#10 +
-    'The uninstaller will also remove:' + #13#10 +
+    'The uninstaller will remove:' + #13#10 +
     '- ResistineVPN service' + #13#10 +
     '- WireGuardTunnel$resistine_default' + #13#10 +
     '- WireGuardTunnel$resistine_vpn' + #13#10 +
     '- Wazuh agent (WazuhSvc)' + #13#10 +
-    '- Sysmon monitoring service' + #13#10#13#10 +
-    'By default, your user data is preserved:' + #13#10 +
-    '- ' + GetResistineUserDataDir + #13#10 +
-    '- ' + GetResistineCommonDataDir + #13#10#13#10 +
+    '- Sysmon monitoring service' + #13#10 +
+    '- All user data (settings, email, login, logs, and VPN configs):' + #13#10 +
+    '  ' + GetResistineUserDataDir + #13#10 +
+    '  ' + GetResistineCommonDataDir + #13#10#13#10 +
     'Continue?';
 
   Response := MsgBox(Summary, mbConfirmation, MB_YESNO);
@@ -1658,16 +1645,8 @@ begin
     exit;
   end;
 
-  if HasAnyResistineUserData then
-  begin
-    Response := MsgBox(
-      'Do you also want to remove Resistine user data (settings, logs, and VPN service data)?' + #13#10#13#10 +
-      GetResistineUserDataDir + #13#10 + GetResistineCommonDataDir,
-      mbConfirmation, MB_YESNO);
-    StandaloneUninstallRemoveUserData := (Response = IDYES);
-  end
-  else
-    StandaloneUninstallRemoveUserData := False;
+  { Always remove user data on uninstall }
+  StandaloneUninstallRemoveUserData := True;
 end;
 
 procedure RemoveWazuhAndSysmon;
