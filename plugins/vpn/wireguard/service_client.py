@@ -15,7 +15,7 @@ SERVICE_PORT = 51888
 # Token file is written by the service on first start and shared via ProgramData.
 # Both the service (SYSTEM) and the GUI (current user) can access ProgramData.
 _PROGRAMDATA = os.environ.get("PROGRAMDATA", r"C:\ProgramData")
-_IPC_TOKEN_FILE = os.path.join(_PROGRAMDATA, "Resistine", "wireguard", ".ipc_token")
+_IPC_TOKEN_FILE = os.path.join(_PROGRAMDATA, "Resistine", "ipc_token")
 
 
 def _load_ipc_token() -> str:
