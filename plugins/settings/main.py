@@ -394,6 +394,7 @@ class Plugin(BasePlugin):
     def _check_for_updates(self):
         """Trigger an interactive update check via the cross-platform update manager."""
         try:
+            import webbrowser
             from utils import updates
 
             if not updates.is_available():
@@ -403,12 +404,42 @@ class Plugin(BasePlugin):
                 self.app.after(5000, lambda: self.update_status_label.configure(text=""))
                 return
 
-            success = updates.check_for_updates()
-            if success:
+            result = updates.check_for_updates()
+
+            if result == "update_available":
+                # Get update info from the last check
+                from utils.updates import windows as win_updater
+                import tkinter.messagebox as messagebox
+
+                if hasattr(win_updater, '_latest_version') and hasattr(win_updater, '_download_url'):
+                    version = win_updater._latest_version
+                    url = win_updater._download_url
+
+                    # Show yes/no dialog
+                    response = messagebox.askyesno(
+                        "Update Available",
+                        f"Version {version} is available.\n\nWould you like to download it now?"
+                    )
+
+                    if response:  # User clicked Yes
+                        webbrowser.open(url)
+                        self.update_status_label.configure(
+                            text="Opening download in browser...", text_color="green"
+                        )
+                    else:
+                        self.update_status_label.configure(
+                            text="Update skipped", text_color="orange"
+                        )
+                else:
+                    self.update_status_label.configure(
+                        text="Update available!", text_color="green"
+                    )
+
+            elif result == "up_to_date":
                 self.update_status_label.configure(
-                    text="Checking for updates...", text_color="green"
+                    text="You're up to date!", text_color="green"
                 )
-            else:
+            else:  # error
                 self.update_status_label.configure(
                     text="Update check failed", text_color="red"
                 )
