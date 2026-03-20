@@ -144,6 +144,9 @@ provisioning-profiles/
 # Claude Code
 .claude/
 
+# GitHub Pages submodule / site
+resistine.github.io/
+
 # Inno Setup output
 dist/installer/
 *.exe
