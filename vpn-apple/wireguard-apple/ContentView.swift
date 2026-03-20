@@ -16,18 +16,20 @@ struct ContentView: View {
                 .padding()
             
             Button(action: {
+                // Config is provided at runtime by the main app via IPC.
+                // Do NOT hardcode real keys or endpoints here.
                 let wgQuickConfig = """
                 [Interface]
-                PrivateKey = 6EEkoU4NwuqikacmsPl96aTbPnry2MdUjVpf6dUa/VQ=
-                Address = 10.49.64.211/32
-                DNS = 10.49.11.10
+                PrivateKey = <PRIVATE_KEY>
+                Address = 10.0.0.1/32
+                DNS = 10.0.0.53
 
                 [Peer]
-                PublicKey = T8sxu9+bCkDI3qiZ6VZ0Fgeeko2QeDCqC+AGTDGG4ho=
-                AllowedIPs = 10.49.0.0/17
-                Endpoint = 18.199.109.145:986
+                PublicKey = <SERVER_PUBLIC_KEY>
+                AllowedIPs = 10.0.0.0/24
+                Endpoint = vpn.example.com:51820
                 """
-                
+
                 NSLog("ContentView: Requesting VPN Start via XPC")
                 XPCClient.shared.startVPN(config: wgQuickConfig) { isSuccess in
                     NSLog("ContentView: VPN Start result: \(isSuccess)")

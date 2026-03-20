@@ -32,12 +32,12 @@ def server_vpn_config():
     return {
         "Interface": {
             "PrivateKey": "",
-            "Address": "10.49.65.10",
-            "DNS": ["10.49.11.10"],
+            "Address": "10.0.0.2",
+            "DNS": ["10.0.0.53"],
         },
         "Peer": {
             "PublicKey": "serverPubKey123==",
-            "AllowedIPs": ["10.49.0.0/17"],
+            "AllowedIPs": ["10.0.0.0/24"],
             "Endpoint": "1.2.3.4:51820",
         },
     }
@@ -92,7 +92,7 @@ class TestOtpFlow:
         verify_response = _mock_post({
             "status": "success",
             "vpn_config": json.dumps({
-                "Interface": {"Address": "10.49.0.1", "DNS": ["10.49.11.10"]},
+                "Interface": {"Address": "10.0.0.2", "DNS": ["10.0.0.53"]},
                 "Peer": {"PublicKey": "spk==", "AllowedIPs": ["0.0.0.0/0"], "Endpoint": "1.2.3.4:51820"},
             }),
         })
@@ -171,7 +171,7 @@ class TestSaveVpnConfig:
         content = open(path).read()
         assert "[Interface]" in content
         assert "[Peer]" in content
-        assert "10.49.65.10" in content
+        assert "10.0.0.2" in content
         assert "1.2.3.4:51820" in content
 
     def test_save_vpn_configuration_none_returns_none(

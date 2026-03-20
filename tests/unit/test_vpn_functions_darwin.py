@@ -20,7 +20,7 @@ import base64
 import json
 import os
 import pytest
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +211,7 @@ class TestParseAndCreateVpnConfig:
                    return_value=str(tmp_path)):
             path = parse_and_create_vpn_config(sample_vpn_config_json, "test_config")
         content = open(path).read()
-        assert "10.49.65.6" in content
+        assert "10.0.0.2" in content
 
     def test_config_contains_server_endpoint(self, tmp_path, isolated_settings, sample_vpn_config_json):
         from plugins.vpn.wireguard.vpn_functions_darwin import (
@@ -223,7 +223,7 @@ class TestParseAndCreateVpnConfig:
                    return_value=str(tmp_path)):
             path = parse_and_create_vpn_config(sample_vpn_config_json, "test_config")
         content = open(path).read()
-        assert "18.199.109.145:987" in content
+        assert "vpn.example.com:51820" in content
 
     def test_uses_private_key_from_storage(self, tmp_path, isolated_settings, sample_vpn_config_json):
         from plugins.vpn.wireguard.vpn_functions_darwin import (

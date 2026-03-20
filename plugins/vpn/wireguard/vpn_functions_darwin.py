@@ -385,13 +385,13 @@ def parse_and_create_vpn_config(vpn_config_json_string, config_name="resdef"):
     {
         "Peer": {
             "PublicKey": "...",
-            "AllowedIPs": ["10.49.0.0/17"],
-            "Endpoint": "18.199.109.145:987"
+            "AllowedIPs": ["10.0.0.0/24"],
+            "Endpoint": "vpn.example.com:51820"
         },
         "Interface": {
             "PrivateKey": "",  # Empty, will use from keychain
-            "Address": "10.49.65.6",
-            "DNS": ["10.49.11.10"]  # Uses DNS_SERVER constant (see top of file)
+            "Address": "10.0.0.2",
+            "DNS": ["10.0.0.53"]  # Uses DNS_SERVER constant (see top of file)
         }
     }
     """
