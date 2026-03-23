@@ -170,6 +170,25 @@
             "uninstall_enabled": false
         },
         {
+            "id": "012",
+            "order": 6,
+            "name": "Antivirus",
+            "version": "2026.01.04-alpha",
+            "status": "Warning",
+            "description": "Scan, quarantine, and protect against malware with ClamAV.",
+            "supported_systems": [
+                "Darwin"
+            ],
+            "translations": {
+                "US": "Antivirus",
+                "ES": "Antivirus",
+                "FR": "Antivirus"
+            },
+            "icon_light": "antivirus_light.png",
+            "icon_dark": "antivirus_dark.png",
+            "uninstall_enabled": true
+        },
+        {
             "id": "011",
             "order": 5,
             "name": "Wazuh",
