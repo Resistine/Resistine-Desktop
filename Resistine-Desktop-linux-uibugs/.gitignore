@@ -1,0 +1,149 @@
+# Created by Jacqueline Edoro
+plugins/calculator/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+!scripts/build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+*.spec
+!packaging/Resistine.spec
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+*.pyc
+.installed.cfg
+*.egg
+MANIFEST
+.python-version
+
+# Virtual Environment
+libraries/venv/
+.venv/
+venv/
+ENV/
+env/
+
+# PyInstaller
+build/build/
+build/dist/
+*.manifest
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+
+# Windows
+Thumbs.db
+ehthumbs.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Sensitive Information
+utils/email-settings.txt
+*.key
+*.pem
+*.p12
+*.env
+.env.*
+config/secrets.json
+credentials.json
+
+# VPN Configuration Files
+plugins/vpn/wireguard/*.conf
+!plugins/vpn/wireguard/wg0-example.conf
+utils/email-settings.txt
+*.ovpn
+
+# Build Configuration 
+build_config.env
+build_config.local.env
+*.env.local
+
+# Log Files
+*.log
+logs/
+
+# Temporary Files
+*.tmp
+*.temp
+*.bak
+*.backup
+installer_temp/
+Resistine AI-*.dmg
+Resistine AI-*.pkg
+
+# Build artifacts
+*.dmg
+*.pkg
+*.exe
+*.msi
+*.deb
+*.rpm
+
+# Libraries 
+libraries/customtkinter/
+libraries/site-packages/
+libraries/*/  # Exclude all library directories
+
+# Windows metadata
+*Zone.Identifier
+
+# Test coverage artifacts
+.coverage
+htmlcov/
+.pytest_cache/
+
+# VPN Apple project artifacts
+vpn-apple/build/
+vpn-apple/DerivedData/
+vpn-apple/*.xcuserdatad
+vpn-apple/*.xcuserstate
+vpn-apple/.DS_Store
+vpn-apple/antigravity_run.sh
+
+# Apple Signing & Provisioning (Secrets)
+provisioning-profiles/
+*.provisionprofile
+*.mobileprovision
+*.cert
+*.p12
+
+# Claude Code
+.claude/
+
+# Inno Setup output
+dist/installer/
+*.exe

@@ -9,12 +9,35 @@ Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
 
+import io
 import re
 import sys
 import tkinter as tk
 
+# Regex matching emoji and symbol codepoints that typical text fonts lack.
+# Covers Misc Symbols, Dingbats, Emoticons, Transport/Map, and supplemental ranges.
+_EMOJI_RE = re.compile(
+    "(["
+    "\U0001F100-\U0001FAFF"  # Enclosed Alphanumerics, Symbols & Pictographs … Extended-A
+    "\U00002600-\U000027BF"  # Misc Symbols, Dingbats
+    "\U0000FE00-\U0000FE0F"  # Variation Selectors
+    "\U0000200D"             # Zero Width Joiner (for composite emoji)
+    "\U000020E3"             # Combining Enclosing Keycap
+    "]+)"
+) if sys.platform == "linux" else None
+
+_EMOJI_RENDER = False
+if _EMOJI_RE is not None:
+    try:
+        import cairosvg as _emoji_cairosvg
+        from PIL import Image as _emoji_Image, ImageTk as _emoji_ImageTk
+        _EMOJI_RENDER = True
+    except (ImportError, OSError):
+        pass
+
 import customtkinter
 
+from utils.cairo_canvas import CairoCanvas
 from utils.logger import logger
 
 try:
@@ -420,7 +443,7 @@ class MarkdownBubble(customtkinter.CTkFrame):
         """Render a horizontal rule as a thin visible line."""
         is_dark = self._colors.get('is_dark', False)
         hr_color = "#555559" if is_dark else "#C8CCD0"
-        hr = tk.Canvas(tw, height=2, bg=tw.cget("background"),
+        hr = CairoCanvas(tw, height=2, bg=tw.cget("background"),
                        bd=0, highlightthickness=0)
         hr.create_line(0, 1, 2000, 1, fill=hr_color, width=1)
         tw.window_create("end", window=hr, padx=8, pady=6, stretch=1)
@@ -688,7 +711,162 @@ class MarkdownBubble(customtkinter.CTkFrame):
                 tw.tag_bind(tag_name, "<Enter>", lambda e: tw.configure(cursor="hand2"))
                 tw.tag_bind(tag_name, "<Leave>", lambda e: tw.configure(cursor=""))
             else:
+                self._insert_with_emoji(tw, part, tags)
+
+    # Cache rendered emoji images so identical emoji aren't re-rasterised.
+    _emoji_cache: dict[str, "ImageTk.PhotoImage"] = {}
+
+    def _insert_with_emoji(self, tw, text, tags=()):
+        """Insert text, rendering emoji as inline colour images on Linux."""
+        if not _EMOJI_RENDER:
+            tw.insert("end", text, tags)
+            return
+        # Keep references to PhotoImages and their codepoints on the
+        # instance to prevent GC and enable copy with real emoji.
+        if not hasattr(self, "_emoji_photos"):
+            self._emoji_photos = []
+        if not hasattr(self, "_image_to_emoji"):
+            self._image_to_emoji = {}
+            # Intercept copy on this bubble's textbox
+            tw.bind("<<Copy>>", self._on_copy)
+        parts = _EMOJI_RE.split(text)
+        for i, part in enumerate(parts):
+            if not part:
+                continue
+            if i % 2 == 1:
+                for ch in self._split_emoji_chars(part):
+                    photo = self._render_emoji(ch)
+                    if photo:
+                        self._emoji_photos.append(photo)
+                        img_name = tw.image_create(
+                            "end", image=photo, padx=1)
+                        self._image_to_emoji[img_name] = ch
+                    else:
+                        tw.insert("end", ch, tags)
+            else:
                 tw.insert("end", part, tags)
+
+    @staticmethod
+    def _split_emoji_chars(text):
+        """Split a string of consecutive emoji into individual emoji.
+
+        Handles ZWJ sequences (e.g. 👨‍💻) and variation selectors as single units.
+        """
+        chunks = []
+        buf = ""
+        for ch in text:
+            if ch == "\u200D" or "\uFE00" <= ch <= "\uFE0F":
+                # ZWJ or variation selector — attach to previous
+                buf += ch
+            elif buf and buf[-1] == "\u200D":
+                # Character after ZWJ — part of the sequence
+                buf += ch
+            else:
+                if buf:
+                    chunks.append(buf)
+                buf = ch
+        if buf:
+            chunks.append(buf)
+        return chunks
+
+    _EMOJI_FONTS = ["Noto Color Emoji", "Noto Sans Symbols 2", "Noto Sans"]
+
+    @classmethod
+    def _render_emoji(cls, emoji_str, size=20):
+        """Rasterise an emoji string to a PhotoImage via cairosvg.
+
+        Tries Noto Color Emoji first. If the result is too narrow or
+        empty (font lacks a proper color glyph), falls back to Noto Sans.
+        """
+        cache_key = f"{emoji_str}_{size}"
+        if cache_key in cls._emoji_cache:
+            return cls._emoji_cache[cache_key]
+
+        canvas = size + 10
+        pad = 5
+        safe = emoji_str.replace("&", "&amp;").replace("<", "&lt;")
+
+        for font_family in cls._EMOJI_FONTS:
+            svg = (
+                f'<svg xmlns="http://www.w3.org/2000/svg" '
+                f'width="{canvas}" height="{canvas}">'
+                f'<text x="{pad}" y="{int(size * 0.82) + pad}" '
+                f'font-family="{font_family}" font-size="{size}">'
+                f'{safe}</text></svg>'
+            )
+            try:
+                png_data = _emoji_cairosvg.svg2png(
+                    bytestring=svg.encode("utf-8"),
+                )
+                img = _emoji_Image.open(io.BytesIO(png_data))
+                bbox = img.getbbox()
+                if not bbox:
+                    continue
+                cropped = img.crop(bbox)
+                if cls._is_tofu(cropped):
+                    continue
+                photo = _emoji_ImageTk.PhotoImage(cropped)
+                cls._emoji_cache[cache_key] = photo
+                return photo
+            except Exception:
+                continue
+        return None
+
+    @staticmethod
+    def _is_tofu(img):
+        """Detect if a rendered glyph is a tofu rectangle (missing glyph).
+
+        Tofu is a single-color unfilled rectangle — nearly all visible
+        pixels share one colour and they form a rectangular outline.
+        """
+        w, h = img.size
+        if w < 4 or h < 4:
+            return False
+        colors = {}
+        transparent = 0
+        for x in range(w):
+            for y in range(h):
+                r, g, b, a = img.getpixel((x, y))
+                if a < 20:
+                    transparent += 1
+                else:
+                    key = (r >> 4, g >> 4, b >> 4)
+                    colors[key] = colors.get(key, 0) + 1
+        # Tofu: one dominant colour, hollow interior
+        if len(colors) > 3:
+            return False  # real emoji have many colours
+        # Check if the interior is mostly transparent (hollow rectangle)
+        if w > 6 and h > 6:
+            interior_transparent = 0
+            interior_total = 0
+            for x in range(3, w - 3):
+                for y in range(3, h - 3):
+                    interior_total += 1
+                    if img.getpixel((x, y))[3] < 20:
+                        interior_transparent += 1
+            if interior_total > 0 and interior_transparent / interior_total > 0.7:
+                return True
+        return False
+
+    def _on_copy(self, event=None):
+        """Copy selection with emoji codepoints restored."""
+        tw = self._tw
+        try:
+            sel_start = tw.index("sel.first")
+            sel_end = tw.index("sel.last")
+        except Exception:
+            return
+        mapping = getattr(self, "_image_to_emoji", {})
+        result = []
+        for kind, val, _idx in tw.dump(sel_start, sel_end):
+            if kind == "text":
+                result.append(val)
+            elif kind == "image" and val in mapping:
+                result.append(mapping[val])
+        if result:
+            tw.clipboard_clear()
+            tw.clipboard_append("".join(result))
+        return "break"
 
     def _open_url(self, url):
         """Open URL in the default browser."""
@@ -825,6 +1003,15 @@ class MarkdownBubble(customtkinter.CTkFrame):
             tw = self._tw
             tw.update_idletasks()
 
+            # Measure internal padding that ypixels/dlineinfo won't include:
+            # tw pady (4 top + 4 bottom) + CTkTextbox pack pady (2 top + 8 bottom)
+            try:
+                tw_pady = int(str(tw.cget("pady") or 0))
+            except (ValueError, tk.TclError):
+                tw_pady = 0
+            # 2 + 8 from pack pady=(2, 8) in __init__
+            padding = tw_pady * 2 + 10
+
             # count(…, "ypixels") gives the total pixel height of all content
             # including embedded windows (tables, code blocks). Much more
             # reliable than dlineinfo which only measures one display line.
@@ -833,14 +1020,14 @@ class MarkdownBubble(customtkinter.CTkFrame):
                 result = tw.count("1.0", "end", "ypixels")
                 if result is not None:
                     val = result[0] if isinstance(result, (list, tuple)) else result
-                    h = int(val) + 24
+                    h = int(val) + padding
             except (tk.TclError, TypeError, ValueError):
                 pass
 
             if h is None:
                 info = tw.dlineinfo("end-1c")
                 if info:
-                    h = info[1] + info[3] + 24
+                    h = info[1] + info[3] + padding
                 else:
                     return
 
