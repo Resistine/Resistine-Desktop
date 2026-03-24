@@ -18,6 +18,36 @@
 
       IMPORTANT: sparkle:version MUST match CFBundleVersion in the app inside
       the DMG, otherwise Sparkle will re-download the same update endlessly.
+
+      Linux releases use sparkle:os="linux" on the enclosure so the Linux
+      updater can filter for its platform. Example:
+
+        <item>
+          <title>Version 2026.03.24</title>
+          <description><![CDATA[
+            <h2>What's New</h2>
+            <ul><li>Linux auto-updater support</li></ul>
+          ]]></description>
+          <pubDate>Mon, 24 Mar 2026 12:00:00 +0000</pubDate>
+          <enclosure
+            url="https://resistine.github.io/releases/linux/Resistine-Desktop-2026.03.24-linux.tar.gz"
+            sparkle:version="2026.03.24"
+            sparkle:shortVersionString="2026.03.24"
+            length="15000000"
+            type="application/gzip"
+            sparkle:edSignature="BASE64_ED25519_SIGNATURE"
+            sparkle:os="linux"
+          />
+        </item>
+
+      To sign a Linux tarball, use the same Ed25519 key pair as macOS:
+        python3 -c "
+        import base64, sys
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        key = Ed25519PrivateKey.from_private_bytes(base64.b64decode(sys.argv[1]))
+        data = open(sys.argv[2], 'rb').read()
+        print(base64.b64encode(key.sign(data)).decode())
+        " PRIVATE_KEY_B64 path/to/archive.tar.gz
     -->
 
     <item>
