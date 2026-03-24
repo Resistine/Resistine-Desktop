@@ -9,19 +9,31 @@
     <language>en</language>
 
     <!--
-      To publish a new release:
+      macOS Release Instructions:
       1. Update VERSION in packaging/Resistine.spec
       2. Build the DMG with ./scripts/build/build-distribution.sh
-      3. Sign the DMG:  ./vpn-apple/Sparkle.framework/Resources/bin/sign_update dist/Resistine-Installer.dmg
+      3. Sign the DMG:  scripts/sparkle-tools/sign_update dist/Resistine-Installer.dmg
       4. Add a new <item> with the version, signature, length, and download URL
       5. Push this file + the DMG to resistine.github.io
 
       IMPORTANT: sparkle:version MUST match CFBundleVersion in the app inside
       the DMG, otherwise Sparkle will re-download the same update endlessly.
 
-      Linux releases use sparkle:os="linux" on the enclosure so the Linux
-      updater can filter for its platform. Example:
+      Linux Release Instructions:
+      1. Update VERSION in packaging/Resistine.spec
+      2. Create a tarball of the project: tar czf Resistine-Desktop-VERSION-linux.tar.gz Resistine-Desktop/
+      3. Sign it with the same Ed25519 key:
+           python3 -c "
+           import base64, sys
+           from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+           key = Ed25519PrivateKey.from_private_bytes(base64.b64decode(sys.argv[1]))
+           data = open(sys.argv[2], 'rb').read()
+           print(base64.b64encode(key.sign(data)).decode())
+           " PRIVATE_KEY_B64 path/to/archive.tar.gz
+      4. Upload to resistine.github.io/releases/linux/
+      5. Add a new <item> with sparkle:os="linux" on the enclosure (see example below)
 
+      Linux item example:
         <item>
           <title>Version 2026.03.24</title>
           <description><![CDATA[
@@ -40,14 +52,11 @@
           />
         </item>
 
-      To sign a Linux tarball, use the same Ed25519 key pair as macOS:
-        python3 -c "
-        import base64, sys
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-        key = Ed25519PrivateKey.from_private_bytes(base64.b64decode(sys.argv[1]))
-        data = open(sys.argv[2], 'rb').read()
-        print(base64.b64encode(key.sign(data)).decode())
-        " PRIVATE_KEY_B64 path/to/archive.tar.gz
+      Windows Release Instructions:
+      1. Update VERSION in packaging/Resistine.spec
+      2. Build installer on Windows: .\scripts\build\build-windows-installer.ps1
+      3. Upload Resistine-Setup-VERSION.exe to resistine.github.io/releases/windows/
+      4. Add a new <item> with sparkle:os="windows" on the enclosure
     -->
 
     <item>
