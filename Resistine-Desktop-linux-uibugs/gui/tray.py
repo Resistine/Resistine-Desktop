@@ -1,0 +1,310 @@
+# tray.py
+"""
+Resistine VPN System Tray Icon — standalone, no project imports.
+Authors: Merhawi and the Resistine Team
+Copyright (c) Resistine 2025
+Licensed under the GNU General Public License v2 or later
+"""
+
+import threading
+import os
+import sys
+import time
+import json
+import socket
+import logging
+import subprocess
+
+try:
+    import pystray
+    from pystray import MenuItem as item
+    from PIL import Image, ImageDraw
+except ImportError:
+    print("ERROR: pip install pystray pillow")
+    sys.exit(1)
+
+
+# ---- Paths ----
+BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # project root (up from gui/)
+ASSETS_DIR  = os.path.join(BASE_DIR, "resources", "icons")
+ICON_PATH   = os.path.join(ASSETS_DIR, "icon.ico")
+APPDATA_DIR = os.path.join(os.environ.get("APPDATA", ""), "Resistine")
+WG_DIR      = os.path.join(APPDATA_DIR, "wireguard")
+CONFIG_FILE = os.path.join(APPDATA_DIR, "vpn_config.json")
+LOG_FILE    = os.path.join(APPDATA_DIR, "tray.log")
+MAIN_SCRIPT = os.path.join(BASE_DIR, "main.py")
+
+
+# ---- Logging (minimal) ----
+os.makedirs(APPDATA_DIR, exist_ok=True)
+logging.basicConfig(
+    filename=LOG_FILE,
+    level=logging.WARNING,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+)
+logger = logging.getLogger("ResistineTray")
+
+
+# ---- IPC (inline, no service_client import) ----
+SERVICE_HOST = "127.0.0.1"
+SERVICE_PORT = 51888
+BUFFER_SIZE  = 4096
+IPC_TOKEN    = "RESISTINE_INTERNAL_TOKEN_CHANGE_ME"
+POLL_INTERVAL = 5
+
+DOT_COLORS = {
+    "connected":    (30,  142,  62, 255),   # green
+    "disconnected": (197,  34,  31, 255),   # red
+    "connecting":   (230, 160,   0, 255),   # yellow
+}
+
+
+def _send_command(command: str, tunnel: str, config_path: str = None) -> dict:
+    payload = {
+        "token":   IPC_TOKEN,
+        "command": command,
+        "tunnel":  tunnel,
+    }
+    if config_path:
+        payload["config_path"] = config_path
+
+    sock = None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5)
+        sock.connect((SERVICE_HOST, SERVICE_PORT))
+        sock.sendall(json.dumps(payload).encode("utf-8"))
+        data = sock.recv(BUFFER_SIZE)
+        return json.loads(data.decode("utf-8"))
+    except ConnectionRefusedError:
+        return {"status": "error", "state": "Stopped", "message": "Service not running"}
+    except socket.timeout:
+        return {"status": "error", "state": "Stopped", "message": "Service timed out"}
+    except Exception as e:
+        logger.error(f"IPC error: {e}")
+        return {"status": "error", "state": "Stopped", "message": str(e)}
+    finally:
+        if sock:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+
+# ---- Active tunnel (read config file directly) ----
+
+def _get_active_tunnel() -> tuple:
+    """Returns (tunnel_name, config_path) or (None, None)."""
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, "r") as f:
+                data = json.load(f)
+                name = data.get("active_config")
+                if name:
+                    path = os.path.join(WG_DIR, f"{name}.conf")
+                    return name, path
+
+        # Fallback: first .conf found in wireguard dir
+        if os.path.exists(WG_DIR):
+            confs = [f for f in os.listdir(WG_DIR) if f.endswith(".conf")]
+            if confs:
+                name = confs[0].replace(".conf", "")
+                return name, os.path.join(WG_DIR, confs[0])
+
+    except Exception as e:
+        logger.error(f"Failed to get active tunnel: {e}")
+
+    return None, None
+
+
+# ---- Icon builder ----
+
+def _build_icon(state: str) -> Image.Image:
+    """App icon with a colored status dot in the bottom-right corner."""
+    size = 64
+
+    if os.path.exists(ICON_PATH):
+        base = Image.open(ICON_PATH).convert("RGBA")
+        base = base.resize((size, size), Image.LANCZOS)
+    else:
+        # Fallback: plain blue square
+        base = Image.new("RGBA", (size, size), (60, 120, 200, 255))
+
+    draw = ImageDraw.Draw(base)
+
+    # Dot position — bottom-right corner
+    dot_r  = 10
+    margin = 2
+    x0 = size - (dot_r * 2) - margin
+    y0 = size - (dot_r * 2) - margin
+    x1 = size - margin
+    y1 = size - margin
+
+    # White ring so dot is visible on any background
+    ring = 2
+    draw.ellipse(
+        [x0 - ring, y0 - ring, x1 + ring, y1 + ring],
+        fill=(255, 255, 255, 255),
+    )
+
+    # Colored dot
+    draw.ellipse(
+        [x0, y0, x1, y1],
+        fill=DOT_COLORS.get(state, DOT_COLORS["disconnected"]),
+    )
+
+    return base
+
+
+def _state_from_service(service_state: str) -> str:
+    if service_state == "Running":
+        return "connected"
+    if service_state in ("Starting", "Stopping"):
+        return "connecting"
+    return "disconnected"
+
+
+# ---- Tray App ----
+
+class ResistineTray:
+    def __init__(self):
+        self._icon       = None
+        self._tunnel     = None
+        self._config_path = None
+        self._state      = "disconnected"
+        self._lock       = threading.Lock()
+
+    def _refresh_status(self):
+        tunnel, config_path = _get_active_tunnel()
+        if not tunnel:
+            return
+
+        try:
+            result    = _send_command("status", tunnel)
+            new_state = _state_from_service(result.get("state", "Stopped"))
+
+            with self._lock:
+                changed           = new_state != self._state
+                self._tunnel      = tunnel
+                self._config_path = config_path
+                self._state       = new_state
+
+            if self._icon:
+                self._icon.title = self._title()
+                self._icon.update_menu()
+                if changed:
+                    self._icon.icon = _build_icon(new_state)
+                    logger.warning(f"VPN state changed: {new_state}")
+
+        except Exception as e:
+            logger.error(f"Status poll failed: {e}")
+
+    def _poll_loop(self):
+        while True:
+            self._refresh_status()
+            time.sleep(POLL_INTERVAL)
+
+    def _title(self) -> str:
+        return {
+            "connected":    "Resistine VPN — Connected",
+            "disconnected": "Resistine VPN — Disconnected",
+            "connecting":   "Resistine VPN — Connecting...",
+        }.get(self._state, "Resistine VPN")
+
+    # ---- Actions ----
+
+    def on_connect(self, icon, item):
+        with self._lock:
+            tunnel      = self._tunnel
+            config_path = self._config_path
+        if not tunnel:
+            return
+
+        # Immediate yellow feedback
+        with self._lock:
+            self._state = "connecting"
+        if self._icon:
+            self._icon.icon  = _build_icon("connecting")
+            self._icon.title = self._title()
+            self._icon.update_menu()
+
+        result = _send_command("connect", tunnel, config_path)
+        if result.get("status") != "ok" and \
+           result.get("state") not in ("Starting", "Running"):
+            logger.error(f"Connect failed: {result.get('message', '')}")
+
+        self._refresh_status()
+    
+    def on_disconnect(self, icon, item):
+        with self._lock:
+            if self._state == "disconnected":
+                return
+            tunnel = self._tunnel
+        if not tunnel:
+            return
+        result = _send_command("disconnect", tunnel)
+        if result.get("status") != "ok":
+            logger.error(f"Disconnect failed: {result.get('message', '')}")
+        self._refresh_status()
+
+    def on_open_app(self, icon, item):
+        subprocess.Popen(
+            [sys.executable, MAIN_SCRIPT],
+            cwd=BASE_DIR,
+        )
+
+    def on_quit(self, icon, item):
+        icon.stop()
+
+    # ---- Menu ----
+
+    def _build_menu(self):
+        with self._lock:
+            state = self._state
+
+        is_connected  = state == "connected"
+        is_connecting = state == "connecting"
+
+        status_label = {
+            "connected":    "● Connected",
+            "disconnected": "● Disconnected",
+            "connecting":   "● Connecting...",
+        }.get(state, "● Unknown")
+
+        return pystray.Menu(
+            item(status_label,     None,               enabled=False),
+            pystray.Menu.SEPARATOR,
+            item("Connect",        self.on_connect,
+                 enabled=not is_connected and not is_connecting),
+            item("Disconnect",     self.on_disconnect, enabled=is_connected),
+            pystray.Menu.SEPARATOR,
+            item("Open Resistine", self.on_open_app),
+            item("Quit",           self.on_quit),
+        )
+
+    # ---- Run ----
+
+    def run(self):
+        tunnel, config_path = _get_active_tunnel()
+        if tunnel:
+            try:
+                result            = _send_command("status", tunnel)
+                self._state       = _state_from_service(result.get("state", "Stopped"))
+                self._tunnel      = tunnel
+                self._config_path = config_path
+            except Exception:
+                self._state = "disconnected"
+
+        self._icon = pystray.Icon(
+            name="ResistineVPN",
+            icon=_build_icon(self._state),
+            title=self._title(),
+            menu=pystray.Menu(lambda: self._build_menu()),
+        )
+
+        threading.Thread(target=self._poll_loop, daemon=True).start()
+        self._icon.run()
+
+
+if __name__ == "__main__":
+    ResistineTray().run()

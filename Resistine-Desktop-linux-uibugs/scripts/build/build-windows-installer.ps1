@@ -1,0 +1,110 @@
+param(
+    [switch]$SkipDependencyInstall,
+    [switch]$SkipPyInstaller
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+$ProjectRoot = Split-Path (Split-Path (Split-Path -Parent $PSCommandPath) -Parent) -Parent
+Set-Location $ProjectRoot
+
+function Get-AppVersion {
+    $specPath = Join-Path $ProjectRoot "packaging\Resistine.spec"
+    $match = Select-String -Path $specPath -Pattern "VERSION\s*=\s*'([^']+)'" | Select-Object -First 1
+    if (-not $match) {
+        throw "Could not find VERSION in Resistine.spec"
+    }
+    return $match.Matches[0].Groups[1].Value
+}
+
+function Resolve-InnoCompiler {
+    $fromPath = Get-Command iscc.exe -ErrorAction SilentlyContinue
+    if ($fromPath -and (Test-Path $fromPath.Path)) {
+        return $fromPath.Path
+    }
+
+    $searchPaths = @(
+        "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+        "C:\Program Files\Inno Setup 6\ISCC.exe"
+    )
+    foreach ($candidate in $searchPaths) {
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+
+    throw "Inno Setup compiler (ISCC.exe) not found. Install Inno Setup 6 first, then rerun this script."
+}
+
+function Resolve-BasePython {
+    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($pythonCmd) {
+        return @{
+            Exe  = $pythonCmd.Path
+            Args = @()
+            Name = "python"
+        }
+    }
+
+    $pyCmd = Get-Command py -ErrorAction SilentlyContinue
+    if ($pyCmd) {
+        & $pyCmd.Path -3 -c "import sys" *> $null
+        if ($LASTEXITCODE -eq 0) {
+            return @{
+                Exe  = $pyCmd.Path
+                Args = @("-3")
+                Name = "py -3"
+            }
+        }
+    }
+
+    throw "Python was not found. Install Python (or ensure 'py' launcher is available), then rerun the installer build script."
+}
+
+$venvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+if (-not (Test-Path $venvPython)) {
+    $basePython = Resolve-BasePython
+    Write-Host "Creating .venv for Windows build..."
+    & $basePython.Exe @($basePython.Args + @("-m", "venv", ".venv"))
+} else {
+    Write-Host "Using existing virtual environment: $venvPython"
+}
+
+if (-not $SkipDependencyInstall) {
+    Write-Host "Installing build/runtime dependencies into .venv..."
+    & $venvPython -m pip install --upgrade pip
+    & $venvPython -m pip install -r (Join-Path $ProjectRoot "requirements\requirements-windows.txt")
+    & $venvPython -m pip install pyinstaller
+}
+
+if (-not $SkipPyInstaller) {
+    Write-Host "Building Windows application bundle with PyInstaller..."
+    & $venvPython -m PyInstaller (Join-Path $ProjectRoot "packaging\Resistine.spec") --clean --noconfirm
+}
+
+$sourceDir = Join-Path $ProjectRoot "dist\Resistine"
+if (-not (Test-Path (Join-Path $sourceDir "Resistine.exe"))) {
+    throw "Expected PyInstaller output not found at $sourceDir\Resistine.exe"
+}
+
+$outputDir = Join-Path $ProjectRoot "dist\installers"
+New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
+
+$version = Get-AppVersion
+$iscc = Resolve-InnoCompiler
+$issScript = Join-Path $ProjectRoot "packaging\windows\ResistineInstaller.iss"
+
+if (-not (Test-Path $issScript)) {
+    throw "Inno Setup script not found at $issScript"
+}
+
+Write-Host "Building Windows installer (.exe) with Inno Setup..."
+& $iscc "/DAppName=Resistine" "/DAppVersion=$version" "/DSourceDir=$sourceDir" "/DOutputDir=$outputDir" $issScript
+if ($LASTEXITCODE -ne 0) {
+    throw "Inno Setup compilation failed with exit code $LASTEXITCODE."
+}
+
+Write-Host ""
+Write-Host "Done. Installer output:"
+Write-Host "  $outputDir\Resistine-Setup-$version.exe"
