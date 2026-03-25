@@ -648,6 +648,37 @@ def _patched_check(self, widget):
     return _orig_check(self, widget)
 _sf.CTkScrollableFrame.check_if_master_is_canvas = _patched_check
 
+# ── Scroll overscroll fix (all platforms) ──────────────────────────────────
+# CTkScrollableFrame sets scrollregion to bbox("all") which can be smaller
+# than the canvas viewport. This allows scrolling up past the top of the
+# content. Fix: clamp scrollregion to at least the canvas viewport size.
+_orig_sf_init_scroll = _sf.CTkScrollableFrame.__init__
+
+def _sf_init_clamp_scroll(self, *args, **kwargs):
+    _orig_sf_init_scroll(self, *args, **kwargs)
+
+    # Replace the <Configure> binding on self (the inner frame)
+    # with one that clamps the scrollregion.
+    self.bind("<Configure>", lambda e, s=self: _clamp_scrollregion(s))
+
+def _clamp_scrollregion(sf):
+    try:
+        bbox = sf._parent_canvas.bbox("all")
+        if bbox is None:
+            return
+        x1, y1, x2, y2 = bbox
+        # Ensure scrollregion is at least as large as the canvas viewport
+        canvas_w = sf._parent_canvas.winfo_width()
+        canvas_h = sf._parent_canvas.winfo_height()
+        x2 = max(x2, x1 + canvas_w)
+        y2 = max(y2, y1 + canvas_h)
+        sf._parent_canvas.configure(scrollregion=(x1, y1, x2, y2))
+    except Exception:
+        pass
+
+_sf.CTkScrollableFrame.__init__ = _sf_init_clamp_scroll
+# ──────────────────────────────────────────────────────────────────────────
+
 # ── Windows resize performance patch ────────────────────────────────────────
 # ROOT CAUSE of the resize glitching on Windows:
 #
