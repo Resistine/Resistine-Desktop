@@ -33,7 +33,8 @@ class MarkdownViewer(customtkinter.CTkFrame):
         self.nav_frame = customtkinter.CTkFrame(self, fg_color="transparent")
         self.nav_frame.pack(fill="x", padx=16, pady=(14, 0))
 
-        # Back button
+        # Back button — created as normal first so the initial Cairo draw
+        # renders at the correct size, then disabled after layout.
         self.back_button = customtkinter.CTkButton(
             self.nav_frame,
             text="\u2190  Back",
@@ -47,9 +48,9 @@ class MarkdownViewer(customtkinter.CTkFrame):
             text_color=("#000000", "#ffffff"),
             hover_color=("#F0F0F5", "#1F1F22"),
             command=self.go_back,
-            state="disabled",
         )
         self.back_button.pack(side="left", padx=(0, 6))
+        self.after(10, lambda: self.back_button.configure(state="disabled"))
 
         # Home button
         self.home_button = customtkinter.CTkButton(
