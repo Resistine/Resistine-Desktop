@@ -69,7 +69,7 @@ else:
                     f = tkfont.Font(font=tw.cget("font"))
                     line_h = f.metrics("linespace")
                     # Vertical: center the line in the frame
-                    y = max((outer_h - line_h) // 2, 0)
+                    y = max((outer_h - line_h) // 2, 0) + (line_h // 16)
                     # Horizontal: inset by corner_radius (like CTkEntry)
                     x = min(corner_radius, outer_h // 2)
                     tw.place(x=x, y=y, relwidth=1.0, height=line_h,
