@@ -24,7 +24,7 @@ class Plugin(BasePlugin):
         if not _SHOW_DEBUG_PAGE:
             raise RuntimeError(
                 "Debug page disabled. Set _SHOW_DEBUG_PAGE = True in "
-                "plugins/debug_scroll/main.py to enable."
+                "plugins/debug/main.py to enable."
             )
         super().__init__(
             id="999",
