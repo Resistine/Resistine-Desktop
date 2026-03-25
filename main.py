@@ -115,12 +115,24 @@ if sys.platform.startswith("linux"):
         if photo is None:
             return False
         self._cairo_photos["main"] = photo
-        
+
         if not self._canvas.find_withtag("cairo_main"):
             self._canvas.create_image(0, 0, anchor="nw", image=photo, tags=("cairo_main", "inner_parts"))
         else:
             self._canvas.itemconfig("cairo_main", image=photo)
         self._canvas.tag_lower("cairo_main")
+
+        # On Linux/X11, set the canvas bg to match the widget's visible color
+        # so scroll blit artifacts blend in instead of showing as pink/grey.
+        if sys.platform == "linux":
+            try:
+                if _fg and _fg != "transparent":
+                    self._canvas.configure(bg=_fg)
+                elif _bg and _bg != "transparent":
+                    self._canvas.configure(bg=_bg)
+            except Exception:
+                pass
+
         return False
 
     def _draw_smooth_scrollbar(self, width, height, corner_radius, inner_corner_radius, start_value, end_value, orientation):
@@ -149,6 +161,13 @@ if sys.platform.startswith("linux"):
             self._canvas.create_image(0, 0, anchor="nw", image=photo, tags=("cairo_scrollbar", "scrollbar_parts"))
         else:
             self._canvas.itemconfig("cairo_scrollbar", image=photo)
+        if sys.platform == "linux":
+            try:
+                fg = master._apply_appearance_mode(master._fg_color) if hasattr(master, "_fg_color") else None
+                if fg and fg != "transparent":
+                    self._canvas.configure(bg=fg)
+            except Exception:
+                pass
         return False
 
     def _draw_smooth_progress_bar(self, width, height, corner_radius, border_width, v1, v2, orientation):
@@ -191,6 +210,13 @@ if sys.platform.startswith("linux"):
         else:
             self._canvas.itemconfig("cairo_progress", image=photo)
         self._canvas.tag_lower("cairo_progress")
+        if sys.platform == "linux":
+            try:
+                fg = master._apply_appearance_mode(master._fg_color) if hasattr(master, "_fg_color") else None
+                if fg and fg != "transparent":
+                    self._canvas.configure(bg=fg)
+            except Exception:
+                pass
         return False
 
     def _draw_smooth_slider(self, width, height, corner_radius, border_width, button_length, button_corner_radius, slider_value, orientation, button_color=None):
@@ -278,6 +304,23 @@ if sys.platform.startswith("linux"):
         else:
             self._canvas.itemconfig("cairo_slider", image=photo)
         self._canvas.tag_lower("cairo_slider")
+        if sys.platform == "linux":
+            try:
+                # For sliders/switches, the button color is the most prominent
+                # element — use it as the canvas bg so blit artifacts match.
+                btn_c = None
+                if button_color:
+                    btn_c = button_color
+                elif hasattr(master, "_button_color"):
+                    btn_c = master._apply_appearance_mode(master._button_color)
+                if btn_c and btn_c != "transparent":
+                    self._canvas.configure(bg=btn_c)
+                else:
+                    fg = master._apply_appearance_mode(master._fg_color) if hasattr(master, "_fg_color") else None
+                    if fg and fg != "transparent":
+                        self._canvas.configure(bg=fg)
+            except Exception:
+                pass
         return False
 
     def _draw_smooth_vertical_split(self, width, height, corner_radius, border_width, left_section_width):
@@ -332,6 +375,13 @@ if sys.platform.startswith("linux"):
         else:
             self._canvas.itemconfig("cairo_vertical_split", image=photo)
         self._canvas.tag_lower("cairo_vertical_split")
+        if sys.platform == "linux":
+            try:
+                fg = master._apply_appearance_mode(master._fg_color) if hasattr(master, "_fg_color") else None
+                if fg and fg != "transparent":
+                    self._canvas.configure(bg=fg)
+            except Exception:
+                pass
         return False
 
 
@@ -655,11 +705,91 @@ if sys.platform.startswith("win"):
     _sf.CTkScrollableFrame._fit_frame_dimensions_to_canvas = _throttled_fit
 # ────────────────────────────────────────────────────────────────────────────
 
+# On Linux/X11, CTkFrame._draw resets the canvas bg to _bg_color AFTER our
+# Cairo draw sets it to _fg_color. Patch _draw to re-set the canvas bg to
+# the widget's fg_color (or bg_color for transparent widgets) so blit
+# artifacts match the visible widget color.
+if sys.platform.startswith("linux"):
+    import tkinter as _tk
+
+    _orig_ctkframe_draw = customtkinter.CTkFrame._draw
+
+    def _ctkframe_draw_fixbg(self, no_color_updates=False):
+        _orig_ctkframe_draw(self, no_color_updates)
+        try:
+            fg = self._apply_appearance_mode(self._fg_color)
+            if fg and fg != "transparent":
+                self._canvas.configure(bg=fg)
+            else:
+                bg = self._apply_appearance_mode(self._bg_color)
+                if bg:
+                    self._canvas.configure(bg=bg)
+        except Exception:
+            pass
+
+    customtkinter.CTkFrame._draw = _ctkframe_draw_fixbg
+
+    # Same fix for CTkSwitch — it has two canvases that get reset to _bg_color
+    _orig_ctkswitch_draw = customtkinter.CTkSwitch._draw
+
+    # Replace CTkSwitch's _bg_canvas (a CTkCanvas that X11 stipples during
+    # scroll) with a plain tk.Frame after init. The _bg_canvas is only used
+    # as a solid colored background — no shapes, no items — so a Frame works.
+    _orig_ctkswitch_init = customtkinter.CTkSwitch.__init__
+
+    def _ctkswitch_init_fixbg(self, *args, **kwargs):
+        _orig_ctkswitch_init(self, *args, **kwargs)
+        try:
+            # Replace _bg_canvas (CTkCanvas) with a plain tk.Frame
+            bg = self._bg_canvas.cget("bg")
+            grid_info = self._bg_canvas.grid_info()
+            self._bg_canvas.grid_forget()
+            self._bg_canvas.destroy()
+            self._bg_canvas = _tk.Frame(self, bg=bg, highlightthickness=0, bd=0)
+            self._bg_canvas.grid(
+                row=grid_info.get("row", 0),
+                column=grid_info.get("column", 0),
+                columnspan=grid_info.get("columnspan", 3),
+                sticky=grid_info.get("sticky", "nswe"),
+            )
+            self._bg_canvas.lower()
+        except Exception:
+            pass
+
+    customtkinter.CTkSwitch.__init__ = _ctkswitch_init_fixbg
+
+    # Also fix the track canvas bg and keep _bg_canvas bg in sync
+    _orig_ctkswitch_draw = customtkinter.CTkSwitch._draw
+
+    def _ctkswitch_draw_fixbg(self, no_color_updates=False):
+        _orig_ctkswitch_draw(self, no_color_updates)
+        try:
+            # Track canvas: match the dominant visible color
+            if self._check_state:
+                prog = self._apply_appearance_mode(self._progress_color)
+                if prog and prog != "transparent":
+                    self._canvas.configure(bg=prog)
+                else:
+                    fg = self._apply_appearance_mode(self._fg_color)
+                    if fg and fg != "transparent":
+                        self._canvas.configure(bg=fg)
+            else:
+                fg = self._apply_appearance_mode(self._fg_color)
+                if fg and fg != "transparent":
+                    self._canvas.configure(bg=fg)
+            # Sync bg_canvas (now a Frame) color
+            bg = self._apply_appearance_mode(self._bg_color)
+            if bg:
+                self._bg_canvas.configure(bg=bg)
+        except Exception:
+            pass
+
+    customtkinter.CTkSwitch._draw = _ctkswitch_draw_fixbg
+
 # On Linux, Tk binds <Control-a> to "move cursor to line start" (emacs style),
 # overriding the expected select-all. Fix it at the class level so it applies
 # to every Entry and Text widget in the app without needing per-widget binds.
 if sys.platform.startswith("linux"):
-    import tkinter as _tk
 
     def _select_all_entry(event):
         event.widget.select_range(0, "end")
