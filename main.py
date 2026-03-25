@@ -60,10 +60,16 @@ if sys.platform.startswith("linux"):
     def _render_cairo_to_tk(self, width, height, draw_func):
         """Bridge between Cairo rendering and Tkinter PhotoImage."""
         w, h = math.ceil(width), math.ceil(height)
+        if w < 1 or h < 1:
+            return None
         surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
         ctx = cairo.Context(surface)
         draw_func(ctx, w, h)
-        img = Image.frombuffer("RGBA", (w, h), bytes(surface.get_data()), "raw", "BGRA", 0, 1)
+        surface.flush()
+        data = surface.get_data()
+        if data is None:
+            return None
+        img = Image.frombuffer("RGBA", (w, h), bytes(data), "raw", "BGRA", 0, 1)
         photo = ImageTk.PhotoImage(img)
         if not hasattr(self, "_cairo_photos"): self._cairo_photos = {}
         return photo
@@ -106,6 +112,8 @@ if sys.platform.startswith("linux"):
             ctx.fill()
 
         photo = _render_cairo_to_tk(self, width, height, draw)
+        if photo is None:
+            return False
         self._cairo_photos["main"] = photo
         
         if not self._canvas.find_withtag("cairo_main"):
@@ -133,6 +141,8 @@ if sys.platform.startswith("linux"):
             ctx.fill()
 
         photo = _render_cairo_to_tk(self, width, height, draw)
+        if photo is None:
+            return False
         self._cairo_photos["scrollbar"] = photo
         
         if not self._canvas.find_withtag("cairo_scrollbar"):
@@ -173,6 +183,8 @@ if sys.platform.startswith("linux"):
                 ctx.fill()
 
         photo = _render_cairo_to_tk(self, width, height, draw)
+        if photo is None:
+            return False
         self._cairo_photos["progress"] = photo
         if not self._canvas.find_withtag("cairo_progress"):
             self._canvas.create_image(0, 0, anchor="nw", image=photo, tags=("cairo_progress", "progress_parts"))
@@ -258,6 +270,8 @@ if sys.platform.startswith("linux"):
                     ctx.fill()
 
         photo = _render_cairo_to_tk(self, width, height, draw)
+        if photo is None:
+            return False
         self._cairo_photos["slider"] = photo
         if not self._canvas.find_withtag("cairo_slider"):
             self._canvas.create_image(0, 0, anchor="nw", image=photo, tags=("cairo_slider", "slider_parts"))
@@ -310,6 +324,8 @@ if sys.platform.startswith("linux"):
                 ctx.stroke()
 
         photo = _render_cairo_to_tk(self, width, height, draw)
+        if photo is None:
+            return False
         self._cairo_photos["vertical_split"] = photo
         if not self._canvas.find_withtag("cairo_vertical_split"):
             self._canvas.create_image(0, 0, anchor="nw", image=photo, tags=("cairo_vertical_split", "inner_parts"))
