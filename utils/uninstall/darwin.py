@@ -45,7 +45,7 @@ def run_uninstall(app, progress_callback=None):
     # Steps run in order; later steps are deliberately last to prevent
     # recreation by code/settings modules still running.
     steps = [
-        ("Removing Wazuh agent...",        "Wazuh agent",           _remove_wazuh_agent),
+        ("Removing SIEM agent...",         "SIEM agent",            _remove_wazuh_agent),
         ("Stopping VPN tunnel...",         "VPN stop",              _stop_vpn_tunnel),
         ("Deactivating system extension...","Extension deactivation",_deactivate_system_extension),
         ("Removing keychain items...",     "Keychain",              _remove_keychain_items),

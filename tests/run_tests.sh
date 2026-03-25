@@ -24,7 +24,8 @@ NC='\033[0m'  # No Colour
 
 # ── Project root ─────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR/.."
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJECT_ROOT"
 
 # ── Python / pytest detection ────────────────────────────────────────────────
 PYTHON="${PYTHON:-python3}"
@@ -36,7 +37,7 @@ fi
 # Check pytest installed
 if ! "$PYTHON" -m pytest --version &>/dev/null; then
     echo -e "${YELLOW}pytest not found — installing test dependencies...${NC}"
-    "$PYTHON" -m pip install -r requirements/requirements-test.txt
+    "$PYTHON" -m pip install -r scripts/requirements/requirements-test.txt
 fi
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -97,7 +98,7 @@ case "$MODE" in
       --cov-report=xml:coverage.xml \
       --timeout=120
     echo ""
-    echo -e "${GREEN}Coverage report: ${SCRIPT_DIR}/coverage_html/index.html${NC}"
+    echo -e "${GREEN}Coverage report: ${PROJECT_ROOT}/coverage_html/index.html${NC}"
     ;;
 
   ci)
