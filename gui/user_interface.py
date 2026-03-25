@@ -190,7 +190,7 @@ class AppUI(customtkinter.CTk):
 
             badge = customtkinter.CTkLabel(
                 header,
-                text=str(current_status).title(),
+                text=str(current_status),
                 font=customtkinter.CTkFont(size=11, weight="bold"),
                 text_color=badge_text_color,
                 fg_color=badge_bg,
