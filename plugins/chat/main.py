@@ -708,8 +708,10 @@ class Plugin(BasePlugin):
             text_color=fg_color,
             corner_radius=0,
             border_width=0,
-            activate_scrollbars=True,
+            activate_scrollbars=False,
         )
+        # Delay enabling scrollbars so they don't flash during page load
+        self.app.after(200, lambda: self.chat_box.configure(activate_scrollbars=True))
         # Bottom padding reserves space so content doesn't render behind
         # the input bar overlaid at the bottom of second_frame.
         self.chat_box.grid(row=0, column=0, padx=0, pady=(0, 58), sticky="nsew")

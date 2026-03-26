@@ -657,9 +657,12 @@ _orig_sf_init_scroll = _sf.CTkScrollableFrame.__init__
 def _sf_init_clamp_scroll(self, *args, **kwargs):
     _orig_sf_init_scroll(self, *args, **kwargs)
 
-    # Replace the <Configure> binding on self (the inner frame)
-    # with one that clamps the scrollregion.
+    # Clamp scrollregion and update scrollbar visibility on both
+    # content resize (inner frame <Configure>) and viewport resize
+    # (canvas <Configure>).
+    self._sb_orig_width = self._scrollbar.cget("width")
     self.bind("<Configure>", lambda e, s=self: _clamp_scrollregion(s))
+    self._parent_canvas.bind("<Configure>", lambda e, s=self: _clamp_scrollregion(s), add="+")
 
 def _clamp_scrollregion(sf):
     try:
@@ -670,9 +673,29 @@ def _clamp_scrollregion(sf):
         # Ensure scrollregion is at least as large as the canvas viewport
         canvas_w = sf._parent_canvas.winfo_width()
         canvas_h = sf._parent_canvas.winfo_height()
+        content_w = x2 - x1
+        content_h = y2 - y1
         x2 = max(x2, x1 + canvas_w)
         y2 = max(y2, y1 + canvas_h)
         sf._parent_canvas.configure(scrollregion=(x1, y1, x2, y2))
+
+        # Tie scrollbar visibility to whether scrolling is possible.
+        # If content <= viewport (scrollregion was clamped), no scroll = no bar.
+        if canvas_h > 1 and canvas_w > 1:
+            if sf._orientation == "vertical":
+                can_scroll = content_h > canvas_h
+            else:
+                can_scroll = content_w > canvas_w
+
+            if not can_scroll and not getattr(sf, "_sb_collapsed", False):
+                sf._sb_collapsed = True
+                sf._scrollbar.configure(width=0)
+                sf._scrollbar._canvas.configure(width=0)
+            elif can_scroll and getattr(sf, "_sb_collapsed", False):
+                sf._sb_collapsed = False
+                orig_w = getattr(sf, "_sb_orig_width", 8)
+                sf._scrollbar.configure(width=orig_w)
+                sf._scrollbar._canvas.configure(width=orig_w)
     except Exception:
         pass
 
