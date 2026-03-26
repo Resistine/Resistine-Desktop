@@ -672,6 +672,10 @@ class AppUI(customtkinter.CTk):
         """
         Select and display the specified frame.
         """
+        # Don't reload the current tab
+        if hasattr(self, "current_frame_name") and self.current_frame_name == name:
+            return
+
         self.current_frame_name = name
 
         # Precompute content width hint for smooth initial plugin rendering.
