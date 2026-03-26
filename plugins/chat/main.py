@@ -711,7 +711,10 @@ class Plugin(BasePlugin):
             activate_scrollbars=False,
         )
         # Delay enabling scrollbars so they don't flash during page load
-        self.app.after(200, lambda: self.chat_box.configure(activate_scrollbars=True))
+        def _enable_scrollbars():
+            self.chat_box._scrollbars_activated = True
+            self.chat_box._check_if_scrollbars_needed(continue_loop=True)
+        self.app.after(200, _enable_scrollbars)
         # Bottom padding reserves space so content doesn't render behind
         # the input bar overlaid at the bottom of second_frame.
         self.chat_box.grid(row=0, column=0, padx=0, pady=(0, 58), sticky="nsew")

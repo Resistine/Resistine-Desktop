@@ -251,18 +251,26 @@ class AppUI(customtkinter.CTk):
             except Exception:
                 pass
 
+        _first_configure = [True]
+
         def _schedule_wraplength(event=None, _f=frame, _j=_wrap_job):
             if _j[0] is not None:
                 try:
                     _f.after_cancel(_j[0])
                 except Exception:
                     pass
-            _j[0] = _f.after(150, _apply_wraplength)
+            # Skip the first real configure — dimensions aren't final yet.
+            # Apply immediately on the second one.
+            if _first_configure[0] and _f.winfo_width() > 1:
+                _first_configure[0] = False
+            elif not _first_configure[0] and _f.winfo_width() > 1:
+                _first_configure[0] = None  # sentinel: don't enter this branch again
+                _apply_wraplength()
+                return
+            else:
+                _j[0] = _f.after(150, _apply_wraplength)
 
-        # <Configure> only schedules (cheap); <Map> and the initial after() fire immediately.
         frame.bind("<Configure>", _schedule_wraplength)
-        frame.bind("<Map>", lambda e: _apply_wraplength())
-        frame.after(1, _apply_wraplength)
 
         # --- Interaction ---
         def on_click(_e=None):
