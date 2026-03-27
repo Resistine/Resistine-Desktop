@@ -152,11 +152,9 @@ if [ -f "$SCRIPT_DIR/download-clamav-artifacts.sh" ] && command -v gh &> /dev/nu
     fi
 fi
 
-# Load the bundle placement helper
-if [ -f "$SCRIPT_DIR/place-clamav-in-bundle.sh" ]; then
-    source "$SCRIPT_DIR/place-clamav-in-bundle.sh"
-else
-    CLAMAV_AVAILABLE=false
+CLAMAV_AVAILABLE=false
+if [ -d "$CLAMAV_ARTIFACTS_DIR/binaries" ]; then
+    CLAMAV_AVAILABLE=true
 fi
 
 # ============================================================
@@ -307,10 +305,65 @@ PLISTEOF
 echo ""
 if [ -d "$CLAMAV_ARTIFACTS_DIR/binaries" ]; then
     echo "Step 4b: Placing ClamAV components in app bundle..."
-    place_clamav_in_bundle
+
+    CLAMAV_BINARIES_DIR="$CLAMAV_ARTIFACTS_DIR/binaries"
+    CLAMAV_LIB_DIR="$CLAMAV_ARTIFACTS_DIR/lib"
+
+    # clamonacc → nested app bundle (ESF entitlements need a bundle)
+    CLAMAV_APP="$PYTHON_APP/Contents/Helpers/ResistineClamAV.app"
+    mkdir -p "$CLAMAV_APP/Contents/MacOS"
+
+    cp "$CLAMAV_BINARIES_DIR/clamonacc" "$CLAMAV_APP/Contents/MacOS/clamonacc"
+    echo "  - Placed clamonacc in ResistineClamAV.app"
+
+    cat > "$CLAMAV_APP/Contents/Info.plist" << 'PLISTEOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.resistine.desktop.clamonacc</string>
+    <key>CFBundleName</key>
+    <string>ResistineClamAV</string>
+    <key>CFBundleExecutable</key>
+    <string>clamonacc</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+</dict>
+</plist>
+PLISTEOF
+
+    # Standalone binaries → Contents/Helpers/
+    mkdir -p "$PYTHON_APP/Contents/Helpers"
+    for bin in clamd clamscan clamdscan freshclam; do
+        if [ -f "$CLAMAV_BINARIES_DIR/$bin" ]; then
+            cp "$CLAMAV_BINARIES_DIR/$bin" "$PYTHON_APP/Contents/Helpers/$bin"
+            echo "  - Placed $bin in Contents/Helpers/"
+        fi
+    done
+
+    # Shared libraries → Contents/Frameworks/ (skip static archives, deduplicate symlinks)
+    mkdir -p "$PYTHON_APP/Contents/Frameworks"
+    for f in "$CLAMAV_LIB_DIR"/*; do
+        [ -e "$f" ] || continue
+        # Skip static archives — only needed at compile time, not runtime
+        case "$f" in *.a) continue ;; esac
+        # Only copy the real file for each library; recreate version symlinks
+        if [ -L "$f" ]; then
+            cp -a "$f" "$PYTHON_APP/Contents/Frameworks/"
+        else
+            cp "$f" "$PYTHON_APP/Contents/Frameworks/"
+        fi
+    done
+    echo "  - Placed ClamAV libraries in Contents/Frameworks/"
+    echo "  ClamAV components placed in bundle"
 else
     echo "Step 4b: Skipping ClamAV — no artifacts found"
-    echo "  Run: scripts/build/build-clamav.sh"
+    echo "  Run: scripts/build/download-clamav-artifacts.sh"
     CLAMAV_AVAILABLE=false
 fi
 
@@ -462,6 +515,7 @@ if [ "$CLAMAV_AVAILABLE" = true ]; then
             --entitlements "$CLAMAV_ENTITLEMENTS" \
             "$PYTHON_APP/Contents/Helpers/ResistineClamAV.app/Contents/MacOS/clamonacc" || {
             echo "    clamonacc signing failed"
+            exit 1
         }
     fi
 
@@ -470,6 +524,7 @@ if [ "$CLAMAV_AVAILABLE" = true ]; then
         --options runtime --timestamp \
         "$PYTHON_APP/Contents/Helpers/ResistineClamAV.app" || {
         echo "    ResistineClamAV.app signing failed"
+        exit 1
     }
 
     # Sign other ClamAV binaries (hardened runtime for notarization)
@@ -479,12 +534,13 @@ if [ "$CLAMAV_AVAILABLE" = true ]; then
                 --options runtime --timestamp \
                 "$PYTHON_APP/Contents/Helpers/$binary" || {
                 echo "    $binary signing failed"
+                exit 1
             }
         fi
     done
 
-    # Sign ClamAV shared libraries
-    find "$PYTHON_APP/Contents/Frameworks" \( -name "libclamav*" -o -name "libfreshclam*" -o -name "libclammspack*" \) -type f | while read -r lib; do
+    # Sign ClamAV shared libraries (all ClamAV-related dylibs including unrar, ssl, crypto)
+    find "$PYTHON_APP/Contents/Frameworks" \( -name "libclamav*" -o -name "libfreshclam*" -o -name "libclammspack*" -o -name "libclamunrar*" -o -name "libcrypto*" -o -name "libssl*" \) -type f | while read -r lib; do
         codesign --force --sign "$SIGN_IDENTITY" \
             --options runtime --timestamp \
             "$lib" 2>/dev/null || true
@@ -736,7 +792,7 @@ else
 fi
 
 # Clean up temporary entitlements files
-rm -f /tmp/ne-distribution.entitlements.plist /tmp/xpc-distribution.entitlements.plist
+rm -f /tmp/ne-distribution.entitlements.plist /tmp/cli-distribution.entitlements.plist
 
 # ============================================================
 # Step 8: Install to /Applications

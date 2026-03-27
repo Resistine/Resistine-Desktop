@@ -24,10 +24,28 @@ if ! command -v gh &> /dev/null; then
     exit 1
 fi
 
-# Query the latest artifact's commit SHA from CI
+# Query the latest artifact's commit SHA and name from CI (single API call)
+# Sets LATEST_SHA and LATEST_ARTIFACT_NAME globals
+fetch_latest_artifact_info() {
+    local info
+    info=$(gh api "repos/$REPO/actions/artifacts?per_page=1" \
+        --jq '.artifacts[0] | "\(.workflow_run.head_sha) \(.name)"' 2>/dev/null || echo "")
+    LATEST_SHA="${info%% *}"
+    LATEST_ARTIFACT_NAME="${info#* }"
+}
+
 get_remote_sha() {
-    gh api "repos/$REPO/actions/artifacts?name=clamav-macos-latest&per_page=1" \
-        --jq '.artifacts[0].workflow_run.head_sha' 2>/dev/null || echo ""
+    if [ -z "${LATEST_SHA+x}" ]; then
+        fetch_latest_artifact_info
+    fi
+    echo "$LATEST_SHA"
+}
+
+get_artifact_name() {
+    if [ -z "${LATEST_ARTIFACT_NAME+x}" ]; then
+        fetch_latest_artifact_info
+    fi
+    echo "$LATEST_ARTIFACT_NAME"
 }
 
 # Read local version
@@ -76,6 +94,8 @@ else
         exit 0
     fi
 
+    ARTIFACT_NAME=$(get_artifact_name)
+
     if [ -n "$REMOTE_SHA" ]; then
         echo "Downloading ClamAV artifacts (${REMOTE_SHA:0:12})..."
     else
@@ -91,7 +111,11 @@ mkdir -p "$ARTIFACTS_DIR"
 if [ -n "$1" ]; then
     gh run download "$1" --repo "$REPO" --dir "$ARTIFACTS_DIR"
 else
-    gh run download --repo "$REPO" --name clamav-macos-latest --dir "$ARTIFACTS_DIR"
+    if [ -z "$ARTIFACT_NAME" ]; then
+        echo "Error: Could not determine artifact name from CI"
+        exit 1
+    fi
+    gh run download --repo "$REPO" --name "$ARTIFACT_NAME" --dir "$ARTIFACTS_DIR"
 fi
 
 # gh run download nests files inside a subdirectory named after the artifact.
@@ -132,14 +156,16 @@ if [ -f "$ARTIFACTS_DIR/checksums.txt" ]; then
     fi
 fi
 
-# Recreate library symlinks from manifest
-# upload-artifact doesn't preserve symlinks, so CI records them in symlinks.txt
+# Remove static archives (only needed at compile time, not runtime)
+rm -f "$ARTIFACTS_DIR/lib/"*.a 2>/dev/null && \
+    echo "  Removed static archives (.a) — not needed at runtime"
+
+# Recreate library symlinks from manifest (CI records them in symlinks.txt)
 if [ -f "$ARTIFACTS_DIR/lib/symlinks.txt" ]; then
-    echo "  Recreating library symlinks..."
+    echo "  Recreating library symlinks from manifest..."
     while IFS=' ' read -r link_name _ link_target; do
         [ -n "$link_name" ] && [ -n "$link_target" ] || continue
         (cd "$ARTIFACTS_DIR/lib" && ln -sf "$link_target" "$link_name")
-        echo "    $link_name -> $link_target"
     done < "$ARTIFACTS_DIR/lib/symlinks.txt"
     rm "$ARTIFACTS_DIR/lib/symlinks.txt"
 fi
