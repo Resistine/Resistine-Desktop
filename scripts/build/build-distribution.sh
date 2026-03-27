@@ -338,7 +338,7 @@ ln -sf "ResistineCLI.app/Contents/MacOS/resistine-vpn-cli" "$PYTHON_APP/Contents
 
 # --- Copy Sparkle.framework for auto-updates ---
 echo "  - Copying Sparkle.framework..."
-SPARKLE_SOURCE="$PYTHON_UI_PATH/vpn-apple/Sparkle.framework"
+SPARKLE_SOURCE="$PYTHON_UI_PATH/frameworks/Sparkle.framework"
 if [ -d "$SPARKLE_SOURCE" ]; then
     mkdir -p "$PYTHON_APP/Contents/Frameworks"
     cp -R "$SPARKLE_SOURCE" "$PYTHON_APP/Contents/Frameworks/Sparkle.framework"
