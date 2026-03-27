@@ -132,6 +132,18 @@ if [ -f "$ARTIFACTS_DIR/checksums.txt" ]; then
     fi
 fi
 
+# Recreate library symlinks from manifest
+# upload-artifact doesn't preserve symlinks, so CI records them in symlinks.txt
+if [ -f "$ARTIFACTS_DIR/lib/symlinks.txt" ]; then
+    echo "  Recreating library symlinks..."
+    while IFS=' ' read -r link_name _ link_target; do
+        [ -n "$link_name" ] && [ -n "$link_target" ] || continue
+        (cd "$ARTIFACTS_DIR/lib" && ln -sf "$link_target" "$link_name")
+        echo "    $link_name -> $link_target"
+    done < "$ARTIFACTS_DIR/lib/symlinks.txt"
+    rm "$ARTIFACTS_DIR/lib/symlinks.txt"
+fi
+
 # Save version for staleness checks
 if [ -n "$DOWNLOAD_SHA" ]; then
     echo "$DOWNLOAD_SHA" > "$VERSION_FILE"
