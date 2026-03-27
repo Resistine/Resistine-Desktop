@@ -105,6 +105,10 @@ installer_temp/
 Resistine AI-*.dmg
 Resistine AI-*.pkg
 
+# Downloaded CI artifacts (built by separate repos)
+scripts/build/clamav-artifacts/
+scripts/build/vpn-artifacts/
+
 # Build artifacts
 *.dmg
 *.pkg
