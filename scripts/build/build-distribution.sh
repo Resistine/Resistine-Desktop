@@ -129,10 +129,30 @@ else
 fi
 
 # ============================================================
-# Step 2b: Load ClamAV artifact helper
+# Step 2b: Obtain ClamAV Components
 # ============================================================
-# ClamAV is built separately via scripts/build/build-clamav.sh
-CLAMAV_ARTIFACTS_DIR="$SCRIPT_DIR/clamav-artifacts"
+# Artifacts are auto-downloaded from Resistine/ClamAV-Mac CI.
+# The script detects stale artifacts and re-downloads when a newer
+# build is available. Set CLAMAV_ARTIFACTS_DIR to override the path.
+# ============================================================
+
+CLAMAV_ARTIFACTS_DIR="${CLAMAV_ARTIFACTS_DIR:-$SCRIPT_DIR/clamav-artifacts}"
+
+echo "Step 2b: Checking ClamAV artifacts..."
+
+# Auto-download if missing or stale
+if [ -f "$SCRIPT_DIR/download-clamav-artifacts.sh" ] && command -v gh &> /dev/null; then
+    if ! "$SCRIPT_DIR/download-clamav-artifacts.sh" --check 2>/dev/null; then
+        echo "  ClamAV artifacts missing or stale — downloading from CI..."
+        "$SCRIPT_DIR/download-clamav-artifacts.sh" || {
+            echo "  Warning: Auto-download failed"
+        }
+    else
+        echo "  ClamAV artifacts up-to-date"
+    fi
+fi
+
+# Load the bundle placement helper
 if [ -f "$SCRIPT_DIR/place-clamav-in-bundle.sh" ]; then
     source "$SCRIPT_DIR/place-clamav-in-bundle.sh"
 else
