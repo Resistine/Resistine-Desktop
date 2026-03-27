@@ -22,18 +22,7 @@ if [ ! -d "$PYTHON_UI_PATH" ]; then
     exit 1
 fi
 
-if [ -z "$VPN_ARTIFACTS_DIR" ] && [ ! -d "$VPN_PROJECT_PATH" ]; then
-    echo "  Error: VPN project directory not found at: $VPN_PROJECT_PATH"
-    echo "  Set VPN_ARTIFACTS_DIR to use pre-built artifacts instead."
-    exit 1
-fi
-
 echo "  Found Python UI: $PYTHON_UI_PATH"
-if [ -d "$VPN_PROJECT_PATH" ]; then
-    echo "  Found VPN project: $VPN_PROJECT_PATH"
-elif [ -n "$VPN_ARTIFACTS_DIR" ]; then
-    echo "  Using pre-built VPN artifacts: $VPN_ARTIFACTS_DIR"
-fi
 echo ""
 
 # Build configuration
@@ -67,10 +56,6 @@ if [ -z "$TEAM_ID" ]; then
     exit 1
 fi
 
-# Provisioning Profile UUIDs (from provisioning-profiles folder)
-NE_PROFILE_UUID="df58a6c4-c227-435a-b136-d508374cf32c"
-CLI_PROFILE_UUID="924cf30e-5ec1-481a-a37b-1256b8447e22"
-
 # Verify notarization credentials are stored
 echo "  Checking notarization credentials..."
 if ! xcrun notarytool history --keychain-profile "resistine-notarize" > /dev/null 2>&1; then
@@ -95,30 +80,34 @@ echo ""
 # ============================================================
 # Step 2: Obtain Swift Components (VPN)
 # ============================================================
-# Option A: Pre-built artifacts from CI (set VPN_ARTIFACTS_DIR)
-#   Directory must contain:
-#     - resistine-vpn-cli (binary)
-#     - com.resistine.desktop.network-extension.systemextension/ (bundle)
-# Option B: Build locally (default, requires Xcode + provisioning profiles)
+# Artifacts are auto-downloaded from Resistine/resistine-vpn-macos CI.
+# The script detects stale artifacts and re-downloads when a newer
+# build is available. Set VPN_ARTIFACTS_DIR to override the path.
+# Fallback: build locally from vpn-apple/ if present.
 # ============================================================
 
-if [ -n "$VPN_ARTIFACTS_DIR" ] && [ -d "$VPN_ARTIFACTS_DIR" ]; then
-    echo "Step 2: Using pre-built VPN artifacts from $VPN_ARTIFACTS_DIR"
+VPN_ARTIFACTS_DIR="${VPN_ARTIFACTS_DIR:-$SCRIPT_DIR/vpn-artifacts}"
 
-    if [ ! -f "$VPN_ARTIFACTS_DIR/resistine-vpn-cli" ]; then
-        echo "  Error: resistine-vpn-cli not found in $VPN_ARTIFACTS_DIR"
-        exit 1
-    fi
-    if [ ! -d "$VPN_ARTIFACTS_DIR/com.resistine.desktop.network-extension.systemextension" ]; then
-        echo "  Error: network extension bundle not found in $VPN_ARTIFACTS_DIR"
-        exit 1
-    fi
+echo "Step 2: Checking VPN artifacts..."
 
-    echo "  Found resistine-vpn-cli"
-    echo "  Found com.resistine.desktop.network-extension.systemextension"
+# Auto-download if missing or stale
+if [ -f "$SCRIPT_DIR/download-vpn-artifacts.sh" ] && command -v gh &> /dev/null; then
+    if ! "$SCRIPT_DIR/download-vpn-artifacts.sh" --check 2>/dev/null; then
+        echo "  VPN artifacts missing or stale — downloading from CI..."
+        "$SCRIPT_DIR/download-vpn-artifacts.sh" || {
+            echo "  Warning: Auto-download failed"
+        }
+    else
+        echo "  VPN artifacts up-to-date"
+    fi
+fi
+
+if [ -f "$VPN_ARTIFACTS_DIR/resistine-vpn-cli" ] && \
+   [ -d "$VPN_ARTIFACTS_DIR/com.resistine.desktop.network-extension.systemextension" ]; then
+    echo "  Using pre-built VPN artifacts from $VPN_ARTIFACTS_DIR"
     USE_PREBUILT_VPN=true
-else
-    echo "Step 2: Building Swift components locally..."
+elif [ -d "$VPN_PROJECT_PATH" ]; then
+    echo "  No pre-built artifacts — building Swift components locally..."
     cd "$VPN_PROJECT_PATH"
 
     rm -rf build/
@@ -133,6 +122,10 @@ else
 
     echo "  Swift components built"
     USE_PREBUILT_VPN=false
+else
+    echo "  Error: No VPN artifacts and no vpn-apple project to build from."
+    echo "  Install gh CLI (brew install gh) and authenticate (gh auth login)."
+    exit 1
 fi
 
 # ============================================================

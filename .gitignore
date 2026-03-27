@@ -126,13 +126,8 @@ libraries/*/  # Exclude all library directories
 htmlcov/
 .pytest_cache/
 
-# VPN Apple project artifacts
-vpn-apple/build/
-vpn-apple/DerivedData/
-vpn-apple/*.xcuserdatad
-vpn-apple/*.xcuserstate
-vpn-apple/.DS_Store
-vpn-apple/antigravity_run.sh
+# VPN Apple project (built via CI artifacts from resistine-vpn-macos)
+vpn-apple/
 
 # Apple Signing & Provisioning (Secrets)
 provisioning-profiles/
