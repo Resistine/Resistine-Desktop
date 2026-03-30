@@ -193,7 +193,7 @@ fi
 rm -rf dist/Resistine dist/Resistine.app
 
 echo "  - Building with PyInstaller..."
-pyinstaller packaging/Resistine.spec --clean --noconfirm
+pyinstaller packaging/Resistine.spec --noconfirm
 
 echo "  Python UI built"
 
@@ -346,6 +346,13 @@ PLISTEOF
         fi
     done
 
+    # CVD signature-verification certs → Contents/certs/
+    if [ -d "$CLAMAV_ARTIFACTS_DIR/certs" ]; then
+        mkdir -p "$PYTHON_APP/Contents/certs"
+        cp "$CLAMAV_ARTIFACTS_DIR/certs/"* "$PYTHON_APP/Contents/certs/"
+        echo "  - Placed CVD verification certs in Contents/certs/"
+    fi
+
     # Shared libraries → Contents/Frameworks/ (skip static archives, deduplicate symlinks)
     mkdir -p "$PYTHON_APP/Contents/Frameworks"
     for f in "$CLAMAV_LIB_DIR"/*; do
@@ -360,6 +367,73 @@ PLISTEOF
         fi
     done
     echo "  - Placed ClamAV libraries in Contents/Frameworks/"
+
+    # ── Fix dylib rpaths ──
+    # CI-built binaries have hardcoded rpaths from the build machine.
+    # Rewrite them so binaries find dylibs in Contents/Frameworks/ at runtime.
+    echo "  - Fixing ClamAV dylib rpaths..."
+
+    FRAMEWORKS_RELATIVE="@executable_path/../Frameworks"
+
+    # Fix binaries in Contents/Helpers/
+    for bin in clamd clamscan clamdscan freshclam; do
+        BIN_PATH="$PYTHON_APP/Contents/Helpers/$bin"
+        [ -f "$BIN_PATH" ] || continue
+
+        # Remove all existing LC_RPATH entries
+        for old_rpath in $(otool -l "$BIN_PATH" 2>/dev/null | awk '/cmd LC_RPATH/{found=1} found && /path /{print $2; found=0}'); do
+            install_name_tool -delete_rpath "$old_rpath" "$BIN_PATH" 2>/dev/null || true
+        done
+
+        # Add the correct rpath
+        install_name_tool -add_rpath "$FRAMEWORKS_RELATIVE" "$BIN_PATH" 2>/dev/null || true
+
+        # Rewrite hardcoded Homebrew load commands to @rpath
+        for homebrew_ref in $(otool -L "$BIN_PATH" 2>/dev/null | awk '/\/opt\/homebrew/{print $1}'); do
+            install_name_tool -change "$homebrew_ref" "@rpath/$(basename "$homebrew_ref")" "$BIN_PATH" 2>/dev/null || true
+        done
+        echo "    Fixed rpath: $bin → $FRAMEWORKS_RELATIVE"
+    done
+
+    # Fix clamonacc in nested bundle (different relative path)
+    CLAMONACC_PATH="$CLAMAV_APP/Contents/MacOS/clamonacc"
+    if [ -f "$CLAMONACC_PATH" ]; then
+        CLAMONACC_FRAMEWORKS="@executable_path/../../../../Frameworks"
+        for old_rpath in $(otool -l "$CLAMONACC_PATH" 2>/dev/null | awk '/cmd LC_RPATH/{found=1} found && /path /{print $2; found=0}'); do
+            install_name_tool -delete_rpath "$old_rpath" "$CLAMONACC_PATH" 2>/dev/null || true
+        done
+        install_name_tool -add_rpath "$CLAMONACC_FRAMEWORKS" "$CLAMONACC_PATH" 2>/dev/null || true
+        # Rewrite hardcoded Homebrew load commands to @rpath
+        for homebrew_ref in $(otool -L "$CLAMONACC_PATH" 2>/dev/null | awk '/\/opt\/homebrew/{print $1}'); do
+            install_name_tool -change "$homebrew_ref" "@rpath/$(basename "$homebrew_ref")" "$CLAMONACC_PATH" 2>/dev/null || true
+        done
+        echo "    Fixed rpath: clamonacc → $CLAMONACC_FRAMEWORKS"
+    fi
+
+    # Fix dylibs that reference other dylibs via @rpath
+    for dylib in "$PYTHON_APP/Contents/Frameworks"/lib*.dylib; do
+        [ -f "$dylib" ] || continue
+        [ -L "$dylib" ] && continue  # Skip symlinks
+
+        # Remove hardcoded rpaths
+        for old_rpath in $(otool -l "$dylib" 2>/dev/null | awk '/cmd LC_RPATH/{found=1} found && /path /{print $2; found=0}'); do
+            install_name_tool -delete_rpath "$old_rpath" "$dylib" 2>/dev/null || true
+        done
+
+        # Set the dylib's own install name to @rpath/name
+        DYLIB_NAME=$(basename "$dylib")
+        install_name_tool -id "@rpath/$DYLIB_NAME" "$dylib" 2>/dev/null || true
+
+        # Add rpath for peer dylib resolution
+        install_name_tool -add_rpath "@loader_path" "$dylib" 2>/dev/null || true
+
+        # Rewrite hardcoded Homebrew load commands to @rpath
+        for homebrew_ref in $(otool -L "$dylib" 2>/dev/null | awk '/\/opt\/homebrew/{print $1}'); do
+            install_name_tool -change "$homebrew_ref" "@rpath/$(basename "$homebrew_ref")" "$dylib" 2>/dev/null || true
+        done
+    done
+    echo "    Fixed dylib install names and rpaths"
+
     echo "  ClamAV components placed in bundle"
 else
     echo "Step 4b: Skipping ClamAV — no artifacts found"
@@ -540,7 +614,7 @@ if [ "$CLAMAV_AVAILABLE" = true ]; then
     done
 
     # Sign ClamAV shared libraries (all ClamAV-related dylibs including unrar, ssl, crypto)
-    find "$PYTHON_APP/Contents/Frameworks" \( -name "libclamav*" -o -name "libfreshclam*" -o -name "libclammspack*" -o -name "libclamunrar*" -o -name "libcrypto*" -o -name "libssl*" \) -type f | while read -r lib; do
+    find "$PYTHON_APP/Contents/Frameworks" \( -name "libclamav*" -o -name "libfreshclam*" -o -name "libclammspack*" -o -name "libclamunrar*" -o -name "libcrypto*" -o -name "libssl*" -o -name "libjson-c*" \) -type f | while read -r lib; do
         codesign --force --sign "$SIGN_IDENTITY" \
             --options runtime --timestamp \
             "$lib" 2>/dev/null || true
