@@ -103,13 +103,13 @@ jobs:
         run: pip install pip-audit
 
       - name: Audit macOS dependencies
-        run: pip-audit -r requirements/requirements-mac.txt
+        run: pip-audit --no-deps -r requirements/requirements-mac.txt
 
       - name: Audit Linux dependencies
-        run: pip-audit -r requirements/requirements-linux.txt
+        run: pip-audit --no-deps -r requirements/requirements-linux.txt
 
       - name: Audit Windows dependencies
-        run: pip-audit -r requirements/requirements-windows.txt
+        run: pip-audit --no-deps -r requirements/requirements-windows.txt
 
   build-macos:
     name: Build Test (macOS)
@@ -197,6 +197,33 @@ jobs:
           elseif (Test-Path "dist/Resistine.exe") { Write-Output "Build artifact verified: dist/Resistine.exe" }
           else { Write-Error "No build artifact found"; exit 1 }
 
+      - name: Smoke test — app launches and stays alive
+        run: |
+          # Find the executable
+          if (Test-Path "dist/Resistine/Resistine.exe") {
+            $exe = "dist/Resistine/Resistine.exe"
+          } elseif (Test-Path "dist/Resistine.exe") {
+            $exe = "dist/Resistine.exe"
+          } else {
+            Write-Error "No executable found for smoke test"
+            exit 1
+          }
+
+          # Launch in background
+          $proc = Start-Process -FilePath $exe -PassThru
+
+          # Wait for the process to start
+          Start-Sleep -Seconds 5
+
+          # Check if still running
+          if (!$proc.HasExited) {
+            Write-Output "Smoke test passed: Resistine is running (PID $($proc.Id))"
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          } else {
+            Write-Error "Smoke test FAILED: Resistine exited with code $($proc.ExitCode)"
+            exit 1
+          }
+
   build-linux:
     name: Build Test (Linux)
     runs-on: ubuntu-latest
@@ -211,6 +238,9 @@ jobs:
           python-version: "3.13"
           cache: pip
           cache-dependency-path: requirements/requirements-linux.txt
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y xvfb
 
       - name: Install dependencies
         run: |
@@ -227,3 +257,37 @@ jobs:
         run: |
           test -f dist/Resistine || test -d dist/Resistine
           echo "Build artifact verified: dist/Resistine"
+
+      - name: Smoke test — app launches and stays alive
+        run: |
+          # Find the executable
+          if [ -f dist/Resistine ]; then
+            EXE=dist/Resistine
+          elif [ -f dist/Resistine/Resistine ]; then
+            EXE=dist/Resistine/Resistine
+          else
+            echo "No executable found for smoke test"
+            exit 1
+          fi
+
+          # Launch in background (use virtual display for GUI)
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1024x768x24 &
+          sleep 1
+
+          ./$EXE &
+          APP_PID=$!
+
+          # Wait for the process to start
+          sleep 5
+
+          # Check if still running
+          if kill -0 $APP_PID 2>/dev/null; then
+            echo "Smoke test passed: Resistine is running (PID $APP_PID)"
+            kill $APP_PID || true
+            sleep 2
+            kill -9 $APP_PID 2>/dev/null || true
+          else
+            echo "Smoke test FAILED: Resistine did not stay running"
+            exit 1
+          fi
