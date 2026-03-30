@@ -654,13 +654,130 @@ if sys.platform.startswith("linux"):
         event.widget.tag_add("sel", "1.0", "end")
         return "break"
 
+    def _ctrl_backspace_entry(event):
+        """Delete the word before the cursor in an Entry widget."""
+        w = event.widget
+        pos = w.index("insert")
+        if pos == 0:
+            return "break"
+        text = w.get()[:pos]
+        # Skip trailing spaces, then skip the word
+        i = len(text) - 1
+        while i >= 0 and text[i] == " ":
+            i -= 1
+        while i >= 0 and text[i] != " ":
+            i -= 1
+        w.delete(i + 1, pos)
+        return "break"
+
+    def _ctrl_backspace_text(event):
+        """Delete the word before the cursor in a Text widget."""
+        w = event.widget
+        pos = w.index("insert")
+        if pos == "1.0":
+            return "break"
+        # Tk's wordstart finds the start of the current/previous word
+        # Move back past any spaces first
+        prev = w.index(f"{pos}-1c")
+        while prev != "1.0" and w.get(prev) == " ":
+            prev = w.index(f"{prev}-1c")
+        word_start = w.index(f"{prev} wordstart")
+        w.delete(word_start, pos)
+        return "break"
+
     _tk.Entry.bind_class = _tk.Entry.bind_class  # ensure class exists
     _tk.Entry.bind_all   # no-op ref
     _root_bind_done = False
 
+    # Enable undo on all Text widgets by default so Ctrl+Z/Y work.
+    _orig_text_init = _tk.Text.__init__
+
+    def _text_init_with_undo(self, *args, **kw):
+        kw.setdefault("undo", True)
+        kw.setdefault("maxundo", -1)
+        _orig_text_init(self, *args, **kw)
+
+    _tk.Text.__init__ = _text_init_with_undo
+
+    def _undo_text(event):
+        try:
+            event.widget.edit_undo()
+        except _tk.TclError:
+            pass  # nothing to undo
+        return "break"
+
+    def _redo_text(event):
+        try:
+            event.widget.edit_redo()
+        except _tk.TclError:
+            pass  # nothing to redo
+        return "break"
+
+    # --- Entry undo/redo (tk.Entry has no built-in undo) ---------------
+    # Monkey-patch tk.Entry to track undo history per widget.
+
+    _orig_entry_init = _tk.Entry.__init__
+
+    def _entry_init_with_undo(self, *args, **kw):
+        _orig_entry_init(self, *args, **kw)
+        self._undo_stack = []
+        self._redo_stack = []
+        self._undo_last = ""
+
+        def _snapshot(*_a):
+            current = self.get()
+            if current != self._undo_last:
+                self._undo_stack.append(self._undo_last)
+                self._redo_stack.clear()
+                self._undo_last = current
+
+        self.bind("<KeyRelease>", _snapshot, add="+")
+
+    _tk.Entry.__init__ = _entry_init_with_undo
+
+    def _undo_entry(event):
+        w = event.widget
+        stack = getattr(w, "_undo_stack", None)
+        if not stack:
+            return "break"
+        current = w.get()
+        w._redo_stack.append(current)
+        prev = stack.pop()
+        w._undo_last = prev
+        state = str(w.cget("state"))
+        w.configure(state="normal")
+        w.delete(0, "end")
+        w.insert(0, prev)
+        if state != "normal":
+            w.configure(state=state)
+        return "break"
+
+    def _redo_entry(event):
+        w = event.widget
+        stack = getattr(w, "_redo_stack", None)
+        if not stack:
+            return "break"
+        current = w.get()
+        w._undo_stack.append(current)
+        nxt = stack.pop()
+        w._undo_last = nxt
+        state = str(w.cget("state"))
+        w.configure(state="normal")
+        w.delete(0, "end")
+        w.insert(0, nxt)
+        if state != "normal":
+            w.configure(state=state)
+        return "break"
+
     def _patch_ctrl_a(root):
         root.bind_class("Entry", "<Control-a>", _select_all_entry)
         root.bind_class("Text",  "<Control-a>", _select_all_text)
+        root.bind_class("Entry", "<Control-BackSpace>", _ctrl_backspace_entry)
+        root.bind_class("Text",  "<Control-BackSpace>", _ctrl_backspace_text)
+        root.bind_class("Text",  "<Control-z>", _undo_text)
+        root.bind_class("Text",  "<Control-y>", _redo_text)
+        root.bind_class("Entry", "<Control-z>", _undo_entry)
+        root.bind_class("Entry", "<Control-y>", _redo_entry)
 
 
 # DEPRECATED: Debug Window - controlled by command-line arguments

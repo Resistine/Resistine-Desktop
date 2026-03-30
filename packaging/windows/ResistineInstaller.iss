@@ -1644,7 +1644,7 @@ begin
     '- ResistineVPN service' + #13#10 +
     '- WireGuardTunnel$resistine_default' + #13#10 +
     '- WireGuardTunnel$resistine_vpn' + #13#10 +
-    '- Wazuh agent (WazuhSvc)' + #13#10 +
+    '- SIEM agent (WazuhSvc)' + #13#10 +
     '- Sysmon monitoring service' + #13#10#13#10 +
     'By default, your user data is preserved:' + #13#10 +
     '- ' + GetResistineUserDataDir + #13#10 +

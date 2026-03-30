@@ -183,7 +183,7 @@ fi
 echo "  - Installing dependencies..."
 source .venv/bin/activate
 export MACOSX_DEPLOYMENT_TARGET=13.0  # Ensure compiled extensions target macOS 13+ (Ventura)
-pip install -q -r requirements/requirements-mac.txt
+pip install -q -r scripts/requirements/requirements-mac.txt
 
 if [ ! -f "packaging/Resistine.spec" ]; then
     echo "  Error: packaging/Resistine.spec not found in $PYTHON_UI_PATH"

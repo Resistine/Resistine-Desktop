@@ -438,7 +438,7 @@ class Plugin(BasePlugin):
         logger.info("Login successful")
         self.app.show_notification("Login successful!", type="info")
 
-        # Persist the authenticated email for other plugins (Settings, Wazuh, etc.)
+        # Persist the authenticated email for other plugins (Settings, SIEM agent, etc.)
         from utils import settings as app_settings
         app_settings.set("auth", "email", self.email)
 
