@@ -46,11 +46,25 @@ hiddenimports = [
     'keyring',
     'keyring.backends',
     'httpx',
+    'ssl',
+    '_ssl',
+    'certifi',
+    'requests',
+    'urllib3',
+    'idna',
     'openai',
     'markdown',
     'tkinterweb',
     'html2text',
     'loguru',
+    # OpenTelemetry (logger.py imports these; PyInstaller can't trace the submodules)
+    'opentelemetry',
+    'opentelemetry._logs',
+    'opentelemetry.exporter.otlp.proto.http._log_exporter',
+    'opentelemetry.sdk._logs',
+    'opentelemetry.sdk._logs.export',
+    'opentelemetry.sdk.resources',
+    'opentelemetry.trace',
 ]
 
 if IS_MACOS:

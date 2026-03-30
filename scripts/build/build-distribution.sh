@@ -22,13 +22,7 @@ if [ ! -d "$PYTHON_UI_PATH" ]; then
     exit 1
 fi
 
-if [ ! -d "$VPN_PROJECT_PATH" ]; then
-    echo "  Error: VPN project directory not found at: $VPN_PROJECT_PATH"
-    exit 1
-fi
-
 echo "  Found Python UI: $PYTHON_UI_PATH"
-echo "  Found VPN project: $VPN_PROJECT_PATH"
 echo ""
 
 # Build configuration
@@ -62,10 +56,6 @@ if [ -z "$TEAM_ID" ]; then
     exit 1
 fi
 
-# Provisioning Profile UUIDs (from provisioning-profiles folder)
-NE_PROFILE_UUID="df58a6c4-c227-435a-b136-d508374cf32c"
-CLI_PROFILE_UUID="924cf30e-5ec1-481a-a37b-1256b8447e22"
-
 # Verify notarization credentials are stored
 echo "  Checking notarization credentials..."
 if ! xcrun notarytool history --keychain-profile "resistine-notarize" > /dev/null 2>&1; then
@@ -88,22 +78,84 @@ fi
 echo ""
 
 # ============================================================
-# Step 2: Build Swift Components (VPN)
+# Step 2: Obtain Swift Components (VPN)
 # ============================================================
-echo "Step 2: Building Swift components..."
-cd "$VPN_PROJECT_PATH"
+# Artifacts are auto-downloaded from Resistine/resistine-vpn-macos CI.
+# The script detects stale artifacts and re-downloads when a newer
+# build is available. Set VPN_ARTIFACTS_DIR to override the path.
+# Fallback: build locally from vpn-apple/ if present.
+# ============================================================
 
-rm -rf build/
+VPN_ARTIFACTS_DIR="${VPN_ARTIFACTS_DIR:-$SCRIPT_DIR/vpn-artifacts}"
 
-xcodebuild \
-  -project wireguard-apple.xcodeproj \
-  -scheme wireguard-apple \
-  -configuration Release \
-  -archivePath "$BUILD_DIR/wireguard-apple.xcarchive" \
-  archive \
-  -allowProvisioningUpdates
+echo "Step 2: Checking VPN artifacts..."
 
-echo "  Swift components built"
+# Auto-download if missing or stale
+if [ -f "$SCRIPT_DIR/download-vpn-artifacts.sh" ] && command -v gh &> /dev/null; then
+    if ! "$SCRIPT_DIR/download-vpn-artifacts.sh" --check 2>/dev/null; then
+        echo "  VPN artifacts missing or stale — downloading from CI..."
+        "$SCRIPT_DIR/download-vpn-artifacts.sh" || {
+            echo "  Warning: Auto-download failed"
+        }
+    else
+        echo "  VPN artifacts up-to-date"
+    fi
+fi
+
+if [ -f "$VPN_ARTIFACTS_DIR/resistine-vpn-cli" ] && \
+   [ -d "$VPN_ARTIFACTS_DIR/com.resistine.desktop.network-extension.systemextension" ]; then
+    echo "  Using pre-built VPN artifacts from $VPN_ARTIFACTS_DIR"
+    USE_PREBUILT_VPN=true
+elif [ -d "$VPN_PROJECT_PATH" ]; then
+    echo "  No pre-built artifacts — building Swift components locally..."
+    cd "$VPN_PROJECT_PATH"
+
+    rm -rf build/
+
+    xcodebuild \
+      -project wireguard-apple.xcodeproj \
+      -scheme wireguard-apple \
+      -configuration Release \
+      -archivePath "$BUILD_DIR/wireguard-apple.xcarchive" \
+      archive \
+      -allowProvisioningUpdates
+
+    echo "  Swift components built"
+    USE_PREBUILT_VPN=false
+else
+    echo "  Error: No VPN artifacts and no vpn-apple project to build from."
+    echo "  Install gh CLI (brew install gh) and authenticate (gh auth login)."
+    exit 1
+fi
+
+# ============================================================
+# Step 2b: Obtain ClamAV Components
+# ============================================================
+# Artifacts are auto-downloaded from Resistine/ClamAV-Mac CI.
+# The script detects stale artifacts and re-downloads when a newer
+# build is available. Set CLAMAV_ARTIFACTS_DIR to override the path.
+# ============================================================
+
+CLAMAV_ARTIFACTS_DIR="${CLAMAV_ARTIFACTS_DIR:-$SCRIPT_DIR/clamav-artifacts}"
+
+echo "Step 2b: Checking ClamAV artifacts..."
+
+# Auto-download if missing or stale
+if [ -f "$SCRIPT_DIR/download-clamav-artifacts.sh" ] && command -v gh &> /dev/null; then
+    if ! "$SCRIPT_DIR/download-clamav-artifacts.sh" --check 2>/dev/null; then
+        echo "  ClamAV artifacts missing or stale — downloading from CI..."
+        "$SCRIPT_DIR/download-clamav-artifacts.sh" || {
+            echo "  Warning: Auto-download failed"
+        }
+    else
+        echo "  ClamAV artifacts up-to-date"
+    fi
+fi
+
+CLAMAV_AVAILABLE=false
+if [ -d "$CLAMAV_ARTIFACTS_DIR/binaries" ]; then
+    CLAMAV_AVAILABLE=true
+fi
 
 # ============================================================
 # Step 3: Build Python UI with PyInstaller
@@ -131,7 +183,7 @@ fi
 echo "  - Installing dependencies..."
 source .venv/bin/activate
 export MACOSX_DEPLOYMENT_TARGET=13.0  # Ensure compiled extensions target macOS 13+ (Ventura)
-pip install -q -r requirements/requirements-mac.txt
+pip install -q -r scripts/requirements/requirements-mac.txt
 
 if [ ! -f "packaging/Resistine.spec" ]; then
     echo "  Error: packaging/Resistine.spec not found in $PYTHON_UI_PATH"
@@ -162,42 +214,49 @@ echo ""
 echo "Step 4: Placing VPN components in main app bundle..."
 
 PYTHON_APP="$DIST_DIR/$APP_NAME.app"
-VPN_ARCHIVE="$BUILD_DIR/wireguard-apple.xcarchive/Products/Applications/wireguard-apple.app"
 
 if [ ! -d "$PYTHON_APP" ]; then
     echo "  Error: Python app bundle not found at $PYTHON_APP"
     exit 1
 fi
 
-if [ ! -d "$VPN_ARCHIVE" ]; then
-    echo "  Error: VPN archive not found at $VPN_ARCHIVE"
-    exit 1
+# Resolve VPN component sources (pre-built artifacts or local archive)
+if [ "$USE_PREBUILT_VPN" = true ]; then
+    CLI_SOURCE="$VPN_ARTIFACTS_DIR/resistine-vpn-cli"
+    NE_SOURCE="$VPN_ARTIFACTS_DIR/com.resistine.desktop.network-extension.systemextension"
+else
+    VPN_ARCHIVE="$BUILD_DIR/wireguard-apple.xcarchive/Products/Applications/wireguard-apple.app"
+
+    if [ ! -d "$VPN_ARCHIVE" ]; then
+        echo "  Error: VPN archive not found at $VPN_ARCHIVE"
+        exit 1
+    fi
+
+    CLI_SOURCE=$(find "$VPN_ARCHIVE" -name "resistine-vpn-cli" -type f | grep -v "dSYM" | grep "/MacOS/" | head -1)
+    if [ -z "$CLI_SOURCE" ] || [ ! -f "$CLI_SOURCE" ]; then
+        echo "  Error: resistine-vpn-cli not found in archive"
+        exit 1
+    fi
+
+    NE_SOURCE=$(find "$VPN_ARCHIVE" -name "*network-extension*" \( -name "*.appex" -o -name "*.systemextension" \) -type d | grep -v "dSYM" | head -1)
+    if [ -z "$NE_SOURCE" ]; then
+        echo "  Error: Network Extension not found in archive"
+        exit 1
+    fi
 fi
 
 # Create Apple-standard directories
 mkdir -p "$PYTHON_APP/Contents/PlugIns"
 mkdir -p "$PYTHON_APP/Contents/Library/SystemExtensions"
 
-# --- Copy CLI to Contents/MacOS/ ---
-# IMPORTANT: The CLI must be in Contents/MacOS/ because
-# NSXPCConnection(serviceName:) (used indirectly by some frameworks) 
-# and other bundle detection logic relies on the process being 
-# in the main app's MacOS folder.
 # --- Copy CLI to Contents/MacOS/ as a Bundle ---
-# To support restricted entitlements (App Groups) in the CLI, it must have a 
-# provisioning profile embedded. Standalone binaries cannot easily have embedded 
+# To support restricted entitlements (App Groups) in the CLI, it must have a
+# provisioning profile embedded. Standalone binaries cannot easily have embedded
 # profiles, so we wrap it in a nested bundle: ResistineCLI.app
 
 echo "  - Packaging resistine-vpn-cli into nested bundle..."
 CLI_APP="$PYTHON_APP/Contents/MacOS/ResistineCLI.app"
 mkdir -p "$CLI_APP/Contents/MacOS"
-
-# Find CLI in archive
-CLI_SOURCE=$(find "$VPN_ARCHIVE" -name "resistine-vpn-cli" -type f | grep -v "dSYM" | grep "/MacOS/" | head -1)
-if [ -z "$CLI_SOURCE" ] || [ ! -f "$CLI_SOURCE" ]; then
-    echo "  Error: resistine-vpn-cli not found in archive"
-    exit 1
-fi
 
 echo "    Found CLI at: $CLI_SOURCE"
 cp "$CLI_SOURCE" "$CLI_APP/Contents/MacOS/resistine-vpn-cli"
@@ -205,13 +264,6 @@ cp "$CLI_SOURCE" "$CLI_APP/Contents/MacOS/resistine-vpn-cli"
 # --- Copy Network Extension to Contents/Library/SystemExtensions/ ---
 # CRITICAL: System Extensions MUST use .systemextension extension, not .appex!
 echo "  - Copying network-extension to Contents/Library/SystemExtensions/..."
-
-NE_SOURCE=$(find "$VPN_ARCHIVE" -name "*network-extension*" \( -name "*.appex" -o -name "*.systemextension" \) -type d | grep -v "dSYM" | head -1)
-
-if [ -z "$NE_SOURCE" ]; then
-    echo "  Error: Network Extension not found in archive"
-    exit 1
-fi
 
 # Use the full bundle name: com.resistine.desktop.network-extension.systemextension
 DEST_EXTENSION="$PYTHON_APP/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension"
@@ -246,6 +298,74 @@ cat > "$CLI_APP/Contents/Info.plist" << PLISTEOF
 </dict>
 </plist>
 PLISTEOF
+
+# ============================================================
+# Step 4b: Place ClamAV components in app bundle
+# ============================================================
+echo ""
+if [ -d "$CLAMAV_ARTIFACTS_DIR/binaries" ]; then
+    echo "Step 4b: Placing ClamAV components in app bundle..."
+
+    CLAMAV_BINARIES_DIR="$CLAMAV_ARTIFACTS_DIR/binaries"
+    CLAMAV_LIB_DIR="$CLAMAV_ARTIFACTS_DIR/lib"
+
+    # clamonacc → nested app bundle (ESF entitlements need a bundle)
+    CLAMAV_APP="$PYTHON_APP/Contents/Helpers/ResistineClamAV.app"
+    mkdir -p "$CLAMAV_APP/Contents/MacOS"
+
+    cp "$CLAMAV_BINARIES_DIR/clamonacc" "$CLAMAV_APP/Contents/MacOS/clamonacc"
+    echo "  - Placed clamonacc in ResistineClamAV.app"
+
+    cat > "$CLAMAV_APP/Contents/Info.plist" << 'PLISTEOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.resistine.desktop.clamonacc</string>
+    <key>CFBundleName</key>
+    <string>ResistineClamAV</string>
+    <key>CFBundleExecutable</key>
+    <string>clamonacc</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+</dict>
+</plist>
+PLISTEOF
+
+    # Standalone binaries → Contents/Helpers/
+    mkdir -p "$PYTHON_APP/Contents/Helpers"
+    for bin in clamd clamscan clamdscan freshclam; do
+        if [ -f "$CLAMAV_BINARIES_DIR/$bin" ]; then
+            cp "$CLAMAV_BINARIES_DIR/$bin" "$PYTHON_APP/Contents/Helpers/$bin"
+            echo "  - Placed $bin in Contents/Helpers/"
+        fi
+    done
+
+    # Shared libraries → Contents/Frameworks/ (skip static archives, deduplicate symlinks)
+    mkdir -p "$PYTHON_APP/Contents/Frameworks"
+    for f in "$CLAMAV_LIB_DIR"/*; do
+        [ -e "$f" ] || continue
+        # Skip static archives — only needed at compile time, not runtime
+        case "$f" in *.a) continue ;; esac
+        # Only copy the real file for each library; recreate version symlinks
+        if [ -L "$f" ]; then
+            cp -a "$f" "$PYTHON_APP/Contents/Frameworks/"
+        else
+            cp "$f" "$PYTHON_APP/Contents/Frameworks/"
+        fi
+    done
+    echo "  - Placed ClamAV libraries in Contents/Frameworks/"
+    echo "  ClamAV components placed in bundle"
+else
+    echo "Step 4b: Skipping ClamAV — no artifacts found"
+    echo "  Run: scripts/build/download-clamav-artifacts.sh"
+    CLAMAV_AVAILABLE=false
+fi
 
 # ============================================================
 # Step 5: Embed Developer ID provisioning profiles & sign
@@ -291,7 +411,7 @@ ln -sf "ResistineCLI.app/Contents/MacOS/resistine-vpn-cli" "$PYTHON_APP/Contents
 
 # --- Copy Sparkle.framework for auto-updates ---
 echo "  - Copying Sparkle.framework..."
-SPARKLE_SOURCE="$PYTHON_UI_PATH/vpn-apple/Sparkle.framework"
+SPARKLE_SOURCE="$PYTHON_UI_PATH/frameworks/Sparkle.framework"
 if [ -d "$SPARKLE_SOURCE" ]; then
     mkdir -p "$PYTHON_APP/Contents/Frameworks"
     cp -R "$SPARKLE_SOURCE" "$PYTHON_APP/Contents/Frameworks/Sparkle.framework"
@@ -303,7 +423,6 @@ fi
 
 # Locate entitlements files
 ENTITLEMENTS_FILE="$PYTHON_UI_PATH/packaging/Resistine.entitlements"
-CLI_ENTITLEMENTS="$VPN_PROJECT_PATH/resistine-vpn-cli/entitlements.plist"
 
 NE_DIST_ENTITLEMENTS="/tmp/ne-distribution.entitlements.plist"
 CLI_DIST_ENTITLEMENTS="/tmp/cli-distribution.entitlements.plist"
@@ -375,12 +494,6 @@ cat > "$CLI_DIST_ENTITLEMENTS" << ENTEOF
 ENTEOF
 
 
-# Verify CLI entitlements exist
-if [ ! -f "$CLI_ENTITLEMENTS" ]; then
-    echo "  Error: CLI entitlements file not found: $CLI_ENTITLEMENTS"
-    exit 1
-fi
-
 ENTITLEMENTS_FLAG=""
 if [ -f "$ENTITLEMENTS_FILE" ]; then
     ENTITLEMENTS_FLAG="--entitlements $ENTITLEMENTS_FILE"
@@ -388,6 +501,53 @@ fi
 
 # --- Sign innermost components first, then work outward ---
 # Order matters: sign binaries inside bundles before signing the bundle itself.
+
+# 5-clamav: Sign ClamAV components (innermost first)
+if [ "$CLAMAV_AVAILABLE" = true ]; then
+    echo "  - Signing ClamAV components with Developer ID..."
+
+    CLAMAV_ENTITLEMENTS="$CLAMAV_ARTIFACTS_DIR/entitlements.plist"
+
+    # Sign clamonacc with ESF entitlements
+    if [ -f "$CLAMAV_ENTITLEMENTS" ]; then
+        codesign --force --sign "$SIGN_IDENTITY" \
+            --options runtime --timestamp \
+            --entitlements "$CLAMAV_ENTITLEMENTS" \
+            "$PYTHON_APP/Contents/Helpers/ResistineClamAV.app/Contents/MacOS/clamonacc" || {
+            echo "    clamonacc signing failed"
+            exit 1
+        }
+    fi
+
+    # Sign ResistineClamAV.app bundle
+    codesign --force --sign "$SIGN_IDENTITY" \
+        --options runtime --timestamp \
+        "$PYTHON_APP/Contents/Helpers/ResistineClamAV.app" || {
+        echo "    ResistineClamAV.app signing failed"
+        exit 1
+    }
+
+    # Sign other ClamAV binaries (hardened runtime for notarization)
+    for binary in clamd clamscan clamdscan freshclam; do
+        if [ -f "$PYTHON_APP/Contents/Helpers/$binary" ]; then
+            codesign --force --sign "$SIGN_IDENTITY" \
+                --options runtime --timestamp \
+                "$PYTHON_APP/Contents/Helpers/$binary" || {
+                echo "    $binary signing failed"
+                exit 1
+            }
+        fi
+    done
+
+    # Sign ClamAV shared libraries (all ClamAV-related dylibs including unrar, ssl, crypto)
+    find "$PYTHON_APP/Contents/Frameworks" \( -name "libclamav*" -o -name "libfreshclam*" -o -name "libclammspack*" -o -name "libclamunrar*" -o -name "libcrypto*" -o -name "libssl*" \) -type f | while read -r lib; do
+        codesign --force --sign "$SIGN_IDENTITY" \
+            --options runtime --timestamp \
+            "$lib" 2>/dev/null || true
+    done
+
+    echo "    ClamAV components signed"
+fi
 
 # 5a: Sign the system extension with distribution entitlements
 echo "  - Signing system extension with Developer ID..."
@@ -503,6 +663,11 @@ codesign --verify --verbose "$PYTHON_APP/Contents/MacOS/resistine-vpn-cli" 2>&1 
 if [ -d "$PYTHON_APP/Contents/Frameworks/Sparkle.framework" ]; then
     codesign --verify --verbose "$PYTHON_APP/Contents/Frameworks/Sparkle.framework" 2>&1 && \
         echo "    Sparkle.framework: valid" || { echo "    Sparkle.framework: INVALID"; VERIFY_FAILED=true; }
+fi
+
+if [ "$CLAMAV_AVAILABLE" = true ] && [ -d "$PYTHON_APP/Contents/Helpers/ResistineClamAV.app" ]; then
+    codesign --verify --verbose "$PYTHON_APP/Contents/Helpers/ResistineClamAV.app" 2>&1 && \
+        echo "    ResistineClamAV.app: valid" || { echo "    ResistineClamAV.app: INVALID"; VERIFY_FAILED=true; }
 fi
 
 codesign --verify --verbose=2 "$PYTHON_APP" 2>&1 && \
@@ -627,7 +792,7 @@ else
 fi
 
 # Clean up temporary entitlements files
-rm -f /tmp/ne-distribution.entitlements.plist /tmp/xpc-distribution.entitlements.plist
+rm -f /tmp/ne-distribution.entitlements.plist /tmp/cli-distribution.entitlements.plist
 
 # ============================================================
 # Step 8: Install to /Applications
