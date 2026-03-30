@@ -24,7 +24,7 @@ vpn_windows_client tests:
 import json
 import socket
 import pytest
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 
 # ---------------------------------------------------------------------------
@@ -32,9 +32,9 @@ from unittest.mock import MagicMock, patch, call
 # ---------------------------------------------------------------------------
 
 def _make_mock_socket(response_data: dict):
-    """Return a context-manager-compatible mock socket that returns response JSON."""
+    """Return a mock socket whose recv() returns JSON then b'' (simulating TCP FIN)."""
     sock = MagicMock()
-    sock.recv.return_value = json.dumps(response_data).encode("utf-8")
+    sock.recv.side_effect = [json.dumps(response_data).encode("utf-8"), b""]
     return sock
 
 
@@ -52,9 +52,18 @@ def _patch_socket(response_data: dict):
 # ===========================================================================
 @pytest.mark.unit
 class TestSendCommand:
+    """All tests set RESISTINE_IPC_TOKEN so _load_ipc_token() returns a
+    known value via its env-var fallback (the token file won't exist in CI)."""
+
+    FAKE_TOKEN = "test-ipc-token-abc123"
+
+    @pytest.fixture(autouse=True)
+    def _set_ipc_token(self, monkeypatch):
+        monkeypatch.setenv("RESISTINE_IPC_TOKEN", self.FAKE_TOKEN)
+
     def test_payload_contains_ipc_token(self):
-        """send_command must include the IPC_TOKEN in the JSON payload."""
-        from plugins.vpn.wireguard.service_client import send_command, IPC_TOKEN
+        """send_command must include the IPC token in the JSON payload."""
+        from plugins.vpn.wireguard.service_client import send_command
 
         ctx, mock_sock = _patch_socket({"status": "ok", "state": "Running"})
         with ctx:
@@ -62,7 +71,7 @@ class TestSendCommand:
 
         sent_bytes = mock_sock.sendall.call_args[0][0]
         payload = json.loads(sent_bytes.decode("utf-8"))
-        assert payload["token"] == IPC_TOKEN
+        assert payload["token"] == self.FAKE_TOKEN
 
     def test_payload_contains_command_and_tunnel(self):
         """Payload must have 'command' and 'tunnel' fields matching the arguments."""

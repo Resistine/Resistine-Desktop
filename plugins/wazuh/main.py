@@ -1,6 +1,6 @@
 """
-Wazuh SIEM Agent Plugin
-Install and manage the Wazuh agent from the Resistine Desktop sidebar.
+SIEM Agent Plugin
+Install and manage the SIEM agent from the Resistine Desktop sidebar.
 Author: Resistine Team
 Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
@@ -85,13 +85,13 @@ class Plugin(BasePlugin):
             id="011",
             version="2026.01.04-alpha",
             order=5,
-            name="Wazuh",
+            name="Endpoint",
             status=None,
-            description="Install and manage the Wazuh SIEM agent.",
+            description="Install and manage the SIEM agent.",
             supported_systems=["Darwin", "Linux", "Windows"],
-            translations={"US": "Wazuh", "ES": "Wazuh", "FR": "Wazuh"},
-            icon_light_path=os.path.join(_PLUGIN_DIR, "wazuh_light.png"),
-            icon_dark_path=os.path.join(_PLUGIN_DIR, "wazuh_dark.png"),
+            translations={"US": "Endpoint", "ES": "Endpoint", "FR": "Endpoint"},
+            icon_light_path=os.path.join(_PLUGIN_DIR, "add_user_light.png"),
+            icon_dark_path=os.path.join(_PLUGIN_DIR, "add_user_dark.png"),
             uninstall_enabled=True,
         )
         self.app = app
@@ -107,7 +107,7 @@ class Plugin(BasePlugin):
         try:
             state = get_agent_status()
         except Exception as e:
-            logger.warning(f"Wazuh check_status failed: {e}")
+            logger.warning(f"SIEM check_status failed: {e}")
             return "Warning"
         if state == "Running":
             return "OK"
@@ -138,7 +138,7 @@ class Plugin(BasePlugin):
 
         customtkinter.CTkLabel(
             self.main_container,
-            text=f"Wazuh agent management is not yet available on {_PLATFORM}.",
+            text=f"SIEM agent management is not yet available on {_PLATFORM}.",
             font=customtkinter.CTkFont(size=14),
             text_color=_COLOR_MUTED,
         ).grid(row=1, column=0, padx=20, pady=5)
@@ -148,7 +148,7 @@ class Plugin(BasePlugin):
     def _agent_screen(self):
         corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
         installed = is_agent_installed()
-        logger.info(f"Wazuh _agent_screen: is_agent_installed={installed}")
+        logger.info(f"SIEM _agent_screen: is_agent_installed={installed}")
 
         self.main_container = customtkinter.CTkFrame(
             self.app, corner_radius=0, fg_color="transparent"
@@ -274,7 +274,7 @@ class Plugin(BasePlugin):
     def _build_install_section(self, card, row):
         customtkinter.CTkLabel(
             card,
-            text="Wazuh SIEM Agent",
+            text="SIEM Agent",
             font=customtkinter.CTkFont(**_FONT_TITLE),
         ).grid(row=row, column=0, columnspan=2, padx=20, pady=(20, 4), sticky="w")
         row += 1
@@ -282,7 +282,7 @@ class Plugin(BasePlugin):
         customtkinter.CTkLabel(
             card,
             text=(
-                "The Wazuh agent collects security telemetry from this machine "
+                "The SIEM agent collects security telemetry from this machine "
                 "and reports to the Resistine SIEM dashboard."
             ),
             font=customtkinter.CTkFont(size=13),
@@ -304,7 +304,7 @@ class Plugin(BasePlugin):
         if not vpn_ok:
             customtkinter.CTkLabel(
                 card,
-                text="Connect VPN to install the Wazuh agent",
+                text="Connect VPN to install the SIEM agent",
                 font=customtkinter.CTkFont(size=13, weight="bold"),
                 text_color=_COLOR_ERROR,
             ).grid(row=row, column=0, columnspan=2, padx=20, pady=(12, 0), sticky="w")
@@ -350,7 +350,7 @@ class Plugin(BasePlugin):
         ).grid(row=0, column=0, padx=(0, 8), sticky="w")
 
         customtkinter.CTkLabel(
-            header, text="Wazuh Agent",
+            header, text="SIEM Agent",
             font=customtkinter.CTkFont(**_FONT_TITLE),
         ).grid(row=0, column=1, sticky="w")
 
@@ -408,14 +408,14 @@ class Plugin(BasePlugin):
             self.app.after(0, lambda: self._progress_label.configure(text=msg))
 
         def _done(success):
-            logger.info(f"Wazuh install done: success={success}")
+            logger.info(f"SIEM install done: success={success}")
             self._installing = False
             if success:
-                self.app.show_notification("Wazuh agent installed successfully!", type="success")
+                self.app.show_notification("SIEM agent installed successfully!", type="success")
                 self._refresh_screen()
             else:
                 self._install_btn.configure(state="normal", text="Retry Install")
-                self.app.show_notification("Wazuh agent installation failed", type="error")
+                self.app.show_notification("SIEM agent installation failed", type="error")
 
         def _run():
             try:
@@ -444,7 +444,7 @@ class Plugin(BasePlugin):
 
         self._agent_toggle.configure(state="disabled")
         action = start_agent if want_start else stop_agent
-        ok_msg = "Wazuh agent started" if want_start else "Wazuh agent stopped"
+        ok_msg = "SIEM agent started" if want_start else "SIEM agent stopped"
         fail_msg = "Failed to start agent" if want_start else "Failed to stop agent"
 
         def _run():
@@ -476,7 +476,7 @@ class Plugin(BasePlugin):
 
             new_status = self.check_status()
             if new_status != self.status:
-                logger.info(f"Wazuh status changed: {self.status} -> {new_status}")
+                logger.info(f"SIEM agent status changed: {self.status} -> {new_status}")
                 self.status = new_status
                 self._refresh_screen()
                 return

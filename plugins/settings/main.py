@@ -366,7 +366,7 @@ class Plugin(BasePlugin):
             )
 
     def _get_app_version(self):
-        """Read CFBundleShortVersionString from the app's Info.plist."""
+        """Read the app version from Info.plist (macOS frozen) or Resistine.spec (source)."""
         try:
             if getattr(sys, "frozen", False):
                 import plistlib
@@ -379,6 +379,16 @@ class Plugin(BasePlugin):
                     return info.get("CFBundleShortVersionString", "1.0.0")
         except Exception:
             pass
+
+        # Running from source (Linux, dev mode): read from spec file
+        try:
+            from utils.updates.version import get_current_version
+            version = get_current_version()
+            if version != "0.0.0":
+                return version
+        except Exception:
+            pass
+
         return "1.0.0"
 
     def _check_for_updates(self):

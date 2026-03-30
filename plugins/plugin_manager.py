@@ -21,8 +21,7 @@ class PluginManager:
     A class to manage the loading and downloading of plugins.
     """
 
-    # URLs for default and optional plugins
-    DEFAULT_PLUGINS_URL = "https://raw.githubusercontent.com/Resistine/Resistine-Desktop/main/plugins/default_plugins.json"
+    # URLs for optional plugins metadata (could be used to display available plugins in the UI)
     OPTIONAL_PLUGINS_URL = "https://raw.githubusercontent.com/Resistine/Resistine-Desktop-Plugins/main/plugins/optional_plugins.json"
 
 

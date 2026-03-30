@@ -118,7 +118,7 @@ class Plugin(BasePlugin):
         self.remote_data_map = {rp["id"]: rp for rp in available_remote}
         
         # Plugins hidden from the Store (still available in sidebar if installed)
-        HIDDEN_FROM_STORE = {"001", "003", "004", "009", "010", "100"}  # Dashboard, Endpoint, Store, Help, Settings, Calculator
+        HIDDEN_FROM_STORE = {"001", "004", "009", "010", "100"}  # Dashboard, Store, Help, Settings, Calculator
         HIDDEN_NAMES = {"template"}  # Also hide by name for remote-only plugins
         plugins = [
             p for p in plugins
