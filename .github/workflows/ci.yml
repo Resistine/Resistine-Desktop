@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, feat/*, fix/*]
+    branches: [main, feat/*, fix/*, build/*]
   pull_request:
     branches: [main]
 
@@ -21,3 +21,57 @@ jobs:
 
       - name: Check syntax (compile all .py files)
         run: python -m compileall -q plugins/ utils/ gui/ main.py
+
+  test:
+    name: Tests
+    runs-on: macos-14
+    needs: syntax-check
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install -r requirements/requirements-mac.txt
+          pip install -r requirements/requirements-test.txt
+
+      - name: Run tests
+        run: |
+          source .venv/bin/activate
+          python -m pytest tests/unit/ tests/security/ --timeout=30
+
+  build-macos:
+    name: Build Test (macOS)
+    runs-on: macos-14
+    needs: syntax-check
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install -r requirements/requirements-mac.txt
+
+      - name: Run PyInstaller
+        run: |
+          source .venv/bin/activate
+          python -m PyInstaller packaging/Resistine.spec --noconfirm
+
+      - name: Verify .app bundle exists
+        run: |
+          test -d dist/Resistine.app/Contents/MacOS/Resistine
+          echo "Build artifact verified: dist/Resistine.app"
