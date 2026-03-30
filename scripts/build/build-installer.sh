@@ -138,7 +138,7 @@ rm -rf dist/Resistine dist/Resistine.app
 
 # Build with PyInstaller using the spec file
 echo "  - Building with PyInstaller..."
-pyinstaller packaging/Resistine.spec --clean
+pyinstaller packaging/Resistine.spec --noconfirm
 
 echo "✅ Python UI built"
 
