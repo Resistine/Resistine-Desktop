@@ -73,5 +73,5 @@ jobs:
 
       - name: Verify .app bundle exists
         run: |
-          test -d dist/Resistine.app/Contents/MacOS/Resistine
+          test -d dist/Resistine.app/Contents/MacOS
           echo "Build artifact verified: dist/Resistine.app"
