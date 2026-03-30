@@ -197,9 +197,11 @@ class TestKeyringSecurityCheck:
 # ===========================================================================
 @pytest.mark.security
 def test_windows_ipc_token_is_not_default():
-    """IPC_TOKEN must not be the factory-default placeholder value."""
-    from plugins.vpn.wireguard.service_client import IPC_TOKEN
-    assert IPC_TOKEN != "RESISTINE_INTERNAL_TOKEN_CHANGE_ME", (
+    """IPC token loader must never return the factory-default placeholder."""
+    from plugins.vpn.wireguard.service_client import _load_ipc_token
+
+    token = _load_ipc_token()
+    assert token != "RESISTINE_INTERNAL_TOKEN_CHANGE_ME", (
         "Default IPC token has not been changed — this is a security vulnerability"
     )
 
