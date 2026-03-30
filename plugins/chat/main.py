@@ -19,6 +19,8 @@ from customtkinter import ThemeManager
 
 from plugins.base_plugin import BasePlugin
 from utils import settings
+from utils.cairo_canvas import CairoCanvas
+from utils.emoji_entry import EmojiEntry
 from utils.logger import logger
 
 # Pool of suggestion prompts shown on the welcome screen.
@@ -329,6 +331,9 @@ class Plugin(BasePlugin):
 
     def render_user_bubble(self, user_message):
         """Render the user's message bubble flush to the right edge."""
+        from plugins.chat.markdown_bubble import (
+            _EMOJI_RE, _EMOJI_RENDER, MarkdownBubble,
+        )
         tw = self.chat_box._textbox
         available = self._get_chat_width()
 
@@ -345,17 +350,122 @@ class Plugin(BasePlugin):
         )
         bubble.pack(side="right", padx=(0, 12))
 
-        label = customtkinter.CTkLabel(
-            bubble,
-            text=user_message,
-            fg_color="transparent",
-            text_color="#FFFFFF",
-            wraplength=min(600, int(available * 0.75)),
-            font=customtkinter.CTkFont(family="Inter", size=15),
-            justify="left",
-            anchor="w",
-        )
-        label.pack(padx=18, pady=11)
+        has_emoji = _EMOJI_RENDER and _EMOJI_RE and _EMOJI_RE.search(user_message)
+
+        if has_emoji:
+            # Use a tk.Text placed inside the rounded CTkFrame with
+            # inset margins so the frame's rounded corners stay visible.
+            wrap_width = min(600, int(available * 0.75))
+            inset = 10  # px inset from rounded corners
+            _user_font = customtkinter.CTkFont(family="Inter", size=15)
+            inner_tw = tk.Text(
+                bubble, bg="#0D5394", fg="#FFFFFF",
+                font=_user_font, wrap="word",
+                borderwidth=0, highlightthickness=0,
+                padx=8, pady=1, cursor="xterm",
+                insertwidth=0,
+            )
+            inner_tw.configure(state="normal")
+
+            # Insert text with emoji images
+            emoji_photos = []
+            image_to_emoji = {}
+            parts = _EMOJI_RE.split(user_message)
+            for i, part in enumerate(parts):
+                if not part:
+                    continue
+                if i % 2 == 1:
+                    for ch in MarkdownBubble._split_emoji_chars(part):
+                        photo = MarkdownBubble._render_emoji(ch)
+                        if photo:
+                            emoji_photos.append(photo)
+                            img_name = inner_tw.image_create(
+                                "end", image=photo, padx=1)
+                            image_to_emoji[img_name] = ch
+                        else:
+                            inner_tw.insert("end", ch)
+                else:
+                    inner_tw.insert("end", part)
+
+            inner_tw.configure(state="disabled")
+
+            # Prevent text selection while keeping the text cursor.
+            # Remove the "Text" class from bindtags so Tk's built-in
+            # Text selection bindings never fire.
+            tags = inner_tw.bindtags()
+            inner_tw.bindtags(tuple(t for t in tags if t != "Text"))
+
+            # Store refs to prevent GC
+            inner_tw._emoji_photos = emoji_photos
+            inner_tw._image_to_emoji = image_to_emoji
+
+            # Intercept copy to restore codepoints
+            def _on_user_copy(event, w=inner_tw, m=image_to_emoji):
+                try:
+                    s = w.index("sel.first")
+                    e = w.index("sel.last")
+                except Exception:
+                    return
+                result = []
+                for kind, val, _idx in w.dump(s, e):
+                    if kind == "text":
+                        result.append(val)
+                    elif kind == "image" and val in m:
+                        result.append(m[val])
+                if result:
+                    w.clipboard_clear()
+                    w.clipboard_append("".join(result))
+                return "break"
+            inner_tw.bind("<<Copy>>", _on_user_copy)
+
+            max_w = min(600, int(available * 0.75))
+            padx_val = int(str(inner_tw.cget("padx") or 0))
+
+            # Step 1: Measure natural content width using xpixels.
+            inner_tw.configure(wrap="none")
+            try:
+                result = inner_tw.count("1.0", "end-1c", "xpixels")
+                xpx = result[0] if isinstance(result, (list, tuple)) else result
+                natural_w = int(xpx) + padx_val * 2
+            except Exception:
+                natural_w = max_w
+            text_w = min(natural_w, max_w)
+
+            # Step 2: Set width, enable wrapping, measure height.
+            inner_tw.configure(wrap="word")
+            inner_tw.place(in_=bubble, x=inset, y=inset,
+                           width=text_w, height=500)
+            bubble.configure(width=text_w + inset * 2, height=520)
+            bubble.pack(side="right", padx=(0, 12))
+            container.update_idletasks()
+
+            try:
+                result = inner_tw.count("1.0", "end", "ypixels")
+                val = result[0] if isinstance(result, (list, tuple)) else result
+                content_h = int(val) + 4
+            except Exception:
+                import tkinter.font as tkfont
+                content_h = tkfont.Font(font=("Inter", 15)).metrics("linespace") + 4
+
+            # Step 3: Apply final dimensions.
+            inner_tw.place_configure(height=content_h)
+            bubble_h = content_h + inset * 2
+            bubble.configure(height=bubble_h)
+            bubble.pack_propagate(False)
+
+            msg_widget = inner_tw
+        else:
+            msg_widget = customtkinter.CTkLabel(
+                bubble,
+                text=user_message,
+                fg_color="transparent",
+                text_color="#FFFFFF",
+                wraplength=min(600, int(available * 0.75)),
+                font=customtkinter.CTkFont(family="Inter", size=15),
+                justify="left",
+                anchor="w",
+            )
+            msg_widget.pack(padx=18, pady=11)
 
         # Height must be set after children are measured
         container.update_idletasks()
@@ -367,7 +477,7 @@ class Plugin(BasePlugin):
         # Redirect scroll events from user bubble widgets to the chat textbox
         self._bind_scroll_redirect_to_chat(tw, container)
         self._bind_scroll_redirect_to_chat(tw, bubble)
-        self._bind_scroll_redirect_to_chat(tw, label)
+        self._bind_scroll_redirect_to_chat(tw, msg_widget)
 
         # Keep container width in sync when window resizes
         def _sync(event, c=container):
@@ -672,7 +782,7 @@ class Plugin(BasePlugin):
         input_bar.grid_columnconfigure(0, weight=1)
         input_bar.grid_columnconfigure(1, weight=0)
 
-        self.chat_entry = customtkinter.CTkEntry(
+        self.chat_entry = EmojiEntry(
             input_bar,
             placeholder_text="Message Resistine AI...",
             corner_radius=20,
@@ -755,7 +865,7 @@ class Plugin(BasePlugin):
 
         dots = []
         for i in range(3):
-            dot = tk.Canvas(
+            dot = CairoCanvas(
                 dot_frame, width=8, height=8,
                 bg=tw.cget("background"), highlightthickness=0,
             )
@@ -833,6 +943,7 @@ class Plugin(BasePlugin):
             self._welcome_frame = None
 
         self.chat_entry.delete(0, "end")
+        self.chat_box.focus_set()
         self.chat_box.configure(state="normal")
 
         # Render User Bubble
@@ -869,8 +980,105 @@ class Plugin(BasePlugin):
         # Poll for results on the main thread
         self._poll_stream()
 
+    # TODO: remove after testing GeneratorExit handling
+    _DEBUG_GENERATOR_EXIT = False
+    _DEBUG_GENERATOR_EXIT_BODY = (
+        "From the logs you provided, there are several events that could be"
+        " analyzed for security-related anomalies or interesting activity."
+        " Here\u2019s a breakdown of notable events and potential security"
+        " concerns:\n\n---\n\n### **1. Frequent Changes of Listening Ports**"
+        "\nThe majority of alerts report changes in the **listened ports**"
+        " using rule **533 (\"Listened ports status changed\")**. This could"
+        " indicate:\n   - High churn of network services (e.g., dynamic"
+        " services, frequent container spin-ups, or testing environments)."
+        "\n   - **Potential Security Risk**:\n     If these are"
+        " **unexpected/uncommon ports**, they might correspond to **malicious"
+        " services** (e.g., botnet nodes, backdoors, or cryptocurrency"
+        " miners) opening and closing connections.\n   - **Action**:\n"
+        "     Investigate active processes bound to these ports using:\n"
+        "     ```bash\n     netstat -tulnp | grep <PORT>\n"
+        "     ss -tulnp | grep <PORT>\n     lsof -i :<PORT>\n     ```\n"
+        "     Check if these ports are authorized in your environment.\n\n"
+        "---\n\n### **2. Wazuh Agent Disconnections (Rule 504)**\nThere are"
+        " **two entries indicating Wazuh agent disconnections**:\n"
+        "   - Alert at **05:48:04** (UTC) and **18:53:57** (UTC).\n"
+        "   - **Potential Causes**:\n     - **Network issues** (agent"
+        " communication dropped).\n     - **Agent termination** (admin"
+        " shutdown or crash).\n     - **Host hardening** (agent stopped for"
+        " security compliance).\n     - **Adversary activity** (an attacker"
+        " stopping monitoring tools).\n   - **Action**:\n     Check Wazuh"
+        " manager logs for disconnection reasons:\n     ```bash\n"
+        "     journalctl -u wazuh-manager -f  # On Wazuh manager system\n"
+        "     ```\n     Verify if the agent was intentionally stopped or if"
+        " hardware/network issues caused it.\n\n---\n\n"
+        "### **3. Authentication Success/Failure Anomalies**\n"
+        "#### **(A) Successful PAM Login Sessions (Rule 5501)**\n"
+        "   - **02:30:36** (Two alerts in quick succession).\n"
+        "   - **02:10:36** (Earlier login entry).\n   - These logs"
+        " correspond to successful logins via **PAM** (Pluggable"
+        " Authentication Modules).\n   - **Action**:\n     Review logins"
+        " during unusual hours (e.g., **nighttime logins**).\n     If an"
+        " attacker gained access, they might move laterally or plant"
+        " backdoors.\n     Check user behavior:\n     ```bash\n"
+        "     auth.log   # Common PAM log locations (may be syslog or"
+        " journalctl)\n     ```\n\n#### **(B) Authentication Failure Not"
+        " Evident**\n   - Oddly, there are **no logged failures** (e.g.,"
+        " password brute-forcing, which is common in attacks).\n"
+        "   - **Intruders** may either:\n     - Be **successful on first"
+        " try** \u2192 Already compromised credentials.\n     - **Avoid"
+        " logging** \u2192 Rootkits/keyloggers masking activity.\n"
+        "   - **Action**:\n     Audit for stolen credentials:\n"
+        "     - Check if users changed passwords unexpectedly.\n"
+        "     - Correlate with Wazuh agent logs for privilege escalation"
+        " events.\n\n---\n\n### **4. USB/Device Detach Events (Rule 804 in"
+        " Earlier Data)**\n   - *Note*: Your logs do **not** explicitly show"
+        " removals, but many attacks involve plugging devices (e.g., badUSB"
+        " exploits).\n   - **Action**:\n     If this was part of a larger"
+        " context, check `dmesg` or `systemd-journald -u udisks2` for USB"
+        " activity:\n     ```bash\n     dmesg | grep usb\n"
+        "     cat /var/log/syslog | grep udisks\n     ```\n\n---\n\n"
+        "### **5. Cron or Scheduled Task Anomalies**\n   You do **not** see"
+        " cron logs here, but attackers often abuse cron jobs or install"
+        " persistence mechanisms.\n   - **Action**:\n     Review `.crontab`,"
+        " `/etc/cron.d`, and `/var/spool/cron` for unauthorized entries:\n"
+        "     ```bash\n     find / -name \"*cron*\" -type f | xargs ls -la\n"
+        "     ```\n\n---\n\n### **6. Logical Next Steps**\n"
+        "#### **(A) Immediate Investigations**\n   - Confirm if the agent"
+        " disconnection was malicious.\n   - Verify new unknown listening"
+        " ports for unauthorized services.\n   - Cross-reference successful"
+        " logins with user activity logs.\n\n#### **(B) Mitigation**\n"
+        "   - Restrict untrusted ports (firewall rules):\n     ```bash\n"
+        "     sudo ufw deny <SUSPECT_PORT>\n     ```\n   - Rotate any"
+        " credentials involved during suspicious logins.\n   - Enhance Wazuh"
+        " rules for better event correlation (e.g., chain of command:"
+        " successful login + new port).\n\n#### **(C) Further Monitoring**\n"
+        "   - If this was part of a breach, ensure **file integrity"
+        " monitoring (FIM)** is active to catch unauthorized binary changes."
+        "\n   - Whitelist known-legitimate processes using `auditd`:\n"
+        "     ```bash\n     sudo auditctl -a exit,always -F arch=b64 -S"
+        " execve -F key=exec\n     ```\n\n---\n\n"
+        "### **Tools & Commands to Dig Deeper**\n   - **Wazuh Dashboard**:"
+        " Analyze alerts for geolocating IPs, suspicious domains, or command"
+        " lines in alerts.\n   - **NetFlow/Snort**: Capture network traffic"
+        " associated with unknown ports.\n   - **Forensic Tools**:\n"
+        "     ```bash\n     strings /targetbinary | grep suspicious_string\n"
+        "     strace -p <PID>  # Analyze syscall behavior of suspicious"
+        " processes\n     ```"
+    )
+
     def _stream_worker(self, user_message):
         """Background thread: stream chunks into the queue."""
+        if self._DEBUG_GENERATOR_EXIT:
+            # Simulate streaming the body in chunks then a GeneratorExit
+            import time
+            body = self._DEBUG_GENERATOR_EXIT_BODY
+            chunk_size = 12
+            for i in range(0, len(body), chunk_size):
+                self._response_queue.put(("chunk", body[i:i + chunk_size]))
+                time.sleep(0.005)
+            self._response_queue.put(("error", "GeneratorExit()"))
+            return
+
         try:
             for chunk in self.send_message_to_chatgpt(user_message):
                 self._response_queue.put(("chunk", chunk))
@@ -921,14 +1129,31 @@ class Plugin(BasePlugin):
                 elif msg_type == "error":
                     if chat_visible:
                         self._remove_loading_indicator()
-                        tw = self.chat_box._textbox
-                        self.chat_box.configure(state="normal")
-                        tw.insert("end", f"Error: {data}\n\n\n", "error")
-                        self.chat_box.configure(state="disabled")
-                        tw.see("end")
-                        self._reset_input_state()
+                        if self._streamed_text.strip():
+                            # Partial response already received — finalize
+                            # whatever we have instead of discarding it.
+                            self._finalize_response()
+                            tw = self.chat_box._textbox
+                            self.chat_box.configure(state="normal")
+                            tw.insert("end",
+                                      "\n⚠ Response generation was "
+                                      "interrupted. The message above "
+                                      "may be incomplete.\n\n\n",
+                                      "error")
+                            self.chat_box.configure(state="disabled")
+                            tw.see("end")
+                        else:
+                            tw = self.chat_box._textbox
+                            self.chat_box.configure(state="normal")
+                            tw.insert("end", f"Error: {data}\n\n\n", "error")
+                            self.chat_box.configure(state="disabled")
+                            tw.see("end")
+                            self._reset_input_state()
                     else:
-                        self._pending_response = None
+                        if self._streamed_text.strip():
+                            self._pending_response = self._streamed_text
+                        else:
+                            self._pending_response = None
                         self._response_in_progress = False
                     return
 

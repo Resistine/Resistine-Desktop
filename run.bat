@@ -1,8 +1,8 @@
 @echo off
 setlocal
 
-:: Change to the project root (two levels up from scripts\run\)
-cd /d "%~dp0\..\.."
+:: Change to the project root (same directory as this script)
+cd /d "%~dp0"
 
 :: Check if .venv exists, if not run install.bat
 if not exist ".venv" (
@@ -29,7 +29,7 @@ if exist "C:\Program Files\GTK3-Runtime Win64\bin" (
 )
 
 echo Updating dependencies...
-python -m pip install -U -q -r requirements\requirements-windows.txt
+python -m pip install -U -q -r scripts\requirements\requirements-windows.txt
 if %errorlevel% neq 0 (
     echo Failed to install requirements.
     exit /b 1
