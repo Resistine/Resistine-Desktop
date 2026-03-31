@@ -26,8 +26,14 @@ def _src(relpath):
     """Resolve a project-relative path to an absolute path."""
     return os.path.join(base_path, relpath)
 
+# Write a VERSION file so the frozen app can read its own version at runtime
+_version_file = os.path.join(base_path, 'VERSION')
+with open(_version_file, 'w') as _vf:
+    _vf.write(VERSION)
+
 # Collect data files
 datas = [
+    (_version_file, '.'),
     (_src('resources'), 'resources'),
     (_src('plugins'), 'plugins'),
     (_src('gui'), 'gui'),
