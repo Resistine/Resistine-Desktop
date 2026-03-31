@@ -26,8 +26,10 @@ def _src(relpath):
     """Resolve a project-relative path to an absolute path."""
     return os.path.join(base_path, relpath)
 
-# Write a VERSION file so the frozen app can read its own version at runtime
-_version_file = os.path.join(base_path, 'VERSION')
+# Write a VERSION file so the frozen app can read its own version at runtime.
+# Use a temp path so we don't pollute the project root.
+import tempfile as _tmpmod
+_version_file = os.path.join(_tmpmod.gettempdir(), 'resistine-build-VERSION')
 with open(_version_file, 'w') as _vf:
     _vf.write(VERSION)
 
