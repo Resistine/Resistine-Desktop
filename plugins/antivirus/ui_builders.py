@@ -157,6 +157,18 @@ def build_scan_activity(plugin, parent, row):
     )
     plugin._scan_status_label.grid(row=0, column=1, sticky="e")
 
+    cancel_btn = customtkinter.CTkButton(
+        header, text="Cancel", width=60, height=24, corner_radius=6,
+        font=font(11), fg_color="transparent", border_width=1,
+        border_color=("#DC2626", "#F87171"),
+        text_color=("#DC2626", "#F87171"),
+        hover_color=("#FEE2E2", "#3B1010"),
+        command=plugin._cancel_scan,
+    )
+    cancel_btn.grid(row=0, column=2, sticky="e", padx=(8, 0))
+    cancel_btn.grid_remove()  # Hidden until a scan starts
+    plugin._action_buttons["cancel_scan"] = cancel_btn
+
     plugin._scan_progress = customtkinter.CTkProgressBar(card, height=4)
     plugin._scan_progress.set(0)
     plugin._scan_progress.grid(

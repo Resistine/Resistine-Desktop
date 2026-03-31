@@ -26,22 +26,31 @@ class ScanResult:
     error: str = ""
 
 
+class ScanHandle:
+    """Handle returned by scan() that supports cancellation."""
+
+    def __init__(self):
+        self._cancelled = threading.Event()
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancelled.is_set()
+
+    def cancel(self):
+        self._cancelled.set()
+
+
 def scan(
     target: str,
     on_progress: Callable | None = None,
     on_complete: Callable | None = None,
-):
+) -> ScanHandle:
     """Run a ClamAV scan on *target* in a background thread.
 
-    Parameters
-    ----------
-    target:
-        File or directory path to scan.
-    on_progress:
-        Called with ``(line: str)`` for each output line.
-    on_complete:
-        Called with ``(result: ScanResult)`` when finished.
+    Returns a ScanHandle whose cancel() method kills the subprocess.
     """
+    handle = ScanHandle()
+
     if not clamav.is_available():
         result = ScanResult(
             target=target,
@@ -49,19 +58,24 @@ def scan(
         )
         if on_complete:
             on_complete(result)
-        return
+        return handle
 
     def _run():
         try:
-            raw = clamav.scan_path(target, on_line=on_progress)
-            result = ScanResult(
-                target=raw["target"],
-                scanned=raw["scanned"],
-                infected=raw["infected"],
-                infections=raw["infections"],
-                duration=raw["duration"],
-                error=raw["error"],
+            raw = clamav.scan_path(
+                target, on_line=on_progress, cancel=handle._cancelled,
             )
+            if handle.cancelled:
+                result = ScanResult(target=target, error="Scan cancelled.")
+            else:
+                result = ScanResult(
+                    target=raw["target"],
+                    scanned=raw["scanned"],
+                    infected=raw["infected"],
+                    infections=raw["infections"],
+                    duration=raw["duration"],
+                    error=raw["error"],
+                )
         except Exception as exc:
             result = ScanResult(target=target, error=str(exc))
         if on_complete:
@@ -69,3 +83,4 @@ def scan(
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
+    return handle
