@@ -65,6 +65,7 @@ class Plugin(BasePlugin):
         self._rt_status = None
         self._rt_switch = None
         self._scanning = False
+        self._scan_handle = None
         self.status = self.get_status()
 
     def check_status(self):
@@ -222,6 +223,11 @@ class Plugin(BasePlugin):
         self._scan_progress.configure(mode="indeterminate")
         self._scan_progress.start()
 
+        # Show cancel button
+        cancel_btn = self._action_buttons.get("cancel_scan")
+        if cancel_btn:
+            cancel_btn.grid()
+
         short = os.path.basename(target) or target
         self._scan_status_label.configure(text=f"Scanning: {short}")
         self._log_append(f"Scanning: {target}")
@@ -232,19 +238,37 @@ class Plugin(BasePlugin):
         def on_complete(result: ScanResult):
             self.app.after(0, self._handle_scan_complete, result)
 
-        scan(target, on_progress=on_progress, on_complete=on_complete)
+        self._scan_handle = scan(
+            target, on_progress=on_progress, on_complete=on_complete,
+        )
+
+    def _cancel_scan(self):
+        """Cancel the running scan."""
+        if self._scan_handle:
+            self._scan_handle.cancel()
+            self._log_append("Cancelling scan...")
 
     def _handle_scan_complete(self, result: ScanResult):
         self._scanning = False
+        self._scan_handle = None
         self._scan_progress.stop()
         self._scan_progress.set(1.0 if not result.error else 0)
         self._scan_progress.configure(mode="determinate")
         self._scan_progress.grid_remove()
         self._set_scan_buttons_state("normal")
 
+        # Hide cancel button
+        cancel_btn = self._action_buttons.get("cancel_scan")
+        if cancel_btn:
+            cancel_btn.grid_remove()
+
         if result.error:
-            self._scan_status_label.configure(text="Scan failed")
-            self._log_append(f"Error: {result.error}")
+            if "cancelled" in result.error.lower():
+                self._scan_status_label.configure(text="Scan cancelled")
+                self._log_append("Scan cancelled.")
+            else:
+                self._scan_status_label.configure(text="Scan failed")
+                self._log_append(f"Error: {result.error}")
             return
 
         self._log_append(

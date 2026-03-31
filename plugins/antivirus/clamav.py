@@ -14,6 +14,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable
 
@@ -380,11 +381,13 @@ def stop_clamd() -> tuple[bool, str]:
 def scan_path(
     target: str,
     on_line: Callable | None = None,
+    cancel: "threading.Event | None" = None,
 ) -> dict:
     """Scan a file or directory. Uses clamdscan if clamd is running,
     otherwise falls back to clamscan.
 
     Returns dict with keys: scanned, infected, infections, duration, error.
+    Pass a threading.Event as *cancel* to allow early termination.
     """
     result = {
         "target": target,
@@ -416,6 +419,10 @@ def scan_path(
     else:
         cmd += ["-d", _DB_DIR, "--recursive"]
 
+    # Skip directories that never contain real threats
+    for skip in (".git", ".hg", ".svn", "node_modules", "__pycache__"):
+        cmd += ["--exclude-dir", skip]
+
     # Apply whitelist exclusions
     for excluded in get_whitelist():
         if os.path.isdir(excluded):
@@ -433,6 +440,10 @@ def scan_path(
             env=_clamav_env(),
         )
         for line in proc.stdout:
+            if cancel and cancel.is_set():
+                proc.terminate()
+                proc.wait(timeout=5)
+                return result
             stripped = line.rstrip()
             if on_line:
                 on_line(stripped)
