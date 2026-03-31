@@ -131,10 +131,10 @@ def init(app):
 def check_for_updates():
     """Trigger an interactive update check (manual "Check for Updates" button).
 
-    Returns True if the check was started successfully.
+    Returns "update_available", "up_to_date", or "error".
     """
     if _backend is None:
-        return False
+        return "error"
     return _backend.check_for_updates()
 
 

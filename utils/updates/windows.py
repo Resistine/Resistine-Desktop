@@ -9,14 +9,13 @@ Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
 
-import os
 import threading
 import xml.etree.ElementTree as ET
-from pathlib import Path
 from urllib.request import urlopen
 from urllib.error import URLError
 
 from utils.logger import logger
+from utils.updates.version import get_current_version
 
 
 APPCAST_URL = "https://resistine.github.io/appcast.xml"
@@ -29,37 +28,10 @@ _gui_callback = None
 
 
 def _load_current_version():
-    """Load the current app version from packaging/Resistine.spec."""
+    """Load the current app version via the shared version helper."""
     global _current_version
-    try:
-        # Try development location first
-        spec_path = Path(__file__).parent.parent.parent / "packaging" / "Resistine.spec"
-        if spec_path.exists():
-            with open(spec_path, "r") as f:
-                for line in f:
-                    if line.startswith("VERSION"):
-                        version = line.split("=")[1].strip().strip("'\"")
-                        _current_version = version
-                        logger.info(f"[UPDATE-WIN] Loaded version from spec: {version}")
-                        return
-
-        # Fallback: try to read from packaging in root
-        alt_path = Path(__file__).parent.parent.parent / "packaging" / "Resistine.spec"
-        if alt_path.exists():
-            with open(alt_path, "r") as f:
-                for line in f:
-                    if "VERSION" in line and "=" in line:
-                        version = line.split("=")[1].strip().strip("'\"")
-                        _current_version = version
-                        logger.info(f"[UPDATE-WIN] Loaded version from alt path: {version}")
-                        return
-
-    except Exception as e:
-        logger.warning(f"[UPDATE-WIN] Could not read version from spec: {e}")
-
-    # Default to 1.0.0 if version cannot be determined
-    _current_version = "1.0.0"
-    logger.info(f"[UPDATE-WIN] Using default version: {_current_version}")
+    _current_version = get_current_version()
+    logger.info(f"[UPDATE-WIN] Current version: {_current_version}")
 
 
 def _compare_versions(v1: str, v2: str) -> int:

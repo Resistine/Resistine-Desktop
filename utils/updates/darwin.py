@@ -81,7 +81,7 @@ def init_updater(app):
         controller = (
             SPUStandardUpdaterController.alloc()
             .initWithStartingUpdater_updaterDelegate_userDriverDelegate_(
-                True, None, None
+                False, None, None
             )
         )
         app._sparkle_controller = controller
@@ -95,17 +95,21 @@ def init_updater(app):
 
 
 def check_for_updates():
-    """Trigger an interactive update check (shows UI even if up-to-date)."""
+    """Trigger an interactive update check (shows UI even if up-to-date).
+
+    Returns "up_to_date" on success (Sparkle handles its own UI for available
+    updates) or "error" on failure.
+    """
     if _controller is None:
         logger.warning("[SPARKLE] Controller not initialized")
-        return False
+        return "error"
     try:
         _controller.checkForUpdates_(None)
         logger.info("[SPARKLE] Interactive check triggered")
-        return True
+        return "up_to_date"
     except Exception as e:
         logger.error(f"[SPARKLE] Interactive check failed: {e}")
-        return False
+        return "error"
 
 
 def check_for_updates_in_background():
