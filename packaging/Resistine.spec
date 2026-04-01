@@ -90,7 +90,7 @@ if IS_MACOS:
 a = Analysis(
     [_src('main.py')],
     pathex=[base_path],
-    binaries=[],
+    binaries=[(_src('frameworks/WinSparkle/WinSparkle.dll'), '.')] if IS_WINDOWS else [],
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

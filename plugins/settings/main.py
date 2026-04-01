@@ -392,9 +392,14 @@ class Plugin(BasePlugin):
         return "1.0.0"
 
     def _check_for_updates(self):
-        """Trigger an interactive update check via the cross-platform update manager."""
+        """Trigger an interactive update check via the cross-platform update manager.
+
+        On macOS (Sparkle) and Windows (WinSparkle) the native library shows
+        its own progress/result UI.  On Linux, the Python updater shows its
+        own dialogs.  The status label below the button is a lightweight
+        fallback for edge cases (updater unavailable, errors).
+        """
         try:
-            import webbrowser
             from utils import updates
 
             if not updates.is_available():
@@ -404,45 +409,22 @@ class Plugin(BasePlugin):
                 self.app.after(5000, lambda: self.update_status_label.configure(text=""))
                 return
 
+            self.update_status_label.configure(
+                text="Checking for updates...", text_color="green"
+            )
+
             result = updates.check_for_updates()
 
-            if result == "update_available":
-                # Get update info from the last check
-                from utils.updates import windows as win_updater
-                import tkinter.messagebox as messagebox
-
-                if hasattr(win_updater, '_latest_version') and hasattr(win_updater, '_download_url'):
-                    version = win_updater._latest_version
-                    url = win_updater._download_url
-
-                    # Show yes/no dialog
-                    response = messagebox.askyesno(
-                        "Update Available",
-                        f"Version {version} is available.\n\nWould you like to download it now?"
-                    )
-
-                    if response:  # User clicked Yes
-                        webbrowser.open(url)
-                        self.update_status_label.configure(
-                            text="Opening download in browser...", text_color="green"
-                        )
-                    else:
-                        self.update_status_label.configure(
-                            text="Update skipped", text_color="orange"
-                        )
-                else:
-                    self.update_status_label.configure(
-                        text="Update available!", text_color="green"
-                    )
-
-            elif result == "up_to_date":
-                self.update_status_label.configure(
-                    text="You're up to date!", text_color="green"
-                )
-            else:  # error
+            if result == "error":
                 self.update_status_label.configure(
                     text="Update check failed", text_color="red"
                 )
+            else:
+                # Native Sparkle/WinSparkle UI handles "up to date" and
+                # "update available" popups.  Clear the status label.
+                self.app.after(3000, lambda: self.update_status_label.configure(text=""))
+                return
+
             self.app.after(5000, lambda: self.update_status_label.configure(text=""))
         except Exception as e:
             logger.error(f"Update check error: {e}")

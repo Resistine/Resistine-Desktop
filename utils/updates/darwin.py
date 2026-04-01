@@ -84,10 +84,14 @@ def init_updater(app):
                 False, None, None
             )
         )
+        # startingUpdater=False avoids an immediate auto-check on launch.
+        # We still need to start the updater so checkForUpdates_ shows UI.
+        controller.startUpdater()
+
         app._sparkle_controller = controller
         _controller = controller
 
-        logger.info("[SPARKLE] Updater controller initialized")
+        logger.info("[SPARKLE] Updater controller initialized and started")
         return True
     except Exception as e:
         logger.error(f"[SPARKLE] Failed to init updater: {e}")
