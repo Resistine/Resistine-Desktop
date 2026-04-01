@@ -163,20 +163,6 @@ class App(AppUI):
         except Exception as e:
             logger.warning(f"Failed to set app icon: {e}")
 
-    def on_update_available(self, version, url, description):
-        """Handle when an update is available."""
-        import webbrowser
-
-        response = self.show_notification(
-            f"Update Available: {version}\n\nWould you like to download and install it?",
-            type="info",
-            buttons=["Download", "Later"]
-        )
-
-        if response == "Download":
-            webbrowser.open(url)
-            self.show_notification("Opening download in your browser...", type="info")
-
     def _on_closing(self):
         """Clean up resources before closing."""
         try:

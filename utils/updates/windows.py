@@ -1,120 +1,221 @@
 """
-Windows Auto-Update Backend — appcast-based updater.
+Windows Auto-Update Backend — WinSparkle via ctypes.
 
-Uses the same appcast.xml and shared parser as macOS and Linux.
-Windows items are identified by sparkle:os="windows" on the enclosure.
-Checks resistine.github.io for Windows releases and notifies user.
+Loads WinSparkle.dll from the app bundle and provides update check
+functionality. Only used on Windows frozen (PyInstaller) builds.
+Mirrors the macOS Sparkle integration in darwin.py.
 
 Author: Resistine Team
 Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
 
-import threading
+import ctypes
+import os
+import sys
 
 from utils.logger import logger
-from utils.updates.appcast import get_latest_windows_update
 from utils.updates.version import get_current_version
 
-_current_version = None
-_latest_version = None
-_download_url = None
-_update_checker_thread = None
-_stop_event = None
-_gui_callback = None
+_dll = None
+_initialized = False
+_app = None
+
+# Same Ed25519 public key used by macOS Sparkle and Linux updater
+_ED25519_PUBLIC_KEY = "2eiUHVoMgl+qqhEWO8iix5SUcRAKfkWYESh9F7jG6ls="
+
+APPCAST_URL = "https://resistine.github.io/appcast.xml"
 
 
-def _check_appcast():
-    """Check appcast for Windows updates using the shared parser.
+def _get_winsparkle_dll_path():
+    """Return path to WinSparkle.dll, or None."""
+    # Frozen build: DLL is next to the executable
+    if getattr(sys, "frozen", False):
+        app_dir = os.path.dirname(sys.executable)
+        path = os.path.join(app_dir, "WinSparkle.dll")
+        if os.path.exists(path):
+            return path
 
-    Returns True if an update is available, False otherwise.
-    """
-    global _latest_version, _download_url
+    # Dev mode: check frameworks/WinSparkle/
+    dev_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "frameworks", "WinSparkle", "WinSparkle.dll"
+    )
+    if os.path.exists(dev_path):
+        return dev_path
 
-    if not _current_version:
-        _load_current_version()
+    return None
 
-    item = get_latest_windows_update(_current_version)
-    if item is None:
-        logger.info("[UPDATE-WIN] No updates available")
+
+def _load_winsparkle():
+    """Load WinSparkle.dll via ctypes. Returns True on success."""
+    global _dll
+    if _dll is not None:
+        return True
+
+    dll_path = _get_winsparkle_dll_path()
+    if not dll_path:
+        logger.info("[WINSPARKLE] DLL not found (dev mode or missing)")
         return False
 
-    _latest_version = item.version
-    _download_url = item.download_url
-    logger.info(f"[UPDATE-WIN] Update available: {item.version} → {item.download_url}")
+    try:
+        _dll = ctypes.CDLL(dll_path)
 
-    if _gui_callback:
-        try:
-            _gui_callback(item.version, item.download_url, item.release_notes_html)
-        except Exception as e:
-            logger.error(f"[UPDATE-WIN] GUI callback failed: {e}")
+        # Configure function signatures
+        _dll.win_sparkle_init.argtypes = []
+        _dll.win_sparkle_init.restype = None
 
-    return True
+        _dll.win_sparkle_cleanup.argtypes = []
+        _dll.win_sparkle_cleanup.restype = None
+
+        _dll.win_sparkle_set_appcast_url.argtypes = [ctypes.c_char_p]
+        _dll.win_sparkle_set_appcast_url.restype = None
+
+        _dll.win_sparkle_set_app_details.argtypes = [
+            ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_wchar_p
+        ]
+        _dll.win_sparkle_set_app_details.restype = None
+
+        _dll.win_sparkle_set_eddsa_public_key.argtypes = [ctypes.c_char_p]
+        _dll.win_sparkle_set_eddsa_public_key.restype = ctypes.c_int
+
+        _dll.win_sparkle_set_automatic_check_for_updates.argtypes = [ctypes.c_int]
+        _dll.win_sparkle_set_automatic_check_for_updates.restype = None
+
+        _dll.win_sparkle_set_update_check_interval.argtypes = [ctypes.c_int]
+        _dll.win_sparkle_set_update_check_interval.restype = None
+
+        _dll.win_sparkle_check_update_with_ui.argtypes = []
+        _dll.win_sparkle_check_update_with_ui.restype = None
+
+        _dll.win_sparkle_check_update_without_ui.argtypes = []
+        _dll.win_sparkle_check_update_without_ui.restype = None
+
+        # Callback types
+        _shutdown_cb_type = ctypes.CFUNCTYPE(None)
+        _dll.win_sparkle_set_shutdown_request_callback.argtypes = [_shutdown_cb_type]
+        _dll.win_sparkle_set_shutdown_request_callback.restype = None
+
+        _can_shutdown_cb_type = ctypes.CFUNCTYPE(ctypes.c_int)
+        _dll.win_sparkle_set_can_shutdown_callback.argtypes = [_can_shutdown_cb_type]
+        _dll.win_sparkle_set_can_shutdown_callback.restype = None
+
+        logger.info(f"[WINSPARKLE] DLL loaded from {dll_path}")
+        return True
+    except Exception as e:
+        logger.error(f"[WINSPARKLE] Failed to load DLL: {e}")
+        _dll = None
+        return False
 
 
-def _load_current_version():
-    """Load the current app version via the shared version helper."""
-    global _current_version
-    _current_version = get_current_version()
-    logger.info(f"[UPDATE-WIN] Current version: {_current_version}")
-
-
-def _background_check_loop():
-    """Background update check loop."""
-    check_interval = 24 * 3600  # 24 hours
-
-    while not _stop_event.is_set():
-        try:
-            _check_appcast()
-        except Exception as e:
-            logger.error(f"[UPDATE-WIN] Background check error: {e}")
-
-        _stop_event.wait(check_interval)
+# Prevent garbage collection of callback pointers
+_stored_callbacks = {}
 
 
 def init_updater(app):
-    """Initialize the Windows update backend."""
-    global _update_checker_thread, _stop_event, _gui_callback
+    """Initialize the WinSparkle updater.
 
-    _load_current_version()
-    _gui_callback = getattr(app, 'on_update_available', None)
+    Must be called after the app window is created.
+    Configures WinSparkle and calls win_sparkle_init().
+    """
+    global _initialized, _app
+    _app = app
 
-    if _stop_event is None:
-        _stop_event = threading.Event()
+    if not _load_winsparkle():
+        return False
 
-    if _update_checker_thread is None or not _update_checker_thread.is_alive():
-        _update_checker_thread = threading.Thread(
-            target=_background_check_loop,
-            daemon=True
+    try:
+        version = get_current_version()
+
+        # All configuration must happen before win_sparkle_init()
+        _dll.win_sparkle_set_appcast_url(APPCAST_URL.encode("utf-8"))
+        _dll.win_sparkle_set_app_details("Resistine", "Resistine", version)
+
+        result = _dll.win_sparkle_set_eddsa_public_key(
+            _ED25519_PUBLIC_KEY.encode("utf-8")
         )
-        _update_checker_thread.start()
-        logger.info("[UPDATE-WIN] Auto-updater initialized")
+        if result != 1:
+            logger.warning("[WINSPARKLE] EdDSA public key was not accepted")
 
-    return True
+        _dll.win_sparkle_set_automatic_check_for_updates(1)
+        _dll.win_sparkle_set_update_check_interval(14400)  # 4 hours
+
+        # Set shutdown callbacks so WinSparkle can close the app before installing
+        @ctypes.CFUNCTYPE(ctypes.c_int)
+        def _can_shutdown():
+            return 1  # Always allow shutdown
+
+        @ctypes.CFUNCTYPE(None)
+        def _shutdown_request():
+            if _app is not None:
+                _app.after(0, _app._on_closing)
+
+        _stored_callbacks["can_shutdown"] = _can_shutdown
+        _stored_callbacks["shutdown_request"] = _shutdown_request
+        _dll.win_sparkle_set_can_shutdown_callback(_can_shutdown)
+        _dll.win_sparkle_set_shutdown_request_callback(_shutdown_request)
+
+        _dll.win_sparkle_init()
+        _initialized = True
+
+        logger.info(
+            f"[WINSPARKLE] Initialized (version={version}, "
+            f"appcast={APPCAST_URL})"
+        )
+        return True
+    except Exception as e:
+        logger.error(f"[WINSPARKLE] Failed to init: {e}")
+        return False
 
 
 def check_for_updates():
-    """Trigger an interactive update check.
+    """Trigger an interactive update check (shows native WinSparkle UI).
 
-    Returns: "update_available", "up_to_date", or "error".
+    WinSparkle handles its own UI: progress, "up to date", or "update
+    available" dialogs — same as Sparkle on macOS.
+
+    Returns "up_to_date" on success or "error" on failure.
     """
-    if not _current_version:
-        _load_current_version()
-
+    if not _initialized:
+        logger.warning("[WINSPARKLE] Not initialized")
+        return "error"
     try:
-        if _check_appcast():
-            return "update_available"
+        _dll.win_sparkle_check_update_with_ui()
+        logger.info("[WINSPARKLE] Interactive check triggered")
         return "up_to_date"
     except Exception as e:
-        logger.error(f"[UPDATE-WIN] Check failed: {e}")
+        logger.error(f"[WINSPARKLE] Interactive check failed: {e}")
         return "error"
 
 
 def check_for_updates_in_background():
-    """Trigger a silent background update check."""
-    return check_for_updates()
+    """Trigger a silent background update check (no UI if up-to-date)."""
+    if not _initialized:
+        return False
+    try:
+        _dll.win_sparkle_check_update_without_ui()
+        logger.info("[WINSPARKLE] Background check triggered")
+        return True
+    except Exception as e:
+        logger.error(f"[WINSPARKLE] Background check failed: {e}")
+        return False
+
+
+def shutdown():
+    """Clean up WinSparkle. Call from the app's close handler."""
+    if _dll is not None and _initialized:
+        try:
+            _dll.win_sparkle_cleanup()
+            logger.info("[WINSPARKLE] Cleanup complete")
+        except Exception as e:
+            logger.error(f"[WINSPARKLE] Cleanup failed: {e}")
+
+
+def stop_runloop_pump():
+    """No-op. Kept for API compatibility with manager.py."""
+    pass
 
 
 def is_available():
-    """Return True if the update backend is operational."""
-    return True
+    """Return True if WinSparkle is loaded and initialized."""
+    return _initialized
