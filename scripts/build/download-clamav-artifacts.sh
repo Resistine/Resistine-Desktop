@@ -145,6 +145,10 @@ if [ "$LIBCLAMAV_COUNT" -eq 0 ]; then
     exit 1
 fi
 
+if [ ! -d "$ARTIFACTS_DIR/launchd" ]; then
+    echo "Warning: launchd/ directory not found in artifacts (daemon auto-start won't work)"
+fi
+
 # Verify artifact checksums (if present)
 if [ -f "$ARTIFACTS_DIR/checksums.txt" ]; then
     echo "  Verifying artifact checksums..."

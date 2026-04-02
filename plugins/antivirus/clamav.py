@@ -31,8 +31,25 @@ _QUARANTINE_DIR = os.path.join(_CLAMAV_DATA_DIR, "quarantine")
 _CLAMD_CONF = os.path.join(_CLAMAV_DATA_DIR, "clamd.conf")
 _FRESHCLAM_CONF = os.path.join(_CLAMAV_DATA_DIR, "freshclam.conf")
 _CLAMD_SOCKET = os.path.join(_RUN_DIR, "clamd.sock")
+_SYSTEM_CLAMD_SOCKET = "/Library/Application Support/Resistine/clamav/run/clamd.sock"
+_SYSTEM_CLAMD_CONF = "/Library/Application Support/Resistine/clamav/clamd.conf"
 _CLAMD_PID = os.path.join(_RUN_DIR, "clamd.pid")
 _WHITELIST_FILE = os.path.join(_CLAMAV_DATA_DIR, "whitelist.txt")
+
+# SMAppService daemon plists (in Contents/Library/LaunchDaemons/).
+# Order matters: clamd must be registered before clamonacc.
+_DAEMON_PLISTS = [
+    "com.resistine.desktop.clamd.plist",
+    "com.resistine.desktop.clamonacc.plist",
+]
+
+# Legacy plist paths from pre-SMAppService installs
+_LEGACY_PLIST_PATHS = [
+    "/Library/LaunchDaemons/com.resistine.clamd.plist",
+    "/Library/LaunchDaemons/com.resistine.clamonacc.plist",
+    "/Library/LaunchDaemons/com.resistine.desktop.clamd.plist",
+    "/Library/LaunchDaemons/com.resistine.desktop.clamonacc.plist",
+]
 
 
 def _find_certs_dir() -> str | None:
@@ -69,7 +86,7 @@ def _ensure_dirs():
 
 
 def _find_binary(name: str) -> str | None:
-    """Find a ClamAV binary: bundled Helpers → dev artifacts → PATH."""
+    """Find a ClamAV binary: bundled Helpers → installed app → dev artifacts → PATH."""
     candidates = []
 
     # 1. Bundled app (frozen build)
@@ -79,7 +96,10 @@ def _find_binary(name: str) -> str | None:
         )
         candidates.append(os.path.join(helpers, name))
 
-    # 2. Dev build artifacts
+    # 2. Installed app bundle (for dev mode using signed binaries)
+    candidates.append(f"/Applications/Resistine.app/Contents/Helpers/{name}")
+
+    # 3. Dev build artifacts
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
     artifacts = os.path.join(
         project_root, "scripts", "build", "clamav-artifacts", "binaries",
@@ -91,7 +111,7 @@ def _find_binary(name: str) -> str | None:
         if os.path.isfile(resolved) and os.access(resolved, os.X_OK):
             return resolved
 
-    # 3. System PATH
+    # 4. System PATH
     return shutil.which(name)
 
 
@@ -120,6 +140,12 @@ def _clamav_env() -> dict[str, str]:
                 break
 
     if not getattr(sys, "frozen", False):
+        lib_dirs = []
+        # Installed app bundle frameworks
+        app_fw = "/Applications/Resistine.app/Contents/Frameworks"
+        if os.path.isdir(app_fw):
+            lib_dirs.append(app_fw)
+        # Dev build artifacts
         project_root = os.path.dirname(
             os.path.dirname(os.path.dirname(__file__)),
         )
@@ -127,9 +153,12 @@ def _clamav_env() -> dict[str, str]:
             project_root, "scripts", "build", "clamav-artifacts", "lib",
         )
         if os.path.isdir(lib_dir):
+            lib_dirs.append(lib_dir)
+        if lib_dirs:
             existing = env.get("DYLD_LIBRARY_PATH", "")
+            combined = ":".join(lib_dirs)
             env["DYLD_LIBRARY_PATH"] = (
-                f"{lib_dir}:{existing}" if existing else lib_dir
+                f"{combined}:{existing}" if existing else combined
             )
     return env
 
@@ -303,19 +332,35 @@ def _clamd_pid_alive() -> bool:
         return False
 
 
-def is_clamd_running() -> bool:
-    """Check if clamd is responsive via its socket."""
-    if not os.path.exists(_CLAMD_SOCKET):
+def _ping_socket(sock_path: str) -> bool:
+    """Send zPING to a clamd Unix socket and return True on PONG."""
+    if not os.path.exists(sock_path):
         return False
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
             s.settimeout(2)
-            s.connect(_CLAMD_SOCKET)
+            s.connect(sock_path)
             s.sendall(b"zPING\0")
-            resp = s.recv(32)
-            return b"PONG" in resp
+            return b"PONG" in s.recv(32)
     except (OSError, ConnectionRefusedError):
         return False
+
+
+def _active_clamd_socket() -> str | None:
+    """Return the socket path of a running clamd, or None.
+
+    Checks the per-user socket first, then the system LaunchDaemon socket.
+    """
+    if _ping_socket(_CLAMD_SOCKET):
+        return _CLAMD_SOCKET
+    if _ping_socket(_SYSTEM_CLAMD_SOCKET):
+        return _SYSTEM_CLAMD_SOCKET
+    return None
+
+
+def is_clamd_running() -> bool:
+    """Check if clamd is responsive via its socket."""
+    return _active_clamd_socket() is not None
 
 
 def start_clamd() -> tuple[bool, str]:
@@ -375,6 +420,143 @@ def stop_clamd() -> tuple[bool, str]:
         return False, str(exc)
 
 
+# ── SMAppService daemon registration (macOS 13+) ────────
+
+
+def ensure_daemons_registered():
+    """Register ClamAV LaunchDaemons via SMAppService.
+
+    Called from the plugin init on a background thread. Follows the same
+    pattern as the VPN helper registration in vpn_functions_darwin.py.
+    """
+    if not (
+        ".app/Contents/MacOS" in sys.executable
+        or ".app/Contents/MacOS" in os.path.abspath(sys.argv[0])
+    ):
+        logger.debug("Skipping ClamAV daemon registration (not an app bundle)")
+        return
+
+    try:
+        from ServiceManagement import SMAppService
+    except ImportError:
+        logger.warning("ServiceManagement framework not available")
+        return
+
+    _cleanup_legacy_plists()
+
+    needs_approval = False
+
+    for plist_name in _DAEMON_PLISTS:
+        try:
+            service = SMAppService.daemonServiceWithPlistName_(plist_name)
+        except Exception:
+            try:
+                service = SMAppService.daemonWithPlistName_(plist_name)
+            except Exception:
+                logger.warning(f"Could not create SMAppService for {plist_name}")
+                continue
+
+        status = int(service.status())
+        status_map = {
+            0: "notRegistered",
+            1: "enabled",
+            2: "requiresApproval",
+            3: "notFound",
+        }
+        logger.info(
+            f"ClamAV daemon {plist_name}: {status_map.get(status, 'unknown')}",
+        )
+
+        if status == 1:
+            continue
+
+        if status == 2:
+            needs_approval = True
+            continue
+
+        # Not registered (0) or not found (3) — register
+        success, err = service.registerAndReturnError_(None)
+        if not success:
+            logger.error(f"ClamAV daemon registration error ({plist_name}): {err}")
+            if int(service.status()) == 2:
+                needs_approval = True
+        else:
+            logger.info(f"ClamAV daemon {plist_name} registered successfully")
+
+    if needs_approval:
+        _prompt_daemon_approval()
+
+
+def _cleanup_legacy_plists():
+    """Remove old /Library/LaunchDaemons/ plists from pre-SMAppService installs."""
+    found = [p for p in _LEGACY_PLIST_PATHS if os.path.exists(p)]
+    if not found:
+        return
+
+    cmds = []
+    for plist in found:
+        cmds.append(f"launchctl bootout system '{plist}' 2>/dev/null")
+        cmds.append(f"rm -f '{plist}'")
+
+    script = "; ".join(cmds)
+    escaped = script.replace("\\", "\\\\").replace('"', '\\"')
+    try:
+        subprocess.run(
+            [
+                "osascript", "-e",
+                f'do shell script "{escaped}" with administrator privileges',
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        logger.info("Cleaned up legacy ClamAV LaunchDaemon plists")
+    except Exception as e:
+        logger.warning(f"Could not clean up legacy plists: {e}")
+
+
+def _prompt_daemon_approval():
+    """Prompt user to approve ClamAV daemons in System Settings > Login Items.
+
+    Must schedule the dialog on the main thread — Tkinter is not thread-safe.
+    """
+    try:
+        import tkinter as tk
+
+        root = getattr(tk, "_default_root", None)
+        if root is None:
+            logger.warning("No Tk root available for daemon approval prompt")
+            return
+
+        def _show_dialog():
+            from gui.dialogs import ask_yes_no
+
+            def on_confirm(confirmed):
+                if confirmed:
+                    try:
+                        from ServiceManagement import SMAppService
+
+                        svc = SMAppService.daemonServiceWithPlistName_(
+                            _DAEMON_PLISTS[0],
+                        )
+                        svc.openSystemSettingsLoginItems()
+                        logger.info("Opened System Settings — Login Items")
+                    except Exception:
+                        pass
+
+            ask_yes_no(
+                root,
+                "ClamAV Approval Required",
+                "Resistine needs your approval to install ClamAV daemons "
+                "for real-time malware protection.\n\n"
+                "Click 'Yes' to open System Settings where you can enable "
+                "them in Login Items.",
+                on_confirm,
+            )
+
+        root.after(0, _show_dialog)
+    except Exception as e:
+        logger.error(f"Could not prompt for daemon approval: {e}")
+
+
 # ── Scanning ──────────────────────────────────────────────
 
 
@@ -399,8 +581,8 @@ def scan_path(
     }
 
     # Prefer clamdscan (faster, uses running daemon)
-    use_daemon = is_clamd_running()
-    if use_daemon:
+    active_socket = _active_clamd_socket()
+    if active_socket:
         binary = _find_binary("clamdscan")
     else:
         binary = _find_binary("clamscan")
@@ -409,26 +591,28 @@ def scan_path(
         result["error"] = "ClamAV not installed."
         return result
 
-    if not use_daemon and not has_database():
+    if not active_socket and not has_database():
         result["error"] = "No signature database — run Update first."
         return result
 
     cmd = [binary, "--stdout"]
-    if use_daemon:
-        cmd += ["--socket", _CLAMD_SOCKET]
+    if active_socket:
+        # Use the config that matches the running daemon's socket
+        if active_socket == _SYSTEM_CLAMD_SOCKET:
+            cmd += ["--config-file", _SYSTEM_CLAMD_CONF]
+        else:
+            cmd += ["--config-file", _CLAMD_CONF]
     else:
         cmd += ["-d", _DB_DIR, "--recursive"]
 
-    # Skip directories that never contain real threats
-    for skip in (".git", ".hg", ".svn", "node_modules", "__pycache__"):
-        cmd += ["--exclude-dir", skip]
-
-    # Apply whitelist exclusions
-    for excluded in get_whitelist():
-        if os.path.isdir(excluded):
-            cmd += ["--exclude-dir", excluded]
-        else:
-            cmd += ["--exclude", excluded]
+        # --exclude-dir and --exclude are clamscan-only flags
+        for skip in (".git", ".hg", ".svn", "node_modules", "__pycache__"):
+            cmd += ["--exclude-dir", skip]
+        for excluded in get_whitelist():
+            if os.path.isdir(excluded):
+                cmd += ["--exclude-dir", excluded]
+            else:
+                cmd += ["--exclude", excluded]
 
     cmd.append(target)
 

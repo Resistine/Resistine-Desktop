@@ -3,13 +3,14 @@ macOS Uninstaller Backend.
 
 Performs full cleanup in order:
 0. Stop and remove Wazuh SIEM agent (if installed)
-1. Stop VPN tunnel (if running)
-2. Deactivate the system extension
-3. Remove keychain items
-4. Remove app bundle from /Applications
-5. Remove WireGuard config files        (late — prevents recreation by running code)
-6. Remove app config directory           (late — prevents recreation by settings module)
-7. Quit the application
+1. Unregister ClamAV daemons (SMAppService + legacy plist cleanup)
+2. Stop VPN tunnel (if running)
+3. Deactivate the system extension
+4. Remove keychain items
+5. Remove app bundle from /Applications
+6. Remove WireGuard config files        (late — prevents recreation by running code)
+7. Remove app config directory           (late — prevents recreation by settings module)
+8. Quit the application
 
 Author: Resistine Team
 Copyright (c) Resistine 2025
@@ -46,6 +47,7 @@ def run_uninstall(app, progress_callback=None):
     # recreation by code/settings modules still running.
     steps = [
         ("Removing SIEM agent...",         "SIEM agent",            _remove_wazuh_agent),
+        ("Stopping ClamAV daemons...",     "ClamAV daemons",        _remove_clamav_daemons),
         ("Stopping VPN tunnel...",         "VPN stop",              _stop_vpn_tunnel),
         ("Deactivating system extension...","Extension deactivation",_deactivate_system_extension),
         ("Removing keychain items...",     "Keychain",              _remove_keychain_items),
@@ -71,6 +73,76 @@ def run_uninstall(app, progress_callback=None):
 # ---------------------------------------------------------------------------
 # Cleanup helpers
 # ---------------------------------------------------------------------------
+
+
+def _remove_clamav_daemons():
+    """Unregister ClamAV daemons via SMAppService and clean up legacy plists."""
+    # 1. SMAppService unregistration (current installs)
+    _smappservice_plist_names = [
+        "com.resistine.desktop.clamonacc.plist",
+        "com.resistine.desktop.clamd.plist",
+    ]
+    try:
+        from ServiceManagement import SMAppService
+
+        for plist_name in _smappservice_plist_names:
+            try:
+                service = SMAppService.daemonServiceWithPlistName_(plist_name)
+                status = int(service.status())
+                if status in (1, 2):  # enabled or requiresApproval
+                    success, err = service.unregisterAndReturnError_(None)
+                    if not success:
+                        logger.warning(
+                            f"[UNINSTALL] SMAppService unregister error "
+                            f"({plist_name}): {err}",
+                        )
+                    else:
+                        logger.info(
+                            f"[UNINSTALL] Unregistered {plist_name} via SMAppService",
+                        )
+            except Exception as e:
+                logger.warning(
+                    f"[UNINSTALL] SMAppService unregister failed ({plist_name}): {e}",
+                )
+    except ImportError:
+        logger.debug("[UNINSTALL] ServiceManagement not available")
+
+    # 2. Legacy cleanup (pre-SMAppService installs)
+    legacy_plists = [
+        "/Library/LaunchDaemons/com.resistine.clamonacc.plist",
+        "/Library/LaunchDaemons/com.resistine.clamd.plist",
+        "/Library/LaunchDaemons/com.resistine.desktop.clamonacc.plist",
+        "/Library/LaunchDaemons/com.resistine.desktop.clamd.plist",
+    ]
+    cmds = []
+    for plist in legacy_plists:
+        if os.path.exists(plist):
+            cmds.append(f"launchctl bootout system '{plist}' 2>/dev/null")
+            cmds.append(f"rm -f '{plist}'")
+
+    if not cmds:
+        logger.info("[UNINSTALL] No legacy ClamAV LaunchDaemon plists found")
+        return
+
+    script = "; ".join(cmds)
+    escaped = script.replace("\\", "\\\\").replace('"', '\\"')
+    cmd = [
+        "osascript", "-e",
+        f'do shell script "{escaped}" with administrator privileges',
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode == 0:
+            logger.info("[UNINSTALL] Legacy ClamAV plists cleaned up")
+        else:
+            logger.warning(
+                f"[UNINSTALL] Legacy plist cleanup returned non-zero: "
+                f"{result.stderr}",
+            )
+    except subprocess.TimeoutExpired:
+        logger.warning("[UNINSTALL] Legacy plist cleanup timed out")
+    except Exception as e:
+        logger.error(f"[UNINSTALL] Legacy plist cleanup error: {e}")
 
 
 def _delete_key_backup(path):

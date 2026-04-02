@@ -68,6 +68,13 @@ class Plugin(BasePlugin):
         self._scan_handle = None
         self.status = self.get_status()
 
+        # Register system-level ClamAV daemons via SMAppService (non-blocking)
+        import platform
+        if platform.system() == "Darwin":
+            threading.Thread(
+                target=clamav.ensure_daemons_registered, daemon=True,
+            ).start()
+
     def check_status(self):
         if self._realtime_on:
             return "OK"
