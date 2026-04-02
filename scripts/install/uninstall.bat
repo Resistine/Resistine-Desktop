@@ -113,7 +113,6 @@ echo    rmdir /s /q "%PROGRAMDATA_DIR%"
 echo    rmdir /s /q "%VENV_DIR%"
 echo ============================================================
 echo.
-pause
 exit /b 0
 
 
@@ -196,7 +195,7 @@ sc query %SERVICE_NAME% >nul 2>&1
 if %errorlevel% equ 0 (
     echo       Stopping service...
     sc stop %SERVICE_NAME% >nul 2>&1
-    timeout /t 3 /nobreak >nul
+    timeout /t 1 /nobreak >nul
 
     echo       Removing service...
     if defined SYS_PYTHON (
@@ -218,7 +217,7 @@ if %errorlevel% equ 0 (
         if !RETRY! lss 10 (
             set /a RETRY+=1
             echo       Waiting for cleanup... ^(!RETRY!/10^)
-            timeout /t 2 /nobreak >nul
+            timeout /t 1 /nobreak >nul
             goto :wait_loop
         ) else (
             echo WARNING: Service still registered.
@@ -235,5 +234,4 @@ echo.
 echo ============================================================
 echo  Service removal complete.
 echo ============================================================
-pause
 exit /b 0

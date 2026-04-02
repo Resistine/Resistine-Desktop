@@ -29,9 +29,14 @@ APPCAST_URL = "https://resistine.github.io/appcast.xml"
 
 def _get_winsparkle_dll_path():
     """Return path to WinSparkle.dll, or None."""
-    # Frozen build: DLL is next to the executable
+    # Frozen build: DLL is in _internal/ (PyInstaller bundles with binaries=[..., '.'])
     if getattr(sys, "frozen", False):
         app_dir = os.path.dirname(sys.executable)
+        # Try _internal/ subdirectory first (PyInstaller layout)
+        path = os.path.join(app_dir, "_internal", "WinSparkle.dll")
+        if os.path.exists(path):
+            return path
+        # Fallback: try next to exe (in case bundle structure differs)
         path = os.path.join(app_dir, "WinSparkle.dll")
         if os.path.exists(path):
             return path
