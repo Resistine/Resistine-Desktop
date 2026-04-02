@@ -29,7 +29,7 @@ def _src(relpath):
 # Write a VERSION file so the frozen app can read its own version at runtime.
 # Use a temp path so we don't pollute the project root.
 import tempfile as _tmpmod
-_version_file = os.path.join(_tmpmod.gettempdir(), 'resistine-build-VERSION')
+_version_file = os.path.join(_tmpmod.gettempdir(), 'VERSION')
 with open(_version_file, 'w') as _vf:
     _vf.write(VERSION)
 
