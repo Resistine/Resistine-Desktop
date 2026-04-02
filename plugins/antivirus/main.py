@@ -57,15 +57,13 @@ class Plugin(BasePlugin):
             uninstall_enabled=True,
         )
         self.app = app
-        self._realtime_on = False
         self._auto_update_on = True
         self._action_buttons = {}
         self._banner_frame = None
         self._banner_label = None
-        self._rt_status = None
-        self._rt_switch = None
         self._scanning = False
         self._scan_handle = None
+        self._last_state = None
         self.status = self.get_status()
 
         # Register system-level ClamAV daemons via SMAppService (non-blocking)
@@ -76,7 +74,7 @@ class Plugin(BasePlugin):
             ).start()
 
     def check_status(self):
-        if self._realtime_on:
+        if self._last_state == "protected":
             return "OK"
         return "Warning"
 
@@ -103,45 +101,71 @@ class Plugin(BasePlugin):
         self.app.after(100, self._refresh_db_info)
         self.app.after(200, self._refresh_whitelist)
         self.app.after(300, self._refresh_quarantine)
+        self.app.after(500, self._update_realtime_status)
 
         return self.main_frame
 
     def destroy(self):
+        self._banner_frame = None
+        self._banner_label = None
         if hasattr(self, "main_frame") and self.main_frame:
             self.main_frame.destroy()
+            self.main_frame = None
 
     # ── UI Event Handlers ────────────────────────────────────
 
-    def _update_banner(self):
+    def _update_realtime_status(self):
+        """Poll daemon state and update the banner."""
+        def _check():
+            status = clamav.get_realtime_status()
+            try:
+                self.app.after(0, self._apply_realtime_status, status)
+            except Exception:
+                pass  # App destroyed during check
+
+        threading.Thread(target=_check, daemon=True).start()
+
+    def _apply_realtime_status(self, status: dict):
+        from plugins.antivirus.theme import (
+            COLOR_ERR_BG,
+            COLOR_ERR_TEXT,
+        )
+
+        state = status["state"]
+        self._last_state = state
+        self.status = self.check_status()
+
         if self._banner_frame is None:
+            self._schedule_status_poll()
             return
-        if self._realtime_on:
+
+        if state == "protected":
             self._banner_frame.configure(fg_color=COLOR_OK_BG)
             self._banner_label.configure(
                 text="\u2713  Protected", text_color=COLOR_OK_TEXT,
             )
-        else:
+        elif state == "warning":
             self._banner_frame.configure(fg_color=COLOR_WARN_BG)
             self._banner_label.configure(
-                text="\u26A0  Protection Off", text_color=COLOR_WARN_TEXT,
+                text="\u26A0  Approve in System Settings \u203A Login Items",
+                text_color=COLOR_WARN_TEXT,
+            )
+        else:  # error
+            self._banner_frame.configure(fg_color=COLOR_ERR_BG)
+            self._banner_label.configure(
+                text="\u2717  Protection Offline — daemons not running",
+                text_color=COLOR_ERR_TEXT,
             )
 
-    def _toggle_realtime(self):
-        self._realtime_on = self._rt_switch.get()
-        self._rt_status.configure(
-            text="Active" if self._realtime_on else "Inactive",
-        )
-        self._update_banner()
-        self.status = self.check_status()
-        logger.info(
-            f"Antivirus: real-time toggled "
-            f"{'on' if self._realtime_on else 'off'}",
-        )
+        self._schedule_status_poll()
 
-        if self._realtime_on:
-            self._start_clamd()
-        else:
-            self._stop_clamd()
+    def _schedule_status_poll(self):
+        """Schedule the next realtime status poll if the UI is still alive."""
+        try:
+            if hasattr(self, "main_frame") and self.main_frame.winfo_exists():
+                self.app.after(10000, self._update_realtime_status)
+        except Exception:
+            pass
 
     def _toggle_auto_update(self):
         self._auto_update_on = self._auto_update_switch.get()
@@ -372,33 +396,6 @@ class Plugin(BasePlugin):
             labels["Signatures"].configure(text=info["signatures"])
         if "Last Updated" in labels:
             labels["Last Updated"].configure(text=info["last_updated"])
-
-    # ── Clamd lifecycle ───────────────────────────────────────
-
-    def _start_clamd(self):
-        def _run():
-            if not clamav.has_database():
-                self.app.after(
-                    0, self._log_append,
-                    "No signature database — updating first...",
-                )
-                ok, msg = clamav.run_freshclam()
-                self.app.after(0, self._log_append, msg)
-                if not ok:
-                    self.app.after(0, self._log_append, "Cannot start daemon.")
-                    return
-
-            ok, msg = clamav.start_clamd()
-            self.app.after(0, self._log_append, f"clamd: {msg}")
-
-        threading.Thread(target=_run, daemon=True).start()
-
-    def _stop_clamd(self):
-        def _run():
-            ok, msg = clamav.stop_clamd()
-            self.app.after(0, self._log_append, f"clamd: {msg}")
-
-        threading.Thread(target=_run, daemon=True).start()
 
     # ── Whitelist ──────────────────────────────────────────────
 

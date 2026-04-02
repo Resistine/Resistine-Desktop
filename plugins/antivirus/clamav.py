@@ -363,6 +363,80 @@ def is_clamd_running() -> bool:
     return _active_clamd_socket() is not None
 
 
+def is_clamonacc_running() -> bool:
+    """Check if clamonacc is running (by process name)."""
+    try:
+        result = subprocess.run(
+            ["pgrep", "-x", "clamonacc"],
+            capture_output=True, timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _daemons_approved() -> bool:
+    """Check if ClamAV daemons are approved in Login Items via SMAppService."""
+    if not (
+        ".app/Contents/MacOS" in sys.executable
+        or ".app/Contents/MacOS" in os.path.abspath(sys.argv[0])
+    ):
+        return False
+    try:
+        from ServiceManagement import SMAppService
+
+        for plist_name in _DAEMON_PLISTS:
+            try:
+                service = SMAppService.daemonServiceWithPlistName_(plist_name)
+                status = int(service.status())
+                if status != 1:  # 1 = enabled
+                    return False
+            except Exception:
+                return False
+        return True
+    except ImportError:
+        return False
+
+
+def get_realtime_status() -> dict:
+    """Return the real-time protection status for UI display.
+
+    Returns dict with keys:
+        approved: bool (daemons approved in Login Items)
+        clamd_running: bool
+        clamonacc_running: bool
+        state: "protected" | "error" | "warning"
+    """
+    clamd_ok = is_clamd_running()
+    clamonacc_ok = is_clamonacc_running()
+
+    # Outside an app bundle, SMAppService is not applicable —
+    # status depends only on whether daemons are actually running.
+    in_bundle = (
+        ".app/Contents/MacOS" in sys.executable
+        or ".app/Contents/MacOS" in os.path.abspath(sys.argv[0])
+    )
+
+    if in_bundle:
+        approved = _daemons_approved()
+    else:
+        approved = True  # Not relevant outside a bundle
+
+    if not approved:
+        state = "warning"
+    elif clamd_ok and clamonacc_ok:
+        state = "protected"
+    else:
+        state = "error"
+
+    return {
+        "approved": approved,
+        "clamd_running": clamd_ok,
+        "clamonacc_running": clamonacc_ok,
+        "state": state,
+    }
+
+
 def start_clamd() -> tuple[bool, str]:
     """Start clamd daemon if not already running."""
     if is_clamd_running():

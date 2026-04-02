@@ -14,8 +14,6 @@ from plugins.antivirus.theme import (
     COLOR_CARD_BG,
     COLOR_CARD_BORDER,
     COLOR_MUTED,
-    COLOR_OK_BG,
-    COLOR_OK_TEXT,
     COLOR_WARN_BG,
     COLOR_WARN_TEXT,
     CORNER_R,
@@ -29,12 +27,9 @@ from plugins.antivirus.theme import (
 
 
 def build_status_banner(plugin, parent, row):
-    if plugin._realtime_on:
-        bg, text_c = COLOR_OK_BG, COLOR_OK_TEXT
-        label = "\u2713  Protected"
-    else:
-        bg, text_c = COLOR_WARN_BG, COLOR_WARN_TEXT
-        label = "\u26A0  Protection Off"
+    # Initial state is "checking" — polling will update it
+    bg, text_c = COLOR_WARN_BG, COLOR_WARN_TEXT
+    label = "\u26A0  Checking protection status..."
 
     banner = customtkinter.CTkFrame(
         parent, fg_color=bg, corner_radius=CORNER_R, height=48,
@@ -89,50 +84,14 @@ def _build_scan_card(plugin, container):
         plugin._action_buttons[key] = btn
 
 
-def _build_realtime_card(plugin, container):
-    card = customtkinter.CTkFrame(
-        container, corner_radius=CORNER_R, fg_color=COLOR_CARD_BG,
-        border_width=1, border_color=COLOR_CARD_BORDER,
-    )
-    card.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
-    card.grid_columnconfigure(0, weight=1)
-
-    customtkinter.CTkLabel(
-        card, text="Real-Time Protection", font=font(14, bold=True),
-    ).grid(row=0, column=0, padx=16, pady=(14, 0), sticky="w")
-
-    customtkinter.CTkLabel(
-        card, text="Auto-scan on file save", font=font(11),
-        text_color=COLOR_MUTED,
-    ).grid(row=1, column=0, padx=16, pady=(0, 6), sticky="w")
-
-    toggle_row = customtkinter.CTkFrame(card, fg_color="transparent")
-    toggle_row.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 14))
-    toggle_row.grid_columnconfigure(0, weight=1)
-
-    plugin._rt_status = customtkinter.CTkLabel(
-        toggle_row, text="Inactive", font=font(12),
-        text_color=COLOR_MUTED,
-    )
-    plugin._rt_status.grid(row=0, column=0, sticky="w")
-
-    plugin._rt_switch = customtkinter.CTkSwitch(
-        toggle_row, text="", width=44, command=plugin._toggle_realtime,
-        onvalue=True, offvalue=False,
-    )
-    plugin._rt_switch.grid(row=0, column=1, sticky="e")
-
-
 def build_scan_and_protection(plugin, parent, row):
     container = customtkinter.CTkFrame(
         parent, fg_color="transparent", corner_radius=0,
     )
     container.grid(row=row, column=0, sticky="ew", padx=PAD_X, pady=(0, 6))
-    container.grid_columnconfigure(0, weight=3)
-    container.grid_columnconfigure(1, weight=2)
+    container.grid_columnconfigure(0, weight=1)
 
     _build_scan_card(plugin, container)
-    _build_realtime_card(plugin, container)
     return row + 1
 
 
