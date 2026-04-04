@@ -375,12 +375,17 @@ def is_clamonacc_running() -> bool:
         return False
 
 
-def _daemons_approved() -> bool:
-    """Check if ClamAV daemons are approved in Login Items via SMAppService."""
-    if not (
+def _is_app_bundle() -> bool:
+    """Return True if running inside a .app bundle."""
+    return (
         ".app/Contents/MacOS" in sys.executable
         or ".app/Contents/MacOS" in os.path.abspath(sys.argv[0])
-    ):
+    )
+
+
+def _daemons_approved() -> bool:
+    """Check if ClamAV daemons are approved in Login Items via SMAppService."""
+    if not _is_app_bundle():
         return False
     try:
         from ServiceManagement import SMAppService
@@ -398,39 +403,118 @@ def _daemons_approved() -> bool:
         return False
 
 
+def has_full_disk_access() -> bool:
+    """Check whether the clamonacc process has Full Disk Access.
+
+    clamonacc requires FDA to use the Endpoint Security Framework.
+    We probe by attempting to read a TCC-protected path that only
+    FDA-granted processes can access.
+    """
+    # Quick heuristic: try reading a TCC-protected directory.
+    # ~/Library/Mail is protected by FDA on macOS 10.14+.
+    probe = os.path.expanduser("~/Library/Mail")
+    try:
+        os.listdir(probe)
+        return True
+    except PermissionError:
+        return False
+    except FileNotFoundError:
+        # Mail.app never used — directory doesn't exist. Try Safari data.
+        probe_alt = os.path.expanduser("~/Library/Safari")
+        try:
+            os.listdir(probe_alt)
+            return True
+        except PermissionError:
+            return False
+        except FileNotFoundError:
+            # Neither directory exists — assume FDA is granted since we
+            # can't distinguish "no dir" from "no access".
+            return True
+
+
+def open_fda_settings():
+    """Open System Settings to the Full Disk Access pane."""
+    try:
+        subprocess.Popen(
+            ["open", "x-apple.systempreferences:"
+             "com.apple.preference.security?Privacy_AllFiles"],
+        )
+        logger.info("Opened System Settings — Full Disk Access")
+    except Exception as exc:
+        logger.error(f"Could not open FDA settings: {exc}")
+
+
+def open_login_items_settings():
+    """Open System Settings to the Login Items pane."""
+    try:
+        from ServiceManagement import SMAppService
+
+        svc = SMAppService.daemonServiceWithPlistName_(_DAEMON_PLISTS[0])
+        svc.openSystemSettingsLoginItems()
+        logger.info("Opened System Settings — Login Items")
+    except Exception:
+        # Fallback: SMAppService API unavailable (dev mode / old macOS)
+        try:
+            subprocess.Popen(
+                ["open", "x-apple.systempreferences:"
+                 "com.apple.LoginItems-Settings.extension"],
+            )
+            logger.info("Opened System Settings — Login Items (fallback)")
+        except Exception as exc:
+            logger.error(f"Could not open Login Items settings: {exc}")
+
+
+def is_clamav_installed() -> bool:
+    """Return True if at least the core clamscan binary can be found."""
+    return _find_binary("clamscan") is not None
+
+
 def get_realtime_status() -> dict:
     """Return the real-time protection status for UI display.
 
     Returns dict with keys:
+        installed: bool (ClamAV binaries found)
+        db_present: bool (signature database exists)
         approved: bool (daemons approved in Login Items)
+        fda_granted: bool (Full Disk Access available)
         clamd_running: bool
         clamonacc_running: bool
-        state: "protected" | "error" | "warning"
+        state: one of "not_installed" | "no_database" | "approval_required"
+               | "fda_required" | "protected" | "error"
     """
+    installed = is_clamav_installed()
+    db_present = has_database()
     clamd_ok = is_clamd_running()
     clamonacc_ok = is_clamonacc_running()
 
-    # Outside an app bundle, SMAppService is not applicable —
-    # status depends only on whether daemons are actually running.
-    in_bundle = (
-        ".app/Contents/MacOS" in sys.executable
-        or ".app/Contents/MacOS" in os.path.abspath(sys.argv[0])
-    )
+    in_bundle = _is_app_bundle()
 
     if in_bundle:
         approved = _daemons_approved()
+        fda = has_full_disk_access()
     else:
-        approved = True  # Not relevant outside a bundle
+        approved = True
+        fda = True
 
-    if not approved:
-        state = "warning"
+    # Priority: not installed > no DB > approval > FDA > daemons running
+    if not installed:
+        state = "not_installed"
+    elif not db_present:
+        state = "no_database"
+    elif not approved:
+        state = "approval_required"
+    elif not fda:
+        state = "fda_required"
     elif clamd_ok and clamonacc_ok:
         state = "protected"
     else:
         state = "error"
 
     return {
+        "installed": installed,
+        "db_present": db_present,
         "approved": approved,
+        "fda_granted": fda,
         "clamd_running": clamd_ok,
         "clamonacc_running": clamonacc_ok,
         "state": state,
@@ -558,7 +642,7 @@ def ensure_daemons_registered():
             logger.info(f"ClamAV daemon {plist_name} registered successfully")
 
     if needs_approval:
-        _prompt_daemon_approval()
+        logger.warning("ClamAV daemons require user approval in Login Items")
 
 
 def _cleanup_legacy_plists():
@@ -585,50 +669,6 @@ def _cleanup_legacy_plists():
         logger.info("Cleaned up legacy ClamAV LaunchDaemon plists")
     except Exception as e:
         logger.warning(f"Could not clean up legacy plists: {e}")
-
-
-def _prompt_daemon_approval():
-    """Prompt user to approve ClamAV daemons in System Settings > Login Items.
-
-    Must schedule the dialog on the main thread — Tkinter is not thread-safe.
-    """
-    try:
-        import tkinter as tk
-
-        root = getattr(tk, "_default_root", None)
-        if root is None:
-            logger.warning("No Tk root available for daemon approval prompt")
-            return
-
-        def _show_dialog():
-            from gui.dialogs import ask_yes_no
-
-            def on_confirm(confirmed):
-                if confirmed:
-                    try:
-                        from ServiceManagement import SMAppService
-
-                        svc = SMAppService.daemonServiceWithPlistName_(
-                            _DAEMON_PLISTS[0],
-                        )
-                        svc.openSystemSettingsLoginItems()
-                        logger.info("Opened System Settings — Login Items")
-                    except Exception:
-                        pass
-
-            ask_yes_no(
-                root,
-                "ClamAV Approval Required",
-                "Resistine needs your approval to install ClamAV daemons "
-                "for real-time malware protection.\n\n"
-                "Click 'Yes' to open System Settings where you can enable "
-                "them in Login Items.",
-                on_confirm,
-            )
-
-        root.after(0, _show_dialog)
-    except Exception as e:
-        logger.error(f"Could not prompt for daemon approval: {e}")
 
 
 # ── Scanning ──────────────────────────────────────────────
@@ -669,13 +709,16 @@ def scan_path(
         result["error"] = "No signature database — run Update first."
         return result
 
-    cmd = [binary, "--stdout"]
+    is_dir = os.path.isdir(target)
+    cmd = [binary, "--stdout", "--verbose"]
     if active_socket:
         # Use the config that matches the running daemon's socket
         if active_socket == _SYSTEM_CLAMD_SOCKET:
             cmd += ["--config-file", _SYSTEM_CLAMD_CONF]
         else:
             cmd += ["--config-file", _CLAMD_CONF]
+        if is_dir:
+            cmd.append("--multiscan")
     else:
         cmd += ["-d", _DB_DIR, "--recursive"]
 
@@ -697,16 +740,27 @@ def scan_path(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             env=_clamav_env(),
         )
+    except OSError as exc:
+        result["error"] = f"Could not start ClamAV: {exc}"
+        return result
+
+    scanned_from_output = 0
+    try:
         for line in proc.stdout:
             if cancel and cancel.is_set():
-                proc.terminate()
-                proc.wait(timeout=5)
+                proc.kill()
+                proc.wait(timeout=10)
+                result["error"] = "Scan cancelled."
                 return result
             stripped = line.rstrip()
             if on_line:
                 on_line(stripped)
             if "FOUND" in stripped:
                 result["infections"].append(stripped)
+                scanned_from_output += 1
+            elif "OK" in stripped and ":" in stripped:
+                # Lines like "/path/to/file: OK"
+                scanned_from_output += 1
             elif stripped.startswith("Scanned files:"):
                 try:
                     result["scanned"] = int(stripped.split(":")[-1].strip())
@@ -719,8 +773,32 @@ def scan_path(
                     pass
             elif stripped.startswith("Time:"):
                 result["duration"] = stripped.split(":", 1)[-1].strip()
-        proc.wait()
+
+        proc.wait(timeout=30)
+
+        rc = proc.returncode
+        # clamscan: 0=clean, 1=found virus, 2=error
+        # Negative = killed by signal (e.g. -9 = SIGKILL from quarantine)
+        if rc is not None and rc < 0:
+            sig = abs(rc)
+            result["error"] = (
+                f"ClamAV was killed by signal {sig}. "
+                "The binary may be quarantined — run: "
+                "xattr -cr scripts/build/clamav-artifacts/binaries/"
+            )
+        elif rc == 2 and not result["infections"]:
+            result["error"] = "ClamAV encountered an error during scanning."
+
+        # clamdscan doesn't output "Scanned files:" — derive from output lines
+        if result["scanned"] == 0 and scanned_from_output > 0:
+            result["scanned"] = scanned_from_output
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
+        result["error"] = "Scan timed out."
     except Exception as exc:
+        proc.kill()
+        proc.wait(timeout=5)
         result["error"] = str(exc)
 
     return result

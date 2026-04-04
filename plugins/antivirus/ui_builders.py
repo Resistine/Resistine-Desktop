@@ -1,6 +1,6 @@
 """Primary UI builder functions for the Antivirus plugin.
 
-Builds the Status Banner, Scan Actions / Real-Time Protection,
+Builds the Status Card, Scan Actions / Real-Time Protection,
 and Scan Activity sections.
 
 Author: Resistine Team
@@ -23,28 +23,48 @@ from plugins.antivirus.theme import (
 )
 
 
-# ── 1. Protection Status Banner ─────────────────────────
+# ── 1. Protection Status Card (VPN-style) ──────────────
 
 
 def build_status_banner(plugin, parent, row):
-    # Initial state is "checking" — polling will update it
-    bg, text_c = COLOR_WARN_BG, COLOR_WARN_TEXT
-    label = "\u26A0  Checking protection status..."
+    """Build a VPN-style status card with title, subtitle, and action button."""
+    bg = COLOR_WARN_BG
 
-    banner = customtkinter.CTkFrame(
-        parent, fg_color=bg, corner_radius=CORNER_R, height=48,
+    card = customtkinter.CTkFrame(
+        parent, fg_color=bg, corner_radius=CORNER_R, border_width=0,
     )
-    banner.grid(row=row, column=0, sticky="ew", padx=PAD_X, pady=(16, 10))
-    banner.grid_propagate(False)
-    banner.grid_columnconfigure(0, weight=1)
-    banner.grid_rowconfigure(0, weight=1)
+    card.grid(row=row, column=0, sticky="ew", padx=PAD_X, pady=(16, 10))
+    card.grid_columnconfigure(0, weight=1)
+
+    text_col = customtkinter.CTkFrame(card, fg_color="transparent")
+    text_col.grid(row=0, column=0, padx=22, pady=20, sticky="w")
 
     plugin._banner_label = customtkinter.CTkLabel(
-        banner, text=label, font=font(14, bold=True),
-        text_color=text_c, anchor="center",
+        text_col, text="Checking...",
+        font=customtkinter.CTkFont(family="Inter", size=28, weight="bold"),
+        text_color=COLOR_WARN_TEXT,
     )
-    plugin._banner_label.place(relx=0.5, rely=0.5, anchor="center")
-    plugin._banner_frame = banner
+    plugin._banner_label.grid(row=0, column=0, sticky="w")
+
+    plugin._banner_subtitle = customtkinter.CTkLabel(
+        text_col, text="Checking protection status...",
+        font=customtkinter.CTkFont(family="Inter", size=12),
+        text_color=("#555555", "#AAAAAA"),
+        wraplength=340, justify="left",
+    )
+    plugin._banner_subtitle.grid(row=1, column=0, sticky="w", pady=(4, 0))
+
+    plugin._banner_action_btn = customtkinter.CTkButton(
+        card, text="Open Settings", width=130, height=34,
+        corner_radius=8,
+        font=customtkinter.CTkFont(family="Inter", size=12, weight="bold"),
+        command=lambda: None,
+    )
+    # Hidden initially — shown only when user action is needed
+    plugin._banner_action_btn.grid(row=0, column=1, padx=22, pady=20)
+    plugin._banner_action_btn.grid_remove()
+
+    plugin._banner_frame = card
     return row + 1
 
 
@@ -136,7 +156,7 @@ def build_scan_activity(plugin, parent, row):
     plugin._scan_progress.grid_remove()
 
     plugin._scan_log = customtkinter.CTkTextbox(
-        card, height=56, corner_radius=6,
+        card, height=140, corner_radius=6,
         font=customtkinter.CTkFont(family="Courier New", size=11),
         state="disabled",
     )

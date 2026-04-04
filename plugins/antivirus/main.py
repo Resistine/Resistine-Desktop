@@ -17,6 +17,8 @@ import customtkinter
 from plugins.antivirus import clamav
 from plugins.antivirus.scanner import ScanResult, scan
 from plugins.antivirus.theme import (
+    COLOR_ERR_BG,
+    COLOR_ERR_TEXT,
     COLOR_MUTED,
     COLOR_OK_BG,
     COLOR_OK_TEXT,
@@ -37,6 +39,10 @@ from plugins.base_plugin import BasePlugin
 from utils.logger import logger
 
 _PLUGIN_DIR = os.path.dirname(os.path.realpath(__file__))
+
+# Neutral grey for first-time setup states (matches VPN "No Configuration")
+_COLOR_SETUP_BG = ("#F5F5F5", "#1A1A1A")
+_COLOR_SETUP_TEXT = ("#666666", "#999999")
 
 
 class Plugin(BasePlugin):
@@ -61,9 +67,12 @@ class Plugin(BasePlugin):
         self._action_buttons = {}
         self._banner_frame = None
         self._banner_label = None
+        self._banner_subtitle = None
+        self._banner_action_btn = None
         self._scanning = False
         self._scan_handle = None
         self._last_state = None
+        self._last_status = None
         self.status = self.get_status()
 
         # Register system-level ClamAV daemons via SMAppService (non-blocking)
@@ -76,6 +85,8 @@ class Plugin(BasePlugin):
     def check_status(self):
         if self._last_state == "protected":
             return "OK"
+        if self._last_state == "error":
+            return "Error"
         return "Warning"
 
     # ── Main screen ──────────────────────────────────────────
@@ -101,6 +112,12 @@ class Plugin(BasePlugin):
         self.app.after(100, self._refresh_db_info)
         self.app.after(200, self._refresh_whitelist)
         self.app.after(300, self._refresh_quarantine)
+
+        # If we already know the status from a previous poll, apply it
+        # immediately so the card doesn't flash "Checking..." on every visit.
+        # Then kick off the live poll after a short delay.
+        if self._last_status is not None:
+            self._apply_realtime_status_ui(self._last_status)
         self.app.after(500, self._update_realtime_status)
 
         return self.main_frame
@@ -108,6 +125,8 @@ class Plugin(BasePlugin):
     def destroy(self):
         self._banner_frame = None
         self._banner_label = None
+        self._banner_subtitle = None
+        self._banner_action_btn = None
         if hasattr(self, "main_frame") and self.main_frame:
             self.main_frame.destroy()
             self.main_frame = None
@@ -126,38 +145,108 @@ class Plugin(BasePlugin):
         threading.Thread(target=_check, daemon=True).start()
 
     def _apply_realtime_status(self, status: dict):
-        from plugins.antivirus.theme import (
-            COLOR_ERR_BG,
-            COLOR_ERR_TEXT,
-        )
-
+        """Handle a fresh poll result: cache state, update UI, schedule next."""
         state = status["state"]
         self._last_state = state
+        self._last_status = status
         self.status = self.check_status()
+        self._apply_realtime_status_ui(status)
+        self._schedule_status_poll()
 
+    def _apply_realtime_status_ui(self, status: dict):
+        """Update the status card widgets. Safe to call even if UI is gone."""
         if self._banner_frame is None:
-            self._schedule_status_poll()
             return
 
-        if state == "protected":
-            self._banner_frame.configure(fg_color=COLOR_OK_BG)
-            self._banner_label.configure(
-                text="\u2713  Protected", text_color=COLOR_OK_TEXT,
-            )
-        elif state == "warning":
-            self._banner_frame.configure(fg_color=COLOR_WARN_BG)
-            self._banner_label.configure(
-                text="\u26A0  Approve in System Settings \u203A Login Items",
-                text_color=COLOR_WARN_TEXT,
-            )
-        else:  # error
-            self._banner_frame.configure(fg_color=COLOR_ERR_BG)
-            self._banner_label.configure(
-                text="\u2717  Protection Offline — daemons not running",
-                text_color=COLOR_ERR_TEXT,
-            )
+        try:
+            if not self._banner_frame.winfo_exists():
+                self._banner_frame = None
+                return
+        except Exception:
+            self._banner_frame = None
+            return
 
-        self._schedule_status_poll()
+        state = status["state"]
+
+        # State-driven card configuration matching the VPN status card style
+        states = {
+            "not_installed": {
+                "bg": _COLOR_SETUP_BG,
+                "title": "Not Installed",
+                "title_color": _COLOR_SETUP_TEXT,
+                "subtitle": (
+                    "ClamAV binaries were not found. "
+                    "Reinstall Resistine or run the build script "
+                    "to set up antivirus protection."
+                ),
+                "action": None,
+            },
+            "no_database": {
+                "bg": _COLOR_SETUP_BG,
+                "title": "Setup Required",
+                "title_color": _COLOR_SETUP_TEXT,
+                "subtitle": (
+                    "No signature database found. "
+                    "Tap Update Now below to download the latest "
+                    "malware definitions before scanning."
+                ),
+                "action": None,
+            },
+            "protected": {
+                "bg": COLOR_OK_BG,
+                "title": "Protected",
+                "title_color": COLOR_OK_TEXT,
+                "subtitle": "Real-time malware protection is active",
+                "action": None,
+            },
+            "approval_required": {
+                "bg": COLOR_WARN_BG,
+                "title": "Approval Required",
+                "title_color": COLOR_WARN_TEXT,
+                "subtitle": (
+                    "Enable ClamAV daemons in System Settings "
+                    "\u203A General \u203A Login Items"
+                ),
+                "action": ("Open Login Items", clamav.open_login_items_settings),
+            },
+            "fda_required": {
+                "bg": COLOR_WARN_BG,
+                "title": "Full Disk Access Required",
+                "title_color": COLOR_WARN_TEXT,
+                "subtitle": (
+                    "Resistine needs Full Disk Access to monitor files "
+                    "in real time. Grant access in System Settings "
+                    "\u203A Privacy & Security \u203A Full Disk Access."
+                ),
+                "action": ("Open Settings", clamav.open_fda_settings),
+            },
+            "error": {
+                "bg": COLOR_ERR_BG,
+                "title": "Protection Offline",
+                "title_color": COLOR_ERR_TEXT,
+                "subtitle": "ClamAV daemons are not running",
+                "action": None,
+            },
+        }
+
+        cfg = states.get(state, states["error"])
+
+        self._banner_frame.configure(fg_color=cfg["bg"])
+        self._banner_label.configure(
+            text=cfg["title"], text_color=cfg["title_color"],
+        )
+        self._banner_subtitle.configure(text=cfg["subtitle"])
+
+        if cfg["action"]:
+            label, handler = cfg["action"]
+            self._banner_action_btn.configure(text=label, command=handler)
+            self._banner_action_btn.grid()
+        else:
+            self._banner_action_btn.grid_remove()
+
+        # Disable scan buttons when ClamAV can't actually scan
+        can_scan = state not in ("not_installed", "no_database")
+        self._set_scan_buttons_state("normal" if can_scan else "disabled")
 
     def _schedule_status_poll(self):
         """Schedule the next realtime status poll if the UI is still alive."""
@@ -265,6 +354,11 @@ class Plugin(BasePlugin):
 
         def on_progress(line: str):
             self.app.after(0, self._log_append, line)
+            # Update status label with current file being scanned
+            if ":" in line and ("OK" in line or "FOUND" in line):
+                fname = os.path.basename(line.split(":")[0])
+                self.app.after(0, self._scan_status_label.configure,
+                               {"text": f"Scanning: {fname}"})
 
         def on_complete(result: ScanResult):
             self.app.after(0, self._handle_scan_complete, result)
@@ -275,9 +369,12 @@ class Plugin(BasePlugin):
 
     def _cancel_scan(self):
         """Cancel the running scan."""
-        if self._scan_handle:
+        if self._scan_handle and not self._scan_handle.cancelled:
             self._scan_handle.cancel()
             self._log_append("Cancelling scan...")
+            cancel_btn = self._action_buttons.get("cancel_scan")
+            if cancel_btn:
+                cancel_btn.configure(state="disabled")
 
     def _handle_scan_complete(self, result: ScanResult):
         self._scanning = False
@@ -286,11 +383,15 @@ class Plugin(BasePlugin):
         self._scan_progress.set(1.0 if not result.error else 0)
         self._scan_progress.configure(mode="determinate")
         self._scan_progress.grid_remove()
-        self._set_scan_buttons_state("normal")
 
-        # Hide cancel button
+        # Re-enable scan buttons only if ClamAV is in a scannable state
+        can_scan = self._last_state not in ("not_installed", "no_database")
+        self._set_scan_buttons_state("normal" if can_scan else "disabled")
+
+        # Hide cancel button and reset its state for next scan
         cancel_btn = self._action_buttons.get("cancel_scan")
         if cancel_btn:
+            cancel_btn.configure(state="normal")
             cancel_btn.grid_remove()
 
         if result.error:
