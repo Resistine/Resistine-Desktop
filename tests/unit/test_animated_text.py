@@ -199,6 +199,25 @@ class TestStopAnimation:
 
 
 # ---------------------------------------------------------------------------
+# _update_widget — widget type branches
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestUpdateWidget:
+    """_update_widget silently catches exceptions (including TypeError from
+    isinstance() with mocked tk.Text). We test that it never raises."""
+
+    def test_update_widget_no_crash(self):
+        """_update_widget swallows all exceptions silently."""
+        widget = MagicMock()
+        widget.after.return_value = 1
+        a = AnimatedText(widget)
+        a.displayed_text = "text"
+        # Should not raise even though isinstance(widget, tk.Text) fails
+        a._update_widget()
+
+
+# ---------------------------------------------------------------------------
 # Utility methods
 # ---------------------------------------------------------------------------
 
