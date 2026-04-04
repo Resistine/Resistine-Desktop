@@ -928,7 +928,7 @@ if [ -d "$LAUNCHD_BUNDLE" ]; then
 
     # Create system-level ClamAV directories
     CLAMAV_SYSTEM_DIR="/Library/Application Support/Resistine/clamav"
-    mkdir -p "$CLAMAV_SYSTEM_DIR/log" "$CLAMAV_SYSTEM_DIR/db" "$CLAMAV_SYSTEM_DIR/run"
+    sudo mkdir -p "$CLAMAV_SYSTEM_DIR/log" "$CLAMAV_SYSTEM_DIR/db" "$CLAMAV_SYSTEM_DIR/run"
 
     # Generate system-level clamd.conf if it doesn't exist.
     # The daemon runs as root and needs its own config (separate from the
