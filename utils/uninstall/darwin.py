@@ -40,8 +40,8 @@ def run_uninstall(app, progress_callback=None):
         if progress_callback:
             try:
                 progress_callback(msg)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"[UNINSTALL] Progress callback failed: {e}")
 
     # Steps run in order; later steps are deliberately last to prevent
     # recreation by code/settings modules still running.
@@ -130,33 +130,32 @@ def _remove_clamav_daemons():
         "osascript", "-e",
         f'do shell script "{escaped}" with administrator privileges',
     ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        if result.returncode == 0:
-            logger.info("[UNINSTALL] Legacy ClamAV plists cleaned up")
-        else:
-            logger.warning(
-                f"[UNINSTALL] Legacy plist cleanup returned non-zero: "
-                f"{result.stderr}",
-            )
-    except subprocess.TimeoutExpired:
-        logger.warning("[UNINSTALL] Legacy plist cleanup timed out")
-    except Exception as e:
-        logger.error(f"[UNINSTALL] Legacy plist cleanup error: {e}")
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if result.returncode == 0:
+        logger.info("[UNINSTALL] Legacy ClamAV plists cleaned up")
+    else:
+        raise OSError(
+            f"Legacy plist cleanup failed: {result.stderr.strip()}"
+        )
 
 
 def _delete_key_backup(path):
     """Remove the Wazuh client.keys backup file if it exists."""
-    try:
-        escaped = path.replace("\\", "\\\\").replace('"', '\\"')
-        cmd = [
-            "osascript", "-e",
-            f'do shell script "rm -f \\"{escaped}\\"" with administrator privileges',
-        ]
-        subprocess.run(cmd, capture_output=True, timeout=15)
-        logger.info(f"[UNINSTALL] Removed Wazuh key backup: {path}")
-    except Exception as e:
-        logger.warning(f"[UNINSTALL] Could not remove key backup: {e}")
+    if not os.path.exists(path):
+        logger.info(f"[UNINSTALL] Wazuh key backup not found: {path}")
+        return
+
+    escaped = path.replace("\\", "\\\\").replace('"', '\\"')
+    cmd = [
+        "osascript", "-e",
+        f'do shell script "rm -f \\"{escaped}\\"" with administrator privileges',
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    if result.returncode != 0:
+        raise OSError(
+            f"Failed to remove Wazuh key backup: {result.stderr.strip()}"
+        )
+    logger.info(f"[UNINSTALL] Removed Wazuh key backup: {path}")
 
 
 def _remove_wazuh_agent():
@@ -203,16 +202,13 @@ def _remove_wazuh_agent():
         "osascript", "-e",
         f'do shell script "{escaped}" with administrator privileges',
     ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        if result.returncode == 0:
-            logger.info("[UNINSTALL] Wazuh agent removed successfully")
-        else:
-            logger.warning(f"[UNINSTALL] Wazuh removal returned non-zero: {result.stderr}")
-    except subprocess.TimeoutExpired:
-        logger.warning("[UNINSTALL] Wazuh removal timed out")
-    except Exception as e:
-        logger.error(f"[UNINSTALL] Wazuh removal error: {e}")
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if result.returncode == 0:
+        logger.info("[UNINSTALL] Wazuh agent removed successfully")
+    else:
+        raise OSError(
+            f"Wazuh agent removal failed: {result.stderr.strip()}"
+        )
 
 
 def _stop_vpn_tunnel():
@@ -222,17 +218,19 @@ def _stop_vpn_tunnel():
         logger.info("[UNINSTALL] CLI not found, skipping VPN stop")
         return
 
-    try:
-        subprocess.run(
-            [cli_path, "stop"],
-            capture_output=True,
-            timeout=10,
+    result = subprocess.run(
+        [cli_path, "stop"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode == 0:
+        logger.info("[UNINSTALL] VPN tunnel stopped")
+    else:
+        logger.warning(
+            f"[UNINSTALL] VPN stop returned non-zero "
+            f"(may already be stopped): {result.stderr.strip()}"
         )
-        logger.info("[UNINSTALL] VPN tunnel stop command sent")
-    except subprocess.TimeoutExpired:
-        logger.warning("[UNINSTALL] VPN stop timed out")
-    except FileNotFoundError:
-        logger.info("[UNINSTALL] CLI binary not found")
 
 
 def _deactivate_system_extension():
@@ -278,15 +276,16 @@ def _deactivate_system_extension():
     except ImportError:
         logger.info("[UNINSTALL] SystemExtensions not available (dev mode)")
     except Exception as e:
-        logger.error(f"[UNINSTALL] Extension deactivation error: {e}")
+        raise OSError(f"Extension deactivation error: {e}") from e
 
 
 def _remove_wireguard_configs():
-    """Remove WireGuard configuration directory.
+    """Remove WireGuard configuration files.
 
-    Group Containers are sandbox-protected on macOS, so ``shutil.rmtree``
-    often fails with *Operation not permitted*.  We try ``rm -rf`` first
-    and fall back to an admin-privileged removal via ``osascript``.
+    macOS SIP protects the Group Container directory itself — even admin
+    ``rm -rf`` cannot delete it.  We remove the *contents* instead and
+    tolerate the empty directory remaining (the OS cleans it up when the
+    app is fully removed).
     """
     wg_dir = os.path.expanduser(
         "~/Library/Group Containers/group.Resistine.WireguardTest"
@@ -295,34 +294,40 @@ def _remove_wireguard_configs():
         logger.info("[UNINSTALL] WireGuard config dir not found, skipping")
         return
 
-    # Try unprivileged removal first
+    # Remove contents, not the container directory itself
+    entries = os.listdir(wg_dir)
+    if not entries:
+        logger.info("[UNINSTALL] WireGuard config dir already empty")
+        return
+
+    removed = 0
+    failed = []
+    for entry in entries:
+        entry_path = os.path.join(wg_dir, entry)
+        try:
+            if os.path.isdir(entry_path):
+                shutil.rmtree(entry_path)
+            else:
+                os.remove(entry_path)
+            removed += 1
+        except OSError as e:
+            logger.warning(f"[UNINSTALL] Could not remove {entry_path}: {e}")
+            failed.append(entry_path)
+
+    # Try to remove the now-empty directory (may fail due to SIP — that's OK)
     try:
-        shutil.rmtree(wg_dir)
-        logger.info(f"[UNINSTALL] Removed {wg_dir}")
-        return
+        os.rmdir(wg_dir)
+        logger.info(f"[UNINSTALL] Removed {wg_dir} ({removed} item(s))")
     except OSError:
-        logger.info("[UNINSTALL] shutil.rmtree failed, trying rm -rf")
+        logger.info(
+            f"[UNINSTALL] Cleared {removed} item(s) from {wg_dir} "
+            f"(directory kept by macOS)"
+        )
 
-    # Try rm -rf (handles some sandbox cases shutil cannot)
-    subprocess.run(["rm", "-rf", wg_dir], capture_output=True, text=True)
-    if not os.path.exists(wg_dir):
-        logger.info(f"[UNINSTALL] Removed {wg_dir} via rm -rf")
-        return
-
-    # Fall back to admin-privileged removal
-    logger.info("[UNINSTALL] rm -rf failed, requesting admin privileges")
-    script = f"rm -rf '{wg_dir}'"
-    escaped = script.replace("\\", "\\\\").replace('"', '\\"')
-    cmd = [
-        "osascript", "-e",
-        f'do shell script "{escaped}" with administrator privileges',
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    if result.returncode == 0:
-        logger.info(f"[UNINSTALL] Removed {wg_dir} with admin privileges")
-    else:
+    if failed and removed == 0:
         raise OSError(
-            f"Failed to remove WireGuard configs: {result.stderr.strip()}"
+            f"Failed to remove any WireGuard config files "
+            f"({len(failed)} failures)"
         )
 
 
@@ -348,6 +353,7 @@ def _remove_keychain_items():
         ("resistine-master-key", "master-key"),
     ]
 
+    failed = []
     for service, username in entries:
         try:
             keyring.delete_password(service, username)
@@ -355,7 +361,13 @@ def _remove_keychain_items():
         except keyring.errors.PasswordDeleteError:
             logger.info(f"[UNINSTALL] Keychain entry not found: {service}/{username}")
         except Exception as e:
-            logger.warning(f"[UNINSTALL] Keychain removal failed: {service}: {e}")
+            logger.error(f"[UNINSTALL] Keychain removal failed: {service}: {e}")
+            failed.append(f"{service}: {e}")
+
+    if failed:
+        raise OSError(
+            f"Keychain removal failed: {'; '.join(failed)}"
+        )
 
 
 def _remove_app_bundle():

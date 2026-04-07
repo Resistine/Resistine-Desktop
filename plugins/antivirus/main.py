@@ -9,7 +9,9 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import os
+import random
 import threading
+import time
 from tkinter import filedialog, messagebox
 
 import customtkinter
@@ -36,6 +38,7 @@ from plugins.antivirus.ui_cards import (
     build_whitelist_and_quarantine,
 )
 from plugins.base_plugin import BasePlugin
+from utils import settings
 from utils.logger import logger
 
 _PLUGIN_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -63,7 +66,9 @@ class Plugin(BasePlugin):
             uninstall_enabled=True,
         )
         self.app = app
-        self._auto_update_on = True
+        self._auto_update_on = settings.get(
+            "antivirus", "auto_update_enabled", True,
+        )
         self._action_buttons = {}
         self._banner_frame = None
         self._banner_label = None
@@ -73,6 +78,8 @@ class Plugin(BasePlugin):
         self._scan_handle = None
         self._last_state = None
         self._last_status = None
+        self._auto_update_timer = None
+        self._auto_update_stop = threading.Event()
         self.status = self.get_status()
 
         # Register system-level ClamAV daemons via SMAppService (non-blocking)
@@ -81,6 +88,27 @@ class Plugin(BasePlugin):
             threading.Thread(
                 target=clamav.ensure_daemons_registered, daemon=True,
             ).start()
+
+        # Pre-start clamd so the signature DB is already loaded when the
+        # user clicks scan. Without this, the first scan blocks for minutes
+        # while clamd loads ~500 MB of signatures into memory.
+        threading.Thread(target=self._ensure_clamd_warm, daemon=True).start()
+
+        # Start the auto-update scheduler if enabled
+        if self._auto_update_on:
+            self._start_auto_update_scheduler()
+
+    @staticmethod
+    def _ensure_clamd_warm():
+        """Start clamd if it isn't already running (and a DB exists)."""
+        if clamav.is_clamd_running() or not clamav.has_database():
+            return
+        if not clamav.is_clamav_installed():
+            return
+        logger.info("Antivirus: pre-starting clamd for faster scans")
+        ok, msg = clamav.start_clamd()
+        if not ok:
+            logger.warning(f"Antivirus: clamd warm-up failed: {msg}")
 
     def check_status(self):
         if self._last_state == "protected":
@@ -123,6 +151,7 @@ class Plugin(BasePlugin):
         return self.main_frame
 
     def destroy(self):
+        self._stop_auto_update_scheduler()
         self._banner_frame = None
         self._banner_label = None
         self._banner_subtitle = None
@@ -196,7 +225,11 @@ class Plugin(BasePlugin):
                 "bg": COLOR_OK_BG,
                 "title": "Protected",
                 "title_color": COLOR_OK_TEXT,
-                "subtitle": "Real-time malware protection is active",
+                "subtitle": (
+                    "Real-time malware protection is active"
+                    if status.get("clamonacc_running")
+                    else "On-demand scanning is active"
+                ),
                 "action": None,
             },
             "approval_required": {
@@ -224,8 +257,17 @@ class Plugin(BasePlugin):
                 "bg": COLOR_ERR_BG,
                 "title": "Protection Offline",
                 "title_color": COLOR_ERR_TEXT,
-                "subtitle": "ClamAV daemons are not running",
-                "action": None,
+                "subtitle": (
+                    "ClamAV daemons are not running"
+                    if status.get("in_bundle")
+                    else "On-demand scanning available. "
+                    "Install Resistine.app for real-time protection."
+                ),
+                "action": (
+                    ("Start Protection", self._start_protection)
+                    if status.get("in_bundle")
+                    else None
+                ),
             },
         }
 
@@ -257,11 +299,87 @@ class Plugin(BasePlugin):
             pass
 
     def _toggle_auto_update(self):
-        self._auto_update_on = self._auto_update_switch.get()
+        self._auto_update_on = bool(self._auto_update_switch.get())
+        settings.set("antivirus", "auto_update_enabled", self._auto_update_on)
         logger.info(
             f"Antivirus: auto-update toggled "
             f"{'on' if self._auto_update_on else 'off'}",
         )
+        if self._auto_update_on:
+            self._start_auto_update_scheduler()
+        else:
+            self._stop_auto_update_scheduler()
+
+    # ── Auto-Update Scheduler ─────────────────────────────────
+
+    _AUTO_UPDATE_HOUR = 4  # Target hour (4:00 AM)
+    _AUTO_UPDATE_JITTER_SECS = 7200  # ±2 hours
+
+    def _start_auto_update_scheduler(self):
+        """Start the background thread that triggers freshclam daily."""
+        if self._auto_update_timer and self._auto_update_timer.is_alive():
+            return
+        # Fresh event per thread to avoid races with a previous thread
+        self._auto_update_stop = threading.Event()
+        self._auto_update_timer = threading.Thread(
+            target=self._auto_update_loop, daemon=True,
+        )
+        self._auto_update_timer.start()
+        logger.info("Antivirus: auto-update scheduler started")
+
+    def _stop_auto_update_scheduler(self):
+        """Signal the scheduler thread to stop and wait for it to exit."""
+        self._auto_update_stop.set()
+        timer = self._auto_update_timer
+        if timer is not None:
+            timer.join(timeout=2)
+        self._auto_update_timer = None
+        logger.info("Antivirus: auto-update scheduler stopped")
+
+    def _seconds_until_next_run(self) -> float:
+        """Calculate seconds until the next 4 AM (±2 hr jitter)."""
+        now = time.time()
+        local = time.localtime(now)
+        # Build today's target time
+        target = time.mktime((
+            local.tm_year, local.tm_mon, local.tm_mday,
+            self._AUTO_UPDATE_HOUR, 0, 0,
+            local.tm_wday, local.tm_yday, local.tm_isdst,
+        ))
+        # Roll to tomorrow first if today's 4 AM already passed
+        if target <= now:
+            target += 86400
+        # Apply jitter after rollover so the base is always "next 4 AM"
+        jitter = random.randint(
+            -self._AUTO_UPDATE_JITTER_SECS,
+            self._AUTO_UPDATE_JITTER_SECS,
+        )
+        return max(60, (target - now) + jitter)
+
+    def _auto_update_loop(self):
+        """Background loop: sleep until next run, then call freshclam."""
+        while not self._auto_update_stop.is_set():
+            delay = self._seconds_until_next_run()
+            logger.info(
+                f"Antivirus: next auto-update in "
+                f"{delay / 3600:.1f} hours",
+            )
+            # Sleep in short intervals so we can exit promptly
+            if self._auto_update_stop.wait(timeout=delay):
+                break
+            if not self._auto_update_on:
+                break
+            logger.info("Antivirus: running scheduled signature update")
+            ok, msg = clamav.run_freshclam()
+            if ok:
+                logger.info(f"Antivirus: auto-update succeeded — {msg}")
+            else:
+                logger.warning(f"Antivirus: auto-update failed — {msg}")
+            # Refresh the UI if it's visible
+            try:
+                self.app.after(0, self._refresh_db_info)
+            except Exception:
+                pass  # App may be destroyed
 
     # ── Scan Log Helpers ──────────────────────────────────────
 
@@ -281,10 +399,36 @@ class Plugin(BasePlugin):
         self._scan_log.configure(state="disabled")
 
     def _set_scan_buttons_state(self, state: str):
-        for key in ("scan_file", "scan_directory", "analysis"):
+        for key in ("scan_file", "scan_directory"):
             btn = self._action_buttons.get(key)
             if btn:
                 btn.configure(state=state)
+
+    # ── System Daemon Activation ────────────────────────────────
+
+    def _start_protection(self):
+        """Start system-level ClamAV daemons (clamd + clamonacc)."""
+        if self._banner_action_btn:
+            self._banner_action_btn.configure(
+                state="disabled", text="Starting...",
+            )
+
+        def _run():
+            ok, msg = clamav.activate_system_daemons()
+            self.app.after(0, self._handle_protection_started, ok, msg)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _handle_protection_started(self, ok: bool, msg: str):
+        if self._banner_action_btn:
+            self._banner_action_btn.configure(
+                state="normal", text="Start Protection",
+            )
+        if ok:
+            self._update_realtime_status()
+        else:
+            self._log_append(f"Could not start protection: {msg}")
+            logger.error(f"Antivirus: protection start failed: {msg}")
 
     # ── Action Router ─────────────────────────────────────────
 
@@ -294,7 +438,6 @@ class Plugin(BasePlugin):
         actions = {
             "scan_file": self._start_file_scan,
             "scan_directory": self._start_directory_scan,
-            "analysis": self._start_analysis,
             "update_sigs": self._start_sig_update,
             "whitelist_add": self._add_whitelist_entry,
         }
@@ -312,6 +455,15 @@ class Plugin(BasePlugin):
         )
         if not path:
             return
+        if clamav.is_path_whitelisted(path):
+            messagebox.showinfo(
+                "Whitelisted",
+                f"'{os.path.basename(path)}' is inside a whitelisted "
+                "location and will not be scanned.\n\n"
+                "Remove it from the whitelist first to scan.",
+                parent=self.app,
+            )
+            return
         self._run_scan(path)
 
     def _start_directory_scan(self):
@@ -322,17 +474,16 @@ class Plugin(BasePlugin):
         )
         if not path:
             return
-        self._run_scan(path)
-
-    def _start_analysis(self):
-        """Quick scan of common threat locations."""
-        if self._scanning:
+        if clamav.is_path_whitelisted(path):
+            messagebox.showinfo(
+                "Whitelisted",
+                f"'{os.path.basename(path)}' is whitelisted and will "
+                "not be scanned.\n\n"
+                "Remove it from the whitelist first to scan.",
+                parent=self.app,
+            )
             return
-        home = os.path.expanduser("~")
-        target = os.path.join(home, "Downloads")
-        if not os.path.isdir(target):
-            target = home
-        self._run_scan(target)
+        self._run_scan(path)
 
     def _run_scan(self, target: str):
         self._scanning = True
@@ -352,13 +503,24 @@ class Plugin(BasePlugin):
         self._scan_status_label.configure(text=f"Scanning: {short}")
         self._log_append(f"Scanning: {target}")
 
+        file_count = [0]  # mutable counter for closure
+
         def on_progress(line: str):
             self.app.after(0, self._log_append, line)
             # Update status label with current file being scanned
             if ":" in line and ("OK" in line or "FOUND" in line):
-                fname = os.path.basename(line.split(":")[0])
-                self.app.after(0, self._scan_status_label.configure,
-                               {"text": f"Scanning: {fname}"})
+                file_count[0] += 1
+                fpath = line.split(":")[0].strip()
+                # Show path relative to scan target for context
+                if os.path.isdir(target):
+                    rel = os.path.relpath(fpath, os.path.dirname(target))
+                else:
+                    rel = os.path.basename(fpath)
+                count_str = f" ({file_count[0]} scanned)"
+                self.app.after(
+                    0, self._scan_status_label.configure,
+                    {"text": f"Scanning: {rel}{count_str}"},
+                )
 
         def on_complete(result: ScanResult):
             self.app.after(0, self._handle_scan_complete, result)
@@ -501,22 +663,9 @@ class Plugin(BasePlugin):
     # ── Whitelist ──────────────────────────────────────────────
 
     def _add_whitelist_entry(self):
-        choice = messagebox.askyesnocancel(
-            "Add to Whitelist",
-            "Whitelist a directory?\n\n"
-            "Yes = directory, No = file, Cancel = abort",
-            parent=self.app,
+        path = filedialog.askdirectory(
+            title="Select Folder to Whitelist", parent=self.app,
         )
-        if choice is None:
-            return
-        if choice:
-            path = filedialog.askdirectory(
-                title="Select Directory to Whitelist", parent=self.app,
-            )
-        else:
-            path = filedialog.askopenfilename(
-                title="Select File to Whitelist", parent=self.app,
-            )
         if not path:
             return
         clamav.add_to_whitelist(path)

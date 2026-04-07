@@ -86,7 +86,6 @@ def _build_scan_card(plugin, container):
     actions = [
         ("Scan File", "scan_file"),
         ("Scan Directory", "scan_directory"),
-        ("Analysis", "analysis"),
     ]
     btn_frame = customtkinter.CTkFrame(card, fg_color="transparent")
     btn_frame.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 14))

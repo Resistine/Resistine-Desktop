@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from utils.logger import logger
 from utils.settings import get_config_dir
@@ -187,6 +188,9 @@ DatabaseDirectory {_DB_DIR}
 LogFile {os.path.join(_LOG_DIR, "clamd.log")}
 LogFileMaxSize 5M
 LogTime yes
+LogVerbose yes
+LogClean yes
+MaxThreads 8
 TemporaryDirectory /tmp
 MaxDirectoryRecursion 20
 FollowDirectorySymlinks yes
@@ -363,6 +367,157 @@ def is_clamd_running() -> bool:
     return _active_clamd_socket() is not None
 
 
+# ── Direct socket scanning ────────────────────────────────
+
+_SKIP_DIRS = frozenset({".git", ".hg", ".svn", "node_modules", "__pycache__"})
+_PARALLEL_WORKERS = 6
+
+
+def _contscan_socket(sock_path: str, file_path: str) -> str:
+    """Send zCONTSCAN for one file to clamd; return the response line."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.settimeout(120)
+        s.connect(sock_path)
+        s.sendall(f"zCONTSCAN {file_path}\0".encode())
+        buf = b""
+        while True:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+            if b"\0" in buf:
+                break
+        return buf.decode(errors="replace").strip("\0").strip()
+
+
+def _walk_files(target: str, whitelist: set[str]):
+    """Yield scannable file paths under *target*.
+
+    Both *target* and *whitelist* entries are resolved via realpath so
+    symlinks and non-canonical paths are matched consistently.
+    """
+    resolved_wl = {os.path.realpath(p) for p in whitelist}
+    resolved_target = os.path.realpath(target)
+
+    # Block the entire walk when the target itself is whitelisted.
+    if resolved_target in resolved_wl or any(
+        resolved_target.startswith(w + os.sep) for w in resolved_wl
+    ):
+        return
+
+    for root, dirs, files in os.walk(target):
+        dirs[:] = [
+            d for d in dirs
+            if d not in _SKIP_DIRS
+            and os.path.realpath(os.path.join(root, d)) not in resolved_wl
+        ]
+        for fname in files:
+            fpath = os.path.join(root, fname)
+            if (
+                os.path.realpath(fpath) not in resolved_wl
+                and not os.path.islink(fpath)
+            ):
+                yield fpath
+
+
+def _format_duration(elapsed: float) -> str:
+    mins, secs = divmod(int(elapsed), 60)
+    if mins:
+        return f"{elapsed:.3f} sec ({mins} m {secs} s)"
+    return f"{elapsed:.3f} sec ({secs} s)"
+
+
+def _scan_file_socket(
+    target: str, sock_path: str, result: dict,
+    on_line: Callable | None,
+    cancel: "threading.Event | None" = None,
+) -> dict:
+    """Scan a single file via direct clamd socket connection."""
+    if cancel and cancel.is_set():
+        result["error"] = "Scan cancelled."
+        return result
+
+    logger.info(f"ClamAV: socket scan — {target}")
+    start = time.monotonic()
+    try:
+        response = _contscan_socket(sock_path, target)
+    except OSError as exc:
+        result["error"] = f"Socket error: {exc}"
+        return result
+
+    if on_line:
+        on_line(response)
+
+    result["scanned"] = 1
+    if "FOUND" in response:
+        result["infected"] = 1
+        result["infections"] = [response]
+
+    result["duration"] = _format_duration(time.monotonic() - start)
+    return result
+
+
+def _scan_dir_socket(
+    target: str, sock_path: str, result: dict,
+    on_line: Callable | None,
+    cancel: "threading.Event | None",
+) -> dict:
+    """Scan a directory via parallel clamd socket connections."""
+    whitelist = set(get_whitelist())
+    files = list(_walk_files(target, whitelist))
+
+    if not files:
+        result["duration"] = "0.000 sec (0 s)"
+        return result
+
+    logger.info(
+        f"ClamAV: parallel scan — {len(files)} files, "
+        f"{_PARALLEL_WORKERS} workers",
+    )
+
+    start = time.monotonic()
+    scanned = 0
+    infected = 0
+    infections: list[str] = []
+
+    skipped = 0
+    pool = ThreadPoolExecutor(max_workers=_PARALLEL_WORKERS)
+    try:
+        futures = {
+            pool.submit(_contscan_socket, sock_path, f): f for f in files
+        }
+        for future in as_completed(futures):
+            if cancel and cancel.is_set():
+                pool.shutdown(wait=False, cancel_futures=True)
+                result["error"] = "Scan cancelled."
+                return result
+
+            try:
+                response = future.result()
+            except OSError as exc:
+                skipped += 1
+                logger.debug(f"ClamAV: skip {futures[future]}: {exc}")
+                continue
+
+            scanned += 1
+            if on_line:
+                on_line(response)
+            if "FOUND" in response:
+                infected += 1
+                infections.append(response)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+    if skipped:
+        logger.warning(f"ClamAV: {skipped} files skipped due to errors")
+
+    result["scanned"] = scanned
+    result["infected"] = infected
+    result["infections"] = infections
+    result["duration"] = _format_duration(time.monotonic() - start)
+    return result
+
+
 def is_clamonacc_running() -> bool:
     """Check if clamonacc is running (by process name)."""
     try:
@@ -496,7 +651,9 @@ def get_realtime_status() -> dict:
         approved = True
         fda = True
 
-    # Priority: not installed > no DB > approval > FDA > daemons running
+    # Priority: not installed > no DB > approval > FDA > clamd running
+    # clamonacc (real-time on-access) is optional — clamd alone is enough
+    # for on-demand scanning, so we show "protected" when clamd is up.
     if not installed:
         state = "not_installed"
     elif not db_present:
@@ -505,7 +662,7 @@ def get_realtime_status() -> dict:
         state = "approval_required"
     elif not fda:
         state = "fda_required"
-    elif clamd_ok and clamonacc_ok:
+    elif clamd_ok:
         state = "protected"
     else:
         state = "error"
@@ -517,6 +674,7 @@ def get_realtime_status() -> dict:
         "fda_granted": fda,
         "clamd_running": clamd_ok,
         "clamonacc_running": clamonacc_ok,
+        "in_bundle": in_bundle,
         "state": state,
     }
 
@@ -671,6 +829,100 @@ def _cleanup_legacy_plists():
         logger.warning(f"Could not clean up legacy plists: {e}")
 
 
+# ── System daemon activation ─────────────────────────────
+
+
+def _app_bundle_contents() -> str | None:
+    """Return the Contents/ dir of the running .app bundle, or None."""
+    for base in (sys.executable, os.path.abspath(sys.argv[0])):
+        idx = base.find(".app/Contents/MacOS")
+        if idx != -1:
+            return os.path.realpath(base[: idx + len(".app/Contents")])
+    return None
+
+
+def activate_system_daemons() -> tuple[bool, str]:
+    """Start system-level ClamAV daemons (clamd + clamonacc).
+
+    Uses osascript to obtain admin privileges for launchctl.
+    Only works when running from the installed app bundle.
+    """
+    contents = _app_bundle_contents()
+    if not contents:
+        return False, "Real-time protection requires the installed app."
+
+    launchd_dir = os.path.join(contents, "Library", "LaunchDaemons")
+    cmds = [
+        # Ensure system dirs exist
+        "mkdir -p '/Library/Application Support/Resistine/clamav/log' "
+        "'/Library/Application Support/Resistine/clamav/db' "
+        "'/Library/Application Support/Resistine/clamav/run'",
+    ]
+    for plist_name in _DAEMON_PLISTS:
+        label = plist_name.replace(".plist", "")
+        plist_path = os.path.join(launchd_dir, plist_name)
+        if not os.path.exists(plist_path):
+            logger.warning(f"ClamAV: plist not found: {plist_path}")
+            continue
+        # kickstart if already loaded, otherwise load first
+        cmds.append(
+            f"launchctl kickstart -k system/{label} 2>/dev/null || "
+            f"launchctl load -w '{plist_path}' 2>/dev/null || true"
+        )
+
+    script = "; ".join(cmds)
+    escaped = script.replace("\\", "\\\\").replace('"', '\\"')
+    logger.info("ClamAV: activating system daemons via launchctl")
+
+    try:
+        result = subprocess.run(
+            ["osascript", "-e",
+             f'do shell script "{escaped}" with administrator privileges'],
+            capture_output=True, text=True, timeout=60,
+        )
+        if result.returncode != 0:
+            msg = (result.stderr or "").strip() or "Admin authentication cancelled."
+            logger.error(f"ClamAV: daemon activation failed: {msg}")
+            return False, msg
+    except subprocess.TimeoutExpired:
+        return False, "Admin authentication timed out."
+    except Exception as exc:
+        return False, str(exc)
+
+    # Wait for system clamd to become responsive (up to 15s)
+    for _ in range(30):
+        time.sleep(0.5)
+        if _ping_socket(_SYSTEM_CLAMD_SOCKET):
+            logger.info("ClamAV: system clamd is now running")
+            return True, "Protection activated."
+
+    return False, "Daemons loaded but clamd not responding yet."
+
+
+def deactivate_system_daemons() -> tuple[bool, str]:
+    """Stop system-level ClamAV daemons. Requires admin privileges."""
+    cmds = []
+    for plist_name in reversed(_DAEMON_PLISTS):
+        label = plist_name.replace(".plist", "")
+        cmds.append(f"launchctl bootout system/{label} 2>/dev/null || true")
+
+    script = "; ".join(cmds)
+    escaped = script.replace("\\", "\\\\").replace('"', '\\"')
+    logger.info("ClamAV: deactivating system daemons")
+
+    try:
+        result = subprocess.run(
+            ["osascript", "-e",
+             f'do shell script "{escaped}" with administrator privileges'],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            return True, "Protection deactivated."
+        return False, (result.stderr or "").strip() or "Failed."
+    except Exception as exc:
+        return False, str(exc)
+
+
 # ── Scanning ──────────────────────────────────────────────
 
 
@@ -678,12 +930,15 @@ def scan_path(
     target: str,
     on_line: Callable | None = None,
     cancel: "threading.Event | None" = None,
+    proc_ref: "list | None" = None,
 ) -> dict:
-    """Scan a file or directory. Uses clamdscan if clamd is running,
-    otherwise falls back to clamscan.
+    """Scan a file or directory via direct clamd socket when available,
+    otherwise falls back to standalone clamscan.
 
     Returns dict with keys: scanned, infected, infections, duration, error.
     Pass a threading.Event as *cancel* to allow early termination.
+    Pass a one-element list as *proc_ref* to receive the subprocess handle
+    (only populated when using clamscan fallback).
     """
     result = {
         "target": target,
@@ -694,43 +949,44 @@ def scan_path(
         "error": "",
     }
 
-    # Prefer clamdscan (faster, uses running daemon)
+    # If clamd is running, use direct socket scanning (parallel for dirs).
+    # Otherwise start clamd, or fall back to standalone clamscan.
     active_socket = _active_clamd_socket()
-    if active_socket:
-        binary = _find_binary("clamdscan")
-    else:
-        binary = _find_binary("clamscan")
+    if not active_socket and has_database() and _find_binary("clamd"):
+        logger.info("ClamAV: clamd not running — starting it for faster scan")
+        ok, msg = start_clamd()
+        if ok:
+            active_socket = _active_clamd_socket()
+        else:
+            logger.warning(f"ClamAV: could not start clamd, falling back: {msg}")
 
+    # Direct socket scanning — parallel for directories, fast for files.
+    # Bypasses the clamdscan subprocess entirely.
+    if active_socket:
+        if os.path.isdir(target):
+            return _scan_dir_socket(
+                target, active_socket, result, on_line, cancel,
+            )
+        return _scan_file_socket(target, active_socket, result, on_line, cancel)
+
+    # Fallback: standalone clamscan (reloads entire signature DB each run)
+    binary = _find_binary("clamscan")
     if not binary:
         result["error"] = "ClamAV not installed."
         return result
 
-    if not active_socket and not has_database():
+    if not has_database():
         result["error"] = "No signature database — run Update first."
         return result
 
-    is_dir = os.path.isdir(target)
-    cmd = [binary, "--stdout", "--verbose"]
-    if active_socket:
-        # Use the config that matches the running daemon's socket
-        if active_socket == _SYSTEM_CLAMD_SOCKET:
-            cmd += ["--config-file", _SYSTEM_CLAMD_CONF]
+    cmd = [binary, "--stdout", "--verbose", "-d", _DB_DIR, "--recursive"]
+    for skip in (".git", ".hg", ".svn", "node_modules", "__pycache__"):
+        cmd += ["--exclude-dir", skip]
+    for excluded in get_whitelist():
+        if os.path.isdir(excluded):
+            cmd += ["--exclude-dir", excluded]
         else:
-            cmd += ["--config-file", _CLAMD_CONF]
-        if is_dir:
-            cmd.append("--multiscan")
-    else:
-        cmd += ["-d", _DB_DIR, "--recursive"]
-
-        # --exclude-dir and --exclude are clamscan-only flags
-        for skip in (".git", ".hg", ".svn", "node_modules", "__pycache__"):
-            cmd += ["--exclude-dir", skip]
-        for excluded in get_whitelist():
-            if os.path.isdir(excluded):
-                cmd += ["--exclude-dir", excluded]
-            else:
-                cmd += ["--exclude", excluded]
-
+            cmd += ["--exclude", excluded]
     cmd.append(target)
 
     logger.info(f"ClamAV: scanning — {' '.join(cmd)}")
@@ -738,11 +994,15 @@ def scan_path(
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            env=_clamav_env(),
+            env=_clamav_env(), bufsize=1,
         )
     except OSError as exc:
         result["error"] = f"Could not start ClamAV: {exc}"
         return result
+
+    # Expose proc so callers can kill it directly (e.g. cancel button)
+    if proc_ref is not None:
+        proc_ref[0] = proc
 
     scanned_from_output = 0
     try:
@@ -869,6 +1129,21 @@ def get_whitelist() -> list[str]:
         return []
     with open(_WHITELIST_FILE) as f:
         return [line.strip() for line in f if line.strip()]
+
+
+def is_path_whitelisted(path: str) -> bool:
+    """Check if *path* is whitelisted or inside a whitelisted directory."""
+    entries = get_whitelist()
+    if not entries:
+        return False
+    resolved = os.path.realpath(path)
+    for entry in entries:
+        resolved_entry = os.path.realpath(entry)
+        if resolved == resolved_entry:
+            return True
+        if resolved.startswith(resolved_entry + os.sep):
+            return True
+    return False
 
 
 def add_to_whitelist(path: str):
