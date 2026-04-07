@@ -790,43 +790,46 @@ class TestScanPath:
         assert len(result["infections"]) == 1
         assert "FOUND" in result["infections"][0]
 
-    def test_scan_via_clamdscan(self, monkeypatch, clamav_dirs):
-        """When clamd is running, uses clamdscan with --config-file."""
+    def test_scan_file_via_socket(self, monkeypatch, clamav_dirs):
+        """When clamd is running, single file uses direct socket scan."""
         monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: clamav._CLAMD_SOCKET)
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: f"/bin/{n}")
         monkeypatch.setattr(os.path, "isdir", lambda p: False)
+        monkeypatch.setattr(
+            clamav, "_contscan_socket",
+            lambda sock, path: f"{path}: OK",
+        )
 
-        mock_proc = MagicMock()
-        mock_proc.stdout = iter(["/tmp/file: OK\n"])
-        mock_proc.wait.return_value = None
-        mock_proc.returncode = 0
+        result = clamav.scan_path("/tmp/file")
 
-        with patch("subprocess.Popen", return_value=mock_proc) as mock_popen:
-            clamav.scan_path("/tmp/file")
-            cmd = mock_popen.call_args[0][0]
-            assert "/bin/clamdscan" in cmd[0]
-            assert "--config-file" in cmd
+        assert result["scanned"] == 1
+        assert result["infected"] == 0
+        assert result["error"] == ""
 
-    def test_scan_directory_adds_multiscan(self, monkeypatch, clamav_dirs):
+    def test_scan_dir_parallel_socket(self, monkeypatch, clamav_dirs):
+        """Directory scan uses parallel socket connections for speed."""
         monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: clamav._CLAMD_SOCKET)
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: f"/bin/{n}")
-        monkeypatch.setattr(os.path, "isdir", lambda p: True)
+        monkeypatch.setattr(clamav, "get_whitelist", lambda: [])
+        monkeypatch.setattr(os.path, "isdir", lambda p: p == "/tmp/dir")
 
-        mock_proc = MagicMock()
-        mock_proc.stdout = iter([])
-        mock_proc.wait.return_value = None
-        mock_proc.returncode = 0
+        test_files = ["/tmp/dir/a.txt", "/tmp/dir/b.txt", "/tmp/dir/c.txt"]
+        monkeypatch.setattr(clamav, "_walk_files", lambda t, w: test_files)
+        monkeypatch.setattr(
+            clamav, "_contscan_socket",
+            lambda sock, path: f"{path}: OK",
+        )
 
-        with patch("subprocess.Popen", return_value=mock_proc) as mock_popen:
-            clamav.scan_path("/tmp/dir")
-            cmd = mock_popen.call_args[0][0]
-            assert "--multiscan" in cmd
+        result = clamav.scan_path("/tmp/dir")
+
+        assert result["scanned"] == 3
+        assert result["infected"] == 0
+        assert result["error"] == ""
 
     def test_scan_cancel(self, monkeypatch, clamav_dirs):
         monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: None)
         monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/clamscan")
         monkeypatch.setattr(clamav, "has_database", lambda: True)
         monkeypatch.setattr(clamav, "get_whitelist", lambda: [])
+        monkeypatch.setattr(clamav, "start_clamd", lambda: (False, "test"))
         monkeypatch.setattr(os.path, "isdir", lambda p: False)
 
         cancel = threading.Event()
@@ -847,6 +850,7 @@ class TestScanPath:
         monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/clamscan")
         monkeypatch.setattr(clamav, "has_database", lambda: True)
         monkeypatch.setattr(clamav, "get_whitelist", lambda: [])
+        monkeypatch.setattr(clamav, "start_clamd", lambda: (False, "test"))
         monkeypatch.setattr(os.path, "isdir", lambda p: False)
 
         mock_proc = MagicMock()
@@ -865,6 +869,7 @@ class TestScanPath:
         monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/clamscan")
         monkeypatch.setattr(clamav, "has_database", lambda: True)
         monkeypatch.setattr(clamav, "get_whitelist", lambda: [])
+        monkeypatch.setattr(clamav, "start_clamd", lambda: (False, "test"))
         monkeypatch.setattr(os.path, "isdir", lambda p: False)
 
         mock_proc = MagicMock()
@@ -882,6 +887,7 @@ class TestScanPath:
         monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/clamscan")
         monkeypatch.setattr(clamav, "has_database", lambda: True)
         monkeypatch.setattr(clamav, "get_whitelist", lambda: [])
+        monkeypatch.setattr(clamav, "start_clamd", lambda: (False, "test"))
         monkeypatch.setattr(os.path, "isdir", lambda p: False)
 
         mock_proc = MagicMock()
@@ -903,6 +909,7 @@ class TestScanPath:
         monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/clamscan")
         monkeypatch.setattr(clamav, "has_database", lambda: True)
         monkeypatch.setattr(clamav, "get_whitelist", lambda: [])
+        monkeypatch.setattr(clamav, "start_clamd", lambda: (False, "test"))
         monkeypatch.setattr(os.path, "isdir", lambda p: False)
 
         with patch("subprocess.Popen", side_effect=OSError("Permission denied")):
@@ -915,6 +922,7 @@ class TestScanPath:
         monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/clamscan")
         monkeypatch.setattr(clamav, "has_database", lambda: True)
         monkeypatch.setattr(clamav, "get_whitelist", lambda: [])
+        monkeypatch.setattr(clamav, "start_clamd", lambda: (False, "test"))
         monkeypatch.setattr(os.path, "isdir", lambda p: False)
 
         mock_proc = MagicMock()
@@ -928,30 +936,31 @@ class TestScanPath:
 
         assert lines == ["/tmp/f: OK"]
 
-    def test_scan_uses_system_socket_conf(self, monkeypatch, clamav_dirs):
-        """When system daemon is active, uses system clamd.conf."""
+    def test_scan_file_uses_system_socket(self, monkeypatch, clamav_dirs):
+        """When system daemon is active, socket scan uses system socket path."""
         monkeypatch.setattr(
             clamav, "_active_clamd_socket",
             lambda: clamav._SYSTEM_CLAMD_SOCKET,
         )
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: f"/bin/{n}")
         monkeypatch.setattr(os.path, "isdir", lambda p: False)
 
-        mock_proc = MagicMock()
-        mock_proc.stdout = iter([])
-        mock_proc.wait.return_value = None
-        mock_proc.returncode = 0
+        used_sockets = []
 
-        with patch("subprocess.Popen", return_value=mock_proc) as mock_popen:
-            clamav.scan_path("/tmp/file")
-            cmd = mock_popen.call_args[0][0]
-            assert clamav._SYSTEM_CLAMD_CONF in cmd
+        def mock_contscan(sock_path, file_path):
+            used_sockets.append(sock_path)
+            return f"{file_path}: OK"
+
+        monkeypatch.setattr(clamav, "_contscan_socket", mock_contscan)
+        clamav.scan_path("/tmp/file")
+
+        assert used_sockets[0] == clamav._SYSTEM_CLAMD_SOCKET
 
     def test_scan_clamscan_excludes_whitelist(self, monkeypatch, clamav_dirs):
         monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: None)
         monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/clamscan")
         monkeypatch.setattr(clamav, "has_database", lambda: True)
         monkeypatch.setattr(clamav, "get_whitelist", lambda: ["/excluded/dir"])
+        monkeypatch.setattr(clamav, "start_clamd", lambda: (False, "test"))
         monkeypatch.setattr(os.path, "isdir", lambda p: p == "/excluded/dir" or p == "/tmp/file")
 
         mock_proc = MagicMock()
@@ -967,26 +976,142 @@ class TestScanPath:
             exclude_dir_indices = [i for i, v in enumerate(cmd) if v == "--exclude-dir"]
             assert len(exclude_dir_indices) >= 6  # 5 standard + 1 whitelist
 
-    def test_scan_derives_scanned_from_output(self, monkeypatch, clamav_dirs):
-        """clamdscan doesn't output 'Scanned files:' — count from output lines."""
+    def test_scan_dir_infected_via_socket(self, monkeypatch, clamav_dirs):
+        """Parallel socket scan correctly counts infected files."""
         monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: clamav._CLAMD_SOCKET)
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: f"/bin/{n}")
+        monkeypatch.setattr(clamav, "get_whitelist", lambda: [])
+        monkeypatch.setattr(os.path, "isdir", lambda p: p == "/tmp/dir")
+
+        test_files = ["/tmp/dir/a.txt", "/tmp/dir/b.txt", "/tmp/dir/virus.exe"]
+        monkeypatch.setattr(clamav, "_walk_files", lambda t, w: test_files)
+
+        responses = {
+            "/tmp/dir/a.txt": "/tmp/dir/a.txt: OK",
+            "/tmp/dir/b.txt": "/tmp/dir/b.txt: OK",
+            "/tmp/dir/virus.exe": "/tmp/dir/virus.exe: Win.Trojan FOUND",
+        }
+        monkeypatch.setattr(
+            clamav, "_contscan_socket",
+            lambda sock, path: responses[path],
+        )
+
+        result = clamav.scan_path("/tmp/dir")
+
+        assert result["scanned"] == 3
+        assert result["infected"] == 1
+        assert len(result["infections"]) == 1
+        assert "FOUND" in result["infections"][0]
+
+
+# ---------------------------------------------------------------------------
+# Socket scan helpers
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestSocketScanHelpers:
+    def test_walk_files_skips_special_dirs(self, tmp_path):
+        (tmp_path / "good.txt").touch()
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".git" / "config").touch()
+        (tmp_path / "node_modules").mkdir()
+        (tmp_path / "node_modules" / "pkg.js").touch()
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "file.txt").touch()
+
+        files = list(clamav._walk_files(str(tmp_path), set()))
+        basenames = {os.path.basename(f) for f in files}
+
+        assert "good.txt" in basenames
+        assert "file.txt" in basenames
+        assert "config" not in basenames
+        assert "pkg.js" not in basenames
+
+    def test_walk_files_skips_whitelist(self, tmp_path):
+        (tmp_path / "ok.txt").touch()
+        (tmp_path / "skip.txt").touch()
+
+        whitelist = {str(tmp_path / "skip.txt")}
+        files = list(clamav._walk_files(str(tmp_path), whitelist))
+        basenames = {os.path.basename(f) for f in files}
+
+        assert "ok.txt" in basenames
+        assert "skip.txt" not in basenames
+
+    def test_format_duration_short(self):
+        result = clamav._format_duration(5.123)
+        assert "sec" in result
+        assert "m" not in result
+
+    def test_format_duration_long(self):
+        result = clamav._format_duration(125.5)
+        assert "2 m" in result
+
+    def test_scan_socket_error(self, monkeypatch, clamav_dirs):
+        """Socket error is reported in result."""
+        monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: clamav._CLAMD_SOCKET)
+        monkeypatch.setattr(os.path, "isdir", lambda p: False)
+        monkeypatch.setattr(
+            clamav, "_contscan_socket",
+            MagicMock(side_effect=OSError("Connection refused")),
+        )
+
+        result = clamav.scan_path("/tmp/file")
+
+        assert "Socket error" in result["error"]
+
+    def test_scan_file_cancel_socket(self, monkeypatch, clamav_dirs):
+        """Single-file socket scan respects cancel event."""
+        monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: clamav._CLAMD_SOCKET)
         monkeypatch.setattr(os.path, "isdir", lambda p: False)
 
-        mock_proc = MagicMock()
-        mock_proc.stdout = iter([
-            "/tmp/a: OK\n",
-            "/tmp/b: OK\n",
-            "/tmp/c: Win.Virus FOUND\n",
-        ])
-        mock_proc.wait.return_value = None
-        mock_proc.returncode = 1
+        cancel = threading.Event()
+        cancel.set()
 
-        with patch("subprocess.Popen", return_value=mock_proc):
-            result = clamav.scan_path("/tmp/dir")
+        # _contscan_socket should never be called
+        monkeypatch.setattr(
+            clamav, "_contscan_socket",
+            MagicMock(side_effect=AssertionError("should not be called")),
+        )
 
-        # No "Scanned files:" line, so derived from OK/FOUND lines
-        assert result["scanned"] == 3
+        result = clamav.scan_path("/tmp/file", cancel=cancel)
+
+        assert "cancelled" in result["error"].lower()
+
+    def test_scan_dir_cancel_socket(self, monkeypatch, clamav_dirs):
+        """Parallel socket scan respects cancel event."""
+        monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: clamav._CLAMD_SOCKET)
+        monkeypatch.setattr(clamav, "get_whitelist", lambda: [])
+        monkeypatch.setattr(os.path, "isdir", lambda p: p == "/tmp/dir")
+
+        # Many files so cancel triggers before all are processed
+        test_files = [f"/tmp/dir/f{i}.txt" for i in range(50)]
+        monkeypatch.setattr(clamav, "_walk_files", lambda t, w: test_files)
+
+        cancel = threading.Event()
+        cancel.set()
+
+        monkeypatch.setattr(
+            clamav, "_contscan_socket",
+            lambda sock, path: f"{path}: OK",
+        )
+
+        result = clamav.scan_path("/tmp/dir", cancel=cancel)
+
+        assert "cancelled" in result["error"].lower()
+
+    def test_on_line_callback_socket(self, monkeypatch, clamav_dirs):
+        """Socket scan invokes on_line callback per file."""
+        monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: clamav._CLAMD_SOCKET)
+        monkeypatch.setattr(os.path, "isdir", lambda p: False)
+        monkeypatch.setattr(
+            clamav, "_contscan_socket",
+            lambda sock, path: f"{path}: OK",
+        )
+
+        lines = []
+        clamav.scan_path("/tmp/file", on_line=lines.append)
+
+        assert lines == ["/tmp/file: OK"]
 
 
 # ---------------------------------------------------------------------------
@@ -1116,6 +1241,25 @@ class TestWhitelist:
         with open(wl_path, "w") as f:
             f.write("/path1\n\n\n/path2\n   \n")
         assert clamav.get_whitelist() == ["/path1", "/path2"]
+
+    def test_is_path_whitelisted_exact(self, clamav_dirs):
+        clamav.add_to_whitelist("/some/folder")
+        assert clamav.is_path_whitelisted("/some/folder") is True
+        assert clamav.is_path_whitelisted("/other/folder") is False
+
+    def test_is_path_whitelisted_child(self, clamav_dirs):
+        clamav.add_to_whitelist("/some/folder")
+        assert clamav.is_path_whitelisted("/some/folder/sub/file.txt") is True
+
+    def test_is_path_whitelisted_empty(self, clamav_dirs):
+        assert clamav.is_path_whitelisted("/any/path") is False
+
+    def test_walk_files_skips_whitelisted_target(self, clamav_dirs, tmp_path):
+        (tmp_path / "file.txt").touch()
+        clamav.add_to_whitelist(str(tmp_path))
+        whitelist = set(clamav.get_whitelist())
+        files = list(clamav._walk_files(str(tmp_path), whitelist))
+        assert files == []
 
 
 # ---------------------------------------------------------------------------

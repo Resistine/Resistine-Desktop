@@ -8,6 +8,10 @@ Resistine Desktop is a cross-platform (macOS/Linux/Windows) security desktop app
 
 ## Commands
 
+### Environment
+
+Before running python, pytest, or any Python tool, activate the venv: `source .venv/bin/activate`
+
 ### Running the App
 
 ```bash

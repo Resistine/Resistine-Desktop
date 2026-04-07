@@ -1,7 +1,7 @@
 """Tests for plugins.antivirus.main — Plugin class logic methods.
 
 Covers: check_status, _on_action routing, _handle_scan_complete,
-_offer_quarantine_batch, destroy, and status state mapping.
+_offer_quarantine_batch, destroy, status state mapping, and auto-update scheduler.
 """
 
 from unittest.mock import MagicMock, patch
@@ -21,7 +21,9 @@ def plugin():
     """Create a Plugin instance with a mocked app."""
     with patch("plugins.antivirus.main.clamav") as mock_clamav, \
          patch("plugins.antivirus.main.threading"), \
+         patch("plugins.antivirus.main.settings") as mock_settings, \
          patch("platform.system", return_value="Darwin"):
+        mock_settings.get.return_value = False
         mock_clamav.get_realtime_status.return_value = {
             "state": "protected", "installed": True, "db_present": True,
             "approved": True, "fda_granted": True,
@@ -39,7 +41,6 @@ def plugin():
         p._action_buttons = {
             "scan_file": MagicMock(),
             "scan_directory": MagicMock(),
-            "analysis": MagicMock(),
             "cancel_scan": MagicMock(),
             "update_sigs": MagicMock(),
         }
@@ -76,11 +77,10 @@ class TestCheckStatus:
 @pytest.mark.unit
 class TestOnAction:
     def test_routes_known_actions(self, plugin):
-        for action_key in ("scan_file", "scan_directory", "analysis",
+        for action_key in ("scan_file", "scan_directory",
                            "update_sigs", "whitelist_add"):
             with patch.object(plugin, "_start_file_scan" if action_key == "scan_file"
                               else "_start_directory_scan" if action_key == "scan_directory"
-                              else "_start_analysis" if action_key == "analysis"
                               else "_start_sig_update" if action_key == "update_sigs"
                               else "_add_whitelist_entry") as mock_handler:
                 plugin._on_action(action_key)
@@ -150,15 +150,14 @@ class TestHandleScanComplete:
         plugin._last_state = "protected"
         result = ScanResult(target="/tmp/test", scanned=1)
         plugin._handle_scan_complete(result)
-        # Scan buttons should be re-enabled when state is "protected"
-        for key in ("scan_file", "scan_directory", "analysis"):
+        for key in ("scan_file", "scan_directory"):
             plugin._action_buttons[key].configure.assert_called()
 
     def test_buttons_disabled_when_no_database(self, plugin):
         plugin._last_state = "no_database"
         result = ScanResult(target="/tmp/test", scanned=0)
         plugin._handle_scan_complete(result)
-        for key in ("scan_file", "scan_directory", "analysis"):
+        for key in ("scan_file", "scan_directory"):
             btn = plugin._action_buttons[key]
             last_call = btn.configure.call_args
             assert last_call.kwargs.get("state") == "disabled"
@@ -263,13 +262,6 @@ class TestScanGuards:
             plugin._start_directory_scan()
             mock_fd.askdirectory.assert_not_called()
 
-    def test_analysis_blocked_while_scanning(self, plugin):
-        plugin._scanning = True
-        # Should not call _run_scan
-        with patch.object(plugin, "_run_scan") as mock_run:
-            plugin._start_analysis()
-            mock_run.assert_not_called()
-
     def test_file_scan_cancelled_dialog(self, plugin):
         plugin._scanning = False
         with patch("plugins.antivirus.main.filedialog") as mock_fd, \
@@ -292,7 +284,9 @@ class TestDestroy:
         plugin._banner_action_btn = MagicMock()
         plugin.main_frame = MagicMock()
 
-        plugin.destroy()
+        with patch.object(plugin, "_stop_auto_update_scheduler") as mock_stop:
+            plugin.destroy()
+            mock_stop.assert_called_once()
 
         assert plugin._banner_frame is None
         assert plugin._banner_label is None
@@ -303,7 +297,8 @@ class TestDestroy:
     def test_destroy_no_main_frame(self, plugin):
         plugin.main_frame = None
         # Should not raise
-        plugin.destroy()
+        with patch.object(plugin, "_stop_auto_update_scheduler"):
+            plugin.destroy()
 
 
 # ---------------------------------------------------------------------------
@@ -312,17 +307,100 @@ class TestDestroy:
 
 @pytest.mark.unit
 class TestToggleAutoUpdate:
-    def test_toggle_on(self, plugin):
+    def test_toggle_on_persists_and_starts_scheduler(self, plugin):
         plugin._auto_update_switch = MagicMock()
         plugin._auto_update_switch.get.return_value = True
-        plugin._toggle_auto_update()
-        assert plugin._auto_update_on is True
+        with patch("plugins.antivirus.main.settings") as mock_settings, \
+             patch.object(plugin, "_start_auto_update_scheduler") as mock_start:
+            plugin._toggle_auto_update()
+            assert plugin._auto_update_on is True
+            mock_settings.set.assert_called_once_with(
+                "antivirus", "auto_update_enabled", True,
+            )
+            mock_start.assert_called_once()
 
-    def test_toggle_off(self, plugin):
+    def test_toggle_off_persists_and_stops_scheduler(self, plugin):
         plugin._auto_update_switch = MagicMock()
         plugin._auto_update_switch.get.return_value = False
-        plugin._toggle_auto_update()
-        assert plugin._auto_update_on is False
+        with patch("plugins.antivirus.main.settings") as mock_settings, \
+             patch.object(plugin, "_stop_auto_update_scheduler") as mock_stop:
+            plugin._toggle_auto_update()
+            assert plugin._auto_update_on is False
+            mock_settings.set.assert_called_once_with(
+                "antivirus", "auto_update_enabled", False,
+            )
+            mock_stop.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Auto-update scheduler
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestAutoUpdateScheduler:
+    def test_start_creates_daemon_thread(self, plugin):
+        with patch("plugins.antivirus.main.threading") as mock_threading:
+            mock_thread = MagicMock()
+            mock_thread.is_alive.return_value = False
+            mock_threading.Thread.return_value = mock_thread
+            mock_threading.Event.return_value = MagicMock()
+
+            plugin._auto_update_timer = None
+            plugin._auto_update_stop = mock_threading.Event()
+            plugin._start_auto_update_scheduler()
+
+            mock_threading.Thread.assert_called_once_with(
+                target=plugin._auto_update_loop, daemon=True,
+            )
+            mock_thread.start.assert_called_once()
+
+    def test_start_skips_if_already_running(self, plugin):
+        mock_timer = MagicMock()
+        mock_timer.is_alive.return_value = True
+        plugin._auto_update_timer = mock_timer
+
+        with patch("plugins.antivirus.main.threading") as mock_threading:
+            plugin._start_auto_update_scheduler()
+            mock_threading.Thread.assert_not_called()
+
+    def test_stop_sets_event_and_joins_thread(self, plugin):
+        stop_event = MagicMock()
+        mock_timer = MagicMock()
+        plugin._auto_update_stop = stop_event
+        plugin._auto_update_timer = mock_timer
+        plugin._stop_auto_update_scheduler()
+        stop_event.set.assert_called_once()
+        mock_timer.join.assert_called_once_with(timeout=2)
+        assert plugin._auto_update_timer is None
+
+    def test_seconds_until_next_run_positive(self, plugin):
+        delay = plugin._seconds_until_next_run()
+        assert delay >= 60  # Floor of 1 minute
+        # Should be within 24h + jitter (max ~26 hours)
+        assert delay < 26 * 3600
+
+    def test_auto_update_loop_calls_freshclam(self, plugin):
+        """Verify the loop calls run_freshclam when the timer fires."""
+        call_count = 0
+
+        def fake_wait(timeout):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 2:
+                return True  # Signal stop on second wait
+            return False  # First wait "expires" — triggers freshclam
+
+        plugin._auto_update_stop = MagicMock()
+        plugin._auto_update_stop.is_set.return_value = False
+        plugin._auto_update_stop.wait.side_effect = fake_wait
+        plugin._auto_update_on = True
+        plugin.app = MagicMock()
+
+        with patch("plugins.antivirus.main.clamav") as mock_clamav, \
+             patch.object(plugin, "_seconds_until_next_run", return_value=0):
+            mock_clamav.run_freshclam.return_value = (True, "Updated")
+            plugin._auto_update_loop()
+            mock_clamav.run_freshclam.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -333,12 +411,12 @@ class TestToggleAutoUpdate:
 class TestSetScanButtonsState:
     def test_enables_all(self, plugin):
         plugin._set_scan_buttons_state("normal")
-        for key in ("scan_file", "scan_directory", "analysis"):
+        for key in ("scan_file", "scan_directory"):
             plugin._action_buttons[key].configure.assert_called_with(state="normal")
 
     def test_disables_all(self, plugin):
         plugin._set_scan_buttons_state("disabled")
-        for key in ("scan_file", "scan_directory", "analysis"):
+        for key in ("scan_file", "scan_directory"):
             plugin._action_buttons[key].configure.assert_called_with(state="disabled")
 
     def test_missing_button_no_crash(self, plugin):

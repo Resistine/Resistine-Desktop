@@ -31,6 +31,7 @@ class ScanHandle:
 
     def __init__(self):
         self._cancelled = threading.Event()
+        self._proc_ref: list = [None]
 
     @property
     def cancelled(self) -> bool:
@@ -38,6 +39,12 @@ class ScanHandle:
 
     def cancel(self):
         self._cancelled.set()
+        proc = self._proc_ref[0]
+        if proc:
+            try:
+                proc.kill()
+            except OSError:
+                pass
 
 
 def scan(
@@ -64,6 +71,7 @@ def scan(
         try:
             raw = clamav.scan_path(
                 target, on_line=on_progress, cancel=handle._cancelled,
+                proc_ref=handle._proc_ref,
             )
             if handle.cancelled:
                 result = ScanResult(target=target, error="Scan cancelled.")
