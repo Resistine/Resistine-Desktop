@@ -59,7 +59,7 @@ class Plugin(BasePlugin):
             name="Antivirus",
             status=None,
             description="Scan, quarantine, and protect against malware with ClamAV.",
-            supported_systems=["Darwin"],
+            supported_systems=["Darwin", "Linux", "Windows"],
             translations={"US": "Antivirus", "ES": "Antivirus", "FR": "Antivirus"},
             icon_light_path=os.path.join(_PLUGIN_DIR, "antivirus_light.png"),
             icon_dark_path=os.path.join(_PLUGIN_DIR, "antivirus_dark.png"),
@@ -82,12 +82,15 @@ class Plugin(BasePlugin):
         self._auto_update_stop = threading.Event()
         self.status = self.get_status()
 
-        # Register system-level ClamAV daemons via SMAppService (non-blocking)
+        # Register system-level ClamAV daemons via SMAppService and refresh
+        # system configs so post-Sparkle updates pick up any path changes.
         import platform
         if platform.system() == "Darwin":
-            threading.Thread(
-                target=clamav.ensure_daemons_registered, daemon=True,
-            ).start()
+            def _darwin_daemon_init():
+                clamav.ensure_daemons_registered()
+                clamav.refresh_system_configs()
+
+            threading.Thread(target=_darwin_daemon_init, daemon=True).start()
 
         # Pre-start clamd so the signature DB is already loaded when the
         # user clicks scan. Without this, the first scan blocks for minutes
@@ -169,7 +172,7 @@ class Plugin(BasePlugin):
             try:
                 self.app.after(0, self._apply_realtime_status, status)
             except Exception:
-                pass  # App destroyed during check
+                logger.debug("Antivirus: app destroyed during status check")
 
         threading.Thread(target=_check, daemon=True).start()
 
@@ -237,8 +240,10 @@ class Plugin(BasePlugin):
                 "title": "Approval Required",
                 "title_color": COLOR_WARN_TEXT,
                 "subtitle": (
+                    "On-demand scanning is available. "
                     "Enable ClamAV daemons in System Settings "
-                    "\u203A General \u203A Login Items"
+                    "\u203A General \u203A Login Items "
+                    "for faster scans and real-time protection."
                 ),
                 "action": ("Open Login Items", clamav.open_login_items_settings),
             },
@@ -296,7 +301,7 @@ class Plugin(BasePlugin):
             if hasattr(self, "main_frame") and self.main_frame.winfo_exists():
                 self.app.after(10000, self._update_realtime_status)
         except Exception:
-            pass
+            logger.debug("Antivirus: could not schedule next status poll")
 
     def _toggle_auto_update(self):
         self._auto_update_on = bool(self._auto_update_switch.get())
@@ -379,7 +384,7 @@ class Plugin(BasePlugin):
             try:
                 self.app.after(0, self._refresh_db_info)
             except Exception:
-                pass  # App may be destroyed
+                logger.debug("Antivirus: app destroyed during auto-update")
 
     # ── Scan Log Helpers ──────────────────────────────────────
 

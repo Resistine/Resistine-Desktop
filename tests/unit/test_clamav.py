@@ -14,6 +14,8 @@ import pytest
 
 # Import after conftest stubs GUI modules
 from plugins.antivirus import clamav
+from plugins.antivirus import clamav_common
+from plugins.antivirus import clamav_platform_darwin
 
 
 # ---------------------------------------------------------------------------
@@ -34,16 +36,20 @@ def clamav_dirs(tmp_path, monkeypatch):
     quarantine_dir = data_dir / "quarantine"
     quarantine_dir.mkdir()
 
-    monkeypatch.setattr(clamav, "_CLAMAV_DATA_DIR", str(data_dir))
-    monkeypatch.setattr(clamav, "_DB_DIR", str(db_dir))
-    monkeypatch.setattr(clamav, "_LOG_DIR", str(log_dir))
-    monkeypatch.setattr(clamav, "_RUN_DIR", str(run_dir))
-    monkeypatch.setattr(clamav, "_QUARANTINE_DIR", str(quarantine_dir))
-    monkeypatch.setattr(clamav, "_CLAMD_CONF", str(data_dir / "clamd.conf"))
-    monkeypatch.setattr(clamav, "_FRESHCLAM_CONF", str(data_dir / "freshclam.conf"))
-    monkeypatch.setattr(clamav, "_CLAMD_SOCKET", str(run_dir / "clamd.sock"))
-    monkeypatch.setattr(clamav, "_CLAMD_PID", str(run_dir / "clamd.pid"))
-    monkeypatch.setattr(clamav, "_WHITELIST_FILE", str(data_dir / "whitelist.txt"))
+    monkeypatch.setattr(clamav_common, "_CLAMAV_DATA_DIR", str(data_dir))
+    monkeypatch.setattr(clamav_common, "_DB_DIR", str(db_dir))
+    monkeypatch.setattr(clamav_common, "_LOG_DIR", str(log_dir))
+    monkeypatch.setattr(clamav_common, "_RUN_DIR", str(run_dir))
+    monkeypatch.setattr(clamav_common, "_QUARANTINE_DIR", str(quarantine_dir))
+    monkeypatch.setattr(clamav_common, "_CLAMD_CONF", str(data_dir / "clamd.conf"))
+    monkeypatch.setattr(clamav_common, "_FRESHCLAM_CONF", str(data_dir / "freshclam.conf"))
+    monkeypatch.setattr(clamav_common, "_CLAMD_SOCKET", str(run_dir / "clamd.sock"))
+    monkeypatch.setattr(clamav_common, "_CLAMD_PID", str(run_dir / "clamd.pid"))
+    monkeypatch.setattr(clamav_common, "_WHITELIST_FILE", str(data_dir / "whitelist.txt"))
+
+    # Ensure tests use tmp dirs, not system dirs
+    monkeypatch.setattr(clamav_platform_darwin, "system_db_dir", lambda: None)
+    monkeypatch.setattr(clamav_platform_darwin, "system_db_dir_writable", lambda: None)
 
     return {
         "data": data_dir,
@@ -61,49 +67,52 @@ def clamav_dirs(tmp_path, monkeypatch):
 @pytest.mark.unit
 class TestFindBinary:
     def test_finds_binary_on_path(self, monkeypatch):
-        """_find_binary falls back to shutil.which when no bundled binary exists."""
+        """find_binary falls back to shutil.which when no bundled binary exists."""
         monkeypatch.setattr("sys.frozen", False, raising=False)
         monkeypatch.setattr(
             "shutil.which", lambda name: f"/usr/local/bin/{name}",
         )
         # Ensure no candidate file exists
         monkeypatch.setattr(os.path, "isfile", lambda p: False)
-        result = clamav._find_binary("clamscan")
+        result = clamav_platform_darwin.find_binary("clamscan")
         assert result == "/usr/local/bin/clamscan"
 
     def test_returns_none_when_not_found(self, monkeypatch):
         monkeypatch.setattr("sys.frozen", False, raising=False)
         monkeypatch.setattr("shutil.which", lambda name: None)
         monkeypatch.setattr(os.path, "isfile", lambda p: False)
-        assert clamav._find_binary("nonexistent") is None
+        assert clamav_platform_darwin.find_binary("nonexistent") is None
 
     def test_finds_frozen_binary(self, monkeypatch, tmp_path):
-        """When frozen, checks Helpers dir relative to executable."""
+        """When frozen, checks Helpers dir relative to the .app bundle."""
         monkeypatch.setattr("sys.frozen", True, raising=False)
-        monkeypatch.setattr("sys.executable", str(tmp_path / "MacOS" / "Resistine"))
+        app_dir = tmp_path / "Resistine.app" / "Contents"
+        macos_dir = app_dir / "MacOS"
+        macos_dir.mkdir(parents=True)
+        monkeypatch.setattr("sys.executable", str(macos_dir / "Resistine"))
 
-        helpers = tmp_path / "Helpers"
-        helpers.mkdir(parents=True)
+        helpers = app_dir / "Helpers"
+        helpers.mkdir()
         binary = helpers / "clamscan"
         binary.write_text("#!/bin/sh\n")
         binary.chmod(0o755)
 
-        result = clamav._find_binary("clamscan")
+        result = clamav_platform_darwin.find_binary("clamscan")
         assert result is not None
         assert result.endswith("clamscan")
 
     def test_get_binaries_returns_dict_for_all_names(self, monkeypatch):
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: f"/bin/{n}")
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: f"/bin/{n}")
         bins = clamav.get_binaries()
         assert set(bins.keys()) == {"clamscan", "clamdscan", "clamd", "freshclam", "clamonacc"}
         assert all(v == f"/bin/{k}" for k, v in bins.items())
 
     def test_is_available_true(self, monkeypatch):
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/clamscan" if n == "clamscan" else None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/clamscan" if n == "clamscan" else None)
         assert clamav.is_available() is True
 
     def test_is_available_false(self, monkeypatch):
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: None)
         assert clamav.is_available() is False
 
 
@@ -116,7 +125,7 @@ class TestFindCertsDir:
     def test_returns_none_when_no_certs(self, monkeypatch):
         monkeypatch.setattr("sys.frozen", False, raising=False)
         # No candidate dirs exist
-        result = clamav._find_certs_dir()
+        result = clamav_platform_darwin.find_certs_dir()
         # May or may not be None depending on filesystem; just verify it's
         # None when the dirs don't exist
         if result is not None:
@@ -134,10 +143,10 @@ class TestFindCertsDir:
 
         # Monkey-patch __file__ indirectly via the project root calculation
         monkeypatch.setattr(
-            clamav, "_find_certs_dir",
+            clamav_platform_darwin, "find_certs_dir",
             lambda: str(certs_dir),
         )
-        assert clamav._find_certs_dir() == str(certs_dir)
+        assert clamav_platform_darwin.find_certs_dir() == str(certs_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -147,25 +156,25 @@ class TestFindCertsDir:
 @pytest.mark.unit
 class TestClamavEnv:
     def test_env_contains_system_env(self):
-        env = clamav._clamav_env()
+        env = clamav_platform_darwin.clamav_env()
         # Should include PATH from the system environment
         assert "PATH" in env
 
     def test_sets_cvd_certs_dir_when_found(self, monkeypatch):
         monkeypatch.delenv("CVD_CERTS_DIR", raising=False)
-        monkeypatch.setattr(clamav, "_find_certs_dir", lambda: "/fake/certs")
-        env = clamav._clamav_env()
+        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: "/fake/certs")
+        env = clamav_platform_darwin.clamav_env()
         assert env["CVD_CERTS_DIR"] == "/fake/certs"
 
     def test_skips_cvd_certs_when_already_set(self, monkeypatch):
         monkeypatch.setenv("CVD_CERTS_DIR", "/existing/certs")
-        env = clamav._clamav_env()
+        env = clamav_platform_darwin.clamav_env()
         assert env["CVD_CERTS_DIR"] == "/existing/certs"
 
     def test_skips_cvd_certs_when_not_found(self, monkeypatch):
         monkeypatch.delenv("CVD_CERTS_DIR", raising=False)
-        monkeypatch.setattr(clamav, "_find_certs_dir", lambda: None)
-        env = clamav._clamav_env()
+        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: None)
+        env = clamav_platform_darwin.clamav_env()
         assert "CVD_CERTS_DIR" not in env
 
     def test_sets_ssl_cert_file_when_exists(self, monkeypatch, tmp_path):
@@ -181,11 +190,11 @@ class TestClamavEnv:
             return original_isfile(path)
 
         # Patch the ca_path list to include our temp cert
-        monkeypatch.setattr(clamav, "_find_certs_dir", lambda: None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: None)
         # We can't easily patch the tuple inside the function, so just
         # verify the existing behavior: if SSL_CERT_FILE already set, it's kept
         monkeypatch.setenv("SSL_CERT_FILE", str(cert))
-        env = clamav._clamav_env()
+        env = clamav_platform_darwin.clamav_env()
         assert env["SSL_CERT_FILE"] == str(cert)
 
 
@@ -196,7 +205,7 @@ class TestClamavEnv:
 @pytest.mark.unit
 class TestConfigGeneration:
     def test_write_clamd_conf_creates_file(self, clamav_dirs):
-        clamav._write_clamd_conf()
+        clamav_common._write_clamd_conf()
         conf_path = os.path.join(str(clamav_dirs["data"]), "clamd.conf")
         assert os.path.isfile(conf_path)
         content = open(conf_path).read()
@@ -206,8 +215,8 @@ class TestConfigGeneration:
         assert str(clamav_dirs["db"]) in content
 
     def test_write_freshclam_conf_creates_file(self, clamav_dirs, monkeypatch):
-        monkeypatch.setattr(clamav, "_find_certs_dir", lambda: None)
-        clamav._write_freshclam_conf()
+        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: None)
+        clamav_common._write_freshclam_conf()
         conf_path = os.path.join(str(clamav_dirs["data"]), "freshclam.conf")
         assert os.path.isfile(conf_path)
         content = open(conf_path).read()
@@ -216,15 +225,15 @@ class TestConfigGeneration:
         assert "CVDCertsDirectory" not in content
 
     def test_write_freshclam_conf_includes_certs(self, clamav_dirs, monkeypatch):
-        monkeypatch.setattr(clamav, "_find_certs_dir", lambda: "/my/certs")
-        clamav._write_freshclam_conf()
+        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: "/my/certs")
+        clamav_common._write_freshclam_conf()
         conf_path = os.path.join(str(clamav_dirs["data"]), "freshclam.conf")
         content = open(conf_path).read()
         assert "CVDCertsDirectory /my/certs" in content
 
     def test_ensure_config_creates_both(self, clamav_dirs, monkeypatch):
-        monkeypatch.setattr(clamav, "_find_certs_dir", lambda: None)
-        clamav.ensure_config()
+        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: None)
+        clamav_common.ensure_config()
         assert os.path.isfile(os.path.join(str(clamav_dirs["data"]), "clamd.conf"))
         assert os.path.isfile(os.path.join(str(clamav_dirs["data"]), "freshclam.conf"))
 
@@ -233,11 +242,11 @@ class TestConfigGeneration:
         new_log = tmp_path / "new_log"
         new_run = tmp_path / "new_run"
         new_q = tmp_path / "new_quarantine"
-        monkeypatch.setattr(clamav, "_DB_DIR", str(new_db))
-        monkeypatch.setattr(clamav, "_LOG_DIR", str(new_log))
-        monkeypatch.setattr(clamav, "_RUN_DIR", str(new_run))
-        monkeypatch.setattr(clamav, "_QUARANTINE_DIR", str(new_q))
-        clamav._ensure_dirs()
+        monkeypatch.setattr(clamav_common, "_DB_DIR", str(new_db))
+        monkeypatch.setattr(clamav_common, "_LOG_DIR", str(new_log))
+        monkeypatch.setattr(clamav_common, "_RUN_DIR", str(new_run))
+        monkeypatch.setattr(clamav_common, "_QUARANTINE_DIR", str(new_q))
+        clamav_common._ensure_dirs()
         assert new_db.is_dir()
         assert new_log.is_dir()
         assert new_run.is_dir()
@@ -305,14 +314,14 @@ class TestDbInfo:
 @pytest.mark.unit
 class TestRunFreshclam:
     def test_binary_not_found(self, monkeypatch):
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: None)
         ok, msg = clamav.run_freshclam()
         assert ok is False
         assert "not found" in msg
 
     def test_success(self, monkeypatch, clamav_dirs):
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/freshclam")
-        monkeypatch.setattr(clamav, "_find_certs_dir", lambda: None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/freshclam")
+        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: None)
 
         mock_proc = MagicMock()
         mock_proc.stdout = iter(["Downloading main.cvd\n", "Done\n"])
@@ -329,8 +338,8 @@ class TestRunFreshclam:
             assert "--stdout" in cmd
 
     def test_already_up_to_date(self, monkeypatch, clamav_dirs):
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/freshclam")
-        monkeypatch.setattr(clamav, "_find_certs_dir", lambda: None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/freshclam")
+        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: None)
 
         mock_proc = MagicMock()
         mock_proc.stdout = iter(["main.cvd is up to date\n"])
@@ -343,8 +352,8 @@ class TestRunFreshclam:
             assert "up to date" in msg.lower()
 
     def test_failure_nonzero_exit(self, monkeypatch, clamav_dirs):
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/freshclam")
-        monkeypatch.setattr(clamav, "_find_certs_dir", lambda: None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/freshclam")
+        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: None)
 
         mock_proc = MagicMock()
         mock_proc.stdout = iter(["ERROR: something went wrong\n"])
@@ -356,9 +365,30 @@ class TestRunFreshclam:
             assert ok is False
             assert "2" in msg
 
+    def test_invalid_certs_directory_gives_actionable_error(
+        self, monkeypatch, clamav_dirs,
+    ):
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/freshclam")
+        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: None)
+
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter([
+            "ERROR: Failed to create a new code-signature verifier: "
+            "Can't verify: Invalid certs directory "
+            "'/Users/runner/work/ClamAV-Mac/install/etc/certs/'\n",
+        ])
+        mock_proc.wait.return_value = None
+        mock_proc.returncode = 2
+
+        with patch("subprocess.Popen", return_value=mock_proc):
+            ok, msg = clamav.run_freshclam()
+            assert ok is False
+            assert "certificate verification failed" in msg.lower()
+            assert "clamav-artifacts/certs" in msg
+
     def test_exception_during_run(self, monkeypatch, clamav_dirs):
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/freshclam")
-        monkeypatch.setattr(clamav, "_find_certs_dir", lambda: None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/freshclam")
+        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: None)
 
         with patch("subprocess.Popen", side_effect=OSError("no such file")):
             ok, msg = clamav.run_freshclam()
@@ -366,8 +396,8 @@ class TestRunFreshclam:
             assert "no such file" in msg
 
     def test_on_line_callback(self, monkeypatch, clamav_dirs):
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/freshclam")
-        monkeypatch.setattr(clamav, "_find_certs_dir", lambda: None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/freshclam")
+        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: None)
 
         mock_proc = MagicMock()
         mock_proc.stdout = iter(["line1\n", "line2\n"])
@@ -388,57 +418,57 @@ class TestRunFreshclam:
 @pytest.mark.unit
 class TestClamdStatus:
     def test_clamd_pid_alive_no_file(self, clamav_dirs):
-        assert clamav._clamd_pid_alive() is False
+        assert clamav_common._clamd_pid_alive() is False
 
     def test_clamd_pid_alive_valid_pid(self, clamav_dirs):
         pid_path = clamav_dirs["run"] / "clamd.pid"
         pid_path.write_text(str(os.getpid()))  # Our own PID is always alive
-        assert clamav._clamd_pid_alive() is True
+        assert clamav_common._clamd_pid_alive() is True
 
     def test_clamd_pid_alive_dead_pid(self, clamav_dirs):
         pid_path = clamav_dirs["run"] / "clamd.pid"
         pid_path.write_text("99999999")  # Very unlikely to be a real PID
         # os.kill(99999999, 0) should raise OSError
-        assert clamav._clamd_pid_alive() is False
+        assert clamav_common._clamd_pid_alive() is False
 
     def test_clamd_pid_alive_bad_content(self, clamav_dirs):
         pid_path = clamav_dirs["run"] / "clamd.pid"
         pid_path.write_text("not_a_number")
-        assert clamav._clamd_pid_alive() is False
+        assert clamav_common._clamd_pid_alive() is False
 
     def test_ping_socket_no_file(self, clamav_dirs):
-        assert clamav._ping_socket("/nonexistent/socket") is False
+        assert clamav_common._ping_socket("/nonexistent/socket") is False
 
     def test_ping_socket_connection_refused(self, clamav_dirs, tmp_path):
         sock_path = str(tmp_path / "test.sock")
         # Create file but it's not a real socket
         open(sock_path, "w").close()
-        assert clamav._ping_socket(sock_path) is False
+        assert clamav_common._ping_socket(sock_path) is False
 
     def test_active_clamd_socket_none(self, monkeypatch):
-        monkeypatch.setattr(clamav, "_ping_socket", lambda p: False)
-        assert clamav._active_clamd_socket() is None
+        monkeypatch.setattr(clamav_common, "_ping_socket", lambda p: False)
+        assert clamav_common._active_clamd_socket() is None
 
     def test_active_clamd_socket_user(self, monkeypatch):
         monkeypatch.setattr(
-            clamav, "_ping_socket",
-            lambda p: p == clamav._CLAMD_SOCKET,
+            clamav_common, "_ping_socket",
+            lambda p: p == clamav_common._CLAMD_SOCKET,
         )
-        assert clamav._active_clamd_socket() == clamav._CLAMD_SOCKET
+        assert clamav_common._active_clamd_socket() == clamav_common._CLAMD_SOCKET
 
     def test_active_clamd_socket_system(self, monkeypatch):
         def _ping(p):
-            return p == clamav._SYSTEM_CLAMD_SOCKET
+            return p == clamav_platform_darwin._SYSTEM_CLAMD_SOCKET
 
-        monkeypatch.setattr(clamav, "_ping_socket", _ping)
-        assert clamav._active_clamd_socket() == clamav._SYSTEM_CLAMD_SOCKET
+        monkeypatch.setattr(clamav_common, "_ping_socket", _ping)
+        assert clamav_common._active_clamd_socket() == clamav_platform_darwin._SYSTEM_CLAMD_SOCKET
 
     def test_is_clamd_running_true(self, monkeypatch):
-        monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: "/some/socket")
+        monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: "/some/socket")
         assert clamav.is_clamd_running() is True
 
     def test_is_clamd_running_false(self, monkeypatch):
-        monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: None)
+        monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: None)
         assert clamav.is_clamd_running() is False
 
 
@@ -474,14 +504,14 @@ class TestIsAppBundle:
     def test_not_bundle(self, monkeypatch):
         monkeypatch.setattr("sys.executable", "/usr/bin/python3")
         monkeypatch.setattr("sys.argv", ["/usr/bin/python3"])
-        assert clamav._is_app_bundle() is False
+        assert clamav_platform_darwin.is_app_bundle() is False
 
     def test_is_bundle_via_executable(self, monkeypatch):
         monkeypatch.setattr(
             "sys.executable",
             "/Applications/Resistine.app/Contents/MacOS/Resistine",
         )
-        assert clamav._is_app_bundle() is True
+        assert clamav_platform_darwin.is_app_bundle() is True
 
     def test_is_bundle_via_argv(self, monkeypatch):
         monkeypatch.setattr("sys.executable", "/usr/bin/python3")
@@ -489,7 +519,7 @@ class TestIsAppBundle:
             "sys.argv",
             ["/Applications/Resistine.app/Contents/MacOS/main"],
         )
-        assert clamav._is_app_bundle() is True
+        assert clamav_platform_darwin.is_app_bundle() is True
 
 
 # ---------------------------------------------------------------------------
@@ -498,26 +528,138 @@ class TestIsAppBundle:
 
 @pytest.mark.unit
 class TestFullDiskAccess:
-    def test_fda_granted_mail_accessible(self, monkeypatch):
-        monkeypatch.setattr(os, "listdir", lambda p: ["Inbox"])
-        assert clamav.has_full_disk_access() is True
+    """Tests for has_full_disk_access().
 
-    def test_fda_denied_mail(self, monkeypatch):
+    The function checks in order:
+    1. Is clamonacc running? → True (it needs FDA to stay alive)
+    2. Is the launchd job crash-looping? → False (missing FDA)
+    3. Fallback: probe TCC-protected directories
+    """
+
+    def _stub_no_clamonacc(self, monkeypatch):
+        """Stub out clamonacc-running and launchd checks so we hit probes."""
+        monkeypatch.setattr(
+            clamav_platform_darwin, "is_clamonacc_running", lambda: False,
+        )
+        monkeypatch.setattr(
+            subprocess, "run",
+            lambda *a, **kw: subprocess.CompletedProcess(a[0], 1, "", ""),
+        )
+
+    def test_fda_clamonacc_running(self, monkeypatch):
+        """clamonacc alive → FDA granted."""
+        monkeypatch.setattr(
+            clamav_platform_darwin, "is_clamonacc_running", lambda: True,
+        )
+        assert clamav_platform_darwin.has_full_disk_access() is True
+
+    def test_fda_crash_loop_clamd_running(self, monkeypatch):
+        """clamonacc crash-looping with clamd running → FDA denied."""
+        monkeypatch.setattr(
+            clamav_platform_darwin, "is_clamonacc_running", lambda: False,
+        )
+        # System config exists → crash loop check runs
+        monkeypatch.setattr(os.path, "exists", lambda p: True)
+        monkeypatch.setattr(
+            subprocess, "run",
+            lambda *a, **kw: subprocess.CompletedProcess(
+                a[0], 0, "  runs = 35\n", "",
+            ),
+        )
+        # System clamd is responding → crash-loop is genuinely FDA
+        from plugins.antivirus import clamav_common
+        monkeypatch.setattr(clamav_common, "_ping_socket", lambda p: True)
+        monkeypatch.setattr(time, "sleep", lambda s: None)
+        assert clamav_platform_darwin.has_full_disk_access() is False
+
+    def test_fda_crash_loop_recovers_after_wait(self, monkeypatch):
+        """clamonacc recovers during the polling wait → FDA OK (startup race)."""
+        calls = [0]
+        def _is_running():
+            calls[0] += 1
+            # First call (line 221 early-return check): not running yet.
+            # Second call (inside the retry polling loop): recovered.
+            return calls[0] > 1
+        monkeypatch.setattr(
+            clamav_platform_darwin, "is_clamonacc_running", _is_running,
+        )
+        monkeypatch.setattr(os.path, "exists", lambda p: True)
+        monkeypatch.setattr(
+            subprocess, "run",
+            lambda *a, **kw: subprocess.CompletedProcess(
+                a[0], 0, "  runs = 5\n", "",
+            ),
+        )
+        from plugins.antivirus import clamav_common
+        monkeypatch.setattr(clamav_common, "_ping_socket", lambda p: True)
+        monkeypatch.setattr(time, "sleep", lambda s: None)
+        assert clamav_platform_darwin.has_full_disk_access() is True
+
+    def test_fda_crash_loop_clamd_not_ready(self, monkeypatch):
+        """clamonacc crash-looping but clamd not ready → not FDA."""
+        monkeypatch.setattr(
+            clamav_platform_darwin, "is_clamonacc_running", lambda: False,
+        )
+        monkeypatch.setattr(os.path, "exists", lambda p: True)
+        monkeypatch.setattr(
+            subprocess, "run",
+            lambda *a, **kw: subprocess.CompletedProcess(
+                a[0], 0, "  runs = 35\n", "",
+            ),
+        )
+        # System clamd NOT responding → clamonacc crashes because of
+        # missing socket, not FDA denial
+        from plugins.antivirus import clamav_common
+        monkeypatch.setattr(clamav_common, "_ping_socket", lambda p: False)
+        # Falls through to TCC probe
+        monkeypatch.setattr(os, "listdir", lambda p: ["Inbox"])
+        assert clamav_platform_darwin.has_full_disk_access() is True
+
+    def test_fda_crash_loop_no_config(self, monkeypatch):
+        """clamonacc crash-looping but no system config → skip crash check."""
+        self._stub_no_clamonacc(monkeypatch)
+        # System config does NOT exist → crash is due to missing config, not FDA
+        monkeypatch.setattr(os, "listdir", lambda p: ["Inbox"])
+        assert clamav_platform_darwin.has_full_disk_access() is True
+
+    def test_fda_granted_via_dir_probe(self, monkeypatch):
+        """Daemon not loaded, directory probe succeeds → granted."""
+        self._stub_no_clamonacc(monkeypatch)
+        monkeypatch.setattr(os, "listdir", lambda p: ["Inbox"])
+        assert clamav_platform_darwin.has_full_disk_access() is True
+
+    def test_fda_denied_via_dir_probe(self, monkeypatch):
+        """Daemon not loaded, directory probe denied → not granted."""
+        self._stub_no_clamonacc(monkeypatch)
         def _listdir(p):
             if "Mail" in p:
                 raise PermissionError("denied")
             raise FileNotFoundError("no dir")
         monkeypatch.setattr(os, "listdir", _listdir)
-        # Falls through to Safari check
-        # If Safari also raises PermissionError → False
-        assert clamav.has_full_disk_access() is False
+        assert clamav_platform_darwin.has_full_disk_access() is False
 
-    def test_fda_no_mail_no_safari(self, monkeypatch):
+    def test_fda_no_probes_exist(self, monkeypatch):
+        """Daemon not loaded, no probe paths exist → default True.
+
+        When we can't determine FDA status, assume granted to avoid
+        premature 'FDA Required' screen before daemons are even loaded.
+        The crash-loop check catches real FDA denial once daemons start.
+        """
+        self._stub_no_clamonacc(monkeypatch)
+        monkeypatch.setattr(
+            os, "listdir", lambda p: (_ for _ in ()).throw(FileNotFoundError),
+        )
+        assert clamav_platform_darwin.has_full_disk_access() is True
+
+    def test_fda_granted_via_later_probe(self, monkeypatch):
+        """Mail/Safari missing but Cookies accessible → granted."""
+        self._stub_no_clamonacc(monkeypatch)
         def _listdir(p):
+            if "Cookies" in p:
+                return ["some_cookie"]
             raise FileNotFoundError("no dir")
         monkeypatch.setattr(os, "listdir", _listdir)
-        # Neither exists → assume granted
-        assert clamav.has_full_disk_access() is True
+        assert clamav_platform_darwin.has_full_disk_access() is True
 
 
 # ---------------------------------------------------------------------------
@@ -527,77 +669,107 @@ class TestFullDiskAccess:
 @pytest.mark.unit
 class TestGetRealtimeStatus:
     def test_not_installed(self, monkeypatch):
-        monkeypatch.setattr(clamav, "is_clamav_installed", lambda: False)
-        monkeypatch.setattr(clamav, "has_database", lambda: False)
-        monkeypatch.setattr(clamav, "is_clamd_running", lambda: False)
-        monkeypatch.setattr(clamav, "is_clamonacc_running", lambda: False)
-        monkeypatch.setattr(clamav, "_is_app_bundle", lambda: False)
+        monkeypatch.setattr(clamav_common, "is_clamav_installed", lambda: False)
+        monkeypatch.setattr(clamav_common, "has_database", lambda: False)
+        monkeypatch.setattr(clamav_common, "is_clamd_running", lambda: False)
+        monkeypatch.setattr(clamav_platform_darwin, "is_clamonacc_running", lambda: False)
+        monkeypatch.setattr(clamav_platform_darwin, "is_app_bundle", lambda: False)
         s = clamav.get_realtime_status()
         assert s["state"] == "not_installed"
         assert s["installed"] is False
 
     def test_no_database(self, monkeypatch):
-        monkeypatch.setattr(clamav, "is_clamav_installed", lambda: True)
-        monkeypatch.setattr(clamav, "has_database", lambda: False)
-        monkeypatch.setattr(clamav, "is_clamd_running", lambda: False)
-        monkeypatch.setattr(clamav, "is_clamonacc_running", lambda: False)
-        monkeypatch.setattr(clamav, "_is_app_bundle", lambda: False)
+        monkeypatch.setattr(clamav_common, "is_clamav_installed", lambda: True)
+        monkeypatch.setattr(clamav_common, "has_database", lambda: False)
+        monkeypatch.setattr(clamav_common, "is_clamd_running", lambda: False)
+        monkeypatch.setattr(clamav_platform_darwin, "is_clamonacc_running", lambda: False)
+        monkeypatch.setattr(clamav_platform_darwin, "is_app_bundle", lambda: False)
         s = clamav.get_realtime_status()
         assert s["state"] == "no_database"
 
     def test_protected(self, monkeypatch):
-        monkeypatch.setattr(clamav, "is_clamav_installed", lambda: True)
-        monkeypatch.setattr(clamav, "has_database", lambda: True)
-        monkeypatch.setattr(clamav, "is_clamd_running", lambda: True)
-        monkeypatch.setattr(clamav, "is_clamonacc_running", lambda: True)
-        monkeypatch.setattr(clamav, "_is_app_bundle", lambda: False)
+        monkeypatch.setattr(clamav_common, "is_clamav_installed", lambda: True)
+        monkeypatch.setattr(clamav_common, "has_database", lambda: True)
+        monkeypatch.setattr(clamav_common, "is_clamd_running", lambda: True)
+        monkeypatch.setattr(clamav_platform_darwin, "is_clamonacc_running", lambda: True)
+        monkeypatch.setattr(clamav_platform_darwin, "is_app_bundle", lambda: False)
         s = clamav.get_realtime_status()
         assert s["state"] == "protected"
         assert s["clamd_running"] is True
         assert s["clamonacc_running"] is True
 
     def test_error_daemons_not_running(self, monkeypatch):
-        monkeypatch.setattr(clamav, "is_clamav_installed", lambda: True)
-        monkeypatch.setattr(clamav, "has_database", lambda: True)
-        monkeypatch.setattr(clamav, "is_clamd_running", lambda: False)
-        monkeypatch.setattr(clamav, "is_clamonacc_running", lambda: False)
-        monkeypatch.setattr(clamav, "_is_app_bundle", lambda: False)
+        monkeypatch.setattr(clamav_common, "is_clamav_installed", lambda: True)
+        monkeypatch.setattr(clamav_common, "has_database", lambda: True)
+        monkeypatch.setattr(clamav_common, "is_clamd_running", lambda: False)
+        monkeypatch.setattr(clamav_platform_darwin, "is_clamonacc_running", lambda: False)
+        monkeypatch.setattr(clamav_platform_darwin, "is_app_bundle", lambda: False)
         s = clamav.get_realtime_status()
         assert s["state"] == "error"
 
     def test_approval_required_in_bundle(self, monkeypatch):
-        monkeypatch.setattr(clamav, "is_clamav_installed", lambda: True)
-        monkeypatch.setattr(clamav, "has_database", lambda: True)
-        monkeypatch.setattr(clamav, "is_clamd_running", lambda: True)
-        monkeypatch.setattr(clamav, "is_clamonacc_running", lambda: True)
-        monkeypatch.setattr(clamav, "_is_app_bundle", lambda: True)
-        monkeypatch.setattr(clamav, "_daemons_approved", lambda: False)
-        monkeypatch.setattr(clamav, "has_full_disk_access", lambda: True)
+        monkeypatch.setattr(clamav_common, "is_clamav_installed", lambda: True)
+        monkeypatch.setattr(clamav_common, "has_database", lambda: True)
+        monkeypatch.setattr(clamav_common, "is_clamd_running", lambda: True)
+        monkeypatch.setattr(clamav_common, "_ping_socket", lambda s: False)
+        monkeypatch.setattr(clamav_platform_darwin, "is_clamonacc_running", lambda: True)
+        monkeypatch.setattr(clamav_platform_darwin, "is_app_bundle", lambda: True)
+        monkeypatch.setattr(clamav_platform_darwin, "daemons_approved", lambda: False)
+        monkeypatch.setattr(clamav_platform_darwin, "has_full_disk_access", lambda: True)
         s = clamav.get_realtime_status()
         assert s["state"] == "approval_required"
 
     def test_fda_required_in_bundle(self, monkeypatch):
-        monkeypatch.setattr(clamav, "is_clamav_installed", lambda: True)
-        monkeypatch.setattr(clamav, "has_database", lambda: True)
-        monkeypatch.setattr(clamav, "is_clamd_running", lambda: True)
-        monkeypatch.setattr(clamav, "is_clamonacc_running", lambda: True)
-        monkeypatch.setattr(clamav, "_is_app_bundle", lambda: True)
-        monkeypatch.setattr(clamav, "_daemons_approved", lambda: True)
-        monkeypatch.setattr(clamav, "has_full_disk_access", lambda: False)
+        monkeypatch.setattr(clamav_common, "is_clamav_installed", lambda: True)
+        monkeypatch.setattr(clamav_common, "has_database", lambda: True)
+        monkeypatch.setattr(clamav_common, "is_clamd_running", lambda: True)
+        monkeypatch.setattr(clamav_common, "_ping_socket", lambda s: False)
+        monkeypatch.setattr(clamav_platform_darwin, "is_clamonacc_running", lambda: True)
+        monkeypatch.setattr(clamav_platform_darwin, "is_app_bundle", lambda: True)
+        monkeypatch.setattr(clamav_platform_darwin, "daemons_approved", lambda: True)
+        monkeypatch.setattr(clamav_platform_darwin, "has_full_disk_access", lambda: False)
         s = clamav.get_realtime_status()
         assert s["state"] == "fda_required"
 
     def test_not_bundle_skips_approval_and_fda(self, monkeypatch):
         """Outside app bundle, approved and fda default to True."""
-        monkeypatch.setattr(clamav, "is_clamav_installed", lambda: True)
-        monkeypatch.setattr(clamav, "has_database", lambda: True)
-        monkeypatch.setattr(clamav, "is_clamd_running", lambda: True)
-        monkeypatch.setattr(clamav, "is_clamonacc_running", lambda: True)
-        monkeypatch.setattr(clamav, "_is_app_bundle", lambda: False)
+        monkeypatch.setattr(clamav_common, "is_clamav_installed", lambda: True)
+        monkeypatch.setattr(clamav_common, "has_database", lambda: True)
+        monkeypatch.setattr(clamav_common, "is_clamd_running", lambda: True)
+        monkeypatch.setattr(clamav_platform_darwin, "is_clamonacc_running", lambda: True)
+        monkeypatch.setattr(clamav_platform_darwin, "is_app_bundle", lambda: False)
         s = clamav.get_realtime_status()
         assert s["approved"] is True
         assert s["fda_granted"] is True
         assert s["state"] == "protected"
+
+    def test_protected_in_bundle_system_clamd_running(self, monkeypatch):
+        """In-bundle with system clamd responding → protected."""
+        monkeypatch.setattr(clamav_common, "is_clamav_installed", lambda: True)
+        monkeypatch.setattr(clamav_common, "has_database", lambda: True)
+        monkeypatch.setattr(clamav_common, "is_clamd_running", lambda: True)
+        monkeypatch.setattr(clamav_common, "_ping_socket", lambda s: True)
+        monkeypatch.setattr(clamav_platform_darwin, "is_clamonacc_running", lambda: True)
+        monkeypatch.setattr(clamav_platform_darwin, "is_app_bundle", lambda: True)
+        monkeypatch.setattr(clamav_platform_darwin, "daemons_approved", lambda: True)
+        monkeypatch.setattr(clamav_platform_darwin, "has_full_disk_access", lambda: True)
+        s = clamav.get_realtime_status()
+        assert s["state"] == "protected"
+        assert s["system_clamd_running"] is True
+
+    def test_error_in_bundle_only_user_clamd(self, monkeypatch):
+        """In-bundle but only user clamd running (not system) → error."""
+        monkeypatch.setattr(clamav_common, "is_clamav_installed", lambda: True)
+        monkeypatch.setattr(clamav_common, "has_database", lambda: True)
+        monkeypatch.setattr(clamav_common, "is_clamd_running", lambda: True)
+        monkeypatch.setattr(clamav_common, "_ping_socket", lambda s: False)
+        monkeypatch.setattr(clamav_platform_darwin, "is_clamonacc_running", lambda: False)
+        monkeypatch.setattr(clamav_platform_darwin, "is_app_bundle", lambda: True)
+        monkeypatch.setattr(clamav_platform_darwin, "daemons_approved", lambda: True)
+        monkeypatch.setattr(clamav_platform_darwin, "has_full_disk_access", lambda: True)
+        s = clamav.get_realtime_status()
+        assert s["state"] == "error"
+        assert s["system_clamd_running"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -607,22 +779,22 @@ class TestGetRealtimeStatus:
 @pytest.mark.unit
 class TestStartStopClamd:
     def test_start_already_running(self, monkeypatch):
-        monkeypatch.setattr(clamav, "is_clamd_running", lambda: True)
+        monkeypatch.setattr(clamav_common, "is_clamd_running", lambda: True)
         ok, msg = clamav.start_clamd()
         assert ok is True
         assert "already running" in msg
 
     def test_start_binary_not_found(self, monkeypatch):
-        monkeypatch.setattr(clamav, "is_clamd_running", lambda: False)
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: None)
+        monkeypatch.setattr(clamav_common, "is_clamd_running", lambda: False)
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: None)
         ok, msg = clamav.start_clamd()
         assert ok is False
         assert "not found" in msg
 
     def test_start_no_database(self, monkeypatch):
-        monkeypatch.setattr(clamav, "is_clamd_running", lambda: False)
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/clamd")
-        monkeypatch.setattr(clamav, "has_database", lambda: False)
+        monkeypatch.setattr(clamav_common, "is_clamd_running", lambda: False)
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/clamd")
+        monkeypatch.setattr(clamav_common, "has_database", lambda: False)
         ok, msg = clamav.start_clamd()
         assert ok is False
         assert "database" in msg.lower()
@@ -634,10 +806,10 @@ class TestStartStopClamd:
             call_count["n"] += 1
             return call_count["n"] > 2  # Becomes running after 2 checks
 
-        monkeypatch.setattr(clamav, "is_clamd_running", _is_running)
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/clamd")
-        monkeypatch.setattr(clamav, "has_database", lambda: True)
-        monkeypatch.setattr(clamav, "_find_certs_dir", lambda: None)
+        monkeypatch.setattr(clamav_common, "is_clamd_running", _is_running)
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/clamd")
+        monkeypatch.setattr(clamav_common, "has_database", lambda: True)
+        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: None)
         monkeypatch.setattr(time, "sleep", lambda t: None)
 
         with patch("subprocess.Popen") as mock_popen:
@@ -647,10 +819,10 @@ class TestStartStopClamd:
             mock_popen.assert_called_once()
 
     def test_start_timeout(self, monkeypatch, clamav_dirs):
-        monkeypatch.setattr(clamav, "is_clamd_running", lambda: False)
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/clamd")
-        monkeypatch.setattr(clamav, "has_database", lambda: True)
-        monkeypatch.setattr(clamav, "_find_certs_dir", lambda: None)
+        monkeypatch.setattr(clamav_common, "is_clamd_running", lambda: False)
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/clamd")
+        monkeypatch.setattr(clamav_common, "has_database", lambda: True)
+        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: None)
         monkeypatch.setattr(time, "sleep", lambda t: None)
 
         with patch("subprocess.Popen"):
@@ -671,10 +843,10 @@ class TestStartStopClamd:
             call_count["n"] += 1
             return call_count["n"] > 1
 
-        monkeypatch.setattr(clamav, "is_clamd_running", _is_running)
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/clamd")
-        monkeypatch.setattr(clamav, "has_database", lambda: True)
-        monkeypatch.setattr(clamav, "_find_certs_dir", lambda: None)
+        monkeypatch.setattr(clamav_common, "is_clamd_running", _is_running)
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/clamd")
+        monkeypatch.setattr(clamav_common, "has_database", lambda: True)
+        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: None)
         monkeypatch.setattr(time, "sleep", lambda t: None)
 
         with patch("subprocess.Popen"):
@@ -685,14 +857,14 @@ class TestStartStopClamd:
         assert not pid.exists()
 
     def test_stop_not_running(self, monkeypatch, clamav_dirs):
-        monkeypatch.setattr(clamav, "_clamd_pid_alive", lambda: False)
+        monkeypatch.setattr(clamav_common, "_clamd_pid_alive", lambda: False)
         ok, msg = clamav.stop_clamd()
         assert ok is True
         assert "not running" in msg
 
     def test_stop_cleans_stale_files(self, monkeypatch, clamav_dirs):
         """When not running but stale socket/pid exist, they get cleaned up."""
-        monkeypatch.setattr(clamav, "_clamd_pid_alive", lambda: False)
+        monkeypatch.setattr(clamav_common, "_clamd_pid_alive", lambda: False)
         sock = clamav_dirs["run"] / "clamd.sock"
         pid = clamav_dirs["run"] / "clamd.pid"
         sock.write_text("stale")
@@ -711,7 +883,7 @@ class TestStartStopClamd:
             alive_count["n"] += 1
             return alive_count["n"] <= 1  # Alive on first call, then dead
 
-        monkeypatch.setattr(clamav, "_clamd_pid_alive", _alive)
+        monkeypatch.setattr(clamav_common, "_clamd_pid_alive", _alive)
         monkeypatch.setattr(time, "sleep", lambda t: None)
 
         with patch("os.kill") as mock_kill:
@@ -728,24 +900,24 @@ class TestStartStopClamd:
 @pytest.mark.unit
 class TestScanPath:
     def test_no_binary_found(self, monkeypatch):
-        monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: None)
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: None)
+        monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: None)
         result = clamav.scan_path("/tmp/test")
         assert result["error"] == "ClamAV not installed."
         assert result["scanned"] == 0
 
     def test_no_database_standalone(self, monkeypatch):
-        monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: None)
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/clamscan")
-        monkeypatch.setattr(clamav, "has_database", lambda: False)
+        monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/clamscan")
+        monkeypatch.setattr(clamav_common, "has_database", lambda: False)
         result = clamav.scan_path("/tmp/test")
         assert "database" in result["error"].lower()
 
     def test_clean_scan_via_clamscan(self, monkeypatch, clamav_dirs):
-        monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: None)
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/clamscan" if n == "clamscan" else None)
-        monkeypatch.setattr(clamav, "has_database", lambda: True)
-        monkeypatch.setattr(clamav, "get_whitelist", lambda: [])
+        monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/clamscan" if n == "clamscan" else None)
+        monkeypatch.setattr(clamav_common, "has_database", lambda: True)
+        monkeypatch.setattr(clamav_common, "get_whitelist", lambda: [])
         monkeypatch.setattr(os.path, "isdir", lambda p: False)
 
         mock_proc = MagicMock()
@@ -768,10 +940,10 @@ class TestScanPath:
         assert result["error"] == ""
 
     def test_infected_scan(self, monkeypatch, clamav_dirs):
-        monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: None)
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/clamscan" if n == "clamscan" else None)
-        monkeypatch.setattr(clamav, "has_database", lambda: True)
-        monkeypatch.setattr(clamav, "get_whitelist", lambda: [])
+        monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/clamscan" if n == "clamscan" else None)
+        monkeypatch.setattr(clamav_common, "has_database", lambda: True)
+        monkeypatch.setattr(clamav_common, "get_whitelist", lambda: [])
         monkeypatch.setattr(os.path, "isdir", lambda p: False)
 
         mock_proc = MagicMock()
@@ -792,10 +964,10 @@ class TestScanPath:
 
     def test_scan_file_via_socket(self, monkeypatch, clamav_dirs):
         """When clamd is running, single file uses direct socket scan."""
-        monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: clamav._CLAMD_SOCKET)
+        monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: clamav_common._CLAMD_SOCKET)
         monkeypatch.setattr(os.path, "isdir", lambda p: False)
         monkeypatch.setattr(
-            clamav, "_contscan_socket",
+            clamav_common, "_contscan_socket",
             lambda sock, path: f"{path}: OK",
         )
 
@@ -807,14 +979,14 @@ class TestScanPath:
 
     def test_scan_dir_parallel_socket(self, monkeypatch, clamav_dirs):
         """Directory scan uses parallel socket connections for speed."""
-        monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: clamav._CLAMD_SOCKET)
-        monkeypatch.setattr(clamav, "get_whitelist", lambda: [])
+        monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: clamav_common._CLAMD_SOCKET)
+        monkeypatch.setattr(clamav_common, "get_whitelist", lambda: [])
         monkeypatch.setattr(os.path, "isdir", lambda p: p == "/tmp/dir")
 
         test_files = ["/tmp/dir/a.txt", "/tmp/dir/b.txt", "/tmp/dir/c.txt"]
-        monkeypatch.setattr(clamav, "_walk_files", lambda t, w: test_files)
+        monkeypatch.setattr(clamav_common, "_walk_files", lambda t, w: test_files)
         monkeypatch.setattr(
-            clamav, "_contscan_socket",
+            clamav_common, "_contscan_socket",
             lambda sock, path: f"{path}: OK",
         )
 
@@ -825,11 +997,11 @@ class TestScanPath:
         assert result["error"] == ""
 
     def test_scan_cancel(self, monkeypatch, clamav_dirs):
-        monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: None)
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/clamscan")
-        monkeypatch.setattr(clamav, "has_database", lambda: True)
-        monkeypatch.setattr(clamav, "get_whitelist", lambda: [])
-        monkeypatch.setattr(clamav, "start_clamd", lambda: (False, "test"))
+        monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/clamscan")
+        monkeypatch.setattr(clamav_common, "has_database", lambda: True)
+        monkeypatch.setattr(clamav_common, "get_whitelist", lambda: [])
+        monkeypatch.setattr(clamav_common, "start_clamd", lambda: (False, "test"))
         monkeypatch.setattr(os.path, "isdir", lambda p: False)
 
         cancel = threading.Event()
@@ -846,11 +1018,11 @@ class TestScanPath:
         mock_proc.kill.assert_called_once()
 
     def test_scan_killed_by_signal(self, monkeypatch, clamav_dirs):
-        monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: None)
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/clamscan")
-        monkeypatch.setattr(clamav, "has_database", lambda: True)
-        monkeypatch.setattr(clamav, "get_whitelist", lambda: [])
-        monkeypatch.setattr(clamav, "start_clamd", lambda: (False, "test"))
+        monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/clamscan")
+        monkeypatch.setattr(clamav_common, "has_database", lambda: True)
+        monkeypatch.setattr(clamav_common, "get_whitelist", lambda: [])
+        monkeypatch.setattr(clamav_common, "start_clamd", lambda: (False, "test"))
         monkeypatch.setattr(os.path, "isdir", lambda p: False)
 
         mock_proc = MagicMock()
@@ -865,11 +1037,11 @@ class TestScanPath:
         assert "quarantined" in result["error"]
 
     def test_scan_error_exit(self, monkeypatch, clamav_dirs):
-        monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: None)
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/clamscan")
-        monkeypatch.setattr(clamav, "has_database", lambda: True)
-        monkeypatch.setattr(clamav, "get_whitelist", lambda: [])
-        monkeypatch.setattr(clamav, "start_clamd", lambda: (False, "test"))
+        monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/clamscan")
+        monkeypatch.setattr(clamav_common, "has_database", lambda: True)
+        monkeypatch.setattr(clamav_common, "get_whitelist", lambda: [])
+        monkeypatch.setattr(clamav_common, "start_clamd", lambda: (False, "test"))
         monkeypatch.setattr(os.path, "isdir", lambda p: False)
 
         mock_proc = MagicMock()
@@ -883,11 +1055,11 @@ class TestScanPath:
         assert "error during scanning" in result["error"].lower()
 
     def test_scan_timeout(self, monkeypatch, clamav_dirs):
-        monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: None)
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/clamscan")
-        monkeypatch.setattr(clamav, "has_database", lambda: True)
-        monkeypatch.setattr(clamav, "get_whitelist", lambda: [])
-        monkeypatch.setattr(clamav, "start_clamd", lambda: (False, "test"))
+        monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/clamscan")
+        monkeypatch.setattr(clamav_common, "has_database", lambda: True)
+        monkeypatch.setattr(clamav_common, "get_whitelist", lambda: [])
+        monkeypatch.setattr(clamav_common, "start_clamd", lambda: (False, "test"))
         monkeypatch.setattr(os.path, "isdir", lambda p: False)
 
         mock_proc = MagicMock()
@@ -905,11 +1077,11 @@ class TestScanPath:
         mock_proc.kill.assert_called_once()
 
     def test_scan_popen_failure(self, monkeypatch, clamav_dirs):
-        monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: None)
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/clamscan")
-        monkeypatch.setattr(clamav, "has_database", lambda: True)
-        monkeypatch.setattr(clamav, "get_whitelist", lambda: [])
-        monkeypatch.setattr(clamav, "start_clamd", lambda: (False, "test"))
+        monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/clamscan")
+        monkeypatch.setattr(clamav_common, "has_database", lambda: True)
+        monkeypatch.setattr(clamav_common, "get_whitelist", lambda: [])
+        monkeypatch.setattr(clamav_common, "start_clamd", lambda: (False, "test"))
         monkeypatch.setattr(os.path, "isdir", lambda p: False)
 
         with patch("subprocess.Popen", side_effect=OSError("Permission denied")):
@@ -918,11 +1090,11 @@ class TestScanPath:
         assert "Permission denied" in result["error"]
 
     def test_scan_on_line_callback(self, monkeypatch, clamav_dirs):
-        monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: None)
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/clamscan")
-        monkeypatch.setattr(clamav, "has_database", lambda: True)
-        monkeypatch.setattr(clamav, "get_whitelist", lambda: [])
-        monkeypatch.setattr(clamav, "start_clamd", lambda: (False, "test"))
+        monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/clamscan")
+        monkeypatch.setattr(clamav_common, "has_database", lambda: True)
+        monkeypatch.setattr(clamav_common, "get_whitelist", lambda: [])
+        monkeypatch.setattr(clamav_common, "start_clamd", lambda: (False, "test"))
         monkeypatch.setattr(os.path, "isdir", lambda p: False)
 
         mock_proc = MagicMock()
@@ -939,8 +1111,8 @@ class TestScanPath:
     def test_scan_file_uses_system_socket(self, monkeypatch, clamav_dirs):
         """When system daemon is active, socket scan uses system socket path."""
         monkeypatch.setattr(
-            clamav, "_active_clamd_socket",
-            lambda: clamav._SYSTEM_CLAMD_SOCKET,
+            clamav_common, "_active_clamd_socket",
+            lambda: clamav_platform_darwin._SYSTEM_CLAMD_SOCKET,
         )
         monkeypatch.setattr(os.path, "isdir", lambda p: False)
 
@@ -950,17 +1122,17 @@ class TestScanPath:
             used_sockets.append(sock_path)
             return f"{file_path}: OK"
 
-        monkeypatch.setattr(clamav, "_contscan_socket", mock_contscan)
+        monkeypatch.setattr(clamav_common, "_contscan_socket", mock_contscan)
         clamav.scan_path("/tmp/file")
 
-        assert used_sockets[0] == clamav._SYSTEM_CLAMD_SOCKET
+        assert used_sockets[0] == clamav_platform_darwin._SYSTEM_CLAMD_SOCKET
 
     def test_scan_clamscan_excludes_whitelist(self, monkeypatch, clamav_dirs):
-        monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: None)
-        monkeypatch.setattr(clamav, "_find_binary", lambda n: "/bin/clamscan")
-        monkeypatch.setattr(clamav, "has_database", lambda: True)
-        monkeypatch.setattr(clamav, "get_whitelist", lambda: ["/excluded/dir"])
-        monkeypatch.setattr(clamav, "start_clamd", lambda: (False, "test"))
+        monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/clamscan")
+        monkeypatch.setattr(clamav_common, "has_database", lambda: True)
+        monkeypatch.setattr(clamav_common, "get_whitelist", lambda: ["/excluded/dir"])
+        monkeypatch.setattr(clamav_common, "start_clamd", lambda: (False, "test"))
         monkeypatch.setattr(os.path, "isdir", lambda p: p == "/excluded/dir" or p == "/tmp/file")
 
         mock_proc = MagicMock()
@@ -972,18 +1144,21 @@ class TestScanPath:
             clamav.scan_path("/tmp/file")
             cmd = mock_popen.call_args[0][0]
             assert "--exclude-dir" in cmd
-            # Standard excludes (.git etc) + whitelist dir
+            # Standard excludes (.git etc) + whitelist dir as regex
             exclude_dir_indices = [i for i, v in enumerate(cmd) if v == "--exclude-dir"]
             assert len(exclude_dir_indices) >= 6  # 5 standard + 1 whitelist
+            # Whitelist entry should be a regex pattern (^name$)
+            last_exclude_idx = exclude_dir_indices[-1]
+            assert cmd[last_exclude_idx + 1] == "^dir$"
 
     def test_scan_dir_infected_via_socket(self, monkeypatch, clamav_dirs):
         """Parallel socket scan correctly counts infected files."""
-        monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: clamav._CLAMD_SOCKET)
-        monkeypatch.setattr(clamav, "get_whitelist", lambda: [])
+        monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: clamav_common._CLAMD_SOCKET)
+        monkeypatch.setattr(clamav_common, "get_whitelist", lambda: [])
         monkeypatch.setattr(os.path, "isdir", lambda p: p == "/tmp/dir")
 
         test_files = ["/tmp/dir/a.txt", "/tmp/dir/b.txt", "/tmp/dir/virus.exe"]
-        monkeypatch.setattr(clamav, "_walk_files", lambda t, w: test_files)
+        monkeypatch.setattr(clamav_common, "_walk_files", lambda t, w: test_files)
 
         responses = {
             "/tmp/dir/a.txt": "/tmp/dir/a.txt: OK",
@@ -991,7 +1166,7 @@ class TestScanPath:
             "/tmp/dir/virus.exe": "/tmp/dir/virus.exe: Win.Trojan FOUND",
         }
         monkeypatch.setattr(
-            clamav, "_contscan_socket",
+            clamav_common, "_contscan_socket",
             lambda sock, path: responses[path],
         )
 
@@ -1018,7 +1193,7 @@ class TestSocketScanHelpers:
         (tmp_path / "sub").mkdir()
         (tmp_path / "sub" / "file.txt").touch()
 
-        files = list(clamav._walk_files(str(tmp_path), set()))
+        files = list(clamav_common._walk_files(str(tmp_path), set()))
         basenames = {os.path.basename(f) for f in files}
 
         assert "good.txt" in basenames
@@ -1031,27 +1206,27 @@ class TestSocketScanHelpers:
         (tmp_path / "skip.txt").touch()
 
         whitelist = {str(tmp_path / "skip.txt")}
-        files = list(clamav._walk_files(str(tmp_path), whitelist))
+        files = list(clamav_common._walk_files(str(tmp_path), whitelist))
         basenames = {os.path.basename(f) for f in files}
 
         assert "ok.txt" in basenames
         assert "skip.txt" not in basenames
 
     def test_format_duration_short(self):
-        result = clamav._format_duration(5.123)
+        result = clamav_common._format_duration(5.123)
         assert "sec" in result
         assert "m" not in result
 
     def test_format_duration_long(self):
-        result = clamav._format_duration(125.5)
+        result = clamav_common._format_duration(125.5)
         assert "2 m" in result
 
     def test_scan_socket_error(self, monkeypatch, clamav_dirs):
         """Socket error is reported in result."""
-        monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: clamav._CLAMD_SOCKET)
+        monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: clamav_common._CLAMD_SOCKET)
         monkeypatch.setattr(os.path, "isdir", lambda p: False)
         monkeypatch.setattr(
-            clamav, "_contscan_socket",
+            clamav_common, "_contscan_socket",
             MagicMock(side_effect=OSError("Connection refused")),
         )
 
@@ -1061,7 +1236,7 @@ class TestSocketScanHelpers:
 
     def test_scan_file_cancel_socket(self, monkeypatch, clamav_dirs):
         """Single-file socket scan respects cancel event."""
-        monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: clamav._CLAMD_SOCKET)
+        monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: clamav_common._CLAMD_SOCKET)
         monkeypatch.setattr(os.path, "isdir", lambda p: False)
 
         cancel = threading.Event()
@@ -1069,7 +1244,7 @@ class TestSocketScanHelpers:
 
         # _contscan_socket should never be called
         monkeypatch.setattr(
-            clamav, "_contscan_socket",
+            clamav_common, "_contscan_socket",
             MagicMock(side_effect=AssertionError("should not be called")),
         )
 
@@ -1079,19 +1254,19 @@ class TestSocketScanHelpers:
 
     def test_scan_dir_cancel_socket(self, monkeypatch, clamav_dirs):
         """Parallel socket scan respects cancel event."""
-        monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: clamav._CLAMD_SOCKET)
-        monkeypatch.setattr(clamav, "get_whitelist", lambda: [])
+        monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: clamav_common._CLAMD_SOCKET)
+        monkeypatch.setattr(clamav_common, "get_whitelist", lambda: [])
         monkeypatch.setattr(os.path, "isdir", lambda p: p == "/tmp/dir")
 
         # Many files so cancel triggers before all are processed
         test_files = [f"/tmp/dir/f{i}.txt" for i in range(50)]
-        monkeypatch.setattr(clamav, "_walk_files", lambda t, w: test_files)
+        monkeypatch.setattr(clamav_common, "_walk_files", lambda t, w: test_files)
 
         cancel = threading.Event()
         cancel.set()
 
         monkeypatch.setattr(
-            clamav, "_contscan_socket",
+            clamav_common, "_contscan_socket",
             lambda sock, path: f"{path}: OK",
         )
 
@@ -1099,12 +1274,39 @@ class TestSocketScanHelpers:
 
         assert "cancelled" in result["error"].lower()
 
+    def test_scan_dir_cancel_mid_scan(self, monkeypatch, clamav_dirs):
+        """Cancel event set mid-scan triggers pool shutdown and returns early."""
+        monkeypatch.setattr(
+            clamav_common, "_active_clamd_socket",
+            lambda: clamav_common._CLAMD_SOCKET,
+        )
+        monkeypatch.setattr(clamav_common, "get_whitelist", lambda: [])
+        monkeypatch.setattr(os.path, "isdir", lambda p: p == "/tmp/dir")
+
+        test_files = [f"/tmp/dir/f{i}.txt" for i in range(200)]
+        monkeypatch.setattr(clamav_common, "_walk_files", lambda t, w: test_files)
+
+        cancel = threading.Event()
+
+        def slow_contscan(sock, path):
+            # Simulate work so the pool doesn't drain instantly
+            time.sleep(0.01)
+            if not cancel.is_set():
+                cancel.set()
+            return f"{path}: OK"
+
+        monkeypatch.setattr(clamav_common, "_contscan_socket", slow_contscan)
+
+        result = clamav.scan_path("/tmp/dir", cancel=cancel)
+
+        assert "cancelled" in result["error"].lower()
+
     def test_on_line_callback_socket(self, monkeypatch, clamav_dirs):
         """Socket scan invokes on_line callback per file."""
-        monkeypatch.setattr(clamav, "_active_clamd_socket", lambda: clamav._CLAMD_SOCKET)
+        monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: clamav_common._CLAMD_SOCKET)
         monkeypatch.setattr(os.path, "isdir", lambda p: False)
         monkeypatch.setattr(
-            clamav, "_contscan_socket",
+            clamav_common, "_contscan_socket",
             lambda sock, path: f"{path}: OK",
         )
 
@@ -1258,7 +1460,7 @@ class TestWhitelist:
         (tmp_path / "file.txt").touch()
         clamav.add_to_whitelist(str(tmp_path))
         whitelist = set(clamav.get_whitelist())
-        files = list(clamav._walk_files(str(tmp_path), whitelist))
+        files = list(clamav_common._walk_files(str(tmp_path), whitelist))
         assert files == []
 
 
@@ -1269,11 +1471,11 @@ class TestWhitelist:
 @pytest.mark.unit
 class TestDaemonsApproved:
     def test_not_app_bundle(self, monkeypatch):
-        monkeypatch.setattr(clamav, "_is_app_bundle", lambda: False)
-        assert clamav._daemons_approved() is False
+        monkeypatch.setattr(clamav_platform_darwin, "is_app_bundle", lambda: False)
+        assert clamav_platform_darwin.daemons_approved() is False
 
     def test_smappservice_import_error(self, monkeypatch):
-        monkeypatch.setattr(clamav, "_is_app_bundle", lambda: True)
+        monkeypatch.setattr(clamav_platform_darwin, "is_app_bundle", lambda: True)
         # ServiceManagement is mocked — simulate ImportError
         import builtins
         original_import = builtins.__import__
@@ -1284,7 +1486,7 @@ class TestDaemonsApproved:
             return original_import(name, *args, **kwargs)
 
         monkeypatch.setattr(builtins, "__import__", _mock_import)
-        assert clamav._daemons_approved() is False
+        assert clamav_platform_darwin.daemons_approved() is False
 
 
 # ---------------------------------------------------------------------------
@@ -1317,7 +1519,7 @@ class TestLegacyPlists:
         monkeypatch.setattr(os.path, "exists", lambda p: False)
         # Should not call subprocess
         with patch("subprocess.run") as mock_run:
-            clamav._cleanup_legacy_plists()
+            clamav_platform_darwin._cleanup_legacy_plists()
             mock_run.assert_not_called()
 
     def test_cleanup_runs_osascript(self, monkeypatch):
@@ -1325,12 +1527,12 @@ class TestLegacyPlists:
         original_exists = os.path.exists
         monkeypatch.setattr(
             os.path, "exists",
-            lambda p: p in clamav._LEGACY_PLIST_PATHS or original_exists(p),
+            lambda p: p in clamav_platform_darwin._LEGACY_PLIST_PATHS or original_exists(p),
         )
 
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
-            clamav._cleanup_legacy_plists()
+            clamav_platform_darwin._cleanup_legacy_plists()
             mock_run.assert_called_once()
             cmd = mock_run.call_args[0][0]
             assert "osascript" in cmd
