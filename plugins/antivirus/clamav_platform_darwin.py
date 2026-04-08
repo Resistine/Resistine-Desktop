@@ -281,6 +281,11 @@ def has_full_disk_access() -> bool:
         except Exception:
             pass
 
+    # Final check: clamonacc may have started between the early-return
+    # check and the crash-loop analysis above.
+    if is_clamonacc_running():
+        return True
+
     # Fallback: probe a TCC-protected directory as a hint.
     # This checks *our* process, not clamonacc, but is a reasonable
     # proxy when the daemon hasn't been loaded yet.

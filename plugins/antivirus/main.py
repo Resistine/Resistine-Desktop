@@ -80,6 +80,7 @@ class Plugin(BasePlugin):
         self._last_status = None
         self._auto_update_timer = None
         self._auto_update_stop = threading.Event()
+        self._init_ready = threading.Event()
         self.status = self.get_status()
 
         # Register system-level ClamAV daemons via SMAppService and refresh
@@ -89,8 +90,11 @@ class Plugin(BasePlugin):
             def _darwin_daemon_init():
                 clamav.ensure_daemons_registered()
                 clamav.refresh_system_configs()
+                self._init_ready.set()
 
             threading.Thread(target=_darwin_daemon_init, daemon=True).start()
+        else:
+            self._init_ready.set()
 
         # Pre-start clamd so the signature DB is already loaded when the
         # user clicks scan. Without this, the first scan blocks for minutes
@@ -99,6 +103,7 @@ class Plugin(BasePlugin):
 
         # Poll status once at startup so the sidebar icon shows the
         # correct state before the user clicks the Antivirus plugin.
+        # Waits for daemon registration to finish first.
         threading.Thread(target=self._poll_initial_status, daemon=True).start()
 
         # Start the auto-update scheduler if enabled
@@ -107,7 +112,12 @@ class Plugin(BasePlugin):
 
     def _poll_initial_status(self):
         """Poll daemon state once so the sidebar shows the right icon."""
-        status = clamav.get_realtime_status()
+        self._init_ready.wait(timeout=10)
+        try:
+            status = clamav.get_realtime_status()
+        except Exception:
+            logger.debug("Antivirus: initial status poll failed")
+            return
         self._last_state = status["state"]
         self._last_status = status
         self.status = self.check_status()
@@ -179,7 +189,11 @@ class Plugin(BasePlugin):
     def _update_realtime_status(self):
         """Poll daemon state and update the banner."""
         def _check():
-            status = clamav.get_realtime_status()
+            try:
+                status = clamav.get_realtime_status()
+            except Exception:
+                logger.debug("Antivirus: error during status poll")
+                return
             try:
                 self.app.after(0, self._apply_realtime_status, status)
             except Exception:
