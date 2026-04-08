@@ -97,9 +97,20 @@ class Plugin(BasePlugin):
         # while clamd loads ~500 MB of signatures into memory.
         threading.Thread(target=self._ensure_clamd_warm, daemon=True).start()
 
+        # Poll status once at startup so the sidebar icon shows the
+        # correct state before the user clicks the Antivirus plugin.
+        threading.Thread(target=self._poll_initial_status, daemon=True).start()
+
         # Start the auto-update scheduler if enabled
         if self._auto_update_on:
             self._start_auto_update_scheduler()
+
+    def _poll_initial_status(self):
+        """Poll daemon state once so the sidebar shows the right icon."""
+        status = clamav.get_realtime_status()
+        self._last_state = status["state"]
+        self._last_status = status
+        self.status = self.check_status()
 
     @staticmethod
     def _ensure_clamd_warm():
