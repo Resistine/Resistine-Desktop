@@ -48,6 +48,25 @@ _LEGACY_PLIST_PATHS = [
     "/Library/LaunchDaemons/com.resistine.desktop.clamonacc.plist",
 ]
 
+# Paths derived from the project source tree (relative to this file).
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+_DEV_ARTIFACTS = os.path.join(
+    _PROJECT_ROOT, "scripts", "build", "clamav-artifacts",
+)
+
+
+def _installed_app_contents() -> str | None:
+    """Find an installed Resistine.app's Contents/ directory.
+
+    Checks standard macOS application directories rather than assuming
+    a single hardcoded path, so it works on any machine.
+    """
+    for app_dir in ("/Applications", os.path.expanduser("~/Applications")):
+        contents = os.path.join(app_dir, "Resistine.app", "Contents")
+        if os.path.isdir(contents):
+            return contents
+    return None
+
 
 # ── Platform interface ────────────────────────────────────
 
@@ -86,14 +105,12 @@ def find_binary(name: str) -> str | None:
         candidates.append(os.path.join(contents, "Helpers", name))
 
     # 2. Installed app bundle (for dev mode using signed binaries)
-    candidates.append(f"/Applications/Resistine.app/Contents/Helpers/{name}")
+    installed = _installed_app_contents()
+    if installed:
+        candidates.append(os.path.join(installed, "Helpers", name))
 
     # 3. Dev build artifacts
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-    artifacts = os.path.join(
-        project_root, "scripts", "build", "clamav-artifacts", "binaries",
-    )
-    candidates.append(os.path.join(artifacts, name))
+    candidates.append(os.path.join(_DEV_ARTIFACTS, "binaries", name))
 
     for path in candidates:
         resolved = os.path.realpath(path)
@@ -113,14 +130,18 @@ def find_certs_dir() -> str | None:
     if contents:
         candidates.append(os.path.join(contents, "certs"))
 
-    # 2. Installed app bundle (for dev mode using signed binaries)
-    candidates.append("/Applications/Resistine.app/Contents/certs")
+    # 2. Installed app bundle
+    installed = _installed_app_contents()
+    if installed:
+        candidates.append(os.path.join(installed, "certs"))
 
     # 3. Dev build artifacts
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-    candidates.append(
-        os.path.join(project_root, "scripts", "build", "clamav-artifacts", "certs"),
-    )
+    candidates.append(os.path.join(_DEV_ARTIFACTS, "certs"))
+
+    # 4. ClamAV-Mac sibling repo (dev convenience — checked out alongside)
+    clamav_sibling = os.path.join(_PROJECT_ROOT, "..", "ClamAV-Mac")
+    candidates.append(os.path.join(clamav_sibling, "install", "etc", "certs"))
+    candidates.append(os.path.join(clamav_sibling, "certs"))
 
     for path in candidates:
         resolved = os.path.realpath(path)
@@ -155,16 +176,13 @@ def clamav_env() -> dict[str, str]:
     if not getattr(sys, "frozen", False):
         lib_dirs = []
         # Installed app bundle frameworks
-        app_fw = "/Applications/Resistine.app/Contents/Frameworks"
-        if os.path.isdir(app_fw):
-            lib_dirs.append(app_fw)
+        installed = _installed_app_contents()
+        if installed:
+            fw = os.path.join(installed, "Frameworks")
+            if os.path.isdir(fw):
+                lib_dirs.append(fw)
         # Dev build artifacts
-        project_root = os.path.dirname(
-            os.path.dirname(os.path.dirname(__file__)),
-        )
-        lib_dir = os.path.join(
-            project_root, "scripts", "build", "clamav-artifacts", "lib",
-        )
+        lib_dir = os.path.join(_DEV_ARTIFACTS, "lib")
         if os.path.isdir(lib_dir):
             lib_dirs.append(lib_dir)
         if lib_dirs:
