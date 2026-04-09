@@ -162,8 +162,8 @@ fi
 
 # ── Bundle CVD signature-verification certs ──
 # freshclam needs clamav.crt to verify downloaded CVD signatures. The CI build
-# bakes a hardcoded certs path that won't exist on end-user machines. If the
-# artifact doesn't already include certs/, copy from the ClamAV-Mac source tree.
+# bakes a hardcoded certs path that won't exist on end-user machines.
+# Search order: CI artifact → local ClamAV-Mac source tree → GitHub repo.
 if [ ! -f "$ARTIFACTS_DIR/certs/clamav.crt" ]; then
     CLAMAV_SRC="${CLAMAV_SRC_DIR:-$(cd "$SCRIPT_DIR/../.." && pwd)/../ClamAV-Mac}"
     CERT_CANDIDATES=(
@@ -182,8 +182,23 @@ if [ ! -f "$ARTIFACTS_DIR/certs/clamav.crt" ]; then
         cp "$FOUND_CERT" "$ARTIFACTS_DIR/certs/clamav.crt"
         echo "  Bundled CVD verification cert from ClamAV-Mac source"
     else
-        echo "  WARNING: clamav.crt not found — freshclam CVD verification may fail"
-        echo "  Set CLAMAV_SRC_DIR to point to the ClamAV-Mac source tree"
+        # Fetch from the ClamAV-Mac repo via gh (already authenticated).
+        echo "  Fetching clamav.crt from $REPO..."
+        mkdir -p "$ARTIFACTS_DIR/certs"
+        for remote_path in certs/clamav.crt etc/certs/clamav.crt install/etc/certs/clamav.crt; do
+            if gh api "repos/$REPO/contents/$remote_path" --jq '.content' 2>/dev/null \
+               | base64 -d > "$ARTIFACTS_DIR/certs/clamav.crt" 2>/dev/null \
+               && [ -s "$ARTIFACTS_DIR/certs/clamav.crt" ]; then
+                FOUND_CERT="$ARTIFACTS_DIR/certs/clamav.crt"
+                echo "  Downloaded clamav.crt from $REPO ($remote_path)"
+                break
+            fi
+        done
+        if [ -z "$FOUND_CERT" ]; then
+            rm -f "$ARTIFACTS_DIR/certs/clamav.crt"
+            echo "  WARNING: clamav.crt not found — freshclam CVD verification will fail"
+            echo "  Set CLAMAV_SRC_DIR to point to a ClamAV source tree containing certs/"
+        fi
     fi
 fi
 

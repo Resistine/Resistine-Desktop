@@ -168,9 +168,10 @@ NotifyClamd {_CLAMD_CONF}
         conf += f"CVDCertsDirectory {certs_dir}\n"
     else:
         logger.warning(
-            "ClamAV: CVD certs directory not found — freshclam may fail "
-            "signature verification. Install Resistine.app or place certs "
-            "in scripts/build/clamav-artifacts/certs/",
+            "ClamAV: CVD certs directory not found — freshclam will fail "
+            "signature verification. Run "
+            "./scripts/build/download-clamav-artifacts.sh or copy "
+            "clamav.crt into scripts/build/clamav-artifacts/certs/",
         )
 
     with open(_FRESHCLAM_CONF, "w") as f:
@@ -276,10 +277,11 @@ def run_freshclam(
         # fatal even if some DBs reported up-to-date before the crash.
         if "invalid certs directory" in output.lower():
             return False, (
-                "CVD certificate verification failed — the ClamAV binary "
-                "has a built-in certs path that doesn't exist on this "
-                "machine. Install Resistine.app or place the ClamAV certs "
-                "in scripts/build/clamav-artifacts/certs/"
+                "CVD certificate verification failed — clamav.crt is "
+                "missing. Re-run ./scripts/build/download-clamav-artifacts.sh "
+                "(it will fetch the cert automatically), or copy clamav.crt "
+                "from a ClamAV source tree into "
+                "scripts/build/clamav-artifacts/certs/"
             )
         if "up to date" in output.lower():
             return True, "Signatures already up to date."
