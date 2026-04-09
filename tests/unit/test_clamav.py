@@ -321,7 +321,7 @@ class TestRunFreshclam:
 
     def test_success(self, monkeypatch, clamav_dirs):
         monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/freshclam")
-        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: "/fake/certs")
 
         mock_proc = MagicMock()
         mock_proc.stdout = iter(["Downloading main.cvd\n", "Done\n"])
@@ -339,7 +339,7 @@ class TestRunFreshclam:
 
     def test_already_up_to_date(self, monkeypatch, clamav_dirs):
         monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/freshclam")
-        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: "/fake/certs")
 
         mock_proc = MagicMock()
         mock_proc.stdout = iter(["main.cvd is up to date\n"])
@@ -353,7 +353,7 @@ class TestRunFreshclam:
 
     def test_failure_nonzero_exit(self, monkeypatch, clamav_dirs):
         monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/freshclam")
-        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: "/fake/certs")
 
         mock_proc = MagicMock()
         mock_proc.stdout = iter(["ERROR: something went wrong\n"])
@@ -365,11 +365,43 @@ class TestRunFreshclam:
             assert ok is False
             assert "2" in msg
 
-    def test_invalid_certs_directory_gives_actionable_error(
+    def test_missing_certs_fails_early_without_running_freshclam(
         self, monkeypatch, clamav_dirs,
     ):
         monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/freshclam")
         monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: None)
+        monkeypatch.setattr(clamav_common, "_try_fetch_cvd_cert", lambda: None)
+
+        with patch("subprocess.Popen") as mock_popen:
+            ok, msg = clamav.run_freshclam()
+            assert ok is False
+            assert "clamav.crt" in msg.lower()
+            assert "clamav-artifacts/certs" in msg
+            mock_popen.assert_not_called()
+
+    def test_auto_fetch_cert_allows_freshclam_to_proceed(
+        self, monkeypatch, clamav_dirs,
+    ):
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/freshclam")
+        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: None)
+        monkeypatch.setattr(clamav_common, "_try_fetch_cvd_cert", lambda: "/fetched/certs")
+
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter(["Downloading main.cvd\n"])
+        mock_proc.wait.return_value = None
+        mock_proc.returncode = 0
+
+        with patch("subprocess.Popen", return_value=mock_proc) as mock_popen:
+            ok, msg = clamav.run_freshclam()
+            assert ok is True
+            mock_popen.assert_called_once()
+
+    def test_invalid_certs_directory_gives_actionable_error(
+        self, monkeypatch, clamav_dirs,
+    ):
+        """Safety net: if freshclam still reports certs error despite override."""
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/freshclam")
+        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: "/fake/certs")
 
         mock_proc = MagicMock()
         mock_proc.stdout = iter([
@@ -388,7 +420,7 @@ class TestRunFreshclam:
 
     def test_exception_during_run(self, monkeypatch, clamav_dirs):
         monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/freshclam")
-        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: "/fake/certs")
 
         with patch("subprocess.Popen", side_effect=OSError("no such file")):
             ok, msg = clamav.run_freshclam()
@@ -397,7 +429,7 @@ class TestRunFreshclam:
 
     def test_on_line_callback(self, monkeypatch, clamav_dirs):
         monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/freshclam")
-        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: None)
+        monkeypatch.setattr(clamav_platform_darwin, "find_certs_dir", lambda: "/fake/certs")
 
         mock_proc = MagicMock()
         mock_proc.stdout = iter(["line1\n", "line2\n"])

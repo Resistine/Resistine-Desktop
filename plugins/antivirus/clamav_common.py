@@ -242,6 +242,53 @@ def has_database() -> bool:
 # ── Freshclam (signature updates) ────────────────────────
 
 
+def _try_fetch_cvd_cert() -> str | None:
+    """Attempt to auto-download clamav.crt from GitHub into dev artifacts.
+
+    Returns the certs directory path on success, None on failure.
+    """
+    import base64
+
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    target_dir = os.path.join(
+        project_root, "scripts", "build", "clamav-artifacts", "certs",
+    )
+    target_cert = os.path.join(target_dir, "clamav.crt")
+    if os.path.isfile(target_cert):
+        return target_dir
+
+    repo = "Resistine/ClamAV-Mac"
+    remote_paths = (
+        "certs/clamav.crt",
+        "etc/certs/clamav.crt",
+        "install/etc/certs/clamav.crt",
+    )
+    for remote_path in remote_paths:
+        try:
+            result = subprocess.run(
+                [
+                    "gh", "api", f"repos/{repo}/contents/{remote_path}",
+                    "--jq", ".content",
+                ],
+                capture_output=True, text=True, timeout=15,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                continue
+            cert_data = base64.b64decode(result.stdout.strip())
+            if not cert_data:
+                continue
+            os.makedirs(target_dir, exist_ok=True)
+            with open(target_cert, "wb") as f:
+                f.write(cert_data)
+            logger.info(
+                f"ClamAV: auto-fetched CVD cert from {repo} ({remote_path})",
+            )
+            return target_dir
+        except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+            continue
+    return None
+
+
 def run_freshclam(
     on_line=None,
 ) -> tuple[bool, str]:
@@ -253,6 +300,24 @@ def run_freshclam(
     binary = plat.find_binary("freshclam")
     if not binary:
         return False, "freshclam binary not found."
+
+    # Ensure certs exist before running freshclam — the CI-built binary has
+    # a hardcoded certs path that won't exist on other machines, and
+    # libfreshclam init crashes before reading the config or env override.
+    certs_dir = plat.find_certs_dir()
+    if not certs_dir:
+        logger.info("ClamAV: CVD cert not found locally, attempting auto-fetch")
+        fetched = _try_fetch_cvd_cert()
+        if fetched:
+            certs_dir = fetched
+        else:
+            return False, (
+                "CVD certificate (clamav.crt) not found — freshclam cannot "
+                "verify signatures without it. Run "
+                "./scripts/build/download-clamav-artifacts.sh to fetch it, "
+                "or copy clamav.crt from a ClamAV source tree into "
+                "scripts/build/clamav-artifacts/certs/"
+            )
 
     ensure_config()
     cmd = [binary, "--config-file", _FRESHCLAM_CONF, "--stdout"]
