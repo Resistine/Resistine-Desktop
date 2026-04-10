@@ -160,8 +160,8 @@ def _remove_clamav_daemons(admin_cmds):
 
     # 1. SMAppService unregistration (no admin needed)
     _smappservice_plist_names = [
-        "com.resistine.desktop.clamonacc.plist",
-        "com.resistine.desktop.clamd.plist",
+        "com.resistine.clamonacc.plist",
+        "com.resistine.clamd.plist",
     ]
     try:
         from ServiceManagement import SMAppService
@@ -202,8 +202,8 @@ def _remove_clamav_daemons(admin_cmds):
 
     # Bootout by label in case plists are gone but daemons still loaded
     for label in (
-        "com.resistine.desktop.clamd",
-        "com.resistine.desktop.clamonacc",
+        "com.resistine.clamd",
+        "com.resistine.clamonacc",
     ):
         admin_cmds.append(
             f"launchctl bootout system/{label} 2>/dev/null || true",
