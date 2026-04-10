@@ -172,6 +172,11 @@ class MarkdownBubble(customtkinter.CTkFrame):
 
         tw = self.text_widget._textbox
         tw.configure(padx=8, pady=4, wrap="word")
+        # Visible selection so users can see what they're copying.
+        sel_bg = "#264F78" if is_dark else "#B5D4F8"
+        sel_fg = "#FFFFFF" if is_dark else "#000000"
+        tw.configure(selectbackground=sel_bg, selectforeground=sel_fg,
+                     inactiveselectbackground=sel_bg)
         # Prevent horizontal scrolling
         tw.configure(xscrollcommand=lambda *args: None)
         # Redirect scroll events so the outer chat container scrolls, not this bubble
@@ -639,6 +644,9 @@ class MarkdownBubble(customtkinter.CTkFrame):
                 copy_btn.pack(side="right")
 
         # Code text widget — no wrapping so box diagrams stay aligned
+        is_dark = self._colors.get('is_dark', False)
+        code_sel_bg = "#264F78" if is_dark else "#B5D4F8"
+        code_sel_fg = "#FFFFFF" if is_dark else "#000000"
         code_widget = tk.Text(
             code_frame,
             wrap="none",
@@ -650,7 +658,10 @@ class MarkdownBubble(customtkinter.CTkFrame):
             pady=10,
             highlightthickness=0,
             relief="flat",
-            insertwidth=0  # Hide cursor
+            insertwidth=0,  # Hide cursor
+            selectbackground=code_sel_bg,
+            selectforeground=code_sel_fg,
+            inactiveselectbackground=code_sel_bg,
         )
         code_widget.pack(fill="both", expand=True, padx=0, pady=(6, 10))
         code_widget.insert("1.0", code_text)
