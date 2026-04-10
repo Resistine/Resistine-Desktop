@@ -193,7 +193,7 @@ fi
 rm -rf dist/Resistine dist/Resistine.app
 
 echo "  - Building with PyInstaller..."
-pyinstaller packaging/Resistine.spec --clean --noconfirm
+pyinstaller packaging/Resistine.spec --noconfirm
 
 echo "  Python UI built"
 
@@ -322,7 +322,7 @@ if [ -d "$CLAMAV_ARTIFACTS_DIR/binaries" ]; then
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.resistine.desktop.clamonacc</string>
+    <string>com.resistine.clamonacc</string>
     <key>CFBundleName</key>
     <string>ResistineClamAV</string>
     <key>CFBundleExecutable</key>
@@ -346,6 +346,13 @@ PLISTEOF
         fi
     done
 
+    # CVD signature-verification certs → Contents/certs/
+    if [ -d "$CLAMAV_ARTIFACTS_DIR/certs" ]; then
+        mkdir -p "$PYTHON_APP/Contents/certs"
+        cp "$CLAMAV_ARTIFACTS_DIR/certs/"* "$PYTHON_APP/Contents/certs/"
+        echo "  - Placed CVD verification certs in Contents/certs/"
+    fi
+
     # Shared libraries → Contents/Frameworks/ (skip static archives, deduplicate symlinks)
     mkdir -p "$PYTHON_APP/Contents/Frameworks"
     for f in "$CLAMAV_LIB_DIR"/*; do
@@ -360,6 +367,84 @@ PLISTEOF
         fi
     done
     echo "  - Placed ClamAV libraries in Contents/Frameworks/"
+
+    # ── Fix dylib rpaths ──
+    # CI-built binaries have hardcoded rpaths from the build machine.
+    # Rewrite them so binaries find dylibs in Contents/Frameworks/ at runtime.
+    echo "  - Fixing ClamAV dylib rpaths..."
+
+    FRAMEWORKS_RELATIVE="@executable_path/../Frameworks"
+
+    # Fix binaries in Contents/Helpers/
+    for bin in clamd clamscan clamdscan freshclam; do
+        BIN_PATH="$PYTHON_APP/Contents/Helpers/$bin"
+        [ -f "$BIN_PATH" ] || continue
+
+        # Remove all existing LC_RPATH entries
+        for old_rpath in $(otool -l "$BIN_PATH" 2>/dev/null | awk '/cmd LC_RPATH/{found=1} found && /path /{print $2; found=0}'); do
+            install_name_tool -delete_rpath "$old_rpath" "$BIN_PATH" 2>/dev/null || true
+        done
+
+        # Add the correct rpath
+        install_name_tool -add_rpath "$FRAMEWORKS_RELATIVE" "$BIN_PATH" 2>/dev/null || true
+
+        # Rewrite hardcoded Homebrew load commands to @rpath
+        for homebrew_ref in $(otool -L "$BIN_PATH" 2>/dev/null | awk '/\/opt\/homebrew/{print $1}'); do
+            install_name_tool -change "$homebrew_ref" "@rpath/$(basename "$homebrew_ref")" "$BIN_PATH" 2>/dev/null || true
+        done
+        echo "    Fixed rpath: $bin → $FRAMEWORKS_RELATIVE"
+    done
+
+    # Fix clamonacc in nested bundle (different relative path)
+    CLAMONACC_PATH="$CLAMAV_APP/Contents/MacOS/clamonacc"
+    if [ -f "$CLAMONACC_PATH" ]; then
+        CLAMONACC_FRAMEWORKS="@executable_path/../../../../Frameworks"
+        for old_rpath in $(otool -l "$CLAMONACC_PATH" 2>/dev/null | awk '/cmd LC_RPATH/{found=1} found && /path /{print $2; found=0}'); do
+            install_name_tool -delete_rpath "$old_rpath" "$CLAMONACC_PATH" 2>/dev/null || true
+        done
+        install_name_tool -add_rpath "$CLAMONACC_FRAMEWORKS" "$CLAMONACC_PATH" 2>/dev/null || true
+        # Rewrite hardcoded Homebrew load commands to @rpath
+        for homebrew_ref in $(otool -L "$CLAMONACC_PATH" 2>/dev/null | awk '/\/opt\/homebrew/{print $1}'); do
+            install_name_tool -change "$homebrew_ref" "@rpath/$(basename "$homebrew_ref")" "$CLAMONACC_PATH" 2>/dev/null || true
+        done
+        echo "    Fixed rpath: clamonacc → $CLAMONACC_FRAMEWORKS"
+    fi
+
+    # Fix dylibs that reference other dylibs via @rpath
+    for dylib in "$PYTHON_APP/Contents/Frameworks"/lib*.dylib; do
+        [ -f "$dylib" ] || continue
+        [ -L "$dylib" ] && continue  # Skip symlinks
+
+        # Remove hardcoded rpaths
+        for old_rpath in $(otool -l "$dylib" 2>/dev/null | awk '/cmd LC_RPATH/{found=1} found && /path /{print $2; found=0}'); do
+            install_name_tool -delete_rpath "$old_rpath" "$dylib" 2>/dev/null || true
+        done
+
+        # Set the dylib's own install name to @rpath/name
+        DYLIB_NAME=$(basename "$dylib")
+        install_name_tool -id "@rpath/$DYLIB_NAME" "$dylib" 2>/dev/null || true
+
+        # Add rpath for peer dylib resolution
+        install_name_tool -add_rpath "@loader_path" "$dylib" 2>/dev/null || true
+
+        # Rewrite hardcoded Homebrew load commands to @rpath
+        for homebrew_ref in $(otool -L "$dylib" 2>/dev/null | awk '/\/opt\/homebrew/{print $1}'); do
+            install_name_tool -change "$homebrew_ref" "@rpath/$(basename "$homebrew_ref")" "$dylib" 2>/dev/null || true
+        done
+    done
+    echo "    Fixed dylib install names and rpaths"
+
+    # LaunchDaemon plists → Contents/Library/LaunchDaemons/
+    # Registered at runtime via SMAppService (no manual launchctl needed).
+    LAUNCHD_SRC="$CLAMAV_ARTIFACTS_DIR/launchd"
+    if [ -d "$LAUNCHD_SRC" ]; then
+        mkdir -p "$PYTHON_APP/Contents/Library/LaunchDaemons"
+        cp "$LAUNCHD_SRC/"*.plist "$PYTHON_APP/Contents/Library/LaunchDaemons/"
+        echo "  - Placed launchd plists in Contents/Library/LaunchDaemons/"
+    else
+        echo "  - Warning: No launchd plists found in artifacts"
+    fi
+
     echo "  ClamAV components placed in bundle"
 else
     echo "Step 4b: Skipping ClamAV — no artifacts found"
@@ -377,6 +462,7 @@ PROFILES_DIR="$PYTHON_UI_PATH/provisioning-profiles"
 NE_PROFILE="$PROFILES_DIR/Mac_Network_Ext.provisionprofile"
 XPC_PROFILE="$PROFILES_DIR/Mac_VPNXPC.provisionprofile"
 MAIN_PROFILE="$PROFILES_DIR/Mac_Desktop.provisionprofile"
+CLAMONACC_PROFILE="$PROFILES_DIR/Mac_ClamOnAcc.provisionprofile"
 
 # Validate Profiles
 if [ ! -f "$NE_PROFILE" ]; then
@@ -403,6 +489,17 @@ cp "$MAIN_PROFILE" "$PYTHON_APP/Contents/embedded.provisionprofile"
 
 echo "  - Embedding XPC profile into CLI bundle..."
 cp "$XPC_PROFILE" "$CLI_APP/Contents/embedded.provisionprofile"
+
+# Embed ESF provisioning profile into ResistineClamAV.app (clamonacc)
+if [ "$CLAMAV_AVAILABLE" = true ] && [ -d "$PYTHON_APP/Contents/Helpers/ResistineClamAV.app" ]; then
+    if [ -f "$CLAMONACC_PROFILE" ]; then
+        echo "  - Embedding ESF profile into ResistineClamAV.app..."
+        cp "$CLAMONACC_PROFILE" "$PYTHON_APP/Contents/Helpers/ResistineClamAV.app/Contents/embedded.provisionprofile"
+    else
+        echo "  - Warning: ClamOnAcc provisioning profile not found at $CLAMONACC_PROFILE"
+        echo "    clamonacc will not be able to register as an ESF client"
+    fi
+fi
 
 # Create symlink for compatibility
 # Python code expects resistine-vpn-cli at ../MacOS/resistine-vpn-cli
@@ -519,9 +616,10 @@ if [ "$CLAMAV_AVAILABLE" = true ]; then
         }
     fi
 
-    # Sign ResistineClamAV.app bundle
+    # Sign ResistineClamAV.app bundle (preserve ESF entitlements for clamonacc)
     codesign --force --sign "$SIGN_IDENTITY" \
         --options runtime --timestamp \
+        ${CLAMAV_ENTITLEMENTS:+--entitlements "$CLAMAV_ENTITLEMENTS"} \
         "$PYTHON_APP/Contents/Helpers/ResistineClamAV.app" || {
         echo "    ResistineClamAV.app signing failed"
         exit 1
@@ -540,7 +638,7 @@ if [ "$CLAMAV_AVAILABLE" = true ]; then
     done
 
     # Sign ClamAV shared libraries (all ClamAV-related dylibs including unrar, ssl, crypto)
-    find "$PYTHON_APP/Contents/Frameworks" \( -name "libclamav*" -o -name "libfreshclam*" -o -name "libclammspack*" -o -name "libclamunrar*" -o -name "libcrypto*" -o -name "libssl*" \) -type f | while read -r lib; do
+    find "$PYTHON_APP/Contents/Frameworks" \( -name "libclamav*" -o -name "libfreshclam*" -o -name "libclammspack*" -o -name "libclamunrar*" -o -name "libcrypto*" -o -name "libssl*" -o -name "libjson-c*" \) -type f | while read -r lib; do
         codesign --force --sign "$SIGN_IDENTITY" \
             --options runtime --timestamp \
             "$lib" 2>/dev/null || true
@@ -819,6 +917,12 @@ echo "  - Registering app with LaunchServices..."
 
 echo "  - Registering network extension with pluginkit..."
 pluginkit -a "/Applications/$APP_NAME.app/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension" 2>/dev/null || true
+
+# ── ClamAV system setup ──
+# System directories, configs, and DB seeding are handled at runtime by
+# activate_system_daemons() in clamav_platform_darwin.py (with a native
+# macOS admin dialog), matching the VPN helper pattern. No sudo needed
+# at build time — daemons are registered via SMAppService at app launch.
 
 # ============================================================
 # Summary
