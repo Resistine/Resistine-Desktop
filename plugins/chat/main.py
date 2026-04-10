@@ -1227,7 +1227,17 @@ class Plugin(BasePlugin):
                 self._response_queue.put(("chunk", chunk))
             self._response_queue.put(("done", None))
         except Exception as e:
-            self._response_queue.put(("error", str(e)))
+            endpoint = self.base_url or "https://api.openai.com/v1"
+            from openai import APIConnectionError
+            if isinstance(e, APIConnectionError):
+                msg = (
+                    f"Could not reach {endpoint}. "
+                    "Check that the host is reachable (VPN, DNS, firewall) "
+                    "and the URL in Settings is correct."
+                )
+            else:
+                msg = f"{e} (endpoint: {endpoint})"
+            self._response_queue.put(("error", msg))
 
     def _poll_stream(self):
         """Main-thread poller: drain the queue and update the UI."""
