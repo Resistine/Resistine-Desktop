@@ -1,15 +1,24 @@
 """
 macOS Uninstaller Backend.
 
-Performs full cleanup in order:
-0. Stop and remove Wazuh SIEM agent (if installed)
-1. Stop VPN tunnel (if running)
-2. Deactivate the system extension
-3. Remove keychain items
-4. Remove app bundle from /Applications
-5. Remove WireGuard config files        (late — prevents recreation by running code)
-6. Remove app config directory           (late — prevents recreation by settings module)
-7. Quit the application
+Performs full cleanup in three phases:
+
+Phase 1 — Non-privileged work (no admin prompt):
+  - Unregister ClamAV daemons via SMAppService
+  - Stop VPN tunnel
+  - Deactivate system extension (waits up to 15s)
+  - Remove keychain items
+  - Remove WireGuard config files
+  - Remove user-level app config
+
+Phase 2 — Privileged work (single admin prompt):
+  - Stop/remove Wazuh agent (fallback path)
+  - Kill and clean up ClamAV daemons/plists/data
+  - Remove system-level app config
+  - Remove Wazuh key backup
+
+Phase 3 — App bundle removal (privileged if needed):
+  - Remove the .app bundle from /Applications (admin rm -rf)
 
 Author: Resistine Team
 Copyright (c) Resistine 2025
@@ -32,30 +41,54 @@ def is_available():
 
 
 def run_uninstall(app, progress_callback=None):
-    """Execute the full macOS uninstall sequence."""
+    """Execute the full macOS uninstall sequence.
+
+    Collects all commands that need admin privileges and runs them in a
+    single ``osascript`` call so the user only sees one password prompt.
+    """
 
     def _progress(msg):
         logger.info(f"[UNINSTALL] {msg}")
         if progress_callback:
             try:
                 progress_callback(msg)
-            except Exception:
-                pass
-
-    # Steps run in order; later steps are deliberately last to prevent
-    # recreation by code/settings modules still running.
-    steps = [
-        ("Removing SIEM agent...",         "SIEM agent",            _remove_wazuh_agent),
-        ("Stopping VPN tunnel...",         "VPN stop",              _stop_vpn_tunnel),
-        ("Deactivating system extension...","Extension deactivation",_deactivate_system_extension),
-        ("Removing keychain items...",     "Keychain",              _remove_keychain_items),
-        ("Removing application...",        "App bundle",            _remove_app_bundle),
-        ("Removing VPN configurations...", "WG configs",            _remove_wireguard_configs),
-        ("Removing application data...",   "App config",            _remove_app_config),
-    ]
+            except Exception as e:
+                logger.debug(f"[UNINSTALL] Progress callback failed: {e}")
 
     errors = []
-    for message, label, func in steps:
+    admin_cmds = []  # Shell commands that require admin privileges
+
+    # -- Phase 1: Non-privileged work + collect admin commands ---------------
+
+    # Wazuh — plugin path triggers its own admin prompt (unavoidable);
+    # fallback path adds commands to admin_cmds instead.
+    _progress("Removing SIEM agent...")
+    try:
+        _remove_wazuh_agent(admin_cmds)
+    except Exception as e:
+        logger.error(f"[UNINSTALL] Failed — SIEM agent: {e}")
+        errors.append(f"SIEM agent: {e}")
+
+    # ClamAV — SMAppService (no admin), then collect admin commands
+    _progress("Stopping ClamAV daemons...")
+    try:
+        _remove_clamav_daemons(admin_cmds)
+    except Exception as e:
+        logger.error(f"[UNINSTALL] Failed — ClamAV daemons: {e}")
+        errors.append(f"ClamAV daemons: {e}")
+
+    # Non-privileged steps
+    non_privileged_steps = [
+        ("Stopping VPN tunnel...",             "VPN stop",
+         _stop_vpn_tunnel),
+        ("Deactivating system extension...",   "Extension deactivation",
+         _deactivate_system_extension),
+        ("Removing keychain items...",         "Keychain",
+         _remove_keychain_items),
+        ("Removing VPN configurations...",     "WG configs",
+         _remove_wireguard_configs),
+    ]
+    for message, label, func in non_privileged_steps:
         _progress(message)
         try:
             func()
@@ -63,9 +96,57 @@ def run_uninstall(app, progress_callback=None):
             logger.error(f"[UNINSTALL] Failed — {label}: {e}")
             errors.append(f"{label}: {e}")
 
+    # App config — user-level (no admin), system-level (admin)
+    _progress("Removing application data...")
+    try:
+        _remove_app_config(admin_cmds)
+    except Exception as e:
+        logger.error(f"[UNINSTALL] Failed — App config: {e}")
+        errors.append(f"App config: {e}")
+
+    # -- Phase 2: Run all privileged commands in one admin prompt -------------
+
+    if admin_cmds:
+        _progress("Running privileged cleanup...")
+        try:
+            _run_privileged(admin_cmds)
+        except Exception as e:
+            logger.error(f"[UNINSTALL] Failed — Privileged cleanup: {e}")
+            errors.append(f"Privileged cleanup: {e}")
+
+    # -- Phase 3: Remove app bundle (may need its own admin prompt) ----------
+    _progress("Removing application...")
+    try:
+        _remove_app_bundle()
+    except Exception as e:
+        logger.error(f"[UNINSTALL] Failed — App bundle: {e}")
+        errors.append(f"App bundle: {e}")
+
     if errors:
         return (False, f"Completed with errors: {'; '.join(errors)}")
     return (True, "Resistine has been uninstalled successfully.")
+
+
+# ---------------------------------------------------------------------------
+# Privileged command runner
+# ---------------------------------------------------------------------------
+
+
+def _run_privileged(cmds):
+    """Run a list of shell commands in a single admin osascript prompt."""
+    script = "; ".join(cmds)
+    escaped = script.replace("\\", "\\\\").replace('"', '\\"')
+    cmd = [
+        "osascript", "-e",
+        f'do shell script "{escaped}" with administrator privileges',
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if result.returncode == 0:
+        logger.info("[UNINSTALL] Privileged cleanup completed")
+    else:
+        raise OSError(
+            f"Privileged cleanup failed: {result.stderr.strip()}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -73,29 +154,78 @@ def run_uninstall(app, progress_callback=None):
 # ---------------------------------------------------------------------------
 
 
-def _delete_key_backup(path):
-    """Remove the Wazuh client.keys backup file if it exists."""
+def _remove_clamav_daemons(admin_cmds):
+    """Unregister ClamAV daemons and collect admin commands for cleanup."""
+    _SYSTEM_CLAMAV_DIR = "/Library/Application Support/Resistine/clamav"
+
+    # 1. SMAppService unregistration (no admin needed)
+    _smappservice_plist_names = [
+        "com.resistine.clamonacc.plist",
+        "com.resistine.clamd.plist",
+    ]
     try:
-        escaped = path.replace("\\", "\\\\").replace('"', '\\"')
-        cmd = [
-            "osascript", "-e",
-            f'do shell script "rm -f \\"{escaped}\\"" with administrator privileges',
-        ]
-        subprocess.run(cmd, capture_output=True, timeout=15)
-        logger.info(f"[UNINSTALL] Removed Wazuh key backup: {path}")
-    except Exception as e:
-        logger.warning(f"[UNINSTALL] Could not remove key backup: {e}")
+        from ServiceManagement import SMAppService
+
+        for plist_name in _smappservice_plist_names:
+            try:
+                service = SMAppService.daemonServiceWithPlistName_(plist_name)
+                status = int(service.status())
+                if status in (1, 2):  # enabled or requiresApproval
+                    success, err = service.unregisterAndReturnError_(None)
+                    if not success:
+                        logger.warning(
+                            f"[UNINSTALL] SMAppService unregister error "
+                            f"({plist_name}): {err}",
+                        )
+                    else:
+                        logger.info(
+                            f"[UNINSTALL] Unregistered {plist_name} via SMAppService",
+                        )
+            except Exception as e:
+                logger.warning(
+                    f"[UNINSTALL] SMAppService unregister failed ({plist_name}): {e}",
+                )
+    except ImportError:
+        logger.debug("[UNINSTALL] ServiceManagement not available")
+
+    # 2. Collect admin commands for legacy plist cleanup + process kill + data
+    legacy_plists = [
+        "/Library/LaunchDaemons/com.resistine.clamonacc.plist",
+        "/Library/LaunchDaemons/com.resistine.clamd.plist",
+        "/Library/LaunchDaemons/com.resistine.desktop.clamonacc.plist",
+        "/Library/LaunchDaemons/com.resistine.desktop.clamd.plist",
+    ]
+    for plist in legacy_plists:
+        if os.path.exists(plist):
+            admin_cmds.append(f"launchctl bootout system '{plist}' 2>/dev/null || true")
+            admin_cmds.append(f"rm -f '{plist}'")
+
+    # Bootout by label in case plists are gone but daemons still loaded
+    for label in (
+        "com.resistine.clamd",
+        "com.resistine.clamonacc",
+    ):
+        admin_cmds.append(
+            f"launchctl bootout system/{label} 2>/dev/null || true",
+        )
+
+    # Kill running ClamAV processes (root-owned, needs admin)
+    admin_cmds.append("pkill -x clamonacc 2>/dev/null || true")
+    admin_cmds.append("pkill -x clamd 2>/dev/null || true")
+
+    # Remove system-level ClamAV data (signatures, configs, logs)
+    if os.path.exists(_SYSTEM_CLAMAV_DIR):
+        admin_cmds.append(f"rm -rf '{_SYSTEM_CLAMAV_DIR}'")
 
 
-def _remove_wazuh_agent():
+def _remove_wazuh_agent(admin_cmds):
     """Stop and remove the Wazuh SIEM agent if installed.
 
-    Delegates to the Wazuh plugin's ``remove_agent()`` when available.
-    Falls back to an inline script if the plugin module cannot be imported
-    (e.g. the plugin was already uninstalled).
+    When the Wazuh plugin is available, delegates to its ``remove_agent()``
+    (which triggers its own admin prompt — unavoidable).  The key backup
+    deletion is added to ``admin_cmds`` so it runs in the batched prompt.
 
-    Also removes the client.keys backup — on full uninstall we want a clean
-    slate, not a preserved key for a future reinstall.
+    When the plugin is unavailable, all commands go into ``admin_cmds``.
     """
     try:
         from plugins.wazuh.agent.wazuh_functions_darwin import (
@@ -103,13 +233,15 @@ def _remove_wazuh_agent():
             remove_agent,
         )
         remove_agent()
-        # Delete the key backup so a future install enrolls fresh.
-        _delete_key_backup(_KEY_BACKUP)
+        # Batch key backup deletion with the other admin commands
+        if os.path.exists(_KEY_BACKUP):
+            escaped = _KEY_BACKUP.replace("'", "'\\''")
+            admin_cmds.append(f"rm -f '{escaped}'")
         return
     except ImportError:
         logger.info("[UNINSTALL] Wazuh plugin not available, using inline removal")
 
-    # Fallback: inline removal when the plugin module is missing
+    # Fallback: collect inline removal commands
     wazuh_control = "/Library/Ossec/bin/wazuh-control"
     wazuh_plist = "/Library/LaunchDaemons/com.wazuh.agent.plist"
     ossec_dir = "/Library/Ossec"
@@ -119,28 +251,13 @@ def _remove_wazuh_agent():
         logger.info("[UNINSTALL] Wazuh agent not installed, skipping")
         return
 
-    script = (
-        f"'{wazuh_control}' stop 2>/dev/null; "
-        f"launchctl bootout system '{wazuh_plist}' 2>/dev/null; "
-        f"rm -rf '{ossec_dir}'; "
-        f"rm -f '{wazuh_plist}'; "
-        f"rm -f '{key_backup}'"
+    admin_cmds.append(f"'{wazuh_control}' stop 2>/dev/null || true")
+    admin_cmds.append(
+        f"launchctl bootout system '{wazuh_plist}' 2>/dev/null || true",
     )
-    escaped = script.replace("\\", "\\\\").replace('"', '\\"')
-    cmd = [
-        "osascript", "-e",
-        f'do shell script "{escaped}" with administrator privileges',
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        if result.returncode == 0:
-            logger.info("[UNINSTALL] Wazuh agent removed successfully")
-        else:
-            logger.warning(f"[UNINSTALL] Wazuh removal returned non-zero: {result.stderr}")
-    except subprocess.TimeoutExpired:
-        logger.warning("[UNINSTALL] Wazuh removal timed out")
-    except Exception as e:
-        logger.error(f"[UNINSTALL] Wazuh removal error: {e}")
+    admin_cmds.append(f"rm -rf '{ossec_dir}'")
+    admin_cmds.append(f"rm -f '{wazuh_plist}'")
+    admin_cmds.append(f"rm -f '{key_backup}'")
 
 
 def _stop_vpn_tunnel():
@@ -150,46 +267,61 @@ def _stop_vpn_tunnel():
         logger.info("[UNINSTALL] CLI not found, skipping VPN stop")
         return
 
-    try:
-        subprocess.run(
-            [cli_path, "stop"],
-            capture_output=True,
-            timeout=10,
+    result = subprocess.run(
+        [cli_path, "stop"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode == 0:
+        logger.info("[UNINSTALL] VPN tunnel stopped")
+    else:
+        logger.warning(
+            f"[UNINSTALL] VPN stop returned non-zero "
+            f"(may already be stopped): {result.stderr.strip()}"
         )
-        logger.info("[UNINSTALL] VPN tunnel stop command sent")
-    except subprocess.TimeoutExpired:
-        logger.warning("[UNINSTALL] VPN stop timed out")
-    except FileNotFoundError:
-        logger.info("[UNINSTALL] CLI binary not found")
 
 
 def _deactivate_system_extension():
-    """Deactivate the network extension via SystemExtensions framework."""
+    """Deactivate the network extension via SystemExtensions framework.
+
+    Blocks up to 15 seconds for the delegate callback, so the uninstall
+    doesn't remove the app bundle while deactivation is still in flight.
+    """
     try:
         from Foundation import NSObject, NSOperationQueue
         from SystemExtensions import (
             OSSystemExtensionManager,
             OSSystemExtensionRequest,
         )
+    except ImportError:
+        logger.info("[UNINSTALL] SystemExtensions not available (dev mode)")
+        return
 
-        class _Deactivator(NSObject):
-            def request_didFinishWithResult_(self, request, result):
-                logger.info(f"[UNINSTALL] Extension deactivation finished: {result}")
+    import threading
+    done_event = threading.Event()
+    deactivation_error = []
 
-            def request_didFailWithError_(self, request, error):
-                logger.error(
-                    f"[UNINSTALL] Extension deactivation failed: "
-                    f"{error.localizedDescription()}"
-                )
+    class _Deactivator(NSObject):
+        def request_didFinishWithResult_(self, request, result):
+            logger.info(f"[UNINSTALL] Extension deactivation finished: {result}")
+            done_event.set()
 
-            def requestNeedsUserApproval_(self, request):
-                logger.info("[UNINSTALL] Extension deactivation needs user approval")
+        def request_didFailWithError_(self, request, error):
+            msg = error.localizedDescription()
+            logger.error(f"[UNINSTALL] Extension deactivation failed: {msg}")
+            deactivation_error.append(msg)
+            done_event.set()
 
-            def request_actionForReplacingExtension_withExtension_(
-                self, request, existing, extension
-            ):
-                return 1  # Replace
+        def requestNeedsUserApproval_(self, request):
+            logger.info("[UNINSTALL] Extension deactivation needs user approval")
 
+        def request_actionForReplacingExtension_withExtension_(
+            self, request, existing, extension
+        ):
+            return 1  # Replace
+
+    try:
         deactivator = _Deactivator.alloc().init()
         queue = NSOperationQueue.mainQueue().underlyingQueue()
         request = (
@@ -203,18 +335,29 @@ def _deactivate_system_extension():
         # Store reference to prevent GC
         _deactivate_system_extension._ref = deactivator
         logger.info("[UNINSTALL] Extension deactivation request submitted")
-    except ImportError:
-        logger.info("[UNINSTALL] SystemExtensions not available (dev mode)")
+
+        if not done_event.wait(timeout=15):
+            logger.warning(
+                "[UNINSTALL] Extension deactivation timed out after 15s "
+                "— continuing anyway"
+            )
+        elif deactivation_error:
+            raise OSError(
+                f"Extension deactivation failed: {deactivation_error[0]}"
+            )
+    except OSError:
+        raise
     except Exception as e:
-        logger.error(f"[UNINSTALL] Extension deactivation error: {e}")
+        raise OSError(f"Extension deactivation error: {e}") from e
 
 
 def _remove_wireguard_configs():
-    """Remove WireGuard configuration directory.
+    """Remove WireGuard configuration files.
 
-    Group Containers are sandbox-protected on macOS, so ``shutil.rmtree``
-    often fails with *Operation not permitted*.  We try ``rm -rf`` first
-    and fall back to an admin-privileged removal via ``osascript``.
+    macOS SIP protects the Group Container directory itself — even admin
+    ``rm -rf`` cannot delete it.  We remove the *contents* instead and
+    tolerate the empty directory remaining (the OS cleans it up when the
+    app is fully removed).
     """
     wg_dir = os.path.expanduser(
         "~/Library/Group Containers/group.Resistine.WireguardTest"
@@ -223,45 +366,64 @@ def _remove_wireguard_configs():
         logger.info("[UNINSTALL] WireGuard config dir not found, skipping")
         return
 
-    # Try unprivileged removal first
+    # Remove contents, not the container directory itself
     try:
-        shutil.rmtree(wg_dir)
-        logger.info(f"[UNINSTALL] Removed {wg_dir}")
+        entries = os.listdir(wg_dir)
+    except PermissionError:
+        logger.info(
+            f"[UNINSTALL] Cannot access {wg_dir} (SIP-protected) — "
+            f"macOS will clean it up when the app is removed"
+        )
         return
+    if not entries:
+        logger.info("[UNINSTALL] WireGuard config dir already empty")
+        return
+
+    removed = 0
+    failed = []
+    for entry in entries:
+        entry_path = os.path.join(wg_dir, entry)
+        try:
+            if os.path.isdir(entry_path):
+                shutil.rmtree(entry_path)
+            else:
+                os.remove(entry_path)
+            removed += 1
+        except OSError as e:
+            logger.warning(f"[UNINSTALL] Could not remove {entry_path}: {e}")
+            failed.append(entry_path)
+
+    # Try to remove the now-empty directory (may fail due to SIP — that's OK)
+    try:
+        os.rmdir(wg_dir)
+        logger.info(f"[UNINSTALL] Removed {wg_dir} ({removed} item(s))")
     except OSError:
-        logger.info("[UNINSTALL] shutil.rmtree failed, trying rm -rf")
+        logger.info(
+            f"[UNINSTALL] Cleared {removed} item(s) from {wg_dir} "
+            f"(directory kept by macOS)"
+        )
 
-    # Try rm -rf (handles some sandbox cases shutil cannot)
-    subprocess.run(["rm", "-rf", wg_dir], capture_output=True, text=True)
-    if not os.path.exists(wg_dir):
-        logger.info(f"[UNINSTALL] Removed {wg_dir} via rm -rf")
-        return
-
-    # Fall back to admin-privileged removal
-    logger.info("[UNINSTALL] rm -rf failed, requesting admin privileges")
-    script = f"rm -rf '{wg_dir}'"
-    escaped = script.replace("\\", "\\\\").replace('"', '\\"')
-    cmd = [
-        "osascript", "-e",
-        f'do shell script "{escaped}" with administrator privileges',
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    if result.returncode == 0:
-        logger.info(f"[UNINSTALL] Removed {wg_dir} with admin privileges")
-    else:
+    if failed and removed == 0:
         raise OSError(
-            f"Failed to remove WireGuard configs: {result.stderr.strip()}"
+            f"Failed to remove any WireGuard config files "
+            f"({len(failed)} failures)"
         )
 
 
-def _remove_app_config():
-    """Remove the application configuration directory."""
+def _remove_app_config(admin_cmds):
+    """Remove application configuration directories (user + system level)."""
+    # User-level config (no admin needed)
     config_dir = os.path.expanduser("~/Library/Application Support/Resistine")
     if os.path.exists(config_dir):
         shutil.rmtree(config_dir)
         logger.info(f"[UNINSTALL] Removed {config_dir}")
     else:
-        logger.info("[UNINSTALL] App config dir not found, skipping")
+        logger.info("[UNINSTALL] User config dir not found, skipping")
+
+    # System-level directory — batch with other admin commands
+    sys_dir = "/Library/Application Support/Resistine"
+    if os.path.exists(sys_dir):
+        admin_cmds.append(f"rm -rf '{sys_dir}'")
 
 
 def _remove_keychain_items():
@@ -276,6 +438,7 @@ def _remove_keychain_items():
         ("resistine-master-key", "master-key"),
     ]
 
+    failed = []
     for service, username in entries:
         try:
             keyring.delete_password(service, username)
@@ -283,11 +446,23 @@ def _remove_keychain_items():
         except keyring.errors.PasswordDeleteError:
             logger.info(f"[UNINSTALL] Keychain entry not found: {service}/{username}")
         except Exception as e:
-            logger.warning(f"[UNINSTALL] Keychain removal failed: {service}: {e}")
+            logger.error(f"[UNINSTALL] Keychain removal failed: {service}: {e}")
+            failed.append(f"{service}: {e}")
+
+    if failed:
+        raise OSError(
+            f"Keychain removal failed: {'; '.join(failed)}"
+        )
 
 
 def _remove_app_bundle():
-    """Remove the Resistine.app bundle."""
+    """Remove the Resistine.app bundle.
+
+    The bundle in /Applications is typically root-owned, so we use an
+    admin ``osascript`` prompt.  macOS allows deleting files that are in
+    use — the kernel keeps the data until the last file descriptor closes,
+    so the running process won't crash.
+    """
     if not getattr(sys, "frozen", False):
         logger.info("[UNINSTALL] Not a frozen app, skipping bundle removal")
         return
@@ -300,11 +475,33 @@ def _remove_app_bundle():
         logger.warning(f"[UNINSTALL] Unexpected bundle path: {app_bundle}")
         return
 
-    if os.path.exists(app_bundle):
+    if not os.path.exists(app_bundle):
+        logger.info("[UNINSTALL] App bundle not found")
+        return
+
+    escaped = app_bundle.replace("'", "'\\''")
+
+    # Try non-privileged first (works if user-owned)
+    try:
         shutil.rmtree(app_bundle)
         logger.info(f"[UNINSTALL] Removed {app_bundle}")
+        return
+    except PermissionError:
+        logger.debug("[UNINSTALL] App bundle requires admin to remove")
+
+    # Fall back to admin removal
+    cmd = [
+        "osascript", "-e",
+        f"do shell script \"rm -rf '{escaped}'\" "
+        f"with administrator privileges",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if result.returncode == 0:
+        logger.info(f"[UNINSTALL] Removed {app_bundle} (admin)")
     else:
-        logger.info("[UNINSTALL] App bundle not found")
+        raise OSError(
+            f"App bundle removal failed: {result.stderr.strip()}"
+        )
 
 
 def _find_cli_path():
