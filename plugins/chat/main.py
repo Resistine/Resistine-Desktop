@@ -1,1347 +1,344 @@
-# @file plugins/chat/main.py
-"""
-Chat Plugin
-The plugin allows users to chat with the AI assistant.
-Author: Peres J., P3 and the Resistine Team
-Copyright (c) Resistine 2025
-Licensed under the GNU General Public License v2 or later
-"""
+"""Resistine AI Chat plugin."""
+from __future__ import annotations
 
 import os
-import queue
-import random  # noqa: F401 — used for suggestion shuffling
 import sys
-import threading
-import tkinter as tk
-
 import customtkinter
-from customtkinter import ThemeManager
-
 from plugins.base_plugin import BasePlugin
+from plugins.chat.bubble import (
+    AssistantBubble, BubbleRow, UserBubble, assistant_width, user_width)
+from plugins.chat.fonts import _is_dark_mode
+from plugins.chat.streaming import StreamController
+from plugins.chat.welcome_screen import ApiKeyMissingScreen, WelcomeScreen
 from utils import settings
-from utils.cairo_canvas import CairoCanvas
 from utils.emoji_entry import EmojiEntry
 from utils.logger import logger
 
-# Pool of suggestion prompts shown on the welcome screen.
-# 4 are picked at random each time the chat is opened.
-_SUGGESTION_POOL = [
-    "Explain what a zero-day exploit is",
-    "How do I harden my Linux server?",
-    "Analyze a suspicious network log",
-    "What are common phishing indicators?",
-    "How does a man-in-the-middle attack work?",
-    "What is the MITRE ATT&CK framework?",
-    "Explain the difference between IDS and IPS",
-    "How do I set up a firewall with iptables?",
-    "What are best practices for password security?",
-    "How do I detect lateral movement in a network?",
-    "Explain DNS tunneling and how to detect it",
-    "What is ransomware and how do I prevent it?",
-]
+_RESISTINE_BLUE = "#0D5394"
+_SYSTEM_PROMPT = "You are SOC Copilot specialized in cybersecurity."
+_ICON_DIR = os.path.dirname(os.path.realpath(__file__))
+_SYS_MSG = {"role": "system", "content": _SYSTEM_PROMPT}
 
 
 class Plugin(BasePlugin):
-    """
-    @brief Plugin class for the Chat plugin.
-    Plugin class for the Chat plugin, that allows users to chat with the AI assistant
-    """
+    """Chat plugin -- lets users talk to an OpenAI-compatible AI assistant."""
 
     def __init__(self, app):
-        """
-        @brief Initialize the Chat plugin.
-        Initialize the Chat plugin with the specified parameters.
-        :param app: Main application object.
-        """
         super().__init__(
-            id="002",
-            version="2025.01.01",
-            order=2,
-            name="Chat",
-            status=None,
+            id="002", version="2025.01.01", order=2, name="Chat", status=None,
             description="This plugin allows you to chat with the AI assistant.",
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Chat", "ES": "Chat", "FR": "Chat"},
-            icon_light_path=os.path.join(
-                os.path.dirname(os.path.realpath(__file__)), "chat_light.png"
-            ),
-            icon_dark_path=os.path.join(
-                os.path.dirname(os.path.realpath(__file__)), "chat_dark.png"
-            ),
-        )
+            icon_light_path=os.path.join(_ICON_DIR, "chat_light.png"),
+            icon_dark_path=os.path.join(_ICON_DIR, "chat_dark.png"))
         self.app = app
         self.client = None
-        self.animated_text = None
-        self.conversation_history = []
+        self.conversation_history: list[dict] = []
+        self._bubble_rows: list[BubbleRow] = []
+        self._stream_ctrl: StreamController | None = None
+        self._welcome_frame: WelcomeScreen | ApiKeyMissingScreen | None = None
         self.reinitialize_client()
         self.status = self.get_status()
 
-    # ------------------------------------------------------------------
-    # Theme helpers
-    # ------------------------------------------------------------------
-
-    def _is_dark_mode(self) -> bool:
-        appearance_mode = customtkinter.get_appearance_mode()
-        if appearance_mode == "Dark":
-            return True
-        if appearance_mode == "Light":
-            return False
-        if sys.platform == "darwin":
-            try:
-                import subprocess
-
-                result = subprocess.run(
-                    ["defaults", "read", "-g", "AppleInterfaceStyle"],
-                    capture_output=True,
-                    text=True,
-                )
-                return result.returncode == 0 and "Dark" in result.stdout
-            except Exception:
-                return False
-        return False
-
-    def _theme_color(self, key, fallback_light, fallback_dark):
-        """Resolve a Theme color from the JSON theme, falling back to provided values."""
-        pair = ThemeManager.theme.get("Theme", {}).get(key)
-        is_dark = self._is_dark_mode()
-        if pair and isinstance(pair, (list, tuple)) and len(pair) == 2:
-            return pair[1] if is_dark else pair[0]
-        return fallback_dark if is_dark else fallback_light
-
-    def _bind_mousewheel(self, widget):
-        """Bind mouse wheel scrolling to a text widget with smooth inertia."""
-        from utils.scroll import (
-            CHAT_SCROLL_DELTA, CHAT_WHEEL_SCALE, CHAT_VEL_CLAMP,
-            CHAT_VEL_THRESHOLD, CHAT_VEL_DECAY,
-        )
-
-        state = {"vel": 0.0, "job": None}
-
-        def _step():
-            try:
-                if not widget.winfo_exists():
-                    state["job"] = None
-                    return
-                v = state["vel"]
-                if abs(v) < CHAT_VEL_THRESHOLD:
-                    state["vel"] = 0.0
-                    state["job"] = None
-                    return
-                before = widget.yview()
-                scroll_px = int(round(v)) or (1 if v > 0 else -1)
-                widget.yview_scroll(scroll_px, "pixels")
-                after = widget.yview()
-                if abs(after[0] - before[0]) < 0.0001:
-                    state["vel"] = 0.0
-                    state["job"] = None
-                    return
-                state["vel"] *= CHAT_VEL_DECAY
-                state["job"] = widget.after(8, _step)
-            except Exception:
-                state["job"] = None
-
-        def _add_velocity(delta):
-            state["vel"] += delta
-            state["vel"] = max(-CHAT_VEL_CLAMP, min(CHAT_VEL_CLAMP, state["vel"]))
-            if state["job"] is None:
-                state["job"] = widget.after(1, _step)
-
-        def on_mousewheel(event):
-            if sys.platform == "darwin":
-                _add_velocity(-1 * event.delta * CHAT_WHEEL_SCALE)
-            else:
-                _add_velocity(-1 * (event.delta / 120) * CHAT_WHEEL_SCALE)
-            return "break"
-
-        widget.bind("<MouseWheel>", on_mousewheel, add="+")
-        if sys.platform != "darwin":
-            widget.bind("<Button-4>", lambda e: (_add_velocity(-CHAT_SCROLL_DELTA), "break")[-1], add="+")
-            widget.bind("<Button-5>", lambda e: (_add_velocity(CHAT_SCROLL_DELTA), "break")[-1], add="+")
-
-        # Prevent horizontal scrolling
-        widget.configure(xscrollcommand=lambda *args: None)
-
-        # Stash _add_velocity so _bind_scroll_redirect_to_chat can reuse it
-        self._chat_add_velocity = _add_velocity
-
-    def _bind_scroll_redirect_to_chat(self, chat_tw, widget):
-        """Bind scroll events on widget to feed into the main chat scroll state.
-
-        Same velocity / animation loop as _bind_mousewheel — no independent
-        state, so multiple widgets can't stack and double the speed.
-        """
-        add_vel = getattr(self, "_chat_add_velocity", None)
-        if add_vel is None:
-            return
-
-        from utils.scroll import CHAT_SCROLL_DELTA, CHAT_WHEEL_SCALE
-
-        def on_wheel(event):
-            if sys.platform == "darwin":
-                add_vel(-1 * event.delta * CHAT_WHEEL_SCALE)
-            else:
-                add_vel(-1 * (event.delta / 120) * CHAT_WHEEL_SCALE)
-            return "break"
-
-        widget.bind("<MouseWheel>", on_wheel, add="+")
-        if sys.platform != "darwin":
-            widget.bind("<Button-4>", lambda e: (add_vel(-CHAT_SCROLL_DELTA), "break")[-1], add="+")
-            widget.bind("<Button-5>", lambda e: (add_vel(CHAT_SCROLL_DELTA), "break")[-1], add="+")
-
-    # ------------------------------------------------------------------
-    # Client / API
-    # ------------------------------------------------------------------
-
     def check_status(self):
-        """Check if the Chat plugin is ready to use."""
-        if self.client:
-            return "OK"
-        return "Warning"
+        """Return ``'OK'`` when the OpenAI client is ready, else ``'Warning'``."""
+        return "OK" if self.client else "Warning"
 
     def reinitialize_client(self, notify: bool = False):
-        """Reinitialize the OpenAI client with the current API key.
-
-        Args:
-            notify: If True, show a user-visible notification on failure.
-                    Defaults to False to avoid spurious toasts during plugin
-                    loading (e.g. when the Store enumerates all plugins).
-        """
+        """Rebuild the OpenAI client from the current settings."""
         api_key = settings.get_secret("chat", "openai_api_key")
         self.base_url = settings.get("chat", "openai_base_url")
-        self.session_id = None  # Reset session ID on re-init
-
-        # Determine model and history setup based on base_url
+        self.session_id = None
         if self.base_url:
-            self.model = "ministral-3:14b"
-            self.conversation_history = []
+            self.model, self.conversation_history = "ministral-3:14b", []
         else:
             self.model = "gpt-4o"
-            self.conversation_history = [
-                {
-                    "role": "system",
-                    "content": "You are SOC Copilot specialized in cybersecurity.",
-                }
-            ]
-
-        if api_key:
-            try:
-                kwargs = {"api_key": api_key}
-                if self.base_url:
-                    kwargs["base_url"] = self.base_url
-                from openai import OpenAI
-                self.client = OpenAI(**kwargs)
-                logger.info("Chat plugin: OpenAI client initialized successfully")
-            except Exception as e:
-                logger.error(f"Chat plugin: Failed to initialize OpenAI client: {e}")
-                if notify:
-                    self.app.show_notification(f"Chat Init Error: {e}", type="error")
-                self.client = None
-        else:
+            self.conversation_history = [dict(_SYS_MSG)]
+        if not api_key:
             self.client = None
-            logger.warning(
-                "Chat plugin: No OpenAI API key found. Chat functionality disabled."
-            )
+            logger.warning("Chat plugin: No API key found. Chat disabled.")
+            return
+        try:
+            kwargs: dict = {"api_key": api_key}
+            if self.base_url:
+                kwargs["base_url"] = self.base_url
+            from openai import OpenAI
+            self.client = OpenAI(**kwargs)
+            logger.info("Chat plugin: OpenAI client initialized successfully")
+        except Exception as e:
+            logger.error(f"Chat plugin: Failed to initialize client: {e}")
+            if notify:
+                self.app.show_notification(f"Chat Init Error: {e}", type="error")
+            self.client = None
 
     def send_message_to_chatgpt(self, message: str):
-        """Send a message to the ChatGPT model and yield the response chunks."""
+        """Send *message* to the AI and yield response chunks (generator)."""
         if not self.client:
             self.reinitialize_client()
-
         if not self.client:
-            yield (
-                "Error: OpenAI API key not configured or invalid. "
-                "Please check your settings."
-            )
+            yield ("Error: OpenAI API key not configured or invalid. "
+                   "Please check your settings.")
             return
-
-        full_response = ""
-
+        self.conversation_history.append({"role": "user", "content": message})
+        full = ""
         if self.base_url:
-            messages = [{"role": "user", "content": message}]
-            self.conversation_history.append({"role": "user", "content": message})
-
-            extra_body = {}
+            extra_body: dict = {}
             if self.session_id:
                 extra_body["session_id"] = self.session_id
-
-            logger.debug(
-                f"Chat plugin: Sending request to Custom API (Model: {self.model}, Session: {self.session_id}, Stream: True): {messages}"
-            )
-
             stream = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                extra_body=extra_body,
-                stream=True,
-            )
-
-            for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    content = chunk.choices[0].delta.content
-                    full_response += content
-                    yield content
-
-                if hasattr(chunk, "session_id"):
-                    self.session_id = chunk.session_id
-
-            logger.debug(
-                f"Chat plugin: Received full response from Custom API: {full_response}"
-            )
-
+                model=self.model, extra_body=extra_body, stream=True,
+                messages=[{"role": "user", "content": message}])
         else:
-            self.conversation_history.append({"role": "user", "content": message})
-
-            logger.debug(
-                f"Chat plugin: Sending request to OpenAI API (Model: {self.model}, Stream: True): {self.conversation_history}"
-            )
-
             stream = self.client.chat.completions.create(
-                model=self.model,
-                messages=self.conversation_history,
-                stream=True,
-            )
+                model=self.model, messages=self.conversation_history, stream=True)
+        for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                full += chunk.choices[0].delta.content
+                yield chunk.choices[0].delta.content
+            if self.base_url and hasattr(chunk, "session_id"):
+                self.session_id = chunk.session_id
+        self.conversation_history.append({"role": "assistant", "content": full})
 
-            for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    content = chunk.choices[0].delta.content
-                    full_response += content
-                    yield content
+    def _clear_conversation(self):
+        """Reset conversation history and rebuild the chat screen."""
+        self.conversation_history = [] if self.base_url else [dict(_SYS_MSG)]
+        self.session_id = None
+        self._bubble_rows.clear()
+        if hasattr(self, "second_frame") and self.second_frame:
+            self.second_frame.destroy()
+        self.create_main_screen().grid(row=0, column=1, sticky="nsew")
 
-            logger.debug(
-                f"Chat plugin: Received full response from OpenAI API: {full_response}"
-            )
+    def create_main_screen(self):
+        """Build and return the chat plugin UI."""
+        is_dark = _is_dark_mode()
+        self.second_frame = customtkinter.CTkFrame(
+            self.app, corner_radius=0, fg_color="transparent")
+        self.second_frame.grid_columnconfigure(0, weight=1)
+        self.second_frame.grid_rowconfigure(0, weight=1)
+        sb_thumb = "#555555" if is_dark else "#BBBBBB"
+        sb_hover = "#777777" if is_dark else "#999999"
+        self.chat_scroll = customtkinter.CTkScrollableFrame(
+            self.second_frame, fg_color="transparent", corner_radius=0,
+            scrollbar_button_color=sb_thumb,
+            scrollbar_button_hover_color=sb_hover)
+        self.chat_scroll.grid(row=0, column=0, padx=0, pady=(0, 62), sticky="nsew")
+        self._bubble_rows.clear()
+        self._welcome_frame = None
+        self._bottom_spacer: customtkinter.CTkFrame | None = None
+        self._current_asst_bubble: AssistantBubble | None = None
+        self._restore_history(is_dark)
+        self._build_input_bar(is_dark)
+        self.chat_scroll.bind("<Configure>", self._on_resize, add="+")
+        return self.second_frame
 
-        self.conversation_history.append(
-            {"role": "assistant", "content": full_response}
-        )
+    def _restore_history(self, is_dark: bool) -> None:
+        has_history = False
+        for msg in self.conversation_history:
+            role, content = msg.get("role"), msg.get("content", "")
+            if role == "system":
+                continue
+            has_history = True
+            if role == "user":
+                self._add_user_bubble(content, is_dark)
+            elif role == "assistant":
+                self._add_assistant_bubble(is_dark, md=content)
+        if has_history:
+            return
+        if self.client is not None:
+            self._welcome_frame = WelcomeScreen(
+                self.chat_scroll, self._use_suggestion, is_dark)
+        else:
+            self._welcome_frame = ApiKeyMissingScreen(
+                self.chat_scroll, self._open_settings, is_dark)
+        self._welcome_frame.pack(expand=True, pady=(80, 0))
 
-    # ------------------------------------------------------------------
-    # Bubble rendering
-    # ------------------------------------------------------------------
+    def _build_input_bar(self, is_dark: bool) -> None:
+        fg = "#ffffff" if is_dark else "#000000"
+        bg, brd = ("#1A1A1C", "#2A2A2A") if is_dark else ("#F5F5F7", "#E5E7EB")
+        bar = customtkinter.CTkFrame(
+            self.second_frame, fg_color=bg,
+            corner_radius=22, border_width=1, border_color=brd)
+        bar.place(relx=0.5, rely=1.0, anchor="s", relwidth=0.98, y=-14)
+        bar.grid_columnconfigure(0, weight=1)
+        self.chat_entry = EmojiEntry(
+            bar, placeholder_text="Message Resistine AI...",
+            corner_radius=20, border_width=0, height=44,
+            font=customtkinter.CTkFont(family="Inter", size=14),
+            fg_color="transparent", text_color=fg,
+            placeholder_text_color="#8ea8c6" if is_dark else "#9aa5b1")
+        self.chat_entry.grid(row=0, column=0, padx=(16, 4), pady=0, sticky="ew")
+        self.send_button = customtkinter.CTkButton(
+            bar, text="\u2191", command=self.send_message,
+            corner_radius=18, height=36, width=36,
+            font=customtkinter.CTkFont(size=18, weight="bold"),
+            fg_color=_RESISTINE_BLUE, hover_color="#1565B0", text_color="#ffffff")
+        self.send_button.grid(row=0, column=1, padx=(0, 6), pady=6)
+        self.chat_entry.bind("<Return>", lambda _e: self.send_message())
+        if self.client is None:
+            self.chat_entry.configure(
+                state="disabled", placeholder_text="API key required \u2014 see Settings")
+            self.send_button.configure(state="disabled", fg_color="#6B7280")
 
-    def _get_chat_width(self):
-        """Return usable pixel width inside the chat textbox.
-
-        On Windows, winfo_width() may return 1 during layout phases.
-        This method measures from the parent chat_wrapper frame instead.
-        """
-        import sys
-
-        # Try to get width from parent chat_wrapper (more reliable on Windows)
-        if hasattr(self, '_chat_wrapper') and self._chat_wrapper:
-            try:
-                # Ensure layout is complete, especially on Windows
-                if sys.platform == "win32":
-                    self._chat_wrapper.update()
-                else:
-                    self._chat_wrapper.update_idletasks()
-
-                w = self._chat_wrapper.winfo_width()
-                if w > 1:
-                    # chat_wrapper already includes scrollbar, only subtract textbox padding
-                    padx = int(str(self.chat_box._textbox.cget("padx") or 0))
-                    return max(w - padx * 2 - 4, 300)
-            except Exception:
-                pass
-
-        # Fallback: measure textbox directly
-        tw = self.chat_box._textbox
+    def _available_width(self) -> int:
         try:
-            if sys.platform == "win32":
-                tw.update()
-            else:
-                tw.update_idletasks()
-            w = tw.winfo_width()
-            if w > 1:
-                padx = int(str(tw.cget("padx") or 0))
-                return max(w - padx * 2 - 4, 300)
+            self.chat_scroll.update_idletasks()
+            w = self.chat_scroll.winfo_width()
+            return max(w - 20, 300) if w > 1 else 800
+        except Exception:
+            return 800
+
+    def _make_row(self) -> BubbleRow:
+        # Remove previous bottom spacer so it stays after the last bubble
+        if self._bottom_spacer is not None:
+            self._bottom_spacer.destroy()
+        row = BubbleRow(self.chat_scroll)
+        self._bubble_rows.append(row)
+        # Re-add spacer after the newest row
+        self._bottom_spacer = customtkinter.CTkFrame(
+            self.chat_scroll, fg_color="transparent", height=16)
+        self._bottom_spacer.pack(fill="x")
+        return row
+
+    def _add_user_bubble(self, text: str, is_dark: bool) -> BubbleRow:
+        row = self._make_row()
+        UserBubble(row, text, is_dark=is_dark, max_width=user_width(self._available_width()))
+        self._bind_mousewheel(row)
+        return row
+
+    def _add_assistant_bubble(self, is_dark: bool, md: str | None = None) -> AssistantBubble:
+        row = self._make_row()
+        ab = AssistantBubble(row, is_dark=is_dark, max_width=assistant_width(self._available_width()))
+        if md is not None:
+            ab.finalize_markdown(md)
+        self._bind_mousewheel(row)
+        return ab
+
+    def _is_near_bottom(self) -> bool:
+        try:
+            return self.chat_scroll._parent_canvas.yview()[1] > 0.95
+        except Exception:
+            return True
+
+    def _scroll_to_bottom(self) -> None:
+        try:
+            self.chat_scroll._parent_canvas.yview_moveto(1.0)
         except Exception:
             pass
 
-        # Last resort: use a reasonable default
-        return 500
+    def _on_resize(self, _event=None) -> None:
+        avail = self._available_width()
+        uw, aw = user_width(avail), assistant_width(avail)
+        for row in self._bubble_rows:
+            for child in row.winfo_children():
+                if isinstance(child, UserBubble):
+                    child.set_width(uw)
+                elif isinstance(child, AssistantBubble):
+                    child.set_width(aw)
 
-    def _wire_chat_entry_paste(self):
-        """Enable Ctrl+V / Cmd+V and a right-click context menu on the chat entry.
-
-        Works for both the plain CTkEntry (Windows/macOS) and the custom
-        Linux EmojiEntry subclass which exposes _insert_with_emoji /
-        _on_copy / _on_cut / _select_all / _clear_placeholder / _snapshot.
-        """
-        entry = self.chat_entry
-        is_emoji_entry = hasattr(entry, "_insert_with_emoji")
-
-        def _read_clipboard():
-            for kwargs in ({}, {"type": "STRING"}, {"type": "UTF8_STRING"}):
-                try:
-                    return entry.clipboard_get(**kwargs)
-                except tk.TclError:
-                    continue
-            return None
-
-        def do_paste(event=None):
-            clip = _read_clipboard()
-            if not clip:
-                return "break"
-            # Single-line entry: collapse newlines into spaces
-            clip = clip.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
-
-            if is_emoji_entry:
-                try:
-                    entry._clear_placeholder()
-                except Exception:
-                    pass
-                tw = entry._textbox
-                try:
-                    tw.delete("sel.first", "sel.last")
-                except tk.TclError:
-                    pass
-                entry._insert_with_emoji(clip)
-                try:
-                    entry._snapshot()
-                except Exception:
-                    pass
-                tw.see("insert")
-            else:
-                try:
-                    entry.delete("sel.first", "sel.last")
-                except tk.TclError:
-                    pass
-                idx = entry.index("insert")
-                entry.insert(idx, clip)
-            return "break"
-
-        def do_copy(event=None):
-            if is_emoji_entry:
-                entry._on_copy()
-                return "break"
-            try:
-                text = entry.selection_get()
-            except tk.TclError:
-                return "break"
-            entry.clipboard_clear()
-            entry.clipboard_append(text)
-            return "break"
-
-        def do_cut(event=None):
-            if is_emoji_entry:
-                entry._on_cut()
-                return "break"
-            try:
-                text = entry.selection_get()
-            except tk.TclError:
-                return "break"
-            entry.clipboard_clear()
-            entry.clipboard_append(text)
-            try:
-                entry.delete("sel.first", "sel.last")
-            except tk.TclError:
-                pass
-            return "break"
-
-        def do_select_all(event=None):
-            if is_emoji_entry:
-                entry._select_all()
-                return "break"
-            entry.select_range(0, "end")
-            entry.icursor("end")
-            return "break"
-
-        # Explicit key bindings — bind to the underlying tk widget so they
-        # take precedence over any class-level bindings that might be missing.
-        target = entry._textbox if is_emoji_entry else entry
-        target.bind("<Control-v>", do_paste, add="+")
-        target.bind("<Control-V>", do_paste, add="+")
-        target.bind("<Command-v>", do_paste, add="+")
-        target.bind("<Control-a>", do_select_all, add="+")
-        target.bind("<Command-a>", do_select_all, add="+")
-
-        # Right-click context menu
-        menu = tk.Menu(target, tearoff=0)
-        menu.add_command(label="Cut", command=do_cut)
-        menu.add_command(label="Copy", command=do_copy)
-        menu.add_command(label="Paste", command=do_paste)
-        menu.add_separator()
-        menu.add_command(label="Select All", command=do_select_all)
-
-        def _show_menu(event):
-            try:
-                target.focus_set()
-            except Exception:
-                pass
-            try:
-                menu.tk_popup(event.x_root, event.y_root)
-            finally:
-                menu.grab_release()
-            return "break"
-
-        # Button-3 = right-click on Win/Linux; Button-2 = right-click on macOS
-        target.bind("<Button-3>", _show_menu, add="+")
-        target.bind("<Button-2>", _show_menu, add="+")
-
-    def render_user_bubble(self, user_message):
-        """Render the user's message bubble flush to the right edge."""
-        from plugins.chat.markdown_bubble import (
-            _EMOJI_RE, _EMOJI_RENDER, MarkdownBubble,
-        )
-        tw = self.chat_box._textbox
-        available = self._get_chat_width()
-
-        # Fixed-width tk.Frame — pack_propagate(False) keeps the width,
-        # pack(side="right") pushes the bubble to the right edge.
-        container = tk.Frame(
-            tw, highlightthickness=0, bd=0,
-            width=available, bg=tw.cget("background"),
-        )
-        container.pack_propagate(False)
-
-        bubble = customtkinter.CTkFrame(
-            container, fg_color="#0D5394", corner_radius=18,
-        )
-        bubble.pack(side="right", padx=(0, 12))
-
-        has_emoji = _EMOJI_RENDER and _EMOJI_RE and _EMOJI_RE.search(user_message)
-
-        # A selectable tk.Text is used for both paths so users can copy from
-        # their messages. Emoji rendering only differs in the insertion loop.
-        inset = 10  # px inset from rounded corners
-        _user_font = customtkinter.CTkFont(family="Inter", size=15)
-        inner_tw = tk.Text(
-            bubble, bg="#0D5394", fg="#FFFFFF",
-            font=_user_font, wrap="word",
-            borderwidth=0, highlightthickness=0,
-            padx=8, pady=1, cursor="xterm",
-            insertwidth=0,
-            selectbackground="#1E6DBF",
-            selectforeground="#FFFFFF",
-            inactiveselectbackground="#1E6DBF",
-        )
-        inner_tw.configure(state="normal")
-
-        # Insert text (with optional emoji images)
-        emoji_photos = []
-        image_to_emoji = {}
-        if has_emoji:
-            parts = _EMOJI_RE.split(user_message)
-            for i, part in enumerate(parts):
-                if not part:
-                    continue
-                if i % 2 == 1:
-                    for ch in MarkdownBubble._split_emoji_chars(part):
-                        photo = MarkdownBubble._render_emoji(ch)
-                        if photo:
-                            emoji_photos.append(photo)
-                            img_name = inner_tw.image_create(
-                                "end", image=photo, padx=1)
-                            image_to_emoji[img_name] = ch
-                        else:
-                            inner_tw.insert("end", ch)
-                else:
-                    inner_tw.insert("end", part)
+    def _bind_mousewheel(self, widget) -> None:
+        """Forward mousewheel/trackpad events from nested widgets to the scroll canvas."""
+        try:
+            canvas = self.chat_scroll._parent_canvas
+        except (AttributeError, Exception):
+            return
+        if sys.platform == "darwin":
+            widget.bind(
+                "<MouseWheel>",
+                lambda e: canvas.yview_scroll(int(-1 * e.delta), "units"))
+        elif sys.platform == "win32":
+            widget.bind(
+                "<MouseWheel>",
+                lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
         else:
-            inner_tw.insert("end", user_message)
-
-        inner_tw.configure(state="disabled")
-
-        # Store refs to prevent GC
-        inner_tw._emoji_photos = emoji_photos
-        inner_tw._image_to_emoji = image_to_emoji
-
-        # Intercept copy to restore emoji codepoints from inserted images.
-        # Falls through to default copy behavior for plain text.
-        def _on_user_copy(event, w=inner_tw, m=image_to_emoji):
-            try:
-                s = w.index("sel.first")
-                e = w.index("sel.last")
-            except Exception:
-                return
-            result = []
-            for kind, val, _idx in w.dump(s, e):
-                if kind == "text":
-                    result.append(val)
-                elif kind == "image" and val in m:
-                    result.append(m[val])
-            if result:
-                w.clipboard_clear()
-                w.clipboard_append("".join(result))
-            return "break"
-        inner_tw.bind("<<Copy>>", _on_user_copy)
-
-        max_w = min(600, int(available * 0.75))
-        padx_val = int(str(inner_tw.cget("padx") or 0))
-
-        # Step 1: Measure natural content width using xpixels.
-        inner_tw.configure(wrap="none")
+            widget.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
+            widget.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
         try:
-            result = inner_tw.count("1.0", "end-1c", "xpixels")
-            xpx = result[0] if isinstance(result, (list, tuple)) else result
-            natural_w = int(xpx) + padx_val * 2
-        except Exception:
-            natural_w = max_w
-        text_w = min(natural_w, max_w)
-
-        # Step 2: Set width, enable wrapping, measure height.
-        inner_tw.configure(wrap="word")
-        inner_tw.place(in_=bubble, x=inset, y=inset,
-                       width=text_w, height=500)
-        bubble.configure(width=text_w + inset * 2, height=520)
-        bubble.pack(side="right", padx=(0, 12))
-        container.update_idletasks()
-
-        try:
-            result = inner_tw.count("1.0", "end", "ypixels")
-            val = result[0] if isinstance(result, (list, tuple)) else result
-            content_h = int(val) + 4
-        except Exception:
-            import tkinter.font as tkfont
-            content_h = tkfont.Font(font=("Inter", 15)).metrics("linespace") + 4
-
-        # Step 3: Apply final dimensions.
-        inner_tw.place_configure(height=content_h)
-        bubble_h = content_h + inset * 2
-        bubble.configure(height=bubble_h)
-        bubble.pack_propagate(False)
-
-        msg_widget = inner_tw
-
-        # Height must be set after children are measured
-        container.update_idletasks()
-        container.configure(height=bubble.winfo_reqheight())
-
-        tw.window_create("end", window=container, padx=0, pady=10)
-        tw.insert("end", "\n")
-
-        # Redirect scroll events from user bubble widgets to the chat textbox
-        self._bind_scroll_redirect_to_chat(tw, container)
-        self._bind_scroll_redirect_to_chat(tw, bubble)
-        self._bind_scroll_redirect_to_chat(tw, msg_widget)
-
-        # Keep container width in sync when window resizes
-        def _sync(event, c=container):
-            try:
-                w = self._get_chat_width()
-                c.configure(width=w)
-            except tk.TclError:
-                pass
-        tw.bind("<Configure>", _sync, add="+")
-
-    def render_assistant_bubble_markdown(self, message):
-        """Render the assistant's response at full available width."""
-        from plugins.chat.markdown_bubble import MarkdownBubble
-
-        tw = self.chat_box._textbox
-        available = self._get_chat_width()
-
-        # Give MarkdownBubble the correct width from the start
-        bubble = MarkdownBubble(self.chat_box, message, width=available)
-
-        tw.window_create("end", window=bubble, padx=0, pady=10)
-        tw.insert("end", "\n")
-
-        # Force a proper resize after embedding
-        def _finalize():
-            w = self._get_chat_width()
-            if w > 1 and hasattr(bubble, "_update_width"):
-                bubble._update_width(w)
-        tw.after(50, _finalize)
-
-    # ------------------------------------------------------------------
-    # Welcome screen (shown when no conversation history)
-    # ------------------------------------------------------------------
-
-    def _build_no_api_key_screen(self, parent):
-        """Build a centered overlay telling the user to configure an API key."""
-        is_dark = self._is_dark_mode()
-        secondary_color = self._theme_color("text_secondary", "#6B7280", "#9CA3AF")
-        resistine_blue = "#0D5394"
-        error_color = self._theme_color("", "#B45309", "#FBBF24")
-
-        self._no_key_frame = customtkinter.CTkFrame(parent, fg_color="transparent")
-        self._no_key_frame.place(relx=0.5, rely=0.45, anchor="center")
-
-        icon_label = customtkinter.CTkLabel(
-            self._no_key_frame,
-            text="\u26A0",
-            font=customtkinter.CTkFont(size=36),
-            text_color=error_color,
-        )
-        icon_label.pack(pady=(0, 8))
-
-        title_label = customtkinter.CTkLabel(
-            self._no_key_frame,
-            text="API Key Required",
-            font=customtkinter.CTkFont(family="Inter", size=20, weight="bold"),
-            text_color="#ffffff" if is_dark else "#000000",
-        )
-        title_label.pack(pady=(0, 6))
-
-        desc_label = customtkinter.CTkLabel(
-            self._no_key_frame,
-            text="Add your OpenAI API key in Settings to start chatting.",
-            font=customtkinter.CTkFont(family="Inter", size=14),
-            text_color=secondary_color,
-        )
-        desc_label.pack(pady=(0, 20))
-
-        settings_btn = customtkinter.CTkButton(
-            self._no_key_frame,
-            text="Open Settings",
-            font=customtkinter.CTkFont(family="Inter", size=13, weight="bold"),
-            fg_color=resistine_blue,
-            hover_color="#1565B0",
-            text_color="#ffffff",
-            corner_radius=10,
-            height=40,
-            width=160,
-            command=self._open_settings,
-        )
-        settings_btn.pack()
-
-    def _open_settings(self):
-        """Navigate to the Settings plugin."""
-        try:
-            settings_plugin = next(
-                (p for p in self.app.plugin_list if p.get_name() == "Settings"), None
-            )
-            if settings_plugin:
-                self.app.select_frame_by_name(
-                    "frame_Settings", button=settings_plugin.get_button()
-                )
+            for child in widget.winfo_children():
+                self._bind_mousewheel(child)
         except Exception:
             pass
 
-    def _build_welcome_screen(self, parent):
-        """Build a centered welcome overlay with greeting + suggestion chips."""
-        is_dark = self._is_dark_mode()
-        fg_color = "#ffffff" if is_dark else "#000000"
-        secondary_color = self._theme_color("text_secondary", "#6B7280", "#9CA3AF")
-        card_bg = "#1A1A1C" if is_dark else "#ffffff"
-        card_hover = "#242426" if is_dark else "#F0F0F5"
-        resistine_blue = "#0D5394"
-
-        self._welcome_frame = customtkinter.CTkFrame(parent, fg_color="transparent")
-        self._welcome_frame.place(relx=0.5, rely=0.45, anchor="center")
-
-        # Greeting
-        greeting_label = customtkinter.CTkLabel(
-            self._welcome_frame,
-            text="Resistine AI",
-            font=customtkinter.CTkFont(family="Inter", size=26, weight="bold"),
-            text_color=resistine_blue,
-        )
-        greeting_label.pack(pady=(0, 4))
-
-        subtitle_label = customtkinter.CTkLabel(
-            self._welcome_frame,
-            text="Your AI security assistant. Ask me anything.",
-            font=customtkinter.CTkFont(family="Inter", size=14),
-            text_color=secondary_color,
-        )
-        subtitle_label.pack(pady=(0, 28))
-
-        # Pick 4 random suggestions from the pool
-        suggestions = random.sample(
-            _SUGGESTION_POOL, min(4, len(_SUGGESTION_POOL))
-        )
-
-        chips_frame = customtkinter.CTkFrame(
-            self._welcome_frame, fg_color="transparent"
-        )
-        chips_frame.pack()
-
-        # 2x2 grid of suggestion chips
-        for i, suggestion in enumerate(suggestions):
-            row = i // 2
-            col = i % 2
-
-            chip = customtkinter.CTkButton(
-                chips_frame,
-                text=suggestion,
-                font=customtkinter.CTkFont(family="Inter", size=13),
-                fg_color=card_bg,
-                hover_color=card_hover,
-                text_color=fg_color,
-                corner_radius=10,
-                border_width=1,
-                border_color=self._theme_color("divider_color", "#E5E7EB", "#2A2A2A"),
-                height=44,
-                width=260,
-                anchor="w",
-                command=lambda s=suggestion: self._use_suggestion(s),
-            )
-            chip.grid(row=row, column=col, padx=6, pady=6)
-
-    def _use_suggestion(self, text):
-        """Fill the input bar with a suggestion and send it."""
-        if hasattr(self, "_welcome_frame") and self._welcome_frame:
+    def send_message(self) -> None:
+        """Handle the send-button / Enter-key press."""
+        user_text = self.chat_entry.get().strip()
+        if not user_text or (self._stream_ctrl and self._stream_ctrl.is_active):
+            return
+        if self._welcome_frame is not None:
             self._welcome_frame.destroy()
             self._welcome_frame = None
+        self.chat_entry.delete(0, "end")
+        is_dark = _is_dark_mode()
+        was_near = self._is_near_bottom()
+        self._add_user_bubble(user_text, is_dark)
+        self._current_asst_bubble = self._add_assistant_bubble(is_dark)
+        if was_near:
+            self.chat_scroll.after(50, self._scroll_to_bottom)
+        self.conversation_history.append({"role": "user", "content": user_text})
+        self.chat_entry.configure(state="disabled")
+        self.send_button.configure(state="disabled", fg_color="#6B7280")
+        self._accumulated_text = ""
+        self._stream_ctrl = StreamController(
+            app=self.app, on_chunk=self._on_stream_chunk,
+            on_done=self._on_stream_done, on_error=self._on_stream_error)
+        msgs = ([{"role": "user", "content": user_text}] if self.base_url
+                else list(self.conversation_history))
+        extra = ({"session_id": self.session_id}
+                 if self.base_url and self.session_id else None)
+        self._stream_ctrl.start(
+            client=self.client, model=self.model, messages=msgs,
+            temperature=0.7, extra_body=extra, base_url=self.base_url)
+
+    def _on_stream_chunk(self, chunk_text: str) -> None:
+        self._accumulated_text += chunk_text
+        if self._current_asst_bubble is not None:
+            self._current_asst_bubble.set_streaming_text(self._accumulated_text)
+        if self._is_near_bottom():
+            self._scroll_to_bottom()
+
+    def _on_stream_done(self, full_text: str) -> None:
+        bubble = self._current_asst_bubble
+        if bubble is not None:
+            bubble.finalize_markdown(full_text)
+            self._current_asst_bubble = None
+        self.conversation_history.append({"role": "assistant", "content": full_text})
+        self._unlock_input()
+        # Delay scroll so the layout recalculates after finalize_markdown
+        self.chat_scroll.after(50, self._scroll_to_bottom)
+        self.chat_scroll.after(200, self._scroll_to_bottom)
+        # Rebind mousewheel on new markdown widgets created by finalize
+        if bubble is not None:
+            self.chat_scroll.after(250, lambda: self._bind_mousewheel(bubble))
+
+    def _on_stream_error(self, error_msg: str) -> None:
+        if self._accumulated_text.strip() and self._current_asst_bubble is not None:
+            self._current_asst_bubble.finalize_markdown(self._accumulated_text)
+            self.conversation_history.append(
+                {"role": "assistant", "content": self._accumulated_text})
+            self.app.show_notification("Response may be incomplete.", type="warning")
+        elif self._current_asst_bubble is not None:
+            self._current_asst_bubble.set_streaming_text(f"Error: {error_msg}")
+        self._current_asst_bubble = None
+        self._unlock_input()
+
+    def _unlock_input(self) -> None:
+        try:
+            self.chat_entry.configure(state="normal")
+            self.send_button.configure(state="normal", fg_color=_RESISTINE_BLUE)
+            self.chat_entry.focus_set()
+        except Exception:
+            pass
+
+    def _use_suggestion(self, text: str) -> None:
+        """Fill the input bar with a suggestion and send it."""
         self.chat_entry.delete(0, "end")
         self.chat_entry.insert(0, text)
         self.send_message()
 
-    def _clear_conversation(self):
-        """Reset conversation history and rebuild the screen."""
-        if self.base_url:
-            self.conversation_history = []
-        else:
-            self.conversation_history = [
-                {
-                    "role": "system",
-                    "content": "You are SOC Copilot specialized in cybersecurity.",
-                }
-            ]
-        self.session_id = None
-        # Destroy and recreate the screen
-        if hasattr(self, "second_frame") and self.second_frame:
-            self.second_frame.destroy()
-        frame = self.create_main_screen()
-        frame.grid(row=0, column=1, sticky="nsew")
-
-    # ------------------------------------------------------------------
-    # Main screen
-    # ------------------------------------------------------------------
-
-    def create_main_screen(self):
-        """Create the main screen for the Chat plugin."""
-        # Preserve streaming state — don't reset _response_in_progress here.
-        # If a response is still loading, we'll restore the loading UI below.
-        self._loading_container = None
-        self._loading_dots = None
-
-        self.corner_radius = ThemeManager.theme.get("Theme", {}).get(
-            "corner_radius", 12
-        )
-
-        is_dark = self._is_dark_mode()
-        resistine_blue = "#0D5394"
-        fg_color = "#ffffff" if is_dark else "#000000"
-        secondary_color = self._theme_color("text_secondary", "#6B7280", "#9CA3AF")
-        input_bg = "#1A1A1C" if is_dark else "#F5F5F7"
-        border_color = self._theme_color("divider_color", "#E5E7EB", "#2A2A2A")
-
-        # --- Root frame ---
-        self.second_frame = customtkinter.CTkFrame(
-            self.app,
-            corner_radius=0,
-            fg_color="transparent",
-        )
-        self.second_frame.grid_columnconfigure(0, weight=1)
-        self.second_frame.grid_rowconfigure(0, weight=1)
-
-        # --- Chat area ---
-        chat_wrapper = customtkinter.CTkFrame(
-            self.second_frame, fg_color="transparent"
-        )
-        chat_wrapper.grid(row=0, column=0, sticky="nsew")
-        chat_wrapper.grid_columnconfigure(0, weight=1)
-        chat_wrapper.grid_rowconfigure(0, weight=1)
-
-        # Store for width measurement on Windows
-        self._chat_wrapper = chat_wrapper
-
-        self.chat_box = customtkinter.CTkTextbox(
-            chat_wrapper,
-            wrap="word",
-            font=customtkinter.CTkFont(family="Inter", size=14, weight="normal"),
-            fg_color="transparent",
-            text_color=fg_color,
-            corner_radius=0,
-            border_width=0,
-            activate_scrollbars=True,
-        )
-        # Bottom padding reserves space so content doesn't render behind
-        # the input bar overlaid at the bottom of second_frame.
-        self.chat_box.grid(row=0, column=0, padx=0, pady=(0, 58), sticky="nsew")
-        self.chat_box._textbox.configure(padx=8)
-
-        # Enable mouse wheel scrolling
-        self._bind_mousewheel(self.chat_box._textbox)
-
-        # Tags for styling
-        self.chat_box._textbox.tag_config(
-            "assistant",
-            foreground=fg_color,
-            justify="left",
-            lmargin1=0,
-            lmargin2=0,
-        )
-        self.chat_box._textbox.tag_config("error", foreground="#EF4444")
-
-        self.chat_box.configure(state="disabled")
-
-        # Animated text handler
-        from plugins.chat.animated_text import AnimatedText
-        self.animated_text = AnimatedText(
-            self.chat_box._textbox,
-            character_delay=0.02,
-            line_delay=0.5,
-        )
-
-        # Restore history or show welcome screen
-        self.chat_box.configure(state="normal")
-
-        has_history = False
-        for msg in self.conversation_history:
-            role = msg.get("role")
-            content = msg.get("content")
-
-            if role == "system":
-                continue
-
-            has_history = True
-            if role == "user":
-                self.render_user_bubble(content)
-            elif role == "assistant":
-                self.render_assistant_bubble_markdown(content)
-
-        self.chat_box.configure(state="disabled")
-
-        # Show appropriate overlay when no history
-        self._welcome_frame = None
-        self._no_key_frame = None
-        has_api_key = self.client is not None
-
-        if not has_history:
-            if has_api_key:
-                self._build_welcome_screen(chat_wrapper)
-            else:
-                self._build_no_api_key_screen(chat_wrapper)
-
-        # --- Input bar (overlaid at bottom, full width) ---
-        input_bar = customtkinter.CTkFrame(
-            self.second_frame,
-            fg_color=input_bg,
-            corner_radius=22,
-            border_width=1,
-            border_color=border_color,
-        )
-        input_bar.place(
-            relx=0.5, rely=1.0, anchor="s", relwidth=0.98, y=-14
-        )
-        input_bar.grid_columnconfigure(0, weight=1)
-        input_bar.grid_columnconfigure(1, weight=0)
-
-        self.chat_entry = EmojiEntry(
-            input_bar,
-            placeholder_text="Message Resistine AI...",
-            corner_radius=20,
-            border_width=0,
-            height=44,
-            font=customtkinter.CTkFont(family="Inter", size=14),
-            fg_color="transparent",
-            text_color=fg_color,
-            placeholder_text_color="#8ea8c6" if is_dark else "#9aa5b1",
-        )
-        self.chat_entry.grid(row=0, column=0, padx=(16, 4), pady=0, sticky="ew")
-
-        self.send_button = customtkinter.CTkButton(
-            input_bar,
-            text="\u2191",
-            command=self.send_message,
-            corner_radius=18,
-            height=36,
-            width=36,
-            font=customtkinter.CTkFont(size=18, weight="bold"),
-            fg_color=resistine_blue,
-            hover_color="#1565B0",
-            text_color="#ffffff",
-        )
-        self.send_button.grid(row=0, column=1, padx=(0, 6), pady=6)
-
-        self.chat_entry.bind("<Return>", lambda event: self.send_message())
-
-        # --- Paste support (Ctrl+V / Cmd+V + right-click menu) ---
-        self._wire_chat_entry_paste()
-
-        # Disable input when no API key is configured
-        if not has_api_key:
-            self.chat_entry.configure(
-                state="disabled",
-                placeholder_text="API key required \u2014 see Settings",
-            )
-            self.send_button.configure(state="disabled", fg_color="#6B7280")
-
-        # If a pending (completed-while-away) response exists, render it now
-        if getattr(self, "_pending_response", None) is not None:
-            self.chat_box.configure(state="normal")
-            self.render_assistant_bubble_markdown(self._pending_response)
-            self.chat_box.configure(state="disabled")
-            self.chat_box._textbox.see("end")
-            self._pending_response = None
-            self._response_in_progress = False
-        # If a response is still in progress, restore loading UI and keep input locked
-        elif getattr(self, "_response_in_progress", False):
-            self._show_loading_indicator()
-            self.chat_entry.configure(state="disabled")
-            self.send_button.configure(state="disabled", fg_color="#6B7280")
-            # Resume polling against the new chat_box
-            self._poll_stream()
-
-        return self.second_frame
-
-    # ------------------------------------------------------------------
-    # Send message
-    # ------------------------------------------------------------------
-
-    # ------------------------------------------------------------------
-    # Loading indicator
-    # ------------------------------------------------------------------
-
-    def _show_loading_indicator(self):
-        """Show an animated typing indicator while waiting for a response."""
-        tw = self.chat_box._textbox
-        available = self._get_chat_width()
-        is_dark = self._is_dark_mode()
-
-        dot_color = "#9CA3AF" if is_dark else "#6B7280"
-
-        container = tk.Frame(
-            tw, highlightthickness=0, bd=0,
-            width=available, height=40,
-            bg=tw.cget("background"),
-        )
-        container.pack_propagate(False)
-
-        dot_frame = tk.Frame(container, bg=tw.cget("background"))
-        dot_frame.pack(side="left", padx=20, pady=8)
-
-        dots = []
-        for i in range(3):
-            dot = CairoCanvas(
-                dot_frame, width=8, height=8,
-                bg=tw.cget("background"), highlightthickness=0,
-            )
-            dot.create_oval(1, 1, 7, 7, fill=dot_color, outline="", tags="dot")
-            dot.pack(side="left", padx=3)
-            dots.append(dot)
-
-        self.chat_box.configure(state="normal")
-        tw.window_create("end", window=container, padx=0, pady=6)
-        tw.insert("end", "\n")
-        self.chat_box.configure(state="disabled")
-        tw.see("end")
-
-        self._loading_container = container
-        self._loading_dots = dots
-        self._loading_step = 0
-        self._loading_job = None
-        self._animate_dots()
-
-    def _animate_dots(self):
-        """Pulse the loading dots in sequence."""
-        if not hasattr(self, "_loading_dots") or not self._loading_dots:
-            return
+    def _open_settings(self) -> None:
+        """Navigate to the Settings plugin."""
         try:
-            is_dark = self._is_dark_mode()
-            dim = "#4B5563" if is_dark else "#D1D5DB"
-            bright = "#E5E7EB" if is_dark else "#374151"
-
-            for i, dot in enumerate(self._loading_dots):
-                if not dot.winfo_exists():
-                    return
-                color = bright if i == (self._loading_step % 3) else dim
-                dot.itemconfigure("dot", fill=color)
-
-            self._loading_step += 1
-            self._loading_job = self._loading_dots[0].after(400, self._animate_dots)
+            sp = next((p for p in self.app.plugin_list if p.get_name() == "Settings"), None)
+            if sp:
+                self.app.select_frame_by_name("frame_Settings", button=sp.get_button())
         except Exception:
             pass
-
-    def _remove_loading_indicator(self):
-        """Remove the loading indicator from the chat."""
-        if hasattr(self, "_loading_job") and self._loading_job:
-            try:
-                self._loading_dots[0].after_cancel(self._loading_job)
-            except Exception:
-                pass
-            self._loading_job = None
-
-        if hasattr(self, "_loading_container") and self._loading_container:
-            try:
-                self._loading_container.destroy()
-            except Exception:
-                pass
-            self._loading_container = None
-
-        self._loading_dots = None
-
-    # ------------------------------------------------------------------
-    # Send message (non-blocking)
-    # ------------------------------------------------------------------
-
-    def send_message(self):
-        """Send a message and render: user bubble + animated assistant reply."""
-        user_message = self.chat_entry.get().strip()
-        if not user_message:
-            return
-
-        # Prevent sending while a response is in progress
-        if getattr(self, "_response_in_progress", False):
-            return
-
-        # Remove welcome screen if visible
-        if hasattr(self, "_welcome_frame") and self._welcome_frame:
-            self._welcome_frame.destroy()
-            self._welcome_frame = None
-
-        self.chat_entry.delete(0, "end")
-        self.chat_box.focus_set()
-        self.chat_box.configure(state="normal")
-
-        # Render User Bubble
-        self.render_user_bubble(user_message)
-
-        tw = self.chat_box._textbox
-        tw.update_idletasks()
-        tw.see("end")
-
-        # Place a persistent mark where streamed text will begin
-        tw.mark_set("stream_start", "end-1c")
-        tw.mark_gravity("stream_start", "left")
-
-        self.chat_box.configure(state="disabled")
-
-        # Show loading indicator
-        self._show_loading_indicator()
-
-        # Disable input while waiting
-        self._response_in_progress = True
-        self._streamed_text = ""
-        self.chat_entry.configure(state="disabled")
-        self.send_button.configure(state="disabled", fg_color="#6B7280")
-
-        # Stream response in background thread
-        self._response_queue = queue.Queue()
-        self._stream_thread = threading.Thread(
-            target=self._stream_worker,
-            args=(user_message,),
-            daemon=True,
-        )
-        self._stream_thread.start()
-
-        # Poll for results on the main thread
-        self._poll_stream()
-
-    # TODO: remove after testing GeneratorExit handling
-    _DEBUG_GENERATOR_EXIT = False
-    _DEBUG_GENERATOR_EXIT_BODY = (
-        "From the logs you provided, there are several events that could be"
-        " analyzed for security-related anomalies or interesting activity."
-        " Here\u2019s a breakdown of notable events and potential security"
-        " concerns:\n\n---\n\n### **1. Frequent Changes of Listening Ports**"
-        "\nThe majority of alerts report changes in the **listened ports**"
-        " using rule **533 (\"Listened ports status changed\")**. This could"
-        " indicate:\n   - High churn of network services (e.g., dynamic"
-        " services, frequent container spin-ups, or testing environments)."
-        "\n   - **Potential Security Risk**:\n     If these are"
-        " **unexpected/uncommon ports**, they might correspond to **malicious"
-        " services** (e.g., botnet nodes, backdoors, or cryptocurrency"
-        " miners) opening and closing connections.\n   - **Action**:\n"
-        "     Investigate active processes bound to these ports using:\n"
-        "     ```bash\n     netstat -tulnp | grep <PORT>\n"
-        "     ss -tulnp | grep <PORT>\n     lsof -i :<PORT>\n     ```\n"
-        "     Check if these ports are authorized in your environment.\n\n"
-        "---\n\n### **2. Wazuh Agent Disconnections (Rule 504)**\nThere are"
-        " **two entries indicating Wazuh agent disconnections**:\n"
-        "   - Alert at **05:48:04** (UTC) and **18:53:57** (UTC).\n"
-        "   - **Potential Causes**:\n     - **Network issues** (agent"
-        " communication dropped).\n     - **Agent termination** (admin"
-        " shutdown or crash).\n     - **Host hardening** (agent stopped for"
-        " security compliance).\n     - **Adversary activity** (an attacker"
-        " stopping monitoring tools).\n   - **Action**:\n     Check Wazuh"
-        " manager logs for disconnection reasons:\n     ```bash\n"
-        "     journalctl -u wazuh-manager -f  # On Wazuh manager system\n"
-        "     ```\n     Verify if the agent was intentionally stopped or if"
-        " hardware/network issues caused it.\n\n---\n\n"
-        "### **3. Authentication Success/Failure Anomalies**\n"
-        "#### **(A) Successful PAM Login Sessions (Rule 5501)**\n"
-        "   - **02:30:36** (Two alerts in quick succession).\n"
-        "   - **02:10:36** (Earlier login entry).\n   - These logs"
-        " correspond to successful logins via **PAM** (Pluggable"
-        " Authentication Modules).\n   - **Action**:\n     Review logins"
-        " during unusual hours (e.g., **nighttime logins**).\n     If an"
-        " attacker gained access, they might move laterally or plant"
-        " backdoors.\n     Check user behavior:\n     ```bash\n"
-        "     auth.log   # Common PAM log locations (may be syslog or"
-        " journalctl)\n     ```\n\n#### **(B) Authentication Failure Not"
-        " Evident**\n   - Oddly, there are **no logged failures** (e.g.,"
-        " password brute-forcing, which is common in attacks).\n"
-        "   - **Intruders** may either:\n     - Be **successful on first"
-        " try** \u2192 Already compromised credentials.\n     - **Avoid"
-        " logging** \u2192 Rootkits/keyloggers masking activity.\n"
-        "   - **Action**:\n     Audit for stolen credentials:\n"
-        "     - Check if users changed passwords unexpectedly.\n"
-        "     - Correlate with Wazuh agent logs for privilege escalation"
-        " events.\n\n---\n\n### **4. USB/Device Detach Events (Rule 804 in"
-        " Earlier Data)**\n   - *Note*: Your logs do **not** explicitly show"
-        " removals, but many attacks involve plugging devices (e.g., badUSB"
-        " exploits).\n   - **Action**:\n     If this was part of a larger"
-        " context, check `dmesg` or `systemd-journald -u udisks2` for USB"
-        " activity:\n     ```bash\n     dmesg | grep usb\n"
-        "     cat /var/log/syslog | grep udisks\n     ```\n\n---\n\n"
-        "### **5. Cron or Scheduled Task Anomalies**\n   You do **not** see"
-        " cron logs here, but attackers often abuse cron jobs or install"
-        " persistence mechanisms.\n   - **Action**:\n     Review `.crontab`,"
-        " `/etc/cron.d`, and `/var/spool/cron` for unauthorized entries:\n"
-        "     ```bash\n     find / -name \"*cron*\" -type f | xargs ls -la\n"
-        "     ```\n\n---\n\n### **6. Logical Next Steps**\n"
-        "#### **(A) Immediate Investigations**\n   - Confirm if the agent"
-        " disconnection was malicious.\n   - Verify new unknown listening"
-        " ports for unauthorized services.\n   - Cross-reference successful"
-        " logins with user activity logs.\n\n#### **(B) Mitigation**\n"
-        "   - Restrict untrusted ports (firewall rules):\n     ```bash\n"
-        "     sudo ufw deny <SUSPECT_PORT>\n     ```\n   - Rotate any"
-        " credentials involved during suspicious logins.\n   - Enhance Wazuh"
-        " rules for better event correlation (e.g., chain of command:"
-        " successful login + new port).\n\n#### **(C) Further Monitoring**\n"
-        "   - If this was part of a breach, ensure **file integrity"
-        " monitoring (FIM)** is active to catch unauthorized binary changes."
-        "\n   - Whitelist known-legitimate processes using `auditd`:\n"
-        "     ```bash\n     sudo auditctl -a exit,always -F arch=b64 -S"
-        " execve -F key=exec\n     ```\n\n---\n\n"
-        "### **Tools & Commands to Dig Deeper**\n   - **Wazuh Dashboard**:"
-        " Analyze alerts for geolocating IPs, suspicious domains, or command"
-        " lines in alerts.\n   - **NetFlow/Snort**: Capture network traffic"
-        " associated with unknown ports.\n   - **Forensic Tools**:\n"
-        "     ```bash\n     strings /targetbinary | grep suspicious_string\n"
-        "     strace -p <PID>  # Analyze syscall behavior of suspicious"
-        " processes\n     ```"
-    )
-
-    def _stream_worker(self, user_message):
-        """Background thread: stream chunks into the queue."""
-        if self._DEBUG_GENERATOR_EXIT:
-            # Simulate streaming the body in chunks then a GeneratorExit
-            import time
-            body = self._DEBUG_GENERATOR_EXIT_BODY
-            chunk_size = 12
-            for i in range(0, len(body), chunk_size):
-                self._response_queue.put(("chunk", body[i:i + chunk_size]))
-                time.sleep(0.005)
-            self._response_queue.put(("error", "GeneratorExit()"))
-            return
-
-        try:
-            for chunk in self.send_message_to_chatgpt(user_message):
-                self._response_queue.put(("chunk", chunk))
-            self._response_queue.put(("done", None))
-        except Exception as e:
-            endpoint = self.base_url or "https://api.openai.com/v1"
-            from openai import APIConnectionError
-            if isinstance(e, APIConnectionError):
-                msg = (
-                    f"Could not reach {endpoint}. "
-                    "Check that the host is reachable (VPN, DNS, firewall) "
-                    "and the URL in Settings is correct."
-                )
-            else:
-                msg = f"{e} (endpoint: {endpoint})"
-            self._response_queue.put(("error", msg))
-
-    def _poll_stream(self):
-        """Main-thread poller: drain the queue and update the UI."""
-        # Check if the chat view still exists
-        chat_visible = False
-        try:
-            chat_visible = self.chat_box.winfo_exists()
-        except Exception:
-            pass
-
-        try:
-            while True:
-                msg_type, data = self._response_queue.get_nowait()
-
-                if msg_type == "chunk":
-                    self._streamed_text += data
-
-                    if chat_visible:
-                        # Remove loading indicator on first chunk
-                        if getattr(self, "_loading_container", None):
-                            self._remove_loading_indicator()
-
-                        disable_animation = settings.get("chat", "disable_animation", False)
-                        if not disable_animation:
-                            tw = self.chat_box._textbox
-                            self.chat_box.configure(state="normal")
-                            tw.insert("end", data, "assistant")
-                            self.chat_box.configure(state="disabled")
-                            tw.see("end")
-
-                elif msg_type == "done":
-                    if chat_visible:
-                        self._remove_loading_indicator()
-                        self._finalize_response()
-                    else:
-                        # Response finished while user was on another plugin.
-                        # Save it so create_main_screen can render it on return.
-                        self._pending_response = self._streamed_text
-                        self._response_in_progress = False
-                    return
-
-                elif msg_type == "error":
-                    if chat_visible:
-                        self._remove_loading_indicator()
-                        if self._streamed_text.strip():
-                            # Partial response already received — finalize
-                            # whatever we have instead of discarding it.
-                            self._finalize_response()
-                            tw = self.chat_box._textbox
-                            self.chat_box.configure(state="normal")
-                            tw.insert("end",
-                                      "\n⚠ Response generation was "
-                                      "interrupted. The message above "
-                                      "may be incomplete.\n\n\n",
-                                      "error")
-                            self.chat_box.configure(state="disabled")
-                            tw.see("end")
-                        else:
-                            tw = self.chat_box._textbox
-                            self.chat_box.configure(state="normal")
-                            tw.insert("end", f"Error: {data}\n\n\n", "error")
-                            self.chat_box.configure(state="disabled")
-                            tw.see("end")
-                            self._reset_input_state()
-                    else:
-                        if self._streamed_text.strip():
-                            self._pending_response = self._streamed_text
-                        else:
-                            self._pending_response = None
-                        self._response_in_progress = False
-                    return
-
-        except queue.Empty:
-            pass
-
-        # Continue polling every 50ms — use self.app.after so it works
-        # even when chat_box is destroyed (user switched plugins)
-        self.app.after(50, self._poll_stream)
-
-    def _finalize_response(self):
-        """Replace streamed text with formatted MarkdownBubble."""
-        tw = self.chat_box._textbox
-        disable_animation = settings.get("chat", "disable_animation", False)
-
-        self.chat_box.configure(state="normal")
-
-        # Delete the raw streamed text using the persistent mark
-        if not disable_animation:
-            try:
-                tw.delete("stream_start", "end-1c")
-            except tk.TclError:
-                pass
-
-        self.render_assistant_bubble_markdown(self._streamed_text)
-
-        self.chat_box.configure(state="disabled")
-        tw.see("end")
-
-        self._reset_input_state()
-
-    def _reset_input_state(self):
-        """Re-enable the input bar after a response completes."""
-        self._response_in_progress = False
-        resistine_blue = "#0D5394"
-        self.chat_entry.configure(state="normal")
-        self.send_button.configure(state="normal", fg_color=resistine_blue)
-        self.chat_entry.focus_set()
