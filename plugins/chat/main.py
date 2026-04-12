@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import sys
 import customtkinter
 from plugins.base_plugin import BasePlugin
 from plugins.chat.bubble import (
@@ -115,12 +114,8 @@ class Plugin(BasePlugin):
             self.app, corner_radius=0, fg_color="transparent")
         self.second_frame.grid_columnconfigure(0, weight=1)
         self.second_frame.grid_rowconfigure(0, weight=1)
-        sb_thumb = "#555555" if is_dark else "#BBBBBB"
-        sb_hover = "#777777" if is_dark else "#999999"
         self.chat_scroll = customtkinter.CTkScrollableFrame(
-            self.second_frame, fg_color="transparent", corner_radius=0,
-            scrollbar_button_color=sb_thumb,
-            scrollbar_button_hover_color=sb_hover)
+            self.second_frame, fg_color="transparent", corner_radius=0)
         self.chat_scroll.grid(row=0, column=0, padx=0, pady=(0, 62), sticky="nsew")
         self._bubble_rows.clear()
         self._welcome_frame = None
@@ -202,7 +197,6 @@ class Plugin(BasePlugin):
     def _add_user_bubble(self, text: str, is_dark: bool) -> BubbleRow:
         row = self._make_row()
         UserBubble(row, text, is_dark=is_dark, max_width=user_width(self._available_width()))
-        self._bind_mousewheel(row)
         return row
 
     def _add_assistant_bubble(self, is_dark: bool, md: str | None = None) -> AssistantBubble:
@@ -210,7 +204,6 @@ class Plugin(BasePlugin):
         ab = AssistantBubble(row, is_dark=is_dark, max_width=assistant_width(self._available_width()))
         if md is not None:
             ab.finalize_markdown(md)
-        self._bind_mousewheel(row)
         return ab
 
     def _is_near_bottom(self) -> bool:
@@ -234,29 +227,6 @@ class Plugin(BasePlugin):
                     child.set_width(uw)
                 elif isinstance(child, AssistantBubble):
                     child.set_width(aw)
-
-    def _bind_mousewheel(self, widget) -> None:
-        """Forward mousewheel/trackpad events from nested widgets to the scroll canvas."""
-        try:
-            canvas = self.chat_scroll._parent_canvas
-        except (AttributeError, Exception):
-            return
-        if sys.platform == "darwin":
-            widget.bind(
-                "<MouseWheel>",
-                lambda e: canvas.yview_scroll(int(-1 * e.delta), "units"))
-        elif sys.platform == "win32":
-            widget.bind(
-                "<MouseWheel>",
-                lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
-        else:
-            widget.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
-            widget.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
-        try:
-            for child in widget.winfo_children():
-                self._bind_mousewheel(child)
-        except Exception:
-            pass
 
     def send_message(self) -> None:
         """Handle the send-button / Enter-key press."""
@@ -296,18 +266,14 @@ class Plugin(BasePlugin):
             self._scroll_to_bottom()
 
     def _on_stream_done(self, full_text: str) -> None:
-        bubble = self._current_asst_bubble
-        if bubble is not None:
-            bubble.finalize_markdown(full_text)
+        if self._current_asst_bubble is not None:
+            self._current_asst_bubble.finalize_markdown(full_text)
             self._current_asst_bubble = None
         self.conversation_history.append({"role": "assistant", "content": full_text})
         self._unlock_input()
         # Delay scroll so the layout recalculates after finalize_markdown
         self.chat_scroll.after(50, self._scroll_to_bottom)
         self.chat_scroll.after(200, self._scroll_to_bottom)
-        # Rebind mousewheel on new markdown widgets created by finalize
-        if bubble is not None:
-            self.chat_scroll.after(250, lambda: self._bind_mousewheel(bubble))
 
     def _on_stream_error(self, error_msg: str) -> None:
         if self._accumulated_text.strip() and self._current_asst_bubble is not None:
