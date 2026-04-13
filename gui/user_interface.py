@@ -997,11 +997,12 @@ class AppUI(customtkinter.CTk):
              self.__class__.plugin_manager = PluginManager(self)
         return self.__class__.plugin_manager
 
-    def show_notification(self, message, type="info"):
+    def show_notification(self, message, type="info", centered=False):
         """
         Show a non-blocking toast notification.
         :param message: The text to display.
         :param type: 'info' (green), 'error' (red), 'warning' (orange).
+        :param centered: If True, center in the full window instead of the content area.
         """
         colors = {
             "info": "#00D100",  # Green
@@ -1009,18 +1010,21 @@ class AppUI(customtkinter.CTk):
             "error": "#FF0000",  # Red
         }
         icon_col = colors.get(type, "#00D100")
-        
-        # Calculate centering relative to content area (excluding sidebar)
-        try:
-            total_w = self.winfo_width()
-            nav_w = self.navigation_frame.winfo_width() if hasattr(self, "navigation_frame") else 200
-            if nav_w < 100: nav_w = 200 # Fallback
-            
-            # relx = (sidebar + remaining/2) / total
-            content_center = nav_w + (total_w - nav_w) / 2
-            target_relx = content_center / total_w
-        except:
+
+        if centered:
             target_relx = 0.5
+        else:
+            # Calculate centering relative to content area (excluding sidebar)
+            try:
+                total_w = self.winfo_width()
+                nav_w = self.navigation_frame.winfo_width() if hasattr(self, "navigation_frame") else 200
+                if nav_w < 100: nav_w = 200 # Fallback
+
+                # relx = (sidebar + remaining/2) / total
+                content_center = nav_w + (total_w - nav_w) / 2
+                target_relx = content_center / total_w
+            except:
+                target_relx = 0.5
 
         # Ensure we use the root window for placement
         root = self.winfo_toplevel()
