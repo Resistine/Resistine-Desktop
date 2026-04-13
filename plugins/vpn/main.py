@@ -469,7 +469,11 @@ class Plugin(BasePlugin):
         if extension_disabled:
             status_text  = "Extension Disabled"
             status_color = ("#C5221F", "#FF4040")
-            sub_text     = "Enable in System Settings › General › Login Items & Extensions › Network Extensions"
+            mac_major = int(platform.mac_ver()[0].split(".")[0] or "0")
+            if mac_major >= 15:
+                sub_text = "Enable in System Settings › General › Login Items & Extensions › Network Extensions"
+            else:
+                sub_text = "Enable in System Settings › Privacy & Security › scroll to Security › click Allow"
             card_bg      = ("#FDEDEC", "#3A1A1A")
             is_enabled   = False
         elif not selected_conf_file:
@@ -1056,9 +1060,13 @@ class Plugin(BasePlugin):
 
             if not is_extension_enabled():
                 logger.error("Network extension is disabled in System Settings")
+                mac_major = int(platform.mac_ver()[0].split(".")[0] or "0")
+                if mac_major >= 15:
+                    ext_path = "General > Login Items & Extensions > Network Extensions"
+                else:
+                    ext_path = "Privacy & Security > Security > click Allow"
                 self.app.show_notification(
-                    "VPN extension is disabled. Enable it in System Settings > "
-                    "General > Login Items & Extensions > Network Extensions",
+                    f"VPN extension is disabled. Enable it in System Settings > {ext_path}",
                     type="error",
                 )
                 my_vpn_status = "Stopped"
