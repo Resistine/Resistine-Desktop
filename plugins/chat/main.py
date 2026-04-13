@@ -329,6 +329,124 @@ class Plugin(BasePlugin):
         padx = int(str(tw.cget("padx") or 0))
         return max(w - padx * 2 - 4, 300)
 
+    def _wire_chat_entry_paste(self):
+        """Enable Ctrl+V / Cmd+V and a right-click context menu on the chat entry.
+
+        Works for both the plain CTkEntry (Windows/macOS) and the custom
+        Linux EmojiEntry subclass which exposes _insert_with_emoji /
+        _on_copy / _on_cut / _select_all / _clear_placeholder / _snapshot.
+        """
+        entry = self.chat_entry
+        is_emoji_entry = hasattr(entry, "_insert_with_emoji")
+
+        def _read_clipboard():
+            for kwargs in ({}, {"type": "STRING"}, {"type": "UTF8_STRING"}):
+                try:
+                    return entry.clipboard_get(**kwargs)
+                except tk.TclError:
+                    continue
+            return None
+
+        def do_paste(event=None):
+            clip = _read_clipboard()
+            if not clip:
+                return "break"
+            # Single-line entry: collapse newlines into spaces
+            clip = clip.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+
+            if is_emoji_entry:
+                try:
+                    entry._clear_placeholder()
+                except Exception:
+                    pass
+                tw = entry._textbox
+                try:
+                    tw.delete("sel.first", "sel.last")
+                except tk.TclError:
+                    pass
+                entry._insert_with_emoji(clip)
+                try:
+                    entry._snapshot()
+                except Exception:
+                    pass
+                tw.see("insert")
+            else:
+                try:
+                    entry.delete("sel.first", "sel.last")
+                except tk.TclError:
+                    pass
+                idx = entry.index("insert")
+                entry.insert(idx, clip)
+            return "break"
+
+        def do_copy(event=None):
+            if is_emoji_entry:
+                entry._on_copy()
+                return "break"
+            try:
+                text = entry.selection_get()
+            except tk.TclError:
+                return "break"
+            entry.clipboard_clear()
+            entry.clipboard_append(text)
+            return "break"
+
+        def do_cut(event=None):
+            if is_emoji_entry:
+                entry._on_cut()
+                return "break"
+            try:
+                text = entry.selection_get()
+            except tk.TclError:
+                return "break"
+            entry.clipboard_clear()
+            entry.clipboard_append(text)
+            try:
+                entry.delete("sel.first", "sel.last")
+            except tk.TclError:
+                pass
+            return "break"
+
+        def do_select_all(event=None):
+            if is_emoji_entry:
+                entry._select_all()
+                return "break"
+            entry.select_range(0, "end")
+            entry.icursor("end")
+            return "break"
+
+        # Explicit key bindings — bind to the underlying tk widget so they
+        # take precedence over any class-level bindings that might be missing.
+        target = entry._textbox if is_emoji_entry else entry
+        target.bind("<Control-v>", do_paste, add="+")
+        target.bind("<Control-V>", do_paste, add="+")
+        target.bind("<Command-v>", do_paste, add="+")
+        target.bind("<Control-a>", do_select_all, add="+")
+        target.bind("<Command-a>", do_select_all, add="+")
+
+        # Right-click context menu
+        menu = tk.Menu(target, tearoff=0)
+        menu.add_command(label="Cut", command=do_cut)
+        menu.add_command(label="Copy", command=do_copy)
+        menu.add_command(label="Paste", command=do_paste)
+        menu.add_separator()
+        menu.add_command(label="Select All", command=do_select_all)
+
+        def _show_menu(event):
+            try:
+                target.focus_set()
+            except Exception:
+                pass
+            try:
+                menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                menu.grab_release()
+            return "break"
+
+        # Button-3 = right-click on Win/Linux; Button-2 = right-click on macOS
+        target.bind("<Button-3>", _show_menu, add="+")
+        target.bind("<Button-2>", _show_menu, add="+")
+
     def render_user_bubble(self, user_message):
         """Render the user's message bubble flush to the right edge."""
         from plugins.chat.markdown_bubble import (
@@ -352,24 +470,26 @@ class Plugin(BasePlugin):
 
         has_emoji = _EMOJI_RENDER and _EMOJI_RE and _EMOJI_RE.search(user_message)
 
-        if has_emoji:
-            # Use a tk.Text placed inside the rounded CTkFrame with
-            # inset margins so the frame's rounded corners stay visible.
-            wrap_width = min(600, int(available * 0.75))
-            inset = 10  # px inset from rounded corners
-            _user_font = customtkinter.CTkFont(family="Inter", size=15)
-            inner_tw = tk.Text(
-                bubble, bg="#0D5394", fg="#FFFFFF",
-                font=_user_font, wrap="word",
-                borderwidth=0, highlightthickness=0,
-                padx=8, pady=1, cursor="xterm",
-                insertwidth=0,
-            )
-            inner_tw.configure(state="normal")
+        # A selectable tk.Text is used for both paths so users can copy from
+        # their messages. Emoji rendering only differs in the insertion loop.
+        inset = 10  # px inset from rounded corners
+        _user_font = customtkinter.CTkFont(family="Inter", size=15)
+        inner_tw = tk.Text(
+            bubble, bg="#0D5394", fg="#FFFFFF",
+            font=_user_font, wrap="word",
+            borderwidth=0, highlightthickness=0,
+            padx=8, pady=1, cursor="xterm",
+            insertwidth=0,
+            selectbackground="#1E6DBF",
+            selectforeground="#FFFFFF",
+            inactiveselectbackground="#1E6DBF",
+        )
+        inner_tw.configure(state="normal")
 
-            # Insert text with emoji images
-            emoji_photos = []
-            image_to_emoji = {}
+        # Insert text (with optional emoji images)
+        emoji_photos = []
+        image_to_emoji = {}
+        if has_emoji:
             parts = _EMOJI_RE.split(user_message)
             for i, part in enumerate(parts):
                 if not part:
@@ -386,86 +506,71 @@ class Plugin(BasePlugin):
                             inner_tw.insert("end", ch)
                 else:
                     inner_tw.insert("end", part)
-
-            inner_tw.configure(state="disabled")
-
-            # Prevent text selection while keeping the text cursor.
-            # Remove the "Text" class from bindtags so Tk's built-in
-            # Text selection bindings never fire.
-            tags = inner_tw.bindtags()
-            inner_tw.bindtags(tuple(t for t in tags if t != "Text"))
-
-            # Store refs to prevent GC
-            inner_tw._emoji_photos = emoji_photos
-            inner_tw._image_to_emoji = image_to_emoji
-
-            # Intercept copy to restore codepoints
-            def _on_user_copy(event, w=inner_tw, m=image_to_emoji):
-                try:
-                    s = w.index("sel.first")
-                    e = w.index("sel.last")
-                except Exception:
-                    return
-                result = []
-                for kind, val, _idx in w.dump(s, e):
-                    if kind == "text":
-                        result.append(val)
-                    elif kind == "image" and val in m:
-                        result.append(m[val])
-                if result:
-                    w.clipboard_clear()
-                    w.clipboard_append("".join(result))
-                return "break"
-            inner_tw.bind("<<Copy>>", _on_user_copy)
-
-            max_w = min(600, int(available * 0.75))
-            padx_val = int(str(inner_tw.cget("padx") or 0))
-
-            # Step 1: Measure natural content width using xpixels.
-            inner_tw.configure(wrap="none")
-            try:
-                result = inner_tw.count("1.0", "end-1c", "xpixels")
-                xpx = result[0] if isinstance(result, (list, tuple)) else result
-                natural_w = int(xpx) + padx_val * 2
-            except Exception:
-                natural_w = max_w
-            text_w = min(natural_w, max_w)
-
-            # Step 2: Set width, enable wrapping, measure height.
-            inner_tw.configure(wrap="word")
-            inner_tw.place(in_=bubble, x=inset, y=inset,
-                           width=text_w, height=500)
-            bubble.configure(width=text_w + inset * 2, height=520)
-            bubble.pack(side="right", padx=(0, 12))
-            container.update_idletasks()
-
-            try:
-                result = inner_tw.count("1.0", "end", "ypixels")
-                val = result[0] if isinstance(result, (list, tuple)) else result
-                content_h = int(val) + 4
-            except Exception:
-                import tkinter.font as tkfont
-                content_h = tkfont.Font(font=("Inter", 15)).metrics("linespace") + 4
-
-            # Step 3: Apply final dimensions.
-            inner_tw.place_configure(height=content_h)
-            bubble_h = content_h + inset * 2
-            bubble.configure(height=bubble_h)
-            bubble.pack_propagate(False)
-
-            msg_widget = inner_tw
         else:
-            msg_widget = customtkinter.CTkLabel(
-                bubble,
-                text=user_message,
-                fg_color="transparent",
-                text_color="#FFFFFF",
-                wraplength=min(600, int(available * 0.75)),
-                font=customtkinter.CTkFont(family="Inter", size=15),
-                justify="left",
-                anchor="w",
-            )
-            msg_widget.pack(padx=18, pady=11)
+            inner_tw.insert("end", user_message)
+
+        inner_tw.configure(state="disabled")
+
+        # Store refs to prevent GC
+        inner_tw._emoji_photos = emoji_photos
+        inner_tw._image_to_emoji = image_to_emoji
+
+        # Intercept copy to restore emoji codepoints from inserted images.
+        # Falls through to default copy behavior for plain text.
+        def _on_user_copy(event, w=inner_tw, m=image_to_emoji):
+            try:
+                s = w.index("sel.first")
+                e = w.index("sel.last")
+            except Exception:
+                return
+            result = []
+            for kind, val, _idx in w.dump(s, e):
+                if kind == "text":
+                    result.append(val)
+                elif kind == "image" and val in m:
+                    result.append(m[val])
+            if result:
+                w.clipboard_clear()
+                w.clipboard_append("".join(result))
+            return "break"
+        inner_tw.bind("<<Copy>>", _on_user_copy)
+
+        max_w = min(600, int(available * 0.75))
+        padx_val = int(str(inner_tw.cget("padx") or 0))
+
+        # Step 1: Measure natural content width using xpixels.
+        inner_tw.configure(wrap="none")
+        try:
+            result = inner_tw.count("1.0", "end-1c", "xpixels")
+            xpx = result[0] if isinstance(result, (list, tuple)) else result
+            natural_w = int(xpx) + padx_val * 2
+        except Exception:
+            natural_w = max_w
+        text_w = min(natural_w, max_w)
+
+        # Step 2: Set width, enable wrapping, measure height.
+        inner_tw.configure(wrap="word")
+        inner_tw.place(in_=bubble, x=inset, y=inset,
+                       width=text_w, height=500)
+        bubble.configure(width=text_w + inset * 2, height=520)
+        bubble.pack(side="right", padx=(0, 12))
+        container.update_idletasks()
+
+        try:
+            result = inner_tw.count("1.0", "end", "ypixels")
+            val = result[0] if isinstance(result, (list, tuple)) else result
+            content_h = int(val) + 4
+        except Exception:
+            import tkinter.font as tkfont
+            content_h = tkfont.Font(font=("Inter", 15)).metrics("linespace") + 4
+
+        # Step 3: Apply final dimensions.
+        inner_tw.place_configure(height=content_h)
+        bubble_h = content_h + inset * 2
+        bubble.configure(height=bubble_h)
+        bubble.pack_propagate(False)
+
+        msg_widget = inner_tw
 
         # Height must be set after children are measured
         container.update_idletasks()
@@ -810,6 +915,9 @@ class Plugin(BasePlugin):
         self.send_button.grid(row=0, column=1, padx=(0, 6), pady=6)
 
         self.chat_entry.bind("<Return>", lambda event: self.send_message())
+
+        # --- Paste support (Ctrl+V / Cmd+V + right-click menu) ---
+        self._wire_chat_entry_paste()
 
         # Disable input when no API key is configured
         if not has_api_key:
