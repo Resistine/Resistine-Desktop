@@ -20,6 +20,7 @@ COLOR_CARD_BORDER = ("#E5E7EB", "#2A2A2C")
 COLOR_DIVIDER = ("#E5E7EB", "#2A2A2A")
 COLOR_BTN_OUTLINE = ("#0D5394", "#2B7DE0")
 COLOR_BTN_OUTLINE_HOVER = ("#0B4578", "#1565B0")
+COLOR_ACCENT = "#3A7EBF"  # Blue section-header accent (matches VPN page)
 
 CORNER_R = 12
 PAD_X = 20
@@ -46,3 +47,14 @@ def add_separator(card, row):
         card, height=1, fg_color=COLOR_DIVIDER,
     ).grid(row=row, column=0, columnspan=2, sticky="ew", padx=16)
     return row + 1
+
+
+def section_title(parent, text):
+    """Blue uppercase section title label matching the VPN page style."""
+    return customtkinter.CTkLabel(
+        parent, text=text.upper(),
+        font=customtkinter.CTkFont(
+            family=_FONT_FAMILY, size=12, weight="bold",
+        ),
+        text_color=COLOR_ACCENT,
+    )

@@ -18,8 +18,10 @@ from plugins.antivirus.theme import (
     COLOR_WARN_TEXT,
     CORNER_R,
     PAD_X,
+    add_separator,
     font,
     make_card,
+    section_title,
 )
 
 
@@ -79,9 +81,10 @@ def _build_scan_card(plugin, container):
     card.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
     card.grid_columnconfigure(0, weight=1)
 
-    customtkinter.CTkLabel(
-        card, text="Scan", font=font(14, bold=True),
-    ).grid(row=0, column=0, padx=16, pady=(14, 10), sticky="w")
+    section_title(card, "Scan").grid(
+        row=0, column=0, padx=16, pady=(14, 3), sticky="w",
+    )
+    add_separator(card, 1)
 
     actions = [
         ("Scan File", "scan_file"),
@@ -89,7 +92,7 @@ def _build_scan_card(plugin, container):
         ("Scan Computer", "scan_computer"),
     ]
     btn_frame = customtkinter.CTkFrame(card, fg_color="transparent")
-    btn_frame.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 14))
+    btn_frame.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 14))
     for i in range(len(actions)):
         btn_frame.grid_columnconfigure(i, weight=1)
 
@@ -123,12 +126,10 @@ def build_scan_activity(plugin, parent, row):
     card.grid_columnconfigure(0, weight=1)
 
     header = customtkinter.CTkFrame(card, fg_color="transparent")
-    header.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 6))
+    header.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 3))
     header.grid_columnconfigure(0, weight=1)
 
-    customtkinter.CTkLabel(
-        header, text="Scan Activity", font=font(14, bold=True),
-    ).grid(row=0, column=0, sticky="w")
+    section_title(header, "Scan Activity").grid(row=0, column=0, sticky="w")
 
     plugin._scan_status_label = customtkinter.CTkLabel(
         header, text="No scans yet", font=font(11),
@@ -148,10 +149,12 @@ def build_scan_activity(plugin, parent, row):
     cancel_btn.grid_remove()  # Hidden until a scan starts
     plugin._action_buttons["cancel_scan"] = cancel_btn
 
+    add_separator(card, 1)
+
     plugin._scan_progress = customtkinter.CTkProgressBar(card, height=4)
     plugin._scan_progress.set(0)
     plugin._scan_progress.grid(
-        row=1, column=0, padx=16, pady=(0, 2), sticky="ew",
+        row=2, column=0, padx=16, pady=(8, 2), sticky="ew",
     )
     plugin._scan_progress.grid_remove()
 
@@ -161,6 +164,6 @@ def build_scan_activity(plugin, parent, row):
         state="disabled",
     )
     plugin._scan_log.grid(
-        row=2, column=0, padx=16, pady=(4, 14), sticky="ew",
+        row=3, column=0, padx=16, pady=(4, 14), sticky="ew",
     )
     return row + 1
