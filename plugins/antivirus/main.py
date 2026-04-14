@@ -37,6 +37,41 @@ from utils.logger import logger
 _PLUGIN_DIR = os.path.dirname(os.path.realpath(__file__))
 
 
+def _send_notification(title: str, body: str):
+    """Send a macOS system notification. No-op on other platforms."""
+    import platform as _platform
+
+    if _platform.system() != "Darwin":
+        return
+    try:
+        from Foundation import NSUserNotification, NSUserNotificationCenter
+
+        notification = NSUserNotification.alloc().init()
+        notification.setTitle_(title)
+        notification.setInformativeText_(body)
+        notification.setSoundName_("default")
+        center = NSUserNotificationCenter.defaultUserNotificationCenter()
+        center.deliverNotification_(notification)
+    except ImportError:
+        # PyObjC not available — fall back to osascript
+        import subprocess
+
+        safe_body = body.replace("\\", "\\\\").replace('"', '\\"')
+        safe_title = title.replace("\\", "\\\\").replace('"', '\\"')
+        script = (
+            f'display notification "{safe_body}" '
+            f'with title "{safe_title}" sound name "default"'
+        )
+        try:
+            subprocess.Popen(
+                ["osascript", "-e", script],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
+
+
 class Plugin(BasePlugin):
     """Antivirus plugin powered by ClamAV."""
 
@@ -706,6 +741,10 @@ class Plugin(BasePlugin):
             self._scan_status_label.configure(
                 text=f"Threats found: {result.infected}",
             )
+            _send_notification(
+                "Resistine — Threats Detected",
+                f"{result.infected} infected file(s) found during scan.",
+            )
             # Collect infected paths
             infected_paths = []
             for infection_line in result.infections:
@@ -873,12 +912,34 @@ class Plugin(BasePlugin):
             ).grid(row=0, column=0, sticky="w")
 
             customtkinter.CTkButton(
+                row_frame, text="Restore", width=50, height=22,
+                font=font(10), fg_color="transparent",
+                hover_color=("#DBEAFE", "#1E2A3A"),
+                text_color=("#2563EB", "#60A5FA"),
+                command=lambda p=qpath: self._restore_quarantined(p),
+            ).grid(row=0, column=1, sticky="e", padx=(4, 0))
+
+            customtkinter.CTkButton(
                 row_frame, text="Delete", width=50, height=22,
                 font=font(10), fg_color="transparent",
                 hover_color=("#FEE2E2", "#3B1010"),
                 text_color=("#DC2626", "#F87171"),
                 command=lambda p=qpath: self._delete_quarantined(p),
-            ).grid(row=0, column=1, sticky="e", padx=(4, 0))
+            ).grid(row=0, column=2, sticky="e", padx=(4, 0))
+
+    def _restore_quarantined(self, qpath: str):
+        name = os.path.basename(qpath).replace(".quarantined", "")
+        dest = filedialog.askdirectory(
+            title=f"Restore '{name}' to...", parent=self.app,
+        )
+        if not dest:
+            return
+        target = os.path.join(dest, name)
+        ok, msg = clamav.restore_quarantined(qpath, target)
+        if ok:
+            self._refresh_quarantine()
+        else:
+            messagebox.showerror("Restore Failed", msg, parent=self.app)
 
     def _delete_quarantined(self, qpath: str):
         name = os.path.basename(qpath).replace(".quarantined", "")
