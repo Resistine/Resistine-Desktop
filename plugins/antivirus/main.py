@@ -9,6 +9,7 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import os
+import platform
 import random
 import threading
 import time
@@ -85,7 +86,6 @@ class Plugin(BasePlugin):
 
         # Register system-level ClamAV daemons via SMAppService and refresh
         # system configs so post-Sparkle updates pick up any path changes.
-        import platform
         if platform.system() == "Darwin":
             def _darwin_daemon_init():
                 clamav.ensure_daemons_registered()
@@ -155,6 +155,29 @@ class Plugin(BasePlugin):
         row = build_scan_activity(self, self.main_frame, row)
         row = build_whitelist_and_quarantine(self, self.main_frame, row)
         row = build_updates_card(self, self.main_frame, row)
+
+        # Show a development banner on Linux/Windows
+        if platform.system() in ("Linux", "Windows"):
+            banner = customtkinter.CTkFrame(
+                self.main_frame,
+                fg_color=("#FEF3C7", "#2D1F05"),
+                corner_radius=10,
+            )
+            banner.grid(
+                row=row, column=0, sticky="ew", padx=20, pady=(10, 0),
+            )
+            banner.grid_columnconfigure(0, weight=1)
+            customtkinter.CTkLabel(
+                banner,
+                text=(
+                    "Antivirus is not hooked up on Windows and Linux yet. "
+                    "This UI is for development purposes only."
+                ),
+                font=customtkinter.CTkFont(family="Inter", size=12),
+                text_color=("#92400E", "#FBBF24"),
+                wraplength=500,
+            ).grid(row=0, column=0, padx=16, pady=12)
+            row += 1
 
         customtkinter.CTkLabel(
             self.main_frame, text="", height=12,
