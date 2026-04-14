@@ -86,6 +86,7 @@ def _build_scan_card(plugin, container):
     actions = [
         ("Scan File", "scan_file"),
         ("Scan Directory", "scan_directory"),
+        ("Scan Computer", "scan_computer"),
     ]
     btn_frame = customtkinter.CTkFrame(card, fg_color="transparent")
     btn_frame.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 14))
@@ -95,7 +96,7 @@ def _build_scan_card(plugin, container):
     for col, (text, key) in enumerate(actions):
         btn = customtkinter.CTkButton(
             btn_frame, text=text, height=34, corner_radius=8,
-            font=font(12),
+            font=font(12), text_color="#F5F5F5",
             command=lambda k=key: plugin._on_action(k),
         )
         px = (0, 4) if col < len(actions) - 1 else (0, 0)

@@ -44,10 +44,6 @@ from utils.logger import logger
 
 _PLUGIN_DIR = os.path.dirname(os.path.realpath(__file__))
 
-# Neutral grey for first-time setup states (matches VPN "No Configuration")
-_COLOR_SETUP_BG = ("#F5F5F5", "#1A1A1A")
-_COLOR_SETUP_TEXT = ("#666666", "#999999")
-
 
 class Plugin(BasePlugin):
     """Antivirus plugin powered by ClamAV."""
@@ -144,9 +140,18 @@ class Plugin(BasePlugin):
     # ── Main screen ──────────────────────────────────────────
 
     def create_main_screen(self):
-        self.main_frame = customtkinter.CTkScrollableFrame(
+        self.main_container = customtkinter.CTkFrame(
             self.app, corner_radius=0, fg_color="transparent",
         )
+        self.main_container.grid_columnconfigure(0, weight=1)
+        self.main_container.grid_columnconfigure(1, weight=0, minsize=100)
+        self.main_container.grid_columnconfigure(2, weight=1)
+        self.main_container.grid_rowconfigure(0, weight=1)
+
+        self.main_frame = customtkinter.CTkScrollableFrame(
+            self.main_container, corner_radius=0, fg_color="transparent",
+        )
+        self.main_frame.grid(row=0, column=1, sticky="nsew", pady=10)
         self.main_frame.grid_columnconfigure(0, weight=1)
 
         row = 0
@@ -175,7 +180,7 @@ class Plugin(BasePlugin):
                 ),
                 font=customtkinter.CTkFont(family="Inter", size=12),
                 text_color=("#92400E", "#FBBF24"),
-                wraplength=500,
+                wraplength=600,
             ).grid(row=0, column=0, padx=16, pady=12)
             row += 1
 
@@ -195,7 +200,54 @@ class Plugin(BasePlugin):
             self._apply_realtime_status_ui(self._last_status)
         self.app.after(500, self._update_realtime_status)
 
-        return self.main_frame
+        MAX_CONTENT_WIDTH = 750
+        _is_windows = platform.system() == "Windows"
+        _resize_job = [None]
+
+        def _do_layout():
+            _resize_job[0] = None
+            if (
+                not hasattr(self, "main_container")
+                or not self.main_container
+                or not self.main_container.winfo_exists()
+            ):
+                return
+            app_w = self.app.winfo_width()
+            if app_w < 10:
+                return
+            try:
+                nav = getattr(self.app, "navigation_frame", None)
+                nav_w = nav.winfo_width() if (nav and nav.winfo_exists()) else 250
+                nav_w = max(nav_w, 250)
+            except Exception:
+                nav_w = 250
+            width = app_w - nav_w
+            if width < 10:
+                return
+            breathing = 60 if _is_windows else 40
+            if width > MAX_CONTENT_WIDTH + 40:
+                col_w = MAX_CONTENT_WIDTH
+            else:
+                col_w = max(100, width - breathing)
+            try:
+                self.main_container.grid_columnconfigure(
+                    1, weight=0, minsize=col_w,
+                )
+            except Exception:
+                return
+
+        def _on_resize(event):
+            if _resize_job[0] is not None:
+                try:
+                    self.app.after_cancel(_resize_job[0])
+                except Exception:
+                    pass
+            _resize_job[0] = self.app.after_idle(_do_layout)
+
+        self.main_container.bind("<Configure>", _on_resize)
+        self.app.after(50, _do_layout)
+
+        return self.main_container
 
     def destroy(self):
         self._stop_auto_update_scheduler()
@@ -203,9 +255,10 @@ class Plugin(BasePlugin):
         self._banner_label = None
         self._banner_subtitle = None
         self._banner_action_btn = None
-        if hasattr(self, "main_frame") and self.main_frame:
-            self.main_frame.destroy()
-            self.main_frame = None
+        if hasattr(self, "main_container") and self.main_container:
+            self.main_container.destroy()
+            self.main_container = None
+        self.main_frame = None
 
     # ── UI Event Handlers ────────────────────────────────────
 
@@ -251,20 +304,20 @@ class Plugin(BasePlugin):
         # State-driven card configuration matching the VPN status card style
         states = {
             "not_installed": {
-                "bg": _COLOR_SETUP_BG,
+                "bg": COLOR_ERR_BG,
                 "title": "Not Installed",
-                "title_color": _COLOR_SETUP_TEXT,
+                "title_color": COLOR_ERR_TEXT,
                 "subtitle": (
-                    "ClamAV binaries were not found. "
+                    "ClamAV binaries were not found.\n"
                     "Reinstall Resistine or run the build script "
                     "to set up antivirus protection."
                 ),
                 "action": None,
             },
             "no_database": {
-                "bg": _COLOR_SETUP_BG,
+                "bg": COLOR_WARN_BG,
                 "title": "Setup Required",
-                "title_color": _COLOR_SETUP_TEXT,
+                "title_color": COLOR_WARN_TEXT,
                 "subtitle": (
                     "No signature database found. "
                     "Tap Update Now below to download the latest "
@@ -491,6 +544,7 @@ class Plugin(BasePlugin):
         actions = {
             "scan_file": self._start_file_scan,
             "scan_directory": self._start_directory_scan,
+            "scan_computer": self.full_computer_scan_placeholder,
             "update_sigs": self._start_sig_update,
             "whitelist_add": self._add_whitelist_entry,
         }
@@ -537,6 +591,9 @@ class Plugin(BasePlugin):
             )
             return
         self._run_scan(path)
+
+    def full_computer_scan_placeholder(self):
+        pass
 
     def _run_scan(self, target: str):
         self._scanning = True
