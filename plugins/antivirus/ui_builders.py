@@ -9,13 +9,9 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import customtkinter
+from customtkinter import ThemeManager
 
 from plugins.antivirus.theme import (
-    COLOR_CARD_BG,
-    COLOR_CARD_BORDER,
-    COLOR_MUTED,
-    COLOR_WARN_BG,
-    COLOR_WARN_TEXT,
     CORNER_R,
     PAD_X,
     add_separator,
@@ -30,7 +26,9 @@ from plugins.antivirus.theme import (
 
 def build_status_banner(plugin, parent, row):
     """Build a VPN-style status card with title, subtitle, and action button."""
-    bg = COLOR_WARN_BG
+    t = ThemeManager.theme.get("Theme", {})
+    bg = t.get("protection_bg_warn")
+    title_color = t.get("protection_text_warn")
 
     card = customtkinter.CTkFrame(
         parent, fg_color=bg, corner_radius=CORNER_R, border_width=0,
@@ -44,7 +42,7 @@ def build_status_banner(plugin, parent, row):
     plugin._banner_label = customtkinter.CTkLabel(
         text_col, text="Checking...",
         font=customtkinter.CTkFont(family="Inter", size=28, weight="bold"),
-        text_color=COLOR_WARN_TEXT,
+        text_color=title_color,
     )
     plugin._banner_label.grid(row=0, column=0, sticky="w")
 
@@ -75,10 +73,9 @@ def build_status_banner(plugin, parent, row):
 
 def _build_scan_card(plugin, container):
     card = customtkinter.CTkFrame(
-        container, corner_radius=CORNER_R, fg_color=COLOR_CARD_BG,
-        border_width=1, border_color=COLOR_CARD_BORDER,
+        container, corner_radius=CORNER_R, border_width=1,
     )
-    card.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+    card.grid(row=0, column=0, sticky="nsew")
     card.grid_columnconfigure(0, weight=1)
 
     section_title(card, "Scan").grid(
@@ -133,7 +130,7 @@ def build_scan_activity(plugin, parent, row):
 
     plugin._scan_status_label = customtkinter.CTkLabel(
         header, text="No scans yet", font=font(11),
-        text_color=COLOR_MUTED,
+        text_color=ThemeManager.theme.get("Theme", {}).get("text_secondary"),
     )
     plugin._scan_status_label.grid(row=0, column=1, sticky="e")
 

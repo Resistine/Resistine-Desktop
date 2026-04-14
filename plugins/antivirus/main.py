@@ -16,19 +16,11 @@ import time
 from tkinter import filedialog, messagebox
 
 import customtkinter
+from customtkinter import ThemeManager
 
 from plugins.antivirus import clamav
 from plugins.antivirus.scanner import ScanResult, scan
-from plugins.antivirus.theme import (
-    COLOR_ERR_BG,
-    COLOR_ERR_TEXT,
-    COLOR_MUTED,
-    COLOR_OK_BG,
-    COLOR_OK_TEXT,
-    COLOR_WARN_BG,
-    COLOR_WARN_TEXT,
-    font,
-)
+from plugins.antivirus.theme import font
 from plugins.antivirus.ui_builders import (
     build_scan_activity,
     build_scan_and_protection,
@@ -212,6 +204,26 @@ class Plugin(BasePlugin):
                 or not self.main_container.winfo_exists()
             ):
                 return
+
+            # --- Auto-hide Scrollbar Logic ---
+            try:
+                if hasattr(self.main_frame, "_parent_canvas") and hasattr(self.main_frame, "_scrollbar"):
+                    yview = self.main_frame._parent_canvas.yview()
+                    is_mapped = bool(self.main_frame._scrollbar.grid_info())
+                    if yview and (yview[0] <= 0.01 and yview[1] >= 0.99):
+                        if not is_mapped:
+                            if hasattr(self.main_frame, "_saved_sb_grid") and self.main_frame._saved_sb_grid:
+                                self.main_frame._scrollbar.grid(**self.main_frame._saved_sb_grid)
+                            else:
+                                self.main_frame._scrollbar.grid(row=0, column=1, sticky="ns", pady=0)
+                    else:
+                        if is_mapped:
+                            self.main_frame._saved_sb_grid = self.main_frame._scrollbar.grid_info()
+                            self.main_frame._scrollbar.grid_remove()
+            except Exception:
+                pass
+            # --- End Auto-hide ---
+
             app_w = self.app.winfo_width()
             if app_w < 10:
                 return
@@ -301,12 +313,20 @@ class Plugin(BasePlugin):
 
         state = status["state"]
 
+        t = ThemeManager.theme.get("Theme", {})
+        ok_bg = t.get("protection_bg_ok")
+        ok_tx = t.get("protection_text_ok")
+        warn_bg = t.get("protection_bg_warn")
+        warn_tx = t.get("protection_text_warn")
+        err_bg = t.get("status_badge_bg", {}).get("error")
+        err_tx = t.get("status_badge_text", {}).get("error")
+
         # State-driven card configuration matching the VPN status card style
         states = {
             "not_installed": {
-                "bg": COLOR_ERR_BG,
+                "bg": err_bg,
                 "title": "Not Installed",
-                "title_color": COLOR_ERR_TEXT,
+                "title_color": err_tx,
                 "subtitle": (
                     "ClamAV binaries were not found.\n"
                     "Reinstall Resistine or run the build script "
@@ -315,9 +335,9 @@ class Plugin(BasePlugin):
                 "action": None,
             },
             "no_database": {
-                "bg": COLOR_WARN_BG,
+                "bg": warn_bg,
                 "title": "Setup Required",
-                "title_color": COLOR_WARN_TEXT,
+                "title_color": warn_tx,
                 "subtitle": (
                     "No signature database found. "
                     "Tap Update Now below to download the latest "
@@ -326,9 +346,9 @@ class Plugin(BasePlugin):
                 "action": None,
             },
             "protected": {
-                "bg": COLOR_OK_BG,
+                "bg": ok_bg,
                 "title": "Protected",
-                "title_color": COLOR_OK_TEXT,
+                "title_color": ok_tx,
                 "subtitle": (
                     "Real-time malware protection is active"
                     if status.get("clamonacc_running")
@@ -337,9 +357,9 @@ class Plugin(BasePlugin):
                 "action": None,
             },
             "approval_required": {
-                "bg": COLOR_WARN_BG,
+                "bg": warn_bg,
                 "title": "Approval Required",
-                "title_color": COLOR_WARN_TEXT,
+                "title_color": warn_tx,
                 "subtitle": (
                     "On-demand scanning is available. "
                     "Enable ClamAV daemons in System Settings "
@@ -349,9 +369,9 @@ class Plugin(BasePlugin):
                 "action": ("Open Login Items", clamav.open_login_items_settings),
             },
             "fda_required": {
-                "bg": COLOR_WARN_BG,
+                "bg": warn_bg,
                 "title": "Full Disk Access Required",
-                "title_color": COLOR_WARN_TEXT,
+                "title_color": warn_tx,
                 "subtitle": (
                     "Resistine needs Full Disk Access to monitor files "
                     "in real time. Grant access in System Settings "
@@ -360,9 +380,9 @@ class Plugin(BasePlugin):
                 "action": ("Open Settings", clamav.open_fda_settings),
             },
             "error": {
-                "bg": COLOR_ERR_BG,
+                "bg": err_bg,
                 "title": "Protection Offline",
-                "title_color": COLOR_ERR_TEXT,
+                "title_color": err_tx,
                 "subtitle": (
                     "ClamAV daemons are not running"
                     if status.get("in_bundle")
@@ -793,7 +813,10 @@ class Plugin(BasePlugin):
         if not entries:
             customtkinter.CTkLabel(
                 frame, text="No whitelisted paths",
-                font=font(12), text_color=COLOR_MUTED,
+                font=font(12),
+                text_color=ThemeManager.theme.get("Theme", {}).get(
+                    "text_secondary",
+                ),
             ).grid(row=0, column=0, sticky="w")
             return
 
@@ -832,7 +855,10 @@ class Plugin(BasePlugin):
         if not entries:
             customtkinter.CTkLabel(
                 frame, text="No threats quarantined",
-                font=font(12), text_color=COLOR_MUTED,
+                font=font(12),
+                text_color=ThemeManager.theme.get("Theme", {}).get(
+                    "text_secondary",
+                ),
             ).grid(row=0, column=0, sticky="w")
             return
 
