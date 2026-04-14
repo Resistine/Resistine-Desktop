@@ -20,6 +20,7 @@ from plugins.antivirus.theme import (
     add_separator,
     font,
     make_card,
+    section_title,
 )
 
 
@@ -35,12 +36,10 @@ def _build_whitelist_card(plugin, container):
     card.grid_columnconfigure(0, weight=1)
 
     hdr = customtkinter.CTkFrame(card, fg_color="transparent")
-    hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 6))
+    hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 3))
     hdr.grid_columnconfigure(0, weight=1)
 
-    customtkinter.CTkLabel(
-        hdr, text="Whitelist", font=font(14, bold=True),
-    ).grid(row=0, column=0, sticky="w")
+    section_title(hdr, "Whitelist").grid(row=0, column=0, sticky="w")
 
     customtkinter.CTkButton(
         hdr, text="+ Add", width=60, height=26, corner_radius=6,
@@ -50,11 +49,13 @@ def _build_whitelist_card(plugin, container):
         command=lambda: plugin._on_action("whitelist_add"),
     ).grid(row=0, column=1, sticky="e")
 
+    add_separator(card, 1)
+
     plugin._whitelist_frame = customtkinter.CTkFrame(
         card, fg_color="transparent",
     )
     plugin._whitelist_frame.grid(
-        row=1, column=0, padx=16, pady=(0, 14), sticky="ew",
+        row=2, column=0, padx=16, pady=(8, 14), sticky="ew",
     )
     plugin._whitelist_frame.grid_columnconfigure(0, weight=1)
 
@@ -72,15 +73,16 @@ def _build_quarantine_card(plugin, container):
     card.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
     card.grid_columnconfigure(0, weight=1)
 
-    customtkinter.CTkLabel(
-        card, text="Quarantine", font=font(14, bold=True),
-    ).grid(row=0, column=0, padx=16, pady=(14, 6), sticky="w")
+    section_title(card, "Quarantine").grid(
+        row=0, column=0, padx=16, pady=(14, 3), sticky="w",
+    )
+    add_separator(card, 1)
 
     plugin._quarantine_frame = customtkinter.CTkFrame(
         card, fg_color="transparent",
     )
     plugin._quarantine_frame.grid(
-        row=1, column=0, padx=16, pady=(0, 14), sticky="ew",
+        row=2, column=0, padx=16, pady=(8, 14), sticky="ew",
     )
     plugin._quarantine_frame.grid_columnconfigure(0, weight=1)
 
@@ -160,9 +162,9 @@ def build_updates_card(plugin, parent, row):
     card = make_card(parent, row)
     card.grid_columnconfigure(1, weight=1)
 
-    customtkinter.CTkLabel(
-        card, text="Signature Updates", font=font(14, bold=True),
-    ).grid(row=0, column=0, columnspan=2, padx=16, pady=(14, 6), sticky="w")
+    section_title(card, "Signature Updates").grid(
+        row=0, column=0, columnspan=2, padx=16, pady=(14, 3), sticky="w",
+    )
 
     add_separator(card, 1)
 
