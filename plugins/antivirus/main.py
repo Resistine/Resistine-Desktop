@@ -9,25 +9,18 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import os
+import platform
 import random
 import threading
 import time
 from tkinter import filedialog, messagebox
 
 import customtkinter
+from customtkinter import ThemeManager
 
 from plugins.antivirus import clamav
 from plugins.antivirus.scanner import ScanResult, scan
-from plugins.antivirus.theme import (
-    COLOR_ERR_BG,
-    COLOR_ERR_TEXT,
-    COLOR_MUTED,
-    COLOR_OK_BG,
-    COLOR_OK_TEXT,
-    COLOR_WARN_BG,
-    COLOR_WARN_TEXT,
-    font,
-)
+from plugins.antivirus.theme import font
 from plugins.antivirus.ui_builders import (
     build_scan_activity,
     build_scan_and_protection,
@@ -42,10 +35,6 @@ from utils import settings
 from utils.logger import logger
 
 _PLUGIN_DIR = os.path.dirname(os.path.realpath(__file__))
-
-# Neutral grey for first-time setup states (matches VPN "No Configuration")
-_COLOR_SETUP_BG = ("#F5F5F5", "#1A1A1A")
-_COLOR_SETUP_TEXT = ("#666666", "#999999")
 
 
 class Plugin(BasePlugin):
@@ -85,7 +74,6 @@ class Plugin(BasePlugin):
 
         # Register system-level ClamAV daemons via SMAppService and refresh
         # system configs so post-Sparkle updates pick up any path changes.
-        import platform
         if platform.system() == "Darwin":
             def _darwin_daemon_init():
                 clamav.ensure_daemons_registered()
@@ -144,9 +132,18 @@ class Plugin(BasePlugin):
     # ── Main screen ──────────────────────────────────────────
 
     def create_main_screen(self):
-        self.main_frame = customtkinter.CTkScrollableFrame(
+        self.main_container = customtkinter.CTkFrame(
             self.app, corner_radius=0, fg_color="transparent",
         )
+        self.main_container.grid_columnconfigure(0, weight=1)
+        self.main_container.grid_columnconfigure(1, weight=0, minsize=100)
+        self.main_container.grid_columnconfigure(2, weight=1)
+        self.main_container.grid_rowconfigure(0, weight=1)
+
+        self.main_frame = customtkinter.CTkScrollableFrame(
+            self.main_container, corner_radius=0, fg_color="transparent",
+        )
+        self.main_frame.grid(row=0, column=1, sticky="nsew", pady=10)
         self.main_frame.grid_columnconfigure(0, weight=1)
 
         row = 0
@@ -155,6 +152,29 @@ class Plugin(BasePlugin):
         row = build_scan_activity(self, self.main_frame, row)
         row = build_whitelist_and_quarantine(self, self.main_frame, row)
         row = build_updates_card(self, self.main_frame, row)
+
+        # Show a development banner on Linux/Windows
+        if platform.system() in ("Linux", "Windows"):
+            banner = customtkinter.CTkFrame(
+                self.main_frame,
+                fg_color=("#FEF3C7", "#2D1F05"),
+                corner_radius=10,
+            )
+            banner.grid(
+                row=row, column=0, sticky="ew", padx=20, pady=(10, 0),
+            )
+            banner.grid_columnconfigure(0, weight=1)
+            customtkinter.CTkLabel(
+                banner,
+                text=(
+                    "Antivirus is not hooked up on Windows and Linux yet. "
+                    "This UI is for development purposes only."
+                ),
+                font=customtkinter.CTkFont(family="Inter", size=12),
+                text_color=("#92400E", "#FBBF24"),
+                wraplength=600,
+            ).grid(row=0, column=0, padx=16, pady=12)
+            row += 1
 
         customtkinter.CTkLabel(
             self.main_frame, text="", height=12,
@@ -172,7 +192,74 @@ class Plugin(BasePlugin):
             self._apply_realtime_status_ui(self._last_status)
         self.app.after(500, self._update_realtime_status)
 
-        return self.main_frame
+        MAX_CONTENT_WIDTH = 750
+        _is_windows = platform.system() == "Windows"
+        _resize_job = [None]
+
+        def _do_layout():
+            _resize_job[0] = None
+            if (
+                not hasattr(self, "main_container")
+                or not self.main_container
+                or not self.main_container.winfo_exists()
+            ):
+                return
+
+            # --- Auto-hide Scrollbar Logic ---
+            try:
+                if hasattr(self.main_frame, "_parent_canvas") and hasattr(self.main_frame, "_scrollbar"):
+                    yview = self.main_frame._parent_canvas.yview()
+                    is_mapped = bool(self.main_frame._scrollbar.grid_info())
+                    if yview and (yview[0] <= 0.01 and yview[1] >= 0.99):
+                        if is_mapped:
+                            self.main_frame._saved_sb_grid = self.main_frame._scrollbar.grid_info()
+                            self.main_frame._scrollbar.grid_remove()
+                    else:
+                        if not is_mapped:
+                            if hasattr(self.main_frame, "_saved_sb_grid") and self.main_frame._saved_sb_grid:
+                                self.main_frame._scrollbar.grid(**self.main_frame._saved_sb_grid)
+                            else:
+                                self.main_frame._scrollbar.grid(row=0, column=1, sticky="ns", pady=0)
+            except Exception:
+                pass
+            # --- End Auto-hide ---
+
+            app_w = self.app.winfo_width()
+            if app_w < 10:
+                return
+            try:
+                nav = getattr(self.app, "navigation_frame", None)
+                nav_w = nav.winfo_width() if (nav and nav.winfo_exists()) else 250
+                nav_w = max(nav_w, 250)
+            except Exception:
+                nav_w = 250
+            width = app_w - nav_w
+            if width < 10:
+                return
+            breathing = 60 if _is_windows else 40
+            if width > MAX_CONTENT_WIDTH + 40:
+                col_w = MAX_CONTENT_WIDTH
+            else:
+                col_w = max(100, width - breathing)
+            try:
+                self.main_container.grid_columnconfigure(
+                    1, weight=0, minsize=col_w,
+                )
+            except Exception:
+                return
+
+        def _on_resize(event):
+            if _resize_job[0] is not None:
+                try:
+                    self.app.after_cancel(_resize_job[0])
+                except Exception:
+                    pass
+            _resize_job[0] = self.app.after_idle(_do_layout)
+
+        self.main_container.bind("<Configure>", _on_resize)
+        self.app.after(50, _do_layout)
+
+        return self.main_container
 
     def destroy(self):
         self._stop_auto_update_scheduler()
@@ -180,9 +267,10 @@ class Plugin(BasePlugin):
         self._banner_label = None
         self._banner_subtitle = None
         self._banner_action_btn = None
-        if hasattr(self, "main_frame") and self.main_frame:
-            self.main_frame.destroy()
-            self.main_frame = None
+        if hasattr(self, "main_container") and self.main_container:
+            self.main_container.destroy()
+            self.main_container = None
+        self.main_frame = None
 
     # ── UI Event Handlers ────────────────────────────────────
 
@@ -225,23 +313,31 @@ class Plugin(BasePlugin):
 
         state = status["state"]
 
+        t = ThemeManager.theme.get("Theme", {})
+        ok_bg = t.get("protection_bg_ok")
+        ok_tx = t.get("protection_text_ok")
+        warn_bg = t.get("protection_bg_warn")
+        warn_tx = t.get("protection_text_warn")
+        err_bg = t.get("status_badge_bg", {}).get("error")
+        err_tx = t.get("status_badge_text", {}).get("error")
+
         # State-driven card configuration matching the VPN status card style
         states = {
             "not_installed": {
-                "bg": _COLOR_SETUP_BG,
+                "bg": err_bg,
                 "title": "Not Installed",
-                "title_color": _COLOR_SETUP_TEXT,
+                "title_color": err_tx,
                 "subtitle": (
-                    "ClamAV binaries were not found. "
+                    "ClamAV binaries were not found.\n"
                     "Reinstall Resistine or run the build script "
                     "to set up antivirus protection."
                 ),
                 "action": None,
             },
             "no_database": {
-                "bg": _COLOR_SETUP_BG,
+                "bg": warn_bg,
                 "title": "Setup Required",
-                "title_color": _COLOR_SETUP_TEXT,
+                "title_color": warn_tx,
                 "subtitle": (
                     "No signature database found. "
                     "Tap Update Now below to download the latest "
@@ -250,9 +346,9 @@ class Plugin(BasePlugin):
                 "action": None,
             },
             "protected": {
-                "bg": COLOR_OK_BG,
+                "bg": ok_bg,
                 "title": "Protected",
-                "title_color": COLOR_OK_TEXT,
+                "title_color": ok_tx,
                 "subtitle": (
                     "Real-time malware protection is active"
                     if status.get("clamonacc_running")
@@ -261,9 +357,9 @@ class Plugin(BasePlugin):
                 "action": None,
             },
             "approval_required": {
-                "bg": COLOR_WARN_BG,
+                "bg": warn_bg,
                 "title": "Approval Required",
-                "title_color": COLOR_WARN_TEXT,
+                "title_color": warn_tx,
                 "subtitle": (
                     "On-demand scanning is available. "
                     "Enable ClamAV daemons in System Settings "
@@ -273,9 +369,9 @@ class Plugin(BasePlugin):
                 "action": ("Open Login Items", clamav.open_login_items_settings),
             },
             "fda_required": {
-                "bg": COLOR_WARN_BG,
+                "bg": warn_bg,
                 "title": "Full Disk Access Required",
-                "title_color": COLOR_WARN_TEXT,
+                "title_color": warn_tx,
                 "subtitle": (
                     "Resistine needs Full Disk Access to monitor files "
                     "in real time. Grant access in System Settings "
@@ -284,9 +380,9 @@ class Plugin(BasePlugin):
                 "action": ("Open Settings", clamav.open_fda_settings),
             },
             "error": {
-                "bg": COLOR_ERR_BG,
+                "bg": err_bg,
                 "title": "Protection Offline",
-                "title_color": COLOR_ERR_TEXT,
+                "title_color": err_tx,
                 "subtitle": (
                     "ClamAV daemons are not running"
                     if status.get("in_bundle")
@@ -468,6 +564,7 @@ class Plugin(BasePlugin):
         actions = {
             "scan_file": self._start_file_scan,
             "scan_directory": self._start_directory_scan,
+            "scan_computer": self.full_computer_scan_placeholder,
             "update_sigs": self._start_sig_update,
             "whitelist_add": self._add_whitelist_entry,
         }
@@ -514,6 +611,9 @@ class Plugin(BasePlugin):
             )
             return
         self._run_scan(path)
+
+    def full_computer_scan_placeholder(self):
+        pass
 
     def _run_scan(self, target: str):
         self._scanning = True
@@ -713,7 +813,10 @@ class Plugin(BasePlugin):
         if not entries:
             customtkinter.CTkLabel(
                 frame, text="No whitelisted paths",
-                font=font(12), text_color=COLOR_MUTED,
+                font=font(12),
+                text_color=ThemeManager.theme.get("Theme", {}).get(
+                    "text_secondary",
+                ),
             ).grid(row=0, column=0, sticky="w")
             return
 
@@ -752,7 +855,10 @@ class Plugin(BasePlugin):
         if not entries:
             customtkinter.CTkLabel(
                 frame, text="No threats quarantined",
-                font=font(12), text_color=COLOR_MUTED,
+                font=font(12),
+                text_color=ThemeManager.theme.get("Theme", {}).get(
+                    "text_secondary",
+                ),
             ).grid(row=0, column=0, sticky="w")
             return
 

@@ -8,19 +8,28 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import customtkinter
+from customtkinter import ThemeManager
 
 from plugins.antivirus.theme import (
-    COLOR_BTN_OUTLINE,
-    COLOR_BTN_OUTLINE_HOVER,
-    COLOR_CARD_BG,
-    COLOR_CARD_BORDER,
-    COLOR_MUTED,
     CORNER_R,
     PAD_X,
     add_separator,
     font,
     make_card,
+    section_title,
 )
+
+
+def _muted():
+    return ThemeManager.theme.get("Theme", {}).get("text_secondary")
+
+
+def _btn_border():
+    return ThemeManager.theme.get("CTkButton", {}).get("border_color")
+
+
+def _btn_hover():
+    return ThemeManager.theme.get("CTkButton", {}).get("hover_color")
 
 
 # ── 4. Whitelist + Quarantine ────────────────────────────
@@ -28,65 +37,64 @@ from plugins.antivirus.theme import (
 
 def _build_whitelist_card(plugin, container):
     card = customtkinter.CTkFrame(
-        container, corner_radius=CORNER_R, fg_color=COLOR_CARD_BG,
-        border_width=1, border_color=COLOR_CARD_BORDER,
+        container, corner_radius=CORNER_R, border_width=1,
     )
     card.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
     card.grid_columnconfigure(0, weight=1)
 
     hdr = customtkinter.CTkFrame(card, fg_color="transparent")
-    hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 6))
+    hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 3))
     hdr.grid_columnconfigure(0, weight=1)
 
-    customtkinter.CTkLabel(
-        hdr, text="Whitelist", font=font(14, bold=True),
-    ).grid(row=0, column=0, sticky="w")
+    section_title(hdr, "Whitelist").grid(row=0, column=0, sticky="w")
 
     customtkinter.CTkButton(
         hdr, text="+ Add", width=60, height=26, corner_radius=6,
         font=font(11), fg_color="transparent", border_width=1,
-        border_color=COLOR_BTN_OUTLINE, text_color=COLOR_BTN_OUTLINE,
-        hover_color=COLOR_BTN_OUTLINE_HOVER,
+        border_color=_btn_border(), text_color=_btn_border(),
+        hover_color=_btn_hover(),
         command=lambda: plugin._on_action("whitelist_add"),
     ).grid(row=0, column=1, sticky="e")
+
+    add_separator(card, 1)
 
     plugin._whitelist_frame = customtkinter.CTkFrame(
         card, fg_color="transparent",
     )
     plugin._whitelist_frame.grid(
-        row=1, column=0, padx=16, pady=(0, 14), sticky="ew",
+        row=2, column=0, padx=16, pady=(8, 14), sticky="ew",
     )
     plugin._whitelist_frame.grid_columnconfigure(0, weight=1)
 
     customtkinter.CTkLabel(
         plugin._whitelist_frame, text="No whitelisted paths",
-        font=font(12), text_color=COLOR_MUTED,
+        font=font(12), text_color=_muted(),
     ).grid(row=0, column=0, sticky="w")
 
 
 def _build_quarantine_card(plugin, container):
     card = customtkinter.CTkFrame(
-        container, corner_radius=CORNER_R, fg_color=COLOR_CARD_BG,
-        border_width=1, border_color=COLOR_CARD_BORDER,
+        container, corner_radius=CORNER_R, border_width=1,
     )
     card.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
     card.grid_columnconfigure(0, weight=1)
 
-    customtkinter.CTkLabel(
-        card, text="Quarantine", font=font(14, bold=True),
-    ).grid(row=0, column=0, padx=16, pady=(14, 6), sticky="w")
+    section_title(card, "Quarantine").grid(
+        row=0, column=0, padx=16, pady=(14, 3), sticky="w",
+    )
+    add_separator(card, 1)
 
     plugin._quarantine_frame = customtkinter.CTkFrame(
         card, fg_color="transparent",
     )
     plugin._quarantine_frame.grid(
-        row=1, column=0, padx=16, pady=(0, 14), sticky="ew",
+        row=2, column=0, padx=16, pady=(8, 14), sticky="ew",
     )
     plugin._quarantine_frame.grid_columnconfigure(0, weight=1)
 
     customtkinter.CTkLabel(
         plugin._quarantine_frame, text="No threats quarantined",
-        font=font(12), text_color=COLOR_MUTED,
+        font=font(12), text_color=_muted(),
     ).grid(row=0, column=0, sticky="w")
 
 
@@ -116,7 +124,7 @@ def _build_db_info_rows(plugin, card, start_row):
     r = start_row
     for label, value in db_rows:
         customtkinter.CTkLabel(
-            card, text=label, text_color=COLOR_MUTED, font=font(12),
+            card, text=label, text_color=_muted(), font=font(12),
         ).grid(row=r, column=0, padx=16, pady=(4, 0), sticky="w")
         val_lbl = customtkinter.CTkLabel(
             card, text=value, font=font(12, bold=True),
@@ -142,7 +150,7 @@ def _build_auto_update_toggle(plugin, card, row):
     ).grid(row=0, column=0, sticky="w")
     customtkinter.CTkLabel(
         left, text="Daily around 4:00 AM (\u00b12 hrs)",
-        font=font(11), text_color=COLOR_MUTED,
+        font=font(11), text_color=_muted(),
     ).grid(row=1, column=0, sticky="w")
 
     plugin._auto_update_switch = customtkinter.CTkSwitch(
@@ -160,9 +168,9 @@ def build_updates_card(plugin, parent, row):
     card = make_card(parent, row)
     card.grid_columnconfigure(1, weight=1)
 
-    customtkinter.CTkLabel(
-        card, text="Signature Updates", font=font(14, bold=True),
-    ).grid(row=0, column=0, columnspan=2, padx=16, pady=(14, 6), sticky="w")
+    section_title(card, "Signature Updates").grid(
+        row=0, column=0, columnspan=2, padx=16, pady=(14, 3), sticky="w",
+    )
 
     add_separator(card, 1)
 
@@ -173,8 +181,8 @@ def build_updates_card(plugin, parent, row):
     update_btn = customtkinter.CTkButton(
         card, text="Update Now", height=30, corner_radius=8,
         font=font(12), fg_color="transparent", border_width=1,
-        border_color=COLOR_BTN_OUTLINE, text_color=COLOR_BTN_OUTLINE,
-        hover_color=COLOR_BTN_OUTLINE_HOVER,
+        border_color=_btn_border(), text_color=_btn_border(),
+        hover_color=_btn_hover(),
         command=lambda: plugin._on_action("update_sigs"),
     )
     update_btn.grid(
