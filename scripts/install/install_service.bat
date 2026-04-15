@@ -21,12 +21,25 @@ for %%A in (%*) do (
 set SERVICE_NAME=ResistineVPN
 set SCRIPT_DIR=%~dp0
 if "%SCRIPT_DIR:~-1%"=="\" set SCRIPT_DIR=%SCRIPT_DIR:~0,-1%
-:: Project root is two levels up from scripts\install\
-set PROJECT_ROOT=%SCRIPT_DIR%\..\..
-for %%I in ("%PROJECT_ROOT%") do set PROJECT_ROOT=%%~fI
 
-set SERVICE_SCRIPT=%PROJECT_ROOT%\plugins\vpn\wireguard\windows_vpn_service.py
-if not exist "%SERVICE_SCRIPT%" if exist "%PROJECT_ROOT%\services\windows_vpn_service.py" set SERVICE_SCRIPT=%PROJECT_ROOT%\services\windows_vpn_service.py
+:: Try to find service script in installation directory first (bundled with installer)
+set SERVICE_SCRIPT=%SCRIPT_DIR%\windows_vpn_service.py
+if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%SCRIPT_DIR%\plugins\vpn\wireguard\windows_vpn_service.py
+if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%SCRIPT_DIR%\..\plugins\vpn\wireguard\windows_vpn_service.py
+
+:: Fallback: assume running from project root (development mode)
+if not exist "%SERVICE_SCRIPT%" (
+    set PROJECT_ROOT=%SCRIPT_DIR%\..\..
+    for %%I in ("%PROJECT_ROOT%") do set PROJECT_ROOT=%%~fI
+    set SERVICE_SCRIPT=%PROJECT_ROOT%\plugins\vpn\wireguard\windows_vpn_service.py
+)
+
+:: Last fallback: check services directory
+if not exist "%SERVICE_SCRIPT%" (
+    set PROJECT_ROOT=%SCRIPT_DIR%\..\..
+    for %%I in ("%PROJECT_ROOT%") do set PROJECT_ROOT=%%~fI
+    set SERVICE_SCRIPT=%PROJECT_ROOT%\services\windows_vpn_service.py
+)
 set PROGRAMDATA_DIR=%PROGRAMDATA%\Resistine\wireguard
 set LOG_DIR=%PROGRAMDATA%\Resistine
 set SERVICE_SETUP_LOG=%LOG_DIR%\vpn_service_install.log

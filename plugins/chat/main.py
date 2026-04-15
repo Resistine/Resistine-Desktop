@@ -320,14 +320,46 @@ class Plugin(BasePlugin):
     # ------------------------------------------------------------------
 
     def _get_chat_width(self):
-        """Return usable pixel width inside the chat textbox."""
+        """Return usable pixel width inside the chat textbox.
+
+        On Windows, winfo_width() may return 1 during layout phases.
+        This method measures from the parent chat_wrapper frame instead.
+        """
+        import sys
+
+        # Try to get width from parent chat_wrapper (more reliable on Windows)
+        if hasattr(self, '_chat_wrapper') and self._chat_wrapper:
+            try:
+                # Ensure layout is complete, especially on Windows
+                if sys.platform == "win32":
+                    self._chat_wrapper.update()
+                else:
+                    self._chat_wrapper.update_idletasks()
+
+                w = self._chat_wrapper.winfo_width()
+                if w > 1:
+                    # chat_wrapper already includes scrollbar, only subtract textbox padding
+                    padx = int(str(self.chat_box._textbox.cget("padx") or 0))
+                    return max(w - padx * 2 - 4, 300)
+            except Exception:
+                pass
+
+        # Fallback: measure textbox directly
         tw = self.chat_box._textbox
-        tw.update_idletasks()
-        w = tw.winfo_width()
-        if w <= 1:
-            w = 800
-        padx = int(str(tw.cget("padx") or 0))
-        return max(w - padx * 2 - 4, 300)
+        try:
+            if sys.platform == "win32":
+                tw.update()
+            else:
+                tw.update_idletasks()
+            w = tw.winfo_width()
+            if w > 1:
+                padx = int(str(tw.cget("padx") or 0))
+                return max(w - padx * 2 - 4, 300)
+        except Exception:
+            pass
+
+        # Last resort: use a reasonable default
+        return 500
 
     def _wire_chat_entry_paste(self):
         """Enable Ctrl+V / Cmd+V and a right-click context menu on the chat entry.
@@ -804,6 +836,9 @@ class Plugin(BasePlugin):
         chat_wrapper.grid(row=0, column=0, sticky="nsew")
         chat_wrapper.grid_columnconfigure(0, weight=1)
         chat_wrapper.grid_rowconfigure(0, weight=1)
+
+        # Store for width measurement on Windows
+        self._chat_wrapper = chat_wrapper
 
         self.chat_box = customtkinter.CTkTextbox(
             chat_wrapper,
