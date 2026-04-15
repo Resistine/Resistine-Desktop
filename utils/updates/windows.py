@@ -105,6 +105,13 @@ def _load_winsparkle():
         _dll.win_sparkle_set_can_shutdown_callback.argtypes = [_can_shutdown_cb_type]
         _dll.win_sparkle_set_can_shutdown_callback.restype = None
 
+        # Callback to launch installer with /SILENT for seamless upgrades
+        _run_installer_cb_type = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_wchar_p)
+        _dll.win_sparkle_set_user_run_installer_callback.argtypes = [
+            _run_installer_cb_type
+        ]
+        _dll.win_sparkle_set_user_run_installer_callback.restype = None
+
         logger.info(f"[WINSPARKLE] DLL loaded from {dll_path}")
         return True
     except Exception as e:
@@ -155,10 +162,24 @@ def init_updater(app):
             if _app is not None:
                 _app.after(0, _app._on_closing)
 
+        @ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_wchar_p)
+        def _run_installer(installer_path):
+            """Launch the downloaded installer with /SILENT for upgrades."""
+            import subprocess
+            try:
+                subprocess.Popen([installer_path, "/SILENT"])
+                logger.info(f"[WINSPARKLE] Launched installer: {installer_path}")
+                return 1  # 1 = handled
+            except Exception as e:
+                logger.error(f"[WINSPARKLE] Failed to launch installer: {e}")
+                return 0  # 0 = let WinSparkle handle it
+
         _stored_callbacks["can_shutdown"] = _can_shutdown
         _stored_callbacks["shutdown_request"] = _shutdown_request
+        _stored_callbacks["run_installer"] = _run_installer
         _dll.win_sparkle_set_can_shutdown_callback(_can_shutdown)
         _dll.win_sparkle_set_shutdown_request_callback(_shutdown_request)
+        _dll.win_sparkle_set_user_run_installer_callback(_run_installer)
 
         _dll.win_sparkle_init()
         _initialized = True
