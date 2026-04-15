@@ -149,3 +149,4 @@ resistine.github.io/
 # Inno Setup output
 dist/installer/
 *.exe
+VERSION

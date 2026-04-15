@@ -16,7 +16,7 @@ IS_WINDOWS = sys.platform == "win32"
 # Application metadata
 APP_NAME = 'Resistine'
 BUNDLE_ID = 'com.resistine.desktop'
-VERSION = '2026.03.19'
+VERSION = '2026.04.09'
 
 # Paths — project root is one level up from packaging/
 _spec_dir = os.path.dirname(os.path.abspath(SPEC))
@@ -26,8 +26,16 @@ def _src(relpath):
     """Resolve a project-relative path to an absolute path."""
     return os.path.join(base_path, relpath)
 
+# Write a VERSION file so the frozen app can read its own version at runtime.
+# Use a temp path so we don't pollute the project root.
+import tempfile as _tmpmod
+_version_file = os.path.join(_tmpmod.gettempdir(), 'VERSION')
+with open(_version_file, 'w') as _vf:
+    _vf.write(VERSION)
+
 # Collect data files
 datas = [
+    (_version_file, '.'),
     (_src('resources'), 'resources'),
     (_src('plugins'), 'plugins'),
     (_src('gui'), 'gui'),
@@ -82,7 +90,7 @@ if IS_MACOS:
 a = Analysis(
     [_src('main.py')],
     pathex=[base_path],
-    binaries=[],
+    binaries=[(_src('frameworks/WinSparkle/WinSparkle.dll'), '.')] if IS_WINDOWS else [],
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
