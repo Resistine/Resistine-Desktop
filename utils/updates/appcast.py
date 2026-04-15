@@ -1,9 +1,9 @@
 """
 Appcast Feed Parser — fetches and parses the Sparkle appcast XML feed.
 
-The same appcast.xml hosted on GitHub Pages serves both macOS (Sparkle)
-and Linux (this module). Linux items are identified by sparkle:os="linux"
-on the <enclosure> element.
+The same appcast.xml hosted on GitHub Pages serves all platforms.
+macOS items have no sparkle:os attribute (Sparkle convention).
+Windows items use sparkle:os="windows", Linux uses sparkle:os="linux".
 
 Author: Resistine Team
 Copyright (c) Resistine 2025
@@ -91,23 +91,37 @@ def fetch_appcast(url: str = APPCAST_URL, timeout: int = 15) -> list[AppcastItem
     return items
 
 
-def get_latest_linux_update(
-    current_version: str, url: str = APPCAST_URL
+def get_latest_update(
+    current_version: str, platform_os: str, url: str = APPCAST_URL
 ) -> Optional[AppcastItem]:
-    """Return the newest Linux appcast item newer than *current_version*.
+    """Return the newest appcast item for *platform_os* newer than *current_version*.
 
-    Filters for items where ``os == "linux"`` and returns the first
+    Filters for items where ``os == platform_os`` and returns the first
     (newest) one whose version is greater than *current_version*.
     Returns ``None`` if already up-to-date or on any error.
     """
     items = fetch_appcast(url)
     for item in items:
-        if item.os != "linux":
+        if item.os != platform_os:
             continue
         if compare_versions(current_version, item.version) < 0:
             logger.info(
-                f"[APPCAST] Linux update available: {item.version} "
+                f"[APPCAST] {platform_os} update available: {item.version} "
                 f"(current: {current_version})"
             )
             return item
     return None
+
+
+def get_latest_linux_update(
+    current_version: str, url: str = APPCAST_URL
+) -> Optional[AppcastItem]:
+    """Return the newest Linux appcast item newer than *current_version*."""
+    return get_latest_update(current_version, "linux", url)
+
+
+def get_latest_windows_update(
+    current_version: str, url: str = APPCAST_URL
+) -> Optional[AppcastItem]:
+    """Return the newest Windows appcast item newer than *current_version*."""
+    return get_latest_update(current_version, "windows", url)
