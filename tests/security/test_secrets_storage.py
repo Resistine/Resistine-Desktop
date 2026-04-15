@@ -193,14 +193,46 @@ class TestKeyringSecurityCheck:
 
 
 # ===========================================================================
-# P1-B: Windows VPN IPC hardcoded token
+# P1-B: Windows VPN IPC token — no hardcoded placeholders anywhere
 # ===========================================================================
+# NOTE: the earlier version of this test just did
+#   `from plugins.vpn.wireguard.service_client import IPC_TOKEN`
+# and asserted it wasn't equal to "RESISTINE_INTERNAL_TOKEN_CHANGE_ME".
+# That only covered one specific placeholder string at a specific
+# import location, and it broke as soon as the module stopped exposing
+# a module-level IPC_TOKEN constant at all. The pair of tests below
+# instead check both the service_client and gui/tray sides and confirm
+# both that no "CHANGE_ME"-style placeholder survives anywhere, and
+# also that a _load_ipc_token loader exists that reads from the shared
+# %PROGRAMDATA%\\Resistine\\ipc_token file. If you refactor the token
+# loading code in either module please make sure both assertions below
+# are correct, otherwise you'll notice ship-blocker authorization
+# failures against the VPN service like the tray bug that was caught
+# earlier in this same branch. - Austin
 @pytest.mark.security
-def test_windows_ipc_token_is_not_default():
-    """IPC_TOKEN must not be the factory-default placeholder value."""
-    from plugins.vpn.wireguard.service_client import IPC_TOKEN
-    assert IPC_TOKEN != "RESISTINE_INTERNAL_TOKEN_CHANGE_ME", (
-        "Default IPC token has not been changed — this is a security vulnerability"
+def test_service_client_has_no_hardcoded_token():
+    """service_client must load the IPC token from the shared file (not a
+    hardcoded placeholder). Token comes from %PROGRAMDATA%\\Resistine\\ipc_token
+    written by the service at first start.
+    """
+    import inspect
+    from plugins.vpn.wireguard import service_client
+    # Must not define a module-level IPC_TOKEN constant with a placeholder value
+    assert not hasattr(service_client, "IPC_TOKEN") or "CHANGE_ME" not in getattr(service_client, "IPC_TOKEN", ""), (
+        "service_client must not ship a hardcoded IPC token placeholder"
+    )
+    # Must expose a loader function that reads from the shared file
+    assert hasattr(service_client, "_load_ipc_token")
+    source = inspect.getsource(service_client._load_ipc_token)
+    assert "ipc_token" in source
+
+
+@pytest.mark.security
+def test_tray_has_no_hardcoded_token():
+    """Tray must load the token dynamically, not hold a 'CHANGE_ME' placeholder."""
+    from gui.tray import IPC_TOKEN
+    assert "CHANGE_ME" not in IPC_TOKEN, (
+        "Tray has a hardcoded placeholder token — it must read from the shared file"
     )
 
 

@@ -234,7 +234,7 @@ def stop_tunnel(tunnel):
     )
 
     out = (result.stdout + result.stderr).lower()
-    if "not started" in out:
+    if "not started" in out or "not been started" in out or "1062" in out:
         return True, "Already stopped"
 
     return result.returncode == 0, out.strip()

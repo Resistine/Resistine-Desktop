@@ -48,9 +48,37 @@ logger = logging.getLogger("ResistineTray")
 # ---- IPC (inline, no service_client import) ----
 SERVICE_HOST = "127.0.0.1"
 SERVICE_PORT = 51888
-BUFFER_SIZE  = 4096
-IPC_TOKEN    = "RESISTINE_INTERNAL_TOKEN_CHANGE_ME"
+BUFFER_SIZE  = 65536
 POLL_INTERVAL = 5
+
+# Token is written by the ResistineVPN service on first start and shared via
+# %PROGRAMDATA%\Resistine\wireguard\.ipc_token. Path must match IPC_TOKEN_FILE
+# in plugins/vpn/wireguard/windows_vpn_service.py.
+_IPC_TOKEN_FILE = os.path.join(
+    os.environ.get("PROGRAMDATA", r"C:\ProgramData"),
+    "Resistine",
+    "wireguard",
+    ".ipc_token",
+)
+
+
+def _load_ipc_token() -> str:
+    try:
+        with open(_IPC_TOKEN_FILE, "r") as fh:
+            token = fh.read().strip()
+        if token:
+            return token
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        logger.error(f"Failed to load IPC token: {e}")
+    # Test/dev override
+    return os.environ.get("RESISTINE_IPC_TOKEN", "")
+
+
+# IPC_TOKEN kept as a module attribute for backward compatibility, but
+# it is re-loaded on every IPC call via _load_ipc_token().
+IPC_TOKEN = _load_ipc_token()
 
 DOT_COLORS = {
     "connected":    (30,  142,  62, 255),   # green
@@ -59,9 +87,25 @@ DOT_COLORS = {
 }
 
 
+def _recv_response(sock: socket.socket) -> bytes:
+    """Read until the service closes the connection (TCP FIN)."""
+    parts = []
+    while True:
+        chunk = sock.recv(BUFFER_SIZE)
+        if not chunk:
+            break
+        parts.append(chunk)
+    return b"".join(parts)
+
+
 def _send_command(command: str, tunnel: str, config_path: str = None) -> dict:
+    token = _load_ipc_token()
+    if not token:
+        return {"status": "error", "state": "Stopped",
+                "message": "IPC token unavailable — VPN service not installed"}
+
     payload = {
-        "token":   IPC_TOKEN,
+        "token":   token,
         "command": command,
         "tunnel":  tunnel,
     }
@@ -74,7 +118,7 @@ def _send_command(command: str, tunnel: str, config_path: str = None) -> dict:
         sock.settimeout(5)
         sock.connect((SERVICE_HOST, SERVICE_PORT))
         sock.sendall(json.dumps(payload).encode("utf-8"))
-        data = sock.recv(BUFFER_SIZE)
+        data = _recv_response(sock)
         return json.loads(data.decode("utf-8"))
     except ConnectionRefusedError:
         return {"status": "error", "state": "Stopped", "message": "Service not running"}

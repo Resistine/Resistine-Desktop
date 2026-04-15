@@ -143,14 +143,27 @@ def get_agent_name():
         name = f"{hostname}-{suffix}"
     else:
         name = hostname
-    return re.sub(r"[^A-Za-z0-9.\-_]", "", name)
+    sanitized = re.sub(r"[^A-Za-z0-9.\-_]", "", name)
+    if sanitized:
+        return sanitized
+    # Hostname was entirely non-ASCII or special chars. Fall back to a name
+    # derived from the GUID so Wazuh enrollment still gets a unique value.
+    if guid:
+        return f"agent-{guid.replace('-', '')[-12:].upper()}"
+    return "resistine-agent"
 
 
 def get_agent_group():
-    """Return the user's email (sanitized) as the agent group."""
+    """Return the user's email (sanitized) as the agent group.
+
+    Email flows into PowerShell commands (msiexec args) so it must be stripped
+    of shell metacharacters using the same allowlist as get_agent_name.
+    """
     email = settings.get("auth", "email", "default")
     if email and email != "default":
-        return email.replace("@", ".")
+        sanitized = re.sub(r"[^A-Za-z0-9.\-_]", "", email.replace("@", "."))
+        if sanitized:
+            return sanitized
     return "default"
 
 
