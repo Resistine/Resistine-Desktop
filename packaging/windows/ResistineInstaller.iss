@@ -1544,6 +1544,17 @@ function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   Result := False;
 
+  { Silent mode (WinSparkle upgrade): skip maintenance page, just overwrite }
+  if WizardSilent and ExistingInstallDetected then
+  begin
+    SelectedAction := maInstall;
+    if (MaintenancePage <> nil) and (PageID = MaintenancePage.ID) then
+    begin
+      Result := True;
+      exit;
+    end;
+  end;
+
   if ExistingInstallDetected and (SelectedAction = maUninstall) and
      ((PageID = wpSelectTasks) or (PageID = wpReady) or (PageID = wpInstalling) or
       ((PreflightPage <> nil) and (PageID = PreflightPage.ID))) then
