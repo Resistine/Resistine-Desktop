@@ -211,15 +211,15 @@ class Plugin(BasePlugin):
                     yview = self.main_frame._parent_canvas.yview()
                     is_mapped = bool(self.main_frame._scrollbar.grid_info())
                     if yview and (yview[0] <= 0.01 and yview[1] >= 0.99):
+                        if is_mapped:
+                            self.main_frame._saved_sb_grid = self.main_frame._scrollbar.grid_info()
+                            self.main_frame._scrollbar.grid_remove()
+                    else:
                         if not is_mapped:
                             if hasattr(self.main_frame, "_saved_sb_grid") and self.main_frame._saved_sb_grid:
                                 self.main_frame._scrollbar.grid(**self.main_frame._saved_sb_grid)
                             else:
                                 self.main_frame._scrollbar.grid(row=0, column=1, sticky="ns", pady=0)
-                    else:
-                        if is_mapped:
-                            self.main_frame._saved_sb_grid = self.main_frame._scrollbar.grid_info()
-                            self.main_frame._scrollbar.grid_remove()
             except Exception:
                 pass
             # --- End Auto-hide ---
