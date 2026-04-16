@@ -46,8 +46,19 @@ if "!SERVICE_RUNNING!"=="1" (
     if "!SERVICE_RUNNING!"=="1" (
         echo [run.bat] post-start: service is now RUNNING
     ) else (
-        echo [run.bat] post-start: service still not running -- UAC may have been declined, or start failed
-        echo [run.bat] check %PROGRAMDATA%\Resistine\vpn_service.log for details
+        echo [run.bat] post-start: start failed -- registration may be stale ^(marked-for-deletion^); attempting full reinstall
+        set "INSTALL_LOG=%PROGRAMDATA%\Resistine\run_bat_install_service.log"
+        set "INSTALL_WRAPPER=%TEMP%\resistine_run_install_wrapper.bat"
+        if not exist "%PROGRAMDATA%\Resistine" mkdir "%PROGRAMDATA%\Resistine" >nul 2>&1
+        call :write_install_wrapper
+        powershell -NoProfile -Command "Start-Process -FilePath '!INSTALL_WRAPPER!' -Verb RunAs -Wait"
+        del "!INSTALL_WRAPPER!" >nul 2>&1
+        call :check_service_state
+        if "!SERVICE_RUNNING!"=="1" (
+            echo [run.bat] post-reinstall: service is now RUNNING
+        ) else (
+            echo [run.bat] post-reinstall: still not running -- check !INSTALL_LOG!
+        )
     )
 ) else (
     echo [run.bat] service: not installed -- reinstall required
