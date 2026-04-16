@@ -9,17 +9,14 @@ if "%SCRIPT_DIR:~-1%"=="\" set SCRIPT_DIR=%SCRIPT_DIR:~0,-1%
 
 set SERVICE_NAME=ResistineVPN
 
-:: Try to find service script in installation directory first (bundled with installer)
-set SERVICE_SCRIPT=%SCRIPT_DIR%\windows_vpn_service.py
-if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%SCRIPT_DIR%\plugins\vpn\wireguard\windows_vpn_service.py
-if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%SCRIPT_DIR%\..\plugins\vpn\wireguard\windows_vpn_service.py
+:: Project root is always two levels up from scripts\install\.
+:: Resolved unconditionally so VENV_DIR, MAIN_SCRIPT, etc. below always expand
+:: correctly — regardless of which SERVICE_SCRIPT path matches.
+for %%I in ("%SCRIPT_DIR%\..\..") do set PROJECT_ROOT=%%~fI
 
-:: Fallback: assume running from project root (development mode)
-if not exist "%SERVICE_SCRIPT%" (
-    set PROJECT_ROOT=%SCRIPT_DIR%\..\..
-    for %%I in ("%PROJECT_ROOT%") do set PROJECT_ROOT=%%~fI
-    set SERVICE_SCRIPT=%PROJECT_ROOT%\plugins\vpn\wireguard\windows_vpn_service.py
-)
+:: Try bundled-installer layout first, then fall back to the project-root layout.
+set SERVICE_SCRIPT=%SCRIPT_DIR%\windows_vpn_service.py
+if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%PROJECT_ROOT%\plugins\vpn\wireguard\windows_vpn_service.py
 set MAIN_SCRIPT=%PROJECT_ROOT%\main.py
 set TRAY_SCRIPT=%PROJECT_ROOT%\gui\tray.py
 set ICON=%PROJECT_ROOT%\resources\icons\icon.ico
@@ -50,9 +47,7 @@ echo.
 
 :: ---- Kill tray process ----
 echo [1/4] Stopping tray icon...
-for /f "tokens=2" %%i in ('tasklist /v 2^>nul ^| findstr /i "tray.py"') do (
-    taskkill /f /pid %%i >nul 2>&1
-)
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe' OR Name='pythonw.exe'\" | Where-Object { $_.CommandLine -like '*tray.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 echo       OK
 
 :: ---- Remove startup registry entries ----
@@ -91,10 +86,13 @@ if defined PYTHON_FULL (
 
 :: ---- Remove service (needs admin) ----
 echo [4/4] Removing Windows service ^(requires Admin^)...
-powershell -Command "Start-Process cmd -ArgumentList '/c \"%~f0\" /service & pause' -Verb RunAs -Wait"
+set "SERVICE_LOG=%PROGRAMDATA_DIR%\uninstall_service.log"
+if not exist "%PROGRAMDATA_DIR%" mkdir "%PROGRAMDATA_DIR%" >nul 2>&1
+powershell -Command "Start-Process cmd -ArgumentList '/c \"%~f0\" /service > \"%SERVICE_LOG%\" 2>&1' -Verb RunAs -Wait"
 if %errorlevel% neq 0 (
     echo WARNING: Service removal failed or was cancelled.
 )
+echo       Service removal log: %SERVICE_LOG%
 
 del "%TEMP%\resistine_python_path.txt" >nul 2>&1
 
@@ -204,10 +202,12 @@ if %errorlevel% equ 0 (
     ) else if exist "%VENV_PYTHON%" (
         :: Fallback to venv if system Python not found
         "%VENV_PYTHON%" "%SERVICE_SCRIPT%" remove >nul 2>&1
-    ) else (
-        :: Last resort: raw sc delete
-        sc delete %SERVICE_NAME% >nul 2>&1
     )
+
+    :: Safety net: always follow up with sc delete in case the python-based
+    :: remove failed silently (pywin32 mismatch, stale registration, etc.).
+    :: Idempotent — harmless if the service is already gone.
+    sc delete %SERVICE_NAME% >nul 2>&1
 
     :: Wait for full cleanup
     set RETRY=0
