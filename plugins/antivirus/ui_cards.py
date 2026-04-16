@@ -103,7 +103,92 @@ def build_whitelist_and_quarantine(plugin, parent, row):
     return row + 1
 
 
-# ── 5. Signature Updates ────────────────────────────────
+# ── 5. Scan Exclusions ─────────────────────────────────
+
+
+def build_scan_exclusions(plugin, parent, row):
+    """Build the Scan Exclusions card (extension filter + max file size)."""
+    card = make_card(parent, row)
+    card.grid_columnconfigure(0, weight=1)
+
+    customtkinter.CTkLabel(
+        card, text="Scan Exclusions", font=font(14, bold=True),
+    ).grid(row=0, column=0, columnspan=2, padx=16, pady=(14, 6), sticky="w")
+
+    add_separator(card, 1)
+
+    # ── Extension exclusions ──
+    customtkinter.CTkLabel(
+        card, text="Skip File Extensions", font=font(12),
+        text_color=COLOR_MUTED,
+    ).grid(row=2, column=0, columnspan=2, padx=16, pady=(8, 4), sticky="w")
+
+    add_row = customtkinter.CTkFrame(card, fg_color="transparent")
+    add_row.grid(
+        row=3, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 4),
+    )
+    add_row.grid_columnconfigure(0, weight=1)
+
+    plugin._ext_entry = customtkinter.CTkEntry(
+        add_row, height=28, placeholder_text=".iso, .vmdk, .log",
+        font=font(11),
+    )
+    plugin._ext_entry.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+    plugin._ext_entry.bind("<Return>", lambda e: plugin._add_excluded_extension())
+
+    customtkinter.CTkButton(
+        add_row, text="+ Add", width=60, height=28, corner_radius=6,
+        font=font(11), fg_color="transparent", border_width=1,
+        border_color=COLOR_BTN_OUTLINE, text_color=COLOR_BTN_OUTLINE,
+        hover_color=COLOR_BTN_OUTLINE_HOVER,
+        command=plugin._add_excluded_extension,
+    ).grid(row=0, column=1)
+
+    plugin._exclusions_frame = customtkinter.CTkFrame(
+        card, fg_color="transparent",
+    )
+    plugin._exclusions_frame.grid(
+        row=4, column=0, columnspan=2, padx=16, pady=(0, 8), sticky="ew",
+    )
+    plugin._exclusions_frame.grid_columnconfigure(0, weight=1)
+
+    add_separator(card, 5)
+
+    # ── Max file size ──
+    size_row = customtkinter.CTkFrame(card, fg_color="transparent")
+    size_row.grid(
+        row=6, column=0, columnspan=2, sticky="ew", padx=16, pady=(8, 14),
+    )
+    size_row.grid_columnconfigure(0, weight=1)
+
+    customtkinter.CTkLabel(
+        size_row, text="Max File Size", font=font(12),
+    ).grid(row=0, column=0, sticky="w")
+
+    right = customtkinter.CTkFrame(size_row, fg_color="transparent")
+    right.grid(row=0, column=1, sticky="e")
+
+    plugin._size_entry = customtkinter.CTkEntry(
+        right, width=70, height=28, font=font(11), justify="right",
+    )
+    plugin._size_entry.grid(row=0, column=0)
+    plugin._size_entry.insert(0, "0")
+    plugin._size_entry.bind("<Return>", lambda e: plugin._save_max_file_size())
+    plugin._size_entry.bind("<FocusOut>", lambda e: plugin._save_max_file_size())
+
+    customtkinter.CTkLabel(
+        right, text="MB", font=font(11), text_color=COLOR_MUTED,
+    ).grid(row=0, column=1, padx=(4, 0))
+
+    customtkinter.CTkLabel(
+        size_row, text="0 = no limit",
+        font=font(10), text_color=COLOR_MUTED,
+    ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
+
+    return row + 1
+
+
+# ── 6. Signature Updates ────────────────────────────────
 
 
 def _build_db_info_rows(plugin, card, start_row):
