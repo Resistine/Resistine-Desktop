@@ -23,7 +23,7 @@ if not exist "%SERVICE_SCRIPT%" (
 set MAIN_SCRIPT=%PROJECT_ROOT%\main.py
 set TRAY_SCRIPT=%PROJECT_ROOT%\gui\tray.py
 set ICON=%PROJECT_ROOT%\resources\icons\icon.ico
-set VENV_DIR=%PROJECT_ROOT%\venv
+set VENV_DIR=%PROJECT_ROOT%\.venv
 set VENV_PYTHON=%VENV_DIR%\Scripts\python.exe
 set VENV_PIP=%VENV_DIR%\Scripts\pip.exe
 set REQUIREMENTS=%PROJECT_ROOT%\requirements\requirements-windows.txt
