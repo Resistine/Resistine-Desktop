@@ -87,11 +87,18 @@ if defined PYTHON_FULL (
 :: ---- Remove service (needs admin) ----
 echo [4/4] Removing Windows service ^(requires Admin^)...
 set "SERVICE_LOG=%PROGRAMDATA_DIR%\uninstall_service.log"
+set "UNINSTALL_WRAPPER=%TEMP%\resistine_uninstall_service_wrapper.bat"
 if not exist "%PROGRAMDATA_DIR%" mkdir "%PROGRAMDATA_DIR%" >nul 2>&1
-powershell -Command "Start-Process cmd -ArgumentList '/c \"%~f0\" /service > \"%SERVICE_LOG%\" 2>&1' -Verb RunAs -Wait"
+:: PowerShell's -ArgumentList doesn't reliably pass `>` and nested quotes
+:: through cmd's argument parser. Write a wrapper bat with the redirect
+:: in plain cmd syntax, then elevate that.
+> "%UNINSTALL_WRAPPER%" echo @echo off
+>> "%UNINSTALL_WRAPPER%" echo call "%~f0" /service ^> "%SERVICE_LOG%" 2^>^&1
+powershell -Command "Start-Process -FilePath '%UNINSTALL_WRAPPER%' -Verb RunAs -Wait"
 if %errorlevel% neq 0 (
     echo WARNING: Service removal failed or was cancelled.
 )
+del "%UNINSTALL_WRAPPER%" >nul 2>&1
 echo       Service removal log: %SERVICE_LOG%
 
 del "%TEMP%\resistine_python_path.txt" >nul 2>&1
@@ -188,50 +195,88 @@ if exist "%WG_EXE%" (
 echo       OK
 
 :: ---- Stop and remove ResistineVPN service ----
+:: Flattened control flow (no labels inside parenthesized blocks) so cmd's
+:: parser can't choke with ". was unexpected at this time".
 echo Removing ResistineVPN service...
 sc query %SERVICE_NAME% >nul 2>&1
-if %errorlevel% equ 0 (
-    echo       Stopping service...
-    sc stop %SERVICE_NAME% >nul 2>&1
-    timeout /t 1 /nobreak >nul
+if %errorlevel% neq 0 goto :service_not_present
 
-    echo       Removing service...
-    if defined SYS_PYTHON (
-        :: Use system Python — matches how the service was installed
-        "%SYS_PYTHON%" "%SERVICE_SCRIPT%" remove >nul 2>&1
-    ) else if exist "%VENV_PYTHON%" (
-        :: Fallback to venv if system Python not found
-        "%VENV_PYTHON%" "%SERVICE_SCRIPT%" remove >nul 2>&1
-    )
+echo       Stopping service...
+sc stop %SERVICE_NAME% >nul 2>&1
+call :wait_for_stopped 30
 
-    :: Safety net: always follow up with sc delete in case the python-based
-    :: remove failed silently (pywin32 mismatch, stale registration, etc.).
-    :: Idempotent — harmless if the service is already gone.
-    sc delete %SERVICE_NAME% >nul 2>&1
-
-    :: Wait for full cleanup
-    set RETRY=0
-    :wait_loop
-    sc query %SERVICE_NAME% >nul 2>&1
-    if %errorlevel% equ 0 (
-        if !RETRY! lss 10 (
-            set /a RETRY+=1
-            echo       Waiting for cleanup... ^(!RETRY!/10^)
-            timeout /t 1 /nobreak >nul
-            goto :wait_loop
-        ) else (
-            echo WARNING: Service still registered.
-            echo          Restart your PC to complete removal.
-        )
-    ) else (
-        echo       OK - Service removed
-    )
-) else (
-    echo       Not found, skipping
+echo       Removing service...
+if defined SYS_PYTHON (
+    "%SYS_PYTHON%" "%SERVICE_SCRIPT%" remove >nul 2>&1
+) else if exist "%VENV_PYTHON%" (
+    "%VENV_PYTHON%" "%SERVICE_SCRIPT%" remove >nul 2>&1
 )
+
+:: Safety net: always follow up with sc delete in case the python-based
+:: remove failed silently (pywin32 mismatch, stale registration, etc.).
+:: Idempotent — harmless if the service is already gone.
+sc delete %SERVICE_NAME% >nul 2>&1
+
+call :wait_for_absence 10
+goto :service_removal_done
+
+:service_not_present
+echo       Not found, skipping
+
+:service_removal_done
 
 echo.
 echo ============================================================
 echo  Service removal complete.
 echo ============================================================
 exit /b 0
+
+
+:: ============================================================
+:: Subroutine: wait_for_stopped <max_seconds>
+:: ============================================================
+:: Polls `sc query %SERVICE_NAME%` until STATE is STOPPED, up to <max_seconds>.
+:: sc stop is async — calling sc delete on a still-stopping service only
+:: marks it for deletion, leaving a zombie registration that blocks reinstalls.
+:: Flattened goto-based flow so no labels sit inside parenthesized blocks
+:: (cmd's parser chokes with ". was unexpected" on multi-label blocks).
+:wait_for_stopped
+set /a _WAIT_MAX=%~1
+set /a _WAIT_COUNT=0
+:_wait_stopped_iter
+sc query %SERVICE_NAME% | findstr /C:"STOPPED" >nul 2>&1
+if %errorlevel% equ 0 goto :_wait_stopped_done
+if !_WAIT_COUNT! geq !_WAIT_MAX! goto :_wait_stopped_timeout
+set /a _WAIT_COUNT+=1
+echo       Waiting for STOPPED state... ^(!_WAIT_COUNT!/!_WAIT_MAX!^)
+timeout /t 1 /nobreak >nul
+goto :_wait_stopped_iter
+:_wait_stopped_timeout
+echo WARNING: Service did not reach STOPPED in !_WAIT_MAX! seconds; proceeding anyway.
+:_wait_stopped_done
+goto :eof
+
+
+:: ============================================================
+:: Subroutine: wait_for_absence <max_seconds>
+:: ============================================================
+:: Polls `sc query %SERVICE_NAME%` until the service is absent (not registered),
+:: up to <max_seconds>. Prints a final "OK - Service removed" or a warning.
+:wait_for_absence
+set /a _ABS_MAX=%~1
+set /a _ABS_COUNT=0
+:_wait_absence_iter
+sc query %SERVICE_NAME% >nul 2>&1
+if %errorlevel% neq 0 goto :_wait_absence_gone
+if !_ABS_COUNT! geq !_ABS_MAX! goto :_wait_absence_timeout
+set /a _ABS_COUNT+=1
+echo       Waiting for cleanup... ^(!_ABS_COUNT!/!_ABS_MAX!^)
+timeout /t 1 /nobreak >nul
+goto :_wait_absence_iter
+:_wait_absence_timeout
+echo WARNING: Service still registered after !_ABS_MAX! seconds.
+echo          It may be marked for deletion; a reboot will complete removal.
+goto :eof
+:_wait_absence_gone
+echo       OK - Service removed
+goto :eof
