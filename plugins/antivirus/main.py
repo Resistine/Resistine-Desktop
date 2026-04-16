@@ -27,6 +27,7 @@ from plugins.antivirus.ui_builders import (
     build_status_banner,
 )
 from plugins.antivirus.ui_cards import (
+    build_scan_exclusions,
     build_updates_card,
     build_whitelist_and_quarantine,
 )
@@ -98,6 +99,7 @@ class Plugin(BasePlugin):
         self._banner_label = None
         self._banner_subtitle = None
         self._banner_action_btn = None
+        self._banner_progress = None
         self._scanning = False
         self._scan_handle = None
         self._last_state = None
@@ -186,6 +188,7 @@ class Plugin(BasePlugin):
         row = build_scan_and_protection(self, self.main_frame, row)
         row = build_scan_activity(self, self.main_frame, row)
         row = build_whitelist_and_quarantine(self, self.main_frame, row)
+        row = build_scan_exclusions(self, self.main_frame, row)
         row = build_updates_card(self, self.main_frame, row)
 
         # Show a development banner on Linux/Windows
@@ -219,6 +222,7 @@ class Plugin(BasePlugin):
         self.app.after(100, self._refresh_db_info)
         self.app.after(200, self._refresh_whitelist)
         self.app.after(300, self._refresh_quarantine)
+        self.app.after(400, self._refresh_exclusions)
 
         # If we already know the status from a previous poll, apply it
         # immediately so the card doesn't flash "Checking..." on every visit.
@@ -302,10 +306,10 @@ class Plugin(BasePlugin):
         self._banner_label = None
         self._banner_subtitle = None
         self._banner_action_btn = None
+        self._banner_progress = None
         if hasattr(self, "main_container") and self.main_container:
             self.main_container.destroy()
             self.main_container = None
-        self.main_frame = None
 
     # ── UI Event Handlers ────────────────────────────────────
 
@@ -573,6 +577,9 @@ class Plugin(BasePlugin):
             self._banner_action_btn.configure(
                 state="disabled", text="Starting...",
             )
+        if self._banner_progress:
+            self._banner_progress.grid()
+            self._banner_progress.start()
 
         def _run():
             ok, msg = clamav.activate_system_daemons()
@@ -581,6 +588,9 @@ class Plugin(BasePlugin):
         threading.Thread(target=_run, daemon=True).start()
 
     def _handle_protection_started(self, ok: bool, msg: str):
+        if self._banner_progress:
+            self._banner_progress.stop()
+            self._banner_progress.grid_remove()
         if self._banner_action_btn:
             self._banner_action_btn.configure(
                 state="normal", text="Start Protection",
@@ -668,23 +678,26 @@ class Plugin(BasePlugin):
         self._scan_status_label.configure(text=f"Scanning: {short}")
         self._log_append(f"Scanning: {target}")
 
-        file_count = [0]  # mutable counter for closure
+        file_count = [0]
+        total_files = [0]
+
+        def on_total(total: int):
+            total_files[0] = total
+            self.app.after(0, self._on_scan_total_known, total)
 
         def on_progress(line: str):
             self.app.after(0, self._log_append, line)
-            # Update status label with current file being scanned
             if ":" in line and ("OK" in line or "FOUND" in line):
                 file_count[0] += 1
-                fpath = line.split(":")[0].strip()
-                # Show path relative to scan target for context
-                if os.path.isdir(target):
-                    rel = os.path.relpath(fpath, os.path.dirname(target))
+                total = total_files[0]
+                if total > 0:
+                    status = f"Scanned {file_count[0]} / {total} files"
+                    pct = file_count[0] / total
                 else:
-                    rel = os.path.basename(fpath)
-                count_str = f" ({file_count[0]} scanned)"
+                    status = f"Scanned {file_count[0]} files"
+                    pct = None
                 self.app.after(
-                    0, self._scan_status_label.configure,
-                    {"text": f"Scanning: {rel}{count_str}"},
+                    0, self._on_scan_file_done, status, pct,
                 )
 
         def on_complete(result: ScanResult):
@@ -692,6 +705,7 @@ class Plugin(BasePlugin):
 
         self._scan_handle = scan(
             target, on_progress=on_progress, on_complete=on_complete,
+            on_total=on_total,
         )
 
     def _cancel_scan(self):
@@ -702,6 +716,22 @@ class Plugin(BasePlugin):
             cancel_btn = self._action_buttons.get("cancel_scan")
             if cancel_btn:
                 cancel_btn.configure(state="disabled")
+
+    def _on_scan_total_known(self, total: int):
+        """Switch progress bar to determinate mode when file count is known."""
+        self._scan_progress.stop()
+        if total == 0:
+            self._scan_progress.grid_remove()
+            self._scan_status_label.configure(text="No files matched filters")
+            return
+        self._scan_progress.configure(mode="determinate")
+        self._scan_progress.set(0)
+
+    def _on_scan_file_done(self, status: str, pct: float | None):
+        """Update scan progress label and bar after each file."""
+        self._scan_status_label.configure(text=status)
+        if pct is not None:
+            self._scan_progress.set(min(pct, 1.0))
 
     def _handle_scan_complete(self, result: ScanResult):
         self._scanning = False
@@ -879,6 +909,74 @@ class Plugin(BasePlugin):
     def _remove_whitelist(self, path: str):
         clamav.remove_from_whitelist(path)
         self._refresh_whitelist()
+
+    # ── Scan Exclusions ───────────────────────────────────────
+
+    def _add_excluded_extension(self):
+        """Add extension(s) from the entry field."""
+        raw = self._ext_entry.get().strip()
+        if not raw:
+            return
+        exts = [part.strip() for part in raw.split(",") if part.strip()]
+        if exts:
+            clamav.add_excluded_extensions(exts)
+        self._ext_entry.delete(0, "end")
+        self._refresh_exclusions()
+
+    def _remove_excluded_extension(self, ext: str):
+        clamav.remove_excluded_extension(ext)
+        self._refresh_exclusions()
+
+    def _save_max_file_size(self):
+        """Persist the max file size from the entry field."""
+        raw = self._size_entry.get().strip()
+        try:
+            size = int(raw) if raw else 0
+            size = max(0, min(size, 10000))  # Clamp 0–10 GB
+        except ValueError:
+            size = 0
+        clamav.set_max_file_size(size)
+        self._size_entry.delete(0, "end")
+        self._size_entry.insert(0, str(size))
+
+    def _refresh_exclusions(self):
+        """Rebuild the scan exclusions card contents."""
+        frame = getattr(self, "_exclusions_frame", None)
+        if frame is None:
+            return
+        for w in frame.winfo_children():
+            w.destroy()
+
+        excl = clamav.get_scan_exclusions()
+
+        if not excl["extensions"]:
+            customtkinter.CTkLabel(
+                frame, text="No excluded extensions",
+                font=font(12), text_color=COLOR_MUTED,
+            ).grid(row=0, column=0, sticky="w")
+        else:
+            for i, ext in enumerate(excl["extensions"]):
+                row_frame = customtkinter.CTkFrame(
+                    frame, fg_color="transparent",
+                )
+                row_frame.grid(row=i, column=0, sticky="ew", pady=1)
+                row_frame.grid_columnconfigure(0, weight=1)
+
+                customtkinter.CTkLabel(
+                    row_frame, text=ext, font=font(11), anchor="w",
+                ).grid(row=0, column=0, sticky="w")
+
+                customtkinter.CTkButton(
+                    row_frame, text="\u2715", width=24, height=24,
+                    font=font(10), fg_color="transparent",
+                    hover_color=("#E5E7EB", "#2A2A2C"),
+                    command=lambda e=ext: self._remove_excluded_extension(e),
+                ).grid(row=0, column=1, sticky="e")
+
+        size_entry = getattr(self, "_size_entry", None)
+        if size_entry:
+            size_entry.delete(0, "end")
+            size_entry.insert(0, str(excl["max_size_mb"]))
 
     # ── Quarantine ─────────────────────────────────────────────
 

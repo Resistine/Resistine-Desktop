@@ -13,6 +13,7 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import glob
+import json
 import os
 import re
 import shutil
@@ -39,6 +40,7 @@ _FRESHCLAM_CONF = os.path.join(_CLAMAV_DATA_DIR, "freshclam.conf")
 _CLAMD_SOCKET = os.path.join(_RUN_DIR, "clamd.sock")
 _CLAMD_PID = os.path.join(_RUN_DIR, "clamd.pid")
 _WHITELIST_FILE = os.path.join(_CLAMAV_DATA_DIR, "whitelist.txt")
+_EXCLUSIONS_FILE = os.path.join(_CLAMAV_DATA_DIR, "exclusions.json")
 
 
 def _ensure_dirs():
@@ -426,11 +428,17 @@ def _contscan_socket(sock_path: str, file_path: str) -> str:
         return buf.decode(errors="replace").strip("\0").strip()
 
 
-def _walk_files(target: str, whitelist: set[str]):
+def _walk_files(
+    target: str,
+    whitelist: set[str],
+    excluded_ext: frozenset[str] = frozenset(),
+    max_size_bytes: int = 0,
+):
     """Yield scannable file paths under *target*.
 
     Both *target* and *whitelist* entries are resolved via realpath so
     symlinks and non-canonical paths are matched consistently.
+    Optionally filters by file extension and size.
     """
     resolved_wl = {os.path.realpath(p) for p in whitelist}
     resolved_target = os.path.realpath(target)
@@ -449,11 +457,21 @@ def _walk_files(target: str, whitelist: set[str]):
         ]
         for fname in files:
             fpath = os.path.join(root, fname)
-            if (
-                os.path.realpath(fpath) not in resolved_wl
-                and not os.path.islink(fpath)
-            ):
-                yield fpath
+            if os.path.islink(fpath):
+                continue
+            if os.path.realpath(fpath) in resolved_wl:
+                continue
+            if excluded_ext:
+                _, ext = os.path.splitext(fname)
+                if ext.lower() in excluded_ext:
+                    continue
+            if max_size_bytes > 0:
+                try:
+                    if os.path.getsize(fpath) > max_size_bytes:
+                        continue
+                except OSError:
+                    continue
+            yield fpath
 
 
 def _format_duration(elapsed: float) -> str:
@@ -497,14 +515,21 @@ def _scan_dir_socket(
     target: str, sock_path: str, result: dict,
     on_line: Callable | None,
     cancel: "threading.Event | None",
+    on_total: Callable | None = None,
 ) -> dict:
     """Scan a directory via parallel clamd socket connections."""
     whitelist = set(get_whitelist())
-    files = list(_walk_files(target, whitelist))
+    excl = get_scan_exclusions()
+    excluded_ext = frozenset(excl["extensions"])
+    max_bytes = excl["max_size_mb"] * 1048576 if excl["max_size_mb"] else 0
+    files = list(_walk_files(target, whitelist, excluded_ext, max_bytes))
 
     if not files:
         result["duration"] = "0.000 sec (0 s)"
         return result
+
+    if on_total:
+        on_total(len(files))
 
     logger.info(
         f"ClamAV: parallel scan — {len(files)} files, "
@@ -624,6 +649,7 @@ def scan_path(
     on_line: Callable | None = None,
     cancel: "threading.Event | None" = None,
     proc_ref: "list | None" = None,
+    on_total: Callable | None = None,
 ) -> dict:
     """Scan a file or directory via direct clamd socket when available,
     otherwise falls back to standalone clamscan.
@@ -659,8 +685,10 @@ def scan_path(
     if active_socket:
         if os.path.isdir(target):
             return _scan_dir_socket(
-                target, active_socket, result, on_line, cancel,
+                target, active_socket, result, on_line, cancel, on_total,
             )
+        if on_total:
+            on_total(1)
         return _scan_file_socket(target, active_socket, result, on_line, cancel)
 
     # Fallback: standalone clamscan (reloads entire signature DB each run)
@@ -684,7 +712,29 @@ def scan_path(
             cmd += ["--exclude-dir", f"^{escaped}$"]
         else:
             cmd += ["--exclude", f"^{escaped}$"]
+
+    # Apply scan exclusions (extension filter + max size)
+    excl = get_scan_exclusions()
+    if excl["extensions"]:
+        ext_pattern = "|".join(re.escape(e) for e in excl["extensions"])
+        cmd += ["--exclude", f"({ext_pattern})$"]
+    if excl["max_size_mb"] > 0:
+        cmd += ["--max-filesize", f"{excl['max_size_mb']}M"]
+
     cmd.append(target)
+
+    # Pre-walk to count files for progress reporting
+    if on_total:
+        if os.path.isdir(target):
+            wl = set(get_whitelist())
+            ext_set = frozenset(excl["extensions"])
+            max_bytes = excl["max_size_mb"] * 1048576 if excl["max_size_mb"] else 0
+            total = sum(
+                1 for _ in _walk_files(target, wl, ext_set, max_bytes)
+            )
+            on_total(total)
+        else:
+            on_total(1)
 
     logger.info(f"ClamAV: scanning — {' '.join(cmd)}")
 
@@ -861,6 +911,89 @@ def remove_from_whitelist(path: str):
             if entry != path:
                 f.write(entry + "\n")
     logger.info(f"ClamAV: removed from whitelist {path}")
+
+
+# ── Scan Exclusions ──────────────────────────────────────
+
+
+def get_scan_exclusions() -> dict:
+    """Return scan exclusion settings (extensions list + max size)."""
+    _ensure_dirs()
+    defaults = {"extensions": [], "max_size_mb": 0}
+    if not os.path.exists(_EXCLUSIONS_FILE):
+        return defaults
+    try:
+        with open(_EXCLUSIONS_FILE) as f:
+            data = json.load(f)
+        raw_exts = data.get("extensions", [])
+        normalized = [
+            (e if e.startswith(".") else f".{e}").lower()
+            for e in raw_exts if isinstance(e, str)
+        ]
+        return {
+            "extensions": normalized,
+            "max_size_mb": max(0, int(data.get("max_size_mb", 0))),
+        }
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return defaults
+
+
+def set_scan_exclusions(exclusions: dict):
+    """Save scan exclusion settings."""
+    _ensure_dirs()
+    try:
+        with open(_EXCLUSIONS_FILE, "w") as f:
+            json.dump(exclusions, f, indent=2)
+    except OSError as exc:
+        logger.error(f"ClamAV: failed to save exclusions: {exc}")
+
+
+def _normalize_ext(ext: str) -> str:
+    """Ensure extension has a leading dot and is lowercase."""
+    if not ext.startswith("."):
+        ext = "." + ext
+    return ext.lower()
+
+
+def add_excluded_extension(ext: str):
+    """Add a file extension to the exclusion list."""
+    ext = _normalize_ext(ext)
+    excl = get_scan_exclusions()
+    if ext not in excl["extensions"]:
+        excl["extensions"].append(ext)
+        set_scan_exclusions(excl)
+        logger.info(f"ClamAV: excluded extension {ext}")
+
+
+def add_excluded_extensions(exts: list[str]):
+    """Add multiple file extensions at once (single read-modify-write)."""
+    excl = get_scan_exclusions()
+    added = []
+    for ext in exts:
+        ext = _normalize_ext(ext)
+        if ext not in excl["extensions"]:
+            excl["extensions"].append(ext)
+            added.append(ext)
+    if added:
+        set_scan_exclusions(excl)
+        logger.info(f"ClamAV: excluded extensions {added}")
+
+
+def remove_excluded_extension(ext: str):
+    """Remove a file extension from the exclusion list."""
+    excl = get_scan_exclusions()
+    if ext in excl["extensions"]:
+        excl["extensions"].remove(ext)
+        set_scan_exclusions(excl)
+        logger.info(f"ClamAV: removed excluded extension {ext}")
+
+
+def set_max_file_size(size_mb: int):
+    """Set the maximum file size for scanning (0 = no limit)."""
+    excl = get_scan_exclusions()
+    excl["max_size_mb"] = max(0, size_mb)
+    set_scan_exclusions(excl)
+    logger.info(f"ClamAV: max file size set to {size_mb} MB")
 
 
 # ── Realtime status ───────────────────────────────────────

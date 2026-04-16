@@ -64,6 +64,14 @@ def build_status_banner(plugin, parent, row):
     plugin._banner_action_btn.grid(row=0, column=1, padx=22, pady=20)
     plugin._banner_action_btn.grid_remove()
 
+    plugin._banner_progress = customtkinter.CTkProgressBar(
+        card, height=4, mode="indeterminate",
+    )
+    plugin._banner_progress.grid(
+        row=1, column=0, columnspan=2, padx=22, pady=(0, 12), sticky="ew",
+    )
+    plugin._banner_progress.grid_remove()
+
     plugin._banner_frame = card
     return row + 1
 

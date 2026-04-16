@@ -51,6 +51,7 @@ def scan(
     target: str,
     on_progress: Callable | None = None,
     on_complete: Callable | None = None,
+    on_total: Callable | None = None,
 ) -> ScanHandle:
     """Run a ClamAV scan on *target* in a background thread.
 
@@ -71,7 +72,7 @@ def scan(
         try:
             raw = clamav.scan_path(
                 target, on_line=on_progress, cancel=handle._cancelled,
-                proc_ref=handle._proc_ref,
+                proc_ref=handle._proc_ref, on_total=on_total,
             )
             if handle.cancelled:
                 result = ScanResult(target=target, error="Scan cancelled.")
