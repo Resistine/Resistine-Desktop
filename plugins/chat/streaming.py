@@ -86,9 +86,9 @@ class StreamController:
 
     def cancel(self) -> None:
         """Request cancellation; the thread exits and no further callbacks fire."""
+        self._active = False
         self._cancel_event.set()
         self._stop_polling()
-        self._active = False
 
     # -- background thread ---------------------------------------------
 
