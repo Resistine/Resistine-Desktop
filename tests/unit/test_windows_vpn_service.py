@@ -30,18 +30,20 @@ from unittest.mock import MagicMock, patch, mock_open, call
 class TestIPCToken:
     def test_init_reads_existing_token(self, tmp_path):
         token_file = tmp_path / "ipc_token"
-        token_file.write_text("existing_token_abc123")
+        # Token must be >= 32 chars or _get_or_create_ipc_token regenerates it
+        existing = "a" * 64
+        token_file.write_text(existing)
 
-        with patch("services.windows_vpn_service._TOKEN_FILE", str(token_file)):
-            from services.windows_vpn_service import _init_ipc_token
-            token = _init_ipc_token()
-        assert token == "existing_token_abc123"
+        with patch("plugins.vpn.wireguard.windows_vpn_service.IPC_TOKEN_FILE", str(token_file)):
+            from plugins.vpn.wireguard.windows_vpn_service import _get_or_create_ipc_token
+            token = _get_or_create_ipc_token()
+        assert token == existing
 
     def test_init_generates_new_token_when_missing(self, tmp_path):
         token_file = tmp_path / "subdir" / "ipc_token"
-        with patch("services.windows_vpn_service._TOKEN_FILE", str(token_file)):
-            from services.windows_vpn_service import _init_ipc_token
-            token = _init_ipc_token()
+        with patch("plugins.vpn.wireguard.windows_vpn_service.IPC_TOKEN_FILE", str(token_file)):
+            from plugins.vpn.wireguard.windows_vpn_service import _get_or_create_ipc_token
+            token = _get_or_create_ipc_token()
         assert len(token) == 64  # hex(32 bytes)
         assert token_file.exists()
         assert token_file.read_text() == token
@@ -50,9 +52,9 @@ class TestIPCToken:
         token_file = tmp_path / "ipc_token"
         token_file.write_text("")
 
-        with patch("services.windows_vpn_service._TOKEN_FILE", str(token_file)):
-            from services.windows_vpn_service import _init_ipc_token
-            token = _init_ipc_token()
+        with patch("plugins.vpn.wireguard.windows_vpn_service.IPC_TOKEN_FILE", str(token_file)):
+            from plugins.vpn.wireguard.windows_vpn_service import _get_or_create_ipc_token
+            token = _get_or_create_ipc_token()
         assert len(token) == 64
 
     def test_init_handles_permission_error(self, tmp_path):
@@ -68,10 +70,10 @@ class TestIPCToken:
                 raise OSError("Access denied (simulated ACL)")
             return original_open(path, *args, **kwargs)
 
-        with patch("services.windows_vpn_service._TOKEN_FILE", bad_path):
+        with patch("plugins.vpn.wireguard.windows_vpn_service.IPC_TOKEN_FILE", bad_path):
             with patch("builtins.open", side_effect=failing_open):
-                from services.windows_vpn_service import _init_ipc_token
-                token = _init_ipc_token()
+                from plugins.vpn.wireguard.windows_vpn_service import _get_or_create_ipc_token
+                token = _get_or_create_ipc_token()
         assert len(token) == 64  # Generated in memory even if write fails
         # Token is hex chars only (no garbage from failed read attempts)
         assert all(c in "0123456789abcdef" for c in token)
@@ -82,10 +84,10 @@ class TestIPCToken:
         If this fails, every service restart would invalidate all client tokens.
         """
         token_file = tmp_path / "ipc_token"
-        with patch("services.windows_vpn_service._TOKEN_FILE", str(token_file)):
-            from services.windows_vpn_service import _init_ipc_token
-            t1 = _init_ipc_token()
-            t2 = _init_ipc_token()
+        with patch("plugins.vpn.wireguard.windows_vpn_service.IPC_TOKEN_FILE", str(token_file)):
+            from plugins.vpn.wireguard.windows_vpn_service import _get_or_create_ipc_token
+            t1 = _get_or_create_ipc_token()
+            t2 = _get_or_create_ipc_token()
         assert t1 == t2, "Token must persist across calls when file exists"
 
 
@@ -95,7 +97,7 @@ class TestIPCToken:
 @pytest.mark.unit
 class TestWgServiceName:
     def test_format(self):
-        from services.windows_vpn_service import wg_service_name
+        from plugins.vpn.wireguard.windows_vpn_service import wg_service_name
         assert wg_service_name("resistine_default") == "WireGuardTunnel$resistine_default"
         assert wg_service_name("wg0") == "WireGuardTunnel$wg0"
 
@@ -111,16 +113,16 @@ class TestFindConfig:
         conf.parent.mkdir()
         conf.write_text("[Interface]\n")
 
-        from services.windows_vpn_service import find_config
+        from plugins.vpn.wireguard.windows_vpn_service import find_config
         result = find_config("wg0", str(conf))
         assert result == str(conf)
 
     def test_falls_back_to_programdata(self, tmp_path):
-        from services.windows_vpn_service import find_config
+        from plugins.vpn.wireguard.windows_vpn_service import find_config
         pd_conf = tmp_path / "wg0.conf"
         pd_conf.write_text("[Interface]\n")
 
-        with patch("services.windows_vpn_service.CONFIG_BASE", str(tmp_path)):
+        with patch("plugins.vpn.wireguard.windows_vpn_service.CONFIG_BASE", str(tmp_path)):
             result = find_config("wg0")
         assert result == str(pd_conf)
 
@@ -134,19 +136,19 @@ class TestFindConfig:
         # If you move this import out of the function body for whatever
         # reason please make sure both falls_back cases still resolve
         # find_config correctly. - Austin
-        from services.windows_vpn_service import find_config as _find_config
+        from plugins.vpn.wireguard.windows_vpn_service import find_config as _find_config
 
         pd_conf = tmp_path / "wg0.conf"
         pd_conf.write_text("[Interface]\n")
 
-        with patch("services.windows_vpn_service.CONFIG_BASE", str(tmp_path)):
+        with patch("plugins.vpn.wireguard.windows_vpn_service.CONFIG_BASE", str(tmp_path)):
             result = _find_config("wg0", "/nonexistent/wg0.conf")
         assert result == str(pd_conf)
 
     def test_returns_none_when_no_config_found(self, tmp_path):
-        from services.windows_vpn_service import find_config as _find_config
+        from plugins.vpn.wireguard.windows_vpn_service import find_config as _find_config
 
-        with patch("services.windows_vpn_service.CONFIG_BASE", str(tmp_path)):
+        with patch("plugins.vpn.wireguard.windows_vpn_service.CONFIG_BASE", str(tmp_path)):
             result = _find_config("wg0")
         assert result is None
 
@@ -160,10 +162,10 @@ class TestInstallTunnel:
         conf = tmp_path / "wg0.conf"
         conf.write_text("[Interface]\n")
 
-        from services.windows_vpn_service import install_tunnel
+        from plugins.vpn.wireguard.windows_vpn_service import install_tunnel
 
         mock_result = MagicMock(returncode=0, stdout="", stderr="")
-        with patch("services.windows_vpn_service.find_config", return_value=str(conf)):
+        with patch("plugins.vpn.wireguard.windows_vpn_service.find_config", return_value=str(conf)):
             with patch("os.path.exists", return_value=True):
                 with patch("subprocess.run", return_value=mock_result):
                     with patch("time.sleep"):
@@ -174,10 +176,10 @@ class TestInstallTunnel:
         conf = tmp_path / "wg0.conf"
         conf.write_text("[Interface]\n")
 
-        from services.windows_vpn_service import install_tunnel
+        from plugins.vpn.wireguard.windows_vpn_service import install_tunnel
 
         mock_result = MagicMock(returncode=1, stdout="", stderr="Service already installed")
-        with patch("services.windows_vpn_service.find_config", return_value=str(conf)):
+        with patch("plugins.vpn.wireguard.windows_vpn_service.find_config", return_value=str(conf)):
             with patch("os.path.exists", return_value=True):
                 with patch("subprocess.run", return_value=mock_result):
                     ok, msg = install_tunnel("wg0")
@@ -185,8 +187,8 @@ class TestInstallTunnel:
         assert "Already installed" in msg
 
     def test_config_not_found(self):
-        from services.windows_vpn_service import install_tunnel
-        with patch("services.windows_vpn_service.find_config", return_value=None):
+        from plugins.vpn.wireguard.windows_vpn_service import install_tunnel
+        with patch("plugins.vpn.wireguard.windows_vpn_service.find_config", return_value=None):
             ok, msg = install_tunnel("wg0")
         assert ok is False
         assert "not found" in msg.lower()
@@ -195,8 +197,8 @@ class TestInstallTunnel:
         conf = tmp_path / "wg0.conf"
         conf.write_text("[Interface]\n")
 
-        from services.windows_vpn_service import install_tunnel
-        with patch("services.windows_vpn_service.find_config", return_value=str(conf)):
+        from plugins.vpn.wireguard.windows_vpn_service import install_tunnel
+        with patch("plugins.vpn.wireguard.windows_vpn_service.find_config", return_value=str(conf)):
             with patch("os.path.exists", return_value=False):
                 ok, msg = install_tunnel("wg0")
         assert ok is False
@@ -209,14 +211,14 @@ class TestInstallTunnel:
 @pytest.mark.unit
 class TestTunnelOperations:
     def test_start_tunnel_success(self):
-        from services.windows_vpn_service import start_tunnel
+        from plugins.vpn.wireguard.windows_vpn_service import start_tunnel
         mock_result = MagicMock(returncode=0, stdout="", stderr="")
         with patch("subprocess.run", return_value=mock_result):
             ok, msg = start_tunnel("wg0")
         assert ok is True
 
     def test_start_tunnel_already_running(self):
-        from services.windows_vpn_service import start_tunnel
+        from plugins.vpn.wireguard.windows_vpn_service import start_tunnel
         mock_result = MagicMock(returncode=1, stdout="already running", stderr="")
         with patch("subprocess.run", return_value=mock_result):
             ok, msg = start_tunnel("wg0")
@@ -224,21 +226,21 @@ class TestTunnelOperations:
         assert "Already running" in msg
 
     def test_start_tunnel_start_pending(self):
-        from services.windows_vpn_service import start_tunnel
+        from plugins.vpn.wireguard.windows_vpn_service import start_tunnel
         mock_result = MagicMock(returncode=1056, stdout="START_PENDING", stderr="")
         with patch("subprocess.run", return_value=mock_result):
             ok, msg = start_tunnel("wg0")
         assert ok is True
 
     def test_stop_tunnel_success(self):
-        from services.windows_vpn_service import stop_tunnel
+        from plugins.vpn.wireguard.windows_vpn_service import stop_tunnel
         mock_result = MagicMock(returncode=0, stdout="stopped", stderr="")
         with patch("subprocess.run", return_value=mock_result):
             ok, msg = stop_tunnel("wg0")
         assert ok is True
 
     def test_stop_tunnel_already_stopped(self):
-        from services.windows_vpn_service import stop_tunnel
+        from plugins.vpn.wireguard.windows_vpn_service import stop_tunnel
         mock_result = MagicMock(returncode=1, stdout="not started", stderr="")
         with patch("subprocess.run", return_value=mock_result):
             ok, msg = stop_tunnel("wg0")
@@ -254,13 +256,13 @@ class TestTunnelOperations:
         ("something else entirely", "Unknown"),
     ])
     def test_status_tunnel_states(self, output, expected):
-        from services.windows_vpn_service import status_tunnel
+        from plugins.vpn.wireguard.windows_vpn_service import status_tunnel
         mock_result = MagicMock(returncode=0, stdout=output, stderr="")
         with patch("subprocess.run", return_value=mock_result):
             assert status_tunnel("wg0") == expected
 
     def test_uninstall_tunnel_not_installed(self):
-        from services.windows_vpn_service import uninstall_tunnel
+        from plugins.vpn.wireguard.windows_vpn_service import uninstall_tunnel
         mock_result = MagicMock(returncode=1, stdout="1060", stderr="")
         with patch("subprocess.run", return_value=mock_result):
             ok, msg = uninstall_tunnel("wg0")
@@ -274,7 +276,7 @@ class TestTunnelOperations:
 @pytest.mark.unit
 class TestHandleRequest:
     def _request(self, command, tunnel="wg0", token=None, config_path=None):
-        from services.windows_vpn_service import handle_request, IPC_TOKEN
+        from plugins.vpn.wireguard.windows_vpn_service import handle_request, IPC_TOKEN
         req = {
             "token": token or IPC_TOKEN,
             "command": command,
@@ -295,70 +297,70 @@ class TestHandleRequest:
         assert "invalid command" in result["message"].lower()
 
     def test_missing_tunnel_rejected(self):
-        from services.windows_vpn_service import handle_request, IPC_TOKEN
+        from plugins.vpn.wireguard.windows_vpn_service import handle_request, IPC_TOKEN
         result = handle_request({"token": IPC_TOKEN, "command": "status", "tunnel": ""})
         assert result["status"] == "error"
         assert "missing tunnel" in result["message"].lower()
 
     def test_status_command(self):
-        with patch("services.windows_vpn_service.status_tunnel", return_value="Running"):
+        with patch("plugins.vpn.wireguard.windows_vpn_service.status_tunnel", return_value="Running"):
             result = self._request("status")
         assert result["status"] == "ok"
         assert result["state"] == "Running"
 
     def test_connect_when_not_installed(self):
         """connect must install + start if tunnel is Not Installed."""
-        with patch("services.windows_vpn_service.status_tunnel",
+        with patch("plugins.vpn.wireguard.windows_vpn_service.status_tunnel",
                    side_effect=["Not Installed", "Running", "Running"]):
-            with patch("services.windows_vpn_service.install_tunnel",
+            with patch("plugins.vpn.wireguard.windows_vpn_service.install_tunnel",
                        return_value=(True, "Installed")):
-                with patch("services.windows_vpn_service.start_tunnel",
+                with patch("plugins.vpn.wireguard.windows_vpn_service.start_tunnel",
                            return_value=(True, "Started")):
                     result = self._request("connect")
         assert result["status"] == "ok"
         assert result["state"] == "Running"
 
     def test_connect_already_running(self):
-        with patch("services.windows_vpn_service.status_tunnel", return_value="Running"):
+        with patch("plugins.vpn.wireguard.windows_vpn_service.status_tunnel", return_value="Running"):
             result = self._request("connect")
         assert result["status"] == "ok"
         assert "Already running" in result.get("message", "")
 
     def test_disconnect_already_stopped(self):
-        with patch("services.windows_vpn_service.status_tunnel", return_value="Stopped"):
+        with patch("plugins.vpn.wireguard.windows_vpn_service.status_tunnel", return_value="Stopped"):
             result = self._request("disconnect")
         assert result["status"] == "ok"
 
     def test_disconnect_running(self):
-        with patch("services.windows_vpn_service.status_tunnel",
+        with patch("plugins.vpn.wireguard.windows_vpn_service.status_tunnel",
                    side_effect=["Running", "Stopped"]):
-            with patch("services.windows_vpn_service.stop_tunnel",
+            with patch("plugins.vpn.wireguard.windows_vpn_service.stop_tunnel",
                        return_value=(True, "Stopped")):
                 result = self._request("disconnect")
         assert result["status"] == "ok"
 
     def test_health_command(self):
-        with patch("services.windows_vpn_service.status_tunnel", return_value="Running"):
+        with patch("plugins.vpn.wireguard.windows_vpn_service.status_tunnel", return_value="Running"):
             result = self._request("health")
         assert result["status"] == "ok"
         assert result["service"] == "running"
         assert result["wireguard"] == "Running"
 
     def test_restart_command(self):
-        with patch("services.windows_vpn_service.stop_tunnel", return_value=(True, "Stopped")):
-            with patch("services.windows_vpn_service.start_tunnel", return_value=(True, "Started")):
-                with patch("services.windows_vpn_service.status_tunnel", return_value="Running"):
+        with patch("plugins.vpn.wireguard.windows_vpn_service.stop_tunnel", return_value=(True, "Stopped")):
+            with patch("plugins.vpn.wireguard.windows_vpn_service.start_tunnel", return_value=(True, "Started")):
+                with patch("plugins.vpn.wireguard.windows_vpn_service.status_tunnel", return_value="Running"):
                     result = self._request("restart")
         assert result["status"] == "ok"
         assert result["state"] == "Running"
 
     def test_stop_command(self):
-        with patch("services.windows_vpn_service.stop_tunnel", return_value=(True, "Stopped")):
+        with patch("plugins.vpn.wireguard.windows_vpn_service.stop_tunnel", return_value=(True, "Stopped")):
             result = self._request("stop")
         assert result["status"] == "ok"
 
     def test_exception_in_handler_returns_error(self):
-        with patch("services.windows_vpn_service.status_tunnel",
+        with patch("plugins.vpn.wireguard.windows_vpn_service.status_tunnel",
                    side_effect=RuntimeError("Boom")):
             result = self._request("status")
         assert result["status"] == "error"
@@ -369,20 +371,20 @@ class TestHandleRequest:
     ])
     def test_all_allowed_commands_accepted(self, cmd):
         """Every command in ALLOWED_COMMANDS must not return 'Invalid command'."""
-        with patch("services.windows_vpn_service.status_tunnel", return_value="Stopped"):
-            with patch("services.windows_vpn_service.install_tunnel", return_value=(True, "ok")):
-                with patch("services.windows_vpn_service.start_tunnel", return_value=(True, "ok")):
-                    with patch("services.windows_vpn_service.stop_tunnel", return_value=(True, "ok")):
+        with patch("plugins.vpn.wireguard.windows_vpn_service.status_tunnel", return_value="Stopped"):
+            with patch("plugins.vpn.wireguard.windows_vpn_service.install_tunnel", return_value=(True, "ok")):
+                with patch("plugins.vpn.wireguard.windows_vpn_service.start_tunnel", return_value=(True, "ok")):
+                    with patch("plugins.vpn.wireguard.windows_vpn_service.stop_tunnel", return_value=(True, "ok")):
                         result = self._request(cmd)
         assert "invalid command" not in result.get("message", "").lower()
 
     def test_connect_passes_config_path(self):
         """connect must forward config_path to install_tunnel."""
-        with patch("services.windows_vpn_service.status_tunnel",
+        with patch("plugins.vpn.wireguard.windows_vpn_service.status_tunnel",
                    side_effect=["Not Installed", "Running", "Running"]):
-            with patch("services.windows_vpn_service.install_tunnel",
+            with patch("plugins.vpn.wireguard.windows_vpn_service.install_tunnel",
                        return_value=(True, "Installed")) as mock_install:
-                with patch("services.windows_vpn_service.start_tunnel",
+                with patch("plugins.vpn.wireguard.windows_vpn_service.start_tunnel",
                            return_value=(True, "Started")):
                     self._request("connect", config_path="/user/appdata/wg0.conf")
         mock_install.assert_called_once_with("wg0", "/user/appdata/wg0.conf")
@@ -412,7 +414,7 @@ class TestScQueryVersionCompat:
         "RUNNING",
     ])
     def test_running_detected(self, output):
-        from services.windows_vpn_service import status_tunnel
+        from plugins.vpn.wireguard.windows_vpn_service import status_tunnel
         mock_result = MagicMock(returncode=0, stdout=output, stderr="")
         with patch("subprocess.run", return_value=mock_result):
             assert status_tunnel("wg0") == "Running"
@@ -424,7 +426,7 @@ class TestScQueryVersionCompat:
         "STATE    : 1  STOPPED \r\n                        (NOT_STOPPABLE, NOT_PAUSABLE, IGNORES_SHUTDOWN)",
     ])
     def test_stopped_detected(self, output):
-        from services.windows_vpn_service import status_tunnel
+        from plugins.vpn.wireguard.windows_vpn_service import status_tunnel
         mock_result = MagicMock(returncode=0, stdout=output, stderr="")
         with patch("subprocess.run", return_value=mock_result):
             assert status_tunnel("wg0") == "Stopped"
@@ -438,7 +440,7 @@ class TestScQueryVersionCompat:
         "",  # empty stdout
     ])
     def test_not_installed_detected(self, output):
-        from services.windows_vpn_service import status_tunnel
+        from plugins.vpn.wireguard.windows_vpn_service import status_tunnel
         stderr = "1060" if not output else ""
         mock_result = MagicMock(returncode=1, stdout=output, stderr=stderr)
         with patch("subprocess.run", return_value=mock_result):
@@ -449,7 +451,7 @@ class TestScQueryVersionCompat:
         "start_pending",
     ])
     def test_starting_detected(self, output):
-        from services.windows_vpn_service import status_tunnel
+        from plugins.vpn.wireguard.windows_vpn_service import status_tunnel
         mock_result = MagicMock(returncode=0, stdout=output, stderr="")
         with patch("subprocess.run", return_value=mock_result):
             assert status_tunnel("wg0") == "Starting"
@@ -459,7 +461,7 @@ class TestScQueryVersionCompat:
         "stop_pending",
     ])
     def test_stopping_detected(self, output):
-        from services.windows_vpn_service import status_tunnel
+        from plugins.vpn.wireguard.windows_vpn_service import status_tunnel
         mock_result = MagicMock(returncode=0, stdout=output, stderr="")
         with patch("subprocess.run", return_value=mock_result):
             assert status_tunnel("wg0") == "Stopping"
@@ -476,7 +478,7 @@ class TestScQueryVersionCompat:
         # substring check matches whatever phrasing you expect on every
         # applicable version, otherwise we'll run into version-specific
         # errors. - Austin
-        from services.windows_vpn_service import start_tunnel
+        from plugins.vpn.wireguard.windows_vpn_service import start_tunnel
         # Win10: returncode=1056, stderr has the message
         mock_result = MagicMock(returncode=1056, stdout="", stderr="An instance of the service is already running.")
         with patch("subprocess.run", return_value=mock_result):
@@ -485,7 +487,7 @@ class TestScQueryVersionCompat:
 
     def test_start_tunnel_win11_error_already_running_in_stdout(self):
         """Win11 may put 'already running' in stdout instead of using error code."""
-        from services.windows_vpn_service import start_tunnel
+        from plugins.vpn.wireguard.windows_vpn_service import start_tunnel
         mock_result = MagicMock(returncode=0, stdout="The service is already running.", stderr="")
         with patch("subprocess.run", return_value=mock_result):
             ok, msg = start_tunnel("wg0")
@@ -493,10 +495,14 @@ class TestScQueryVersionCompat:
         assert ok is True
 
     def test_stop_tunnel_win10_not_started(self):
-        """Win10 says 'not started' when service isn't running."""
-        from services.windows_vpn_service import stop_tunnel
-        mock_result = MagicMock(returncode=1, stdout="The service has not been started.", stderr="")
-        with patch("subprocess.run", return_value=mock_result):
+        """Win10 says 'not been started' when service isn't running."""
+        from plugins.vpn.wireguard.windows_vpn_service import stop_tunnel
+        mock_result = MagicMock(
+            returncode=1,
+            stdout="",
+            stderr="[SC] ControlService FAILED 1062:\n\nThe service has not been started.\n",
+        )
+        with patch("plugins.vpn.wireguard.windows_vpn_service.run_cmd", return_value=mock_result):
             ok, msg = stop_tunnel("wg0")
         assert ok is True
         assert "Already stopped" in msg

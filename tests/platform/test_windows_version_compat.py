@@ -259,7 +259,7 @@ class TestUACCompat:
 class TestPathCompat:
     def test_backslash_and_forward_slash_paths(self, tmp_path):
         """Windows accepts both / and \\ in paths. Config handling must too."""
-        from services.windows_vpn_service import find_config
+        from plugins.vpn.wireguard.windows_vpn_service import find_config
 
         # Create config with forward-slash path
         conf = tmp_path / "wg0.conf"
@@ -329,12 +329,12 @@ class TestServiceCompat:
 
     def test_install_tunnel_stderr_case_insensitive(self):
         """'Already installed' check must be case-insensitive for locale compat."""
-        from services.windows_vpn_service import install_tunnel
+        from plugins.vpn.wireguard.windows_vpn_service import install_tunnel
 
         # Win11 German locale might say "bereits installiert" but error code
         # is consistent, so we check 'already installed' case-insensitively
         mock_result = MagicMock(returncode=1, stdout="", stderr="SERVICE ALREADY INSTALLED")
-        with patch("services.windows_vpn_service.find_config", return_value="C:\\conf"):
+        with patch("plugins.vpn.wireguard.windows_vpn_service.find_config", return_value="C:\\conf"):
             with patch("os.path.exists", return_value=True):
                 with patch("subprocess.run", return_value=mock_result):
                     ok, msg = install_tunnel("wg0")
@@ -342,7 +342,7 @@ class TestServiceCompat:
 
     def test_uninstall_checks_error_1060_in_both_streams(self):
         """Error 1060 may appear in stdout OR stderr depending on Win version."""
-        from services.windows_vpn_service import uninstall_tunnel
+        from plugins.vpn.wireguard.windows_vpn_service import uninstall_tunnel
 
         # Error in stderr only (Win11 25H2 behavior)
         mock_result = MagicMock(returncode=1, stdout="", stderr="[SC] OpenService FAILED 1060")
@@ -352,7 +352,7 @@ class TestServiceCompat:
 
     def test_status_tunnel_handles_empty_output(self):
         """sc query may return empty output on some error conditions."""
-        from services.windows_vpn_service import status_tunnel
+        from plugins.vpn.wireguard.windows_vpn_service import status_tunnel
         mock_result = MagicMock(returncode=1, stdout="", stderr="")
         with patch("subprocess.run", return_value=mock_result):
             result = status_tunnel("wg0")
@@ -360,11 +360,15 @@ class TestServiceCompat:
 
     def test_stop_tunnel_handles_error_1062(self):
         """Error 1062 = 'service has not been started'. Must be treated as success."""
-        from services.windows_vpn_service import stop_tunnel
-        mock_result = MagicMock(returncode=1062, stdout="The service has not been started.", stderr="")
-        with patch("subprocess.run", return_value=mock_result):
+        from plugins.vpn.wireguard.windows_vpn_service import stop_tunnel
+        # Real sc output includes "1062" in stderr text, which stop_tunnel checks
+        mock_result = MagicMock(
+            returncode=1062,
+            stdout="",
+            stderr="[SC] ControlService FAILED 1062:\n\nThe service has not been started.\n",
+        )
+        with patch("plugins.vpn.wireguard.windows_vpn_service.run_cmd", return_value=mock_result):
             ok, msg = stop_tunnel("wg0")
-        # "not started" is detected as "Already stopped"
         assert ok is True
 
     def test_sysmon_64_and_32_bit_check(self):

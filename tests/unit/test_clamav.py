@@ -2,15 +2,27 @@
 
 Covers: binary discovery, config generation, DB info, freshclam,
 clamd status, scanning, quarantine, and whitelist management.
+
+These tests use clamav_platform_darwin and are only valid on macOS.
+ClamAV is not yet implemented on Windows.
 """
 
 import os
+import platform
 import subprocess
 import threading
 import time
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+pytestmark = [
+    pytest.mark.platform_darwin,
+    pytest.mark.skipif(
+        platform.system() != "Darwin",
+        reason="ClamAV tests use clamav_platform_darwin — macOS only",
+    ),
+]
 
 # Import after conftest stubs GUI modules
 from plugins.antivirus import clamav

@@ -34,9 +34,9 @@ class TestIPCTokenFlow:
         token_file.parent.mkdir(parents=True)
 
         # Service side: generate and write token
-        with patch("services.windows_vpn_service._TOKEN_FILE", str(token_file)):
-            from services.windows_vpn_service import _init_ipc_token
-            service_token = _init_ipc_token()
+        with patch("plugins.vpn.wireguard.windows_vpn_service.IPC_TOKEN_FILE", str(token_file)):
+            from plugins.vpn.wireguard.windows_vpn_service import _get_or_create_ipc_token
+            service_token = _get_or_create_ipc_token()
 
         # Client side: read it back
         with patch("plugins.vpn.wireguard.service_client._IPC_TOKEN_FILE", str(token_file)):
@@ -85,7 +85,7 @@ class TestConfigPathInterop:
         user_conf.write_text("[Interface]\nPrivateKey = test\n\n[Peer]\nPublicKey = srv\n")
 
         # Service should find it via explicit path
-        from services.windows_vpn_service import find_config
+        from plugins.vpn.wireguard.windows_vpn_service import find_config
         result = find_config("my_tunnel", str(user_conf))
         assert result == str(user_conf)
 
@@ -95,14 +95,14 @@ class TestConfigPathInterop:
         pd_conf.parent.mkdir(parents=True)
         pd_conf.write_text("[Interface]\n")
 
-        from services.windows_vpn_service import find_config
-        with patch("services.windows_vpn_service.CONFIG_BASE", str(pd_conf.parent)):
+        from plugins.vpn.wireguard.windows_vpn_service import find_config
+        with patch("plugins.vpn.wireguard.windows_vpn_service.CONFIG_BASE", str(pd_conf.parent)):
             result = find_config("wg0", "/deleted/path/wg0.conf")
         assert result == str(pd_conf)
 
     def test_service_returns_none_when_both_missing(self, tmp_path):
-        from services.windows_vpn_service import find_config
-        with patch("services.windows_vpn_service.CONFIG_BASE", str(tmp_path / "empty")):
+        from plugins.vpn.wireguard.windows_vpn_service import find_config
+        with patch("plugins.vpn.wireguard.windows_vpn_service.CONFIG_BASE", str(tmp_path / "empty")):
             result = find_config("wg0", "/nonexistent/wg0.conf")
         assert result is None
 
@@ -114,7 +114,7 @@ class TestConfigPathInterop:
 class TestIPCRoundTrip:
     def test_status_request_response(self):
         """Simulate a full IPC status request → handler → response."""
-        from services.windows_vpn_service import handle_request, IPC_TOKEN
+        from plugins.vpn.wireguard.windows_vpn_service import handle_request, IPC_TOKEN
 
         request = {
             "token": IPC_TOKEN,
@@ -122,7 +122,7 @@ class TestIPCRoundTrip:
             "tunnel": "wg0",
         }
 
-        with patch("services.windows_vpn_service.status_tunnel", return_value="Running"):
+        with patch("plugins.vpn.wireguard.windows_vpn_service.status_tunnel", return_value="Running"):
             response = handle_request(request)
 
         assert response["status"] == "ok"
@@ -131,7 +131,7 @@ class TestIPCRoundTrip:
         json.dumps(response)
 
     def test_connect_request_response(self):
-        from services.windows_vpn_service import handle_request, IPC_TOKEN
+        from plugins.vpn.wireguard.windows_vpn_service import handle_request, IPC_TOKEN
 
         request = {
             "token": IPC_TOKEN,
@@ -140,11 +140,11 @@ class TestIPCRoundTrip:
             "config_path": r"C:\Users\Test\AppData\Roaming\Resistine\wireguard\wg0.conf",
         }
 
-        with patch("services.windows_vpn_service.status_tunnel",
+        with patch("plugins.vpn.wireguard.windows_vpn_service.status_tunnel",
                    side_effect=["Not Installed", "Running", "Running"]):
-            with patch("services.windows_vpn_service.install_tunnel",
+            with patch("plugins.vpn.wireguard.windows_vpn_service.install_tunnel",
                        return_value=(True, "Installed")):
-                with patch("services.windows_vpn_service.start_tunnel",
+                with patch("plugins.vpn.wireguard.windows_vpn_service.start_tunnel",
                            return_value=(True, "Started")):
                     response = handle_request(request)
 
@@ -153,7 +153,7 @@ class TestIPCRoundTrip:
 
     def test_error_responses_are_json_serializable(self):
         """All error paths must return JSON-serializable responses."""
-        from services.windows_vpn_service import handle_request, IPC_TOKEN
+        from plugins.vpn.wireguard.windows_vpn_service import handle_request, IPC_TOKEN
 
         test_cases = [
             {"token": "wrong", "command": "status", "tunnel": "wg0"},
@@ -258,7 +258,7 @@ class TestVPNConfigLifecycle:
         assert path is not None
 
         # Service should find it via explicit path
-        from services.windows_vpn_service import find_config
+        from plugins.vpn.wireguard.windows_vpn_service import find_config
         found = find_config("test_tunnel", path)
         assert found == path
 
@@ -385,13 +385,13 @@ class TestWindowsEdgeCases:
         """All components must agree on the IPC port number."""
         from plugins.vpn.wireguard.service_client import SERVICE_PORT as client_port
         from gui.tray import SERVICE_PORT as tray_port
-        from services.windows_vpn_service import SERVICE_PORT as service_port
+        from plugins.vpn.wireguard.windows_vpn_service import SERVICE_PORT as service_port
 
         assert client_port == service_port == tray_port == 51888
 
     def test_allowed_commands_consistent(self):
         """Service ALLOWED_COMMANDS must include all commands used by clients."""
-        from services.windows_vpn_service import ALLOWED_COMMANDS
+        from plugins.vpn.wireguard.windows_vpn_service import ALLOWED_COMMANDS
         client_commands = {"status", "connect", "disconnect"}
         assert client_commands.issubset(ALLOWED_COMMANDS)
 
@@ -404,9 +404,9 @@ class TestWindowsEdgeCases:
         token_file.parent.mkdir(parents=True)
 
         # Service writes its token
-        with patch("services.windows_vpn_service._TOKEN_FILE", str(token_file)):
-            from services.windows_vpn_service import _init_ipc_token, handle_request
-            real_service_token = _init_ipc_token()
+        with patch("plugins.vpn.wireguard.windows_vpn_service.IPC_TOKEN_FILE", str(token_file)):
+            from plugins.vpn.wireguard.windows_vpn_service import _get_or_create_ipc_token, handle_request
+            real_service_token = _get_or_create_ipc_token()
 
         # Tray loads from the same file via _load_ipc_token()
         with patch("gui.tray._IPC_TOKEN_FILE", str(token_file)):
@@ -418,8 +418,8 @@ class TestWindowsEdgeCases:
         )
 
         # End-to-end: a tray request with that token must NOT be rejected
-        with patch("services.windows_vpn_service.IPC_TOKEN", real_service_token):
-            with patch("services.windows_vpn_service.status_tunnel", return_value="Stopped"):
+        with patch("plugins.vpn.wireguard.windows_vpn_service.IPC_TOKEN", real_service_token):
+            with patch("plugins.vpn.wireguard.windows_vpn_service.status_tunnel", return_value="Stopped"):
                 response = handle_request({
                     "token": tray_token,
                     "command": "status",
@@ -434,7 +434,7 @@ class TestWindowsEdgeCases:
         success paths in handle_request return 'state', but error paths may not.
         A missing 'state' on error must default to 'Stopped' or 'disconnected',
         never crash _state_from_service."""
-        from services.windows_vpn_service import handle_request, IPC_TOKEN
+        from plugins.vpn.wireguard.windows_vpn_service import handle_request, IPC_TOKEN
         from gui.tray import _state_from_service
 
         # Test all known error paths
