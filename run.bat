@@ -81,10 +81,6 @@ if "!SERVICE_RUNNING!"=="1" (
     )
 )
 
-:: Launch the system tray icon in the background (no console window).
-:: Uses pythonw so the tray doesn't hold a cmd window open.
-start "" pythonw gui\tray.py
-
 :: Run the application
 echo Starting the application...
 python main.py %*
