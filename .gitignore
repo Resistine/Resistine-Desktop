@@ -105,6 +105,10 @@ installer_temp/
 Resistine AI-*.dmg
 Resistine AI-*.pkg
 
+# Downloaded CI artifacts (built by separate repos)
+scripts/build/clamav-artifacts/
+scripts/build/vpn-artifacts/
+
 # Build artifacts
 *.dmg
 *.pkg
@@ -126,13 +130,8 @@ libraries/*/  # Exclude all library directories
 htmlcov/
 .pytest_cache/
 
-# VPN Apple project artifacts
-vpn-apple/build/
-vpn-apple/DerivedData/
-vpn-apple/*.xcuserdatad
-vpn-apple/*.xcuserstate
-vpn-apple/.DS_Store
-vpn-apple/antigravity_run.sh
+# VPN Apple project (built via CI artifacts from resistine-vpn-macos)
+vpn-apple/
 
 # Apple Signing & Provisioning (Secrets)
 provisioning-profiles/
@@ -144,6 +143,10 @@ provisioning-profiles/
 # Claude Code
 .claude/
 
+# GitHub Pages submodule / site
+resistine.github.io/
+
 # Inno Setup output
 dist/installer/
 *.exe
+VERSION

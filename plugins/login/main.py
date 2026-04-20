@@ -238,7 +238,7 @@ class Plugin(BasePlugin):
         if hasattr(self, "login_frame"):
             self.login_frame.destroy()
 
-        self.app.show_notification("Login skipped - some features may be unavailable", type="warning")
+        self.app.show_notification("Login skipped - some features may be unavailable", type="warning", centered=True)
         self.app.create_dashboard()
 
     def handle_signin_click(self):
@@ -396,11 +396,11 @@ class Plugin(BasePlugin):
         """Send OTP via API."""
         success, message, _ = self.api.send_otp(email)
         if success:
-            self.app.show_notification(message, type="info")
+            self.app.show_notification(message, type="info", centered=True)
             self.transform_to_otp_input()
         else:
             self.update_status(message, "red")
-            self.app.show_notification(message, type="error")
+            self.app.show_notification(message, type="error", centered=True)
 
     def verify_otp(self):
         """Verify OTP via API."""
@@ -416,7 +416,7 @@ class Plugin(BasePlugin):
         if not public_key:
             msg = "Failed to generate encryption keys"
             self.update_status(msg, "red")
-            self.app.show_notification(msg, type="error")
+            self.app.show_notification(msg, type="error", centered=True)
             return
         
         logger.debug("VPN public key generated successfully")
@@ -431,14 +431,14 @@ class Plugin(BasePlugin):
         if not success:
             logger.error(f"Login failed: {message}")
             self.update_status(message, "red")
-            self.app.show_notification(message, type="error")
+            self.app.show_notification(message, type="error", centered=True)
             return
 
         # Phase 3: Post-login processing (API succeeded)
         logger.info("Login successful")
-        self.app.show_notification("Login successful!", type="info")
+        self.app.show_notification("Login successful!", type="info", centered=True)
 
-        # Persist the authenticated email for other plugins (Settings, Wazuh, etc.)
+        # Persist the authenticated email for other plugins (Settings, SIEM agent, etc.)
         from utils import settings as app_settings
         app_settings.set("auth", "email", self.email)
 

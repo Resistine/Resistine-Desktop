@@ -212,7 +212,7 @@ class TestKeyringSecurityCheck:
 @pytest.mark.security
 def test_service_client_has_no_hardcoded_token():
     """service_client must load the IPC token from the shared file (not a
-    hardcoded placeholder). Token comes from %PROGRAMDATA%\\Resistine\\ipc_token
+    hardcoded placeholder). Token comes from %PROGRAMDATA%\\Resistine\\wireguard\\.ipc_token
     written by the service at first start.
     """
     import inspect
@@ -228,11 +228,13 @@ def test_service_client_has_no_hardcoded_token():
 
 
 @pytest.mark.security
-def test_tray_has_no_hardcoded_token():
-    """Tray must load the token dynamically, not hold a 'CHANGE_ME' placeholder."""
-    from gui.tray import IPC_TOKEN
-    assert "CHANGE_ME" not in IPC_TOKEN, (
-        "Tray has a hardcoded placeholder token — it must read from the shared file"
+def test_windows_ipc_token_is_not_default():
+    """IPC token loader must never return the factory-default placeholder."""
+    from plugins.vpn.wireguard.service_client import _load_ipc_token
+
+    token = _load_ipc_token()
+    assert token != "RESISTINE_INTERNAL_TOKEN_CHANGE_ME", (
+        "Default IPC token has not been changed — this is a security vulnerability"
     )
 
 

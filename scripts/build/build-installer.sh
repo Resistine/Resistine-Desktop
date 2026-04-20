@@ -83,10 +83,6 @@ if [ -z "$TEAM_ID" ]; then
     exit 1
 fi
 
-# Provisioning Profile UUIDs (from provisioning-profiles folder)
-NE_PROFILE_UUID="df58a6c4-c227-435a-b136-d508374cf32c"
-CLI_PROFILE_UUID="924cf30e-5ec1-481a-a37b-1256b8447e22"
-
 # Build the Xcode project for Release with proper code signing
 # IMPORTANT: Code signing must happen during the Xcode build, not after.
 # The networkextension entitlement is a restricted entitlement that requires
@@ -128,7 +124,7 @@ fi
 echo "  - Installing dependencies..."
 source .venv/bin/activate
 export MACOSX_DEPLOYMENT_TARGET=13.0  # Ensure compiled extensions target macOS 13+ (Ventura)
-pip install -q -r requirements/requirements-mac.txt
+pip install -q -r scripts/requirements/requirements-mac.txt
 
 # Check if Resistine.spec exists
 if [ ! -f "packaging/Resistine.spec" ]; then
@@ -142,7 +138,7 @@ rm -rf dist/Resistine dist/Resistine.app
 
 # Build with PyInstaller using the spec file
 echo "  - Building with PyInstaller..."
-pyinstaller packaging/Resistine.spec --clean
+pyinstaller packaging/Resistine.spec --noconfirm
 
 echo "✅ Python UI built"
 

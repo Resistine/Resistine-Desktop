@@ -74,7 +74,7 @@ if (-not (Test-Path $venvPython)) {
 if (-not $SkipDependencyInstall) {
     Write-Host "Installing build/runtime dependencies into .venv..."
     & $venvPython -m pip install --upgrade pip
-    & $venvPython -m pip install -r (Join-Path $ProjectRoot "requirements\requirements-windows.txt")
+    & $venvPython -m pip install -r (Join-Path $ProjectRoot "scripts\requirements\requirements-windows.txt")
     & $venvPython -m pip install pyinstaller
 }
 

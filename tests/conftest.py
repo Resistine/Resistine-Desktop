@@ -13,9 +13,8 @@ import json
 import logging
 import os
 import sys
-import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -324,13 +323,13 @@ def sample_vpn_config_json():
     return {
         "Interface": {
             "PrivateKey": "",
-            "Address": "10.49.65.6",
-            "DNS": ["10.49.11.10"],
+            "Address": "10.0.0.2",
+            "DNS": ["10.0.0.53"],
         },
         "Peer": {
             "PublicKey": "ABC123serverPubKey=",
-            "AllowedIPs": ["10.49.0.0/17"],
-            "Endpoint": "18.199.109.145:987",
+            "AllowedIPs": ["10.0.0.0/24"],
+            "Endpoint": "vpn.example.com:51820",
         },
     }
 
@@ -340,13 +339,13 @@ def sample_wireguard_conf():
     return (
         "[Interface]\n"
         "PrivateKey = myPrivateKey=\n"
-        "Address = 10.49.65.6\n"
-        "DNS = 10.49.11.10\n"
+        "Address = 10.0.0.2\n"
+        "DNS = 10.0.0.53\n"
         "\n"
         "[Peer]\n"
         "PublicKey = serverPubKey=\n"
-        "AllowedIPs = 10.49.0.0/17\n"
-        "Endpoint = 18.199.109.145:987\n"
+        "AllowedIPs = 10.0.0.0/24\n"
+        "Endpoint = vpn.example.com:51820\n"
     )
 
 
