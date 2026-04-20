@@ -16,7 +16,7 @@ from tkinter import filedialog, messagebox
 
 import customtkinter
 
-from plugins.antivirus import clamav
+from plugins.antivirus import clamav, threat_log
 from plugins.antivirus.scanner import ScanResult, scan
 from plugins.antivirus.theme import (
     COLOR_ERR_BG,
@@ -35,6 +35,7 @@ from plugins.antivirus.ui_builders import (
 )
 from plugins.antivirus.ui_cards import (
     build_scan_exclusions,
+    build_siem_card,
     build_updates_card,
     build_whitelist_and_quarantine,
 )
@@ -193,6 +194,7 @@ class Plugin(BasePlugin):
         row = build_whitelist_and_quarantine(self, self.main_frame, row)
         row = build_scan_exclusions(self, self.main_frame, row)
         row = build_updates_card(self, self.main_frame, row)
+        row = build_siem_card(self, self.main_frame, row)
 
         customtkinter.CTkLabel(
             self.main_frame, text="", height=12,
@@ -676,20 +678,24 @@ class Plugin(BasePlugin):
                 "Resistine — Threats Detected",
                 f"{result.infected} infected file(s) found during scan.",
             )
-            # Collect infected paths
-            infected_paths = []
+            infections: dict[str, str] = {}
             for infection_line in result.infections:
-                # Format: "/path/to/file: Virus.Name FOUND"
-                parts = infection_line.rsplit(":", 1)
-                if len(parts) == 2:
-                    infected_paths.append(parts[0].strip())
-            if infected_paths:
-                self._offer_quarantine_batch(infected_paths)
+                filepath, sig = threat_log.parse_infection_line(
+                    infection_line,
+                )
+                infections[filepath] = sig
+                threat_log.log_threat_detected(sig, filepath)
+            if infections:
+                self._offer_quarantine_batch(infections)
         else:
             self._scan_status_label.configure(text="No threats found")
 
-    def _offer_quarantine_batch(self, filepaths: list[str]):
-        """Ask user whether to quarantine all infected files at once."""
+    def _offer_quarantine_batch(self, infections: dict[str, str]):
+        """Ask user whether to quarantine all infected files.
+
+        infections: dict mapping filepath -> ClamAV signature name.
+        """
+        filepaths = list(infections)
         names = [os.path.basename(p) for p in filepaths]
         listing = "\n".join(f"  \u2022 {n}" for n in names[:20])
         if len(names) > 20:
@@ -706,13 +712,16 @@ class Plugin(BasePlugin):
 
         quarantined = 0
         for filepath in filepaths:
-            ok, msg = clamav.quarantine_file(filepath)
+            ok, dest = clamav.quarantine_file(filepath)
             basename = os.path.basename(filepath)
             if ok:
                 self._log_append(f"Quarantined: {basename}")
+                threat_log.log_threat_quarantined(
+                    infections[filepath], filepath, dest,
+                )
                 quarantined += 1
             else:
-                self._log_append(f"Quarantine failed ({basename}): {msg}")
+                self._log_append(f"Quarantine failed ({basename}): {dest}")
         self._refresh_quarantine()
         self._log_append(
             f"Quarantined {quarantined}/{len(filepaths)} files",
@@ -876,6 +885,36 @@ class Plugin(BasePlugin):
             size_entry.delete(0, "end")
             size_entry.insert(0, str(excl["max_size_mb"]))
 
+    # ── SIEM Forwarding ───────────────────────────────────────
+
+    def _setup_wazuh_forwarding(self):
+        """Configure Wazuh agent to forward threat logs."""
+        btn = getattr(self, "_siem_btn", None)
+        if btn:
+            btn.configure(state="disabled", text="Configuring...")
+
+        def _run():
+            ok, msg = threat_log.setup_wazuh_forwarding()
+            self.app.after(0, self._handle_wazuh_setup, ok, msg)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _handle_wazuh_setup(self, ok: bool, msg: str):
+        if not hasattr(self, "main_frame") or not self.main_frame:
+            return
+        btn = getattr(self, "_siem_btn", None)
+        lbl = getattr(self, "_siem_status_label", None)
+        if ok:
+            self._log_append(f"SIEM: {msg}")
+            if btn:
+                btn.configure(text="Configured", state="disabled")
+            if lbl:
+                lbl.configure(text="Forwarding active")
+        else:
+            self._log_append(f"SIEM setup failed: {msg}")
+            if btn:
+                btn.configure(state="normal", text="Configure Forwarding")
+
     # ── Quarantine ─────────────────────────────────────────────
 
     def _refresh_quarantine(self):
@@ -942,4 +981,5 @@ class Plugin(BasePlugin):
             parent=self.app,
         ):
             clamav.delete_quarantined(qpath)
+            threat_log.log_threat_deleted(name)
             self._refresh_quarantine()

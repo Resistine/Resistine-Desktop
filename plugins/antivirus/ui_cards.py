@@ -15,6 +15,7 @@ from plugins.antivirus.theme import (
     COLOR_CARD_BG,
     COLOR_CARD_BORDER,
     COLOR_MUTED,
+    COLOR_OK_TEXT,
     CORNER_R,
     PAD_X,
     add_separator,
@@ -189,6 +190,73 @@ def build_scan_exclusions(plugin, parent, row):
 
 
 # ── 6. Signature Updates ────────────────────────────────
+
+
+# (build_updates_card defined below)
+
+
+# ── 7. SIEM Forwarding ─────────────────────────────────
+
+
+def build_siem_card(plugin, parent, row):
+    """Build the SIEM Forwarding card (threat log + Wazuh setup)."""
+    from plugins.antivirus.threat_log import get_log_path, is_wazuh_installed
+
+    card = make_card(parent, row)
+    card.grid_columnconfigure(0, weight=1)
+
+    customtkinter.CTkLabel(
+        card, text="SIEM Forwarding", font=font(14, bold=True),
+    ).grid(row=0, column=0, columnspan=2, padx=16, pady=(14, 6), sticky="w")
+
+    add_separator(card, 1)
+
+    # Threat log path
+    customtkinter.CTkLabel(
+        card, text="Threat Log", text_color=COLOR_MUTED, font=font(12),
+    ).grid(row=2, column=0, padx=16, pady=(8, 0), sticky="w")
+
+    customtkinter.CTkLabel(
+        card, text=get_log_path(), font=font(10),
+        text_color=COLOR_MUTED, wraplength=340, justify="left",
+    ).grid(row=3, column=0, columnspan=2, padx=16, pady=(2, 8), sticky="w")
+
+    add_separator(card, 4)
+
+    if is_wazuh_installed():
+        plugin._siem_status_label = customtkinter.CTkLabel(
+            card, text="Wazuh agent detected",
+            font=font(12), text_color=COLOR_OK_TEXT,
+        )
+        plugin._siem_status_label.grid(
+            row=5, column=0, padx=16, pady=(8, 4), sticky="w",
+        )
+
+        plugin._siem_btn = customtkinter.CTkButton(
+            card, text="Configure Forwarding", height=30,
+            corner_radius=8, font=font(12),
+            fg_color="transparent", border_width=1,
+            border_color=COLOR_BTN_OUTLINE,
+            text_color=COLOR_BTN_OUTLINE,
+            hover_color=COLOR_BTN_OUTLINE_HOVER,
+            command=plugin._setup_wazuh_forwarding,
+        )
+        plugin._siem_btn.grid(
+            row=6, column=0, columnspan=2,
+            padx=16, pady=(4, 14), sticky="ew",
+        )
+    else:
+        customtkinter.CTkLabel(
+            card, text="Wazuh agent not installed",
+            font=font(12), text_color=COLOR_MUTED,
+        ).grid(row=5, column=0, padx=16, pady=(8, 4), sticky="w")
+
+        customtkinter.CTkLabel(
+            card, text="Threat events are logged locally.",
+            font=font(11), text_color=COLOR_MUTED,
+        ).grid(row=6, column=0, padx=16, pady=(0, 14), sticky="w")
+
+    return row + 1
 
 
 def _build_db_info_rows(plugin, card, start_row):
