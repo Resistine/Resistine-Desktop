@@ -22,31 +22,25 @@ set SERVICE_NAME=ResistineVPN
 set SCRIPT_DIR=%~dp0
 if "%SCRIPT_DIR:~-1%"=="\" set SCRIPT_DIR=%SCRIPT_DIR:~0,-1%
 
-:: Try to find service script in installation directory first (bundled with installer)
+:: Project root is always two levels up from scripts\install\.
+:: Resolved unconditionally so the fallback SERVICE_SCRIPT paths below work
+:: correctly — the previous conditional-block version had a parse-time bug
+:: where %PROJECT_ROOT% was expanded before it was set.
+for %%I in ("%SCRIPT_DIR%\..\..") do set PROJECT_ROOT=%%~fI
+
+:: Try bundled-installer layout first, then fall back to project-root locations.
 set SERVICE_SCRIPT=%SCRIPT_DIR%\windows_vpn_service.py
-if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%SCRIPT_DIR%\plugins\vpn\wireguard\windows_vpn_service.py
-if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%SCRIPT_DIR%\..\plugins\vpn\wireguard\windows_vpn_service.py
-
-:: Fallback: assume running from project root (development mode)
-if not exist "%SERVICE_SCRIPT%" (
-    set PROJECT_ROOT=%SCRIPT_DIR%\..\..
-    for %%I in ("%PROJECT_ROOT%") do set PROJECT_ROOT=%%~fI
-    set SERVICE_SCRIPT=%PROJECT_ROOT%\plugins\vpn\wireguard\windows_vpn_service.py
-)
-
-:: Last fallback: check services directory
-if not exist "%SERVICE_SCRIPT%" (
-    set PROJECT_ROOT=%SCRIPT_DIR%\..\..
-    for %%I in ("%PROJECT_ROOT%") do set PROJECT_ROOT=%%~fI
-    set SERVICE_SCRIPT=%PROJECT_ROOT%\services\windows_vpn_service.py
-)
+if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%PROJECT_ROOT%\plugins\vpn\wireguard\windows_vpn_service.py
+if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%PROJECT_ROOT%\services\windows_vpn_service.py
 set PROGRAMDATA_DIR=%PROGRAMDATA%\Resistine\wireguard
 set LOG_DIR=%PROGRAMDATA%\Resistine
 set SERVICE_SETUP_LOG=%LOG_DIR%\vpn_service_install.log
 
 if not exist "%SERVICE_SCRIPT%" (
     echo ERROR: Service script not found.
-    echo Expected: %SCRIPT_DIR%\plugins\vpn\wireguard\windows_vpn_service.py
+    echo Last path tried: %SERVICE_SCRIPT%
+    echo Project root:    %PROJECT_ROOT%
+    echo Script dir:      %SCRIPT_DIR%
     echo.
     echo If you are running an installed copy, the installer package may be missing the service script.
     echo Rebuild the installer after bundling windows_vpn_service.py, or run this script from the project root.
