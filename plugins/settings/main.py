@@ -392,7 +392,13 @@ class Plugin(BasePlugin):
         return "1.0.0"
 
     def _check_for_updates(self):
-        """Trigger an interactive update check via the cross-platform update manager."""
+        """Trigger an interactive update check via the cross-platform update manager.
+
+        On macOS (Sparkle) and Windows (WinSparkle) the native library shows
+        its own progress/result UI.  On Linux, the Python updater shows its
+        own dialogs.  The status label below the button is a lightweight
+        fallback for edge cases (updater unavailable, errors).
+        """
         try:
             from utils import updates
 
@@ -403,15 +409,22 @@ class Plugin(BasePlugin):
                 self.app.after(5000, lambda: self.update_status_label.configure(text=""))
                 return
 
-            success = updates.check_for_updates()
-            if success:
-                self.update_status_label.configure(
-                    text="Checking for updates...", text_color="green"
-                )
-            else:
+            self.update_status_label.configure(
+                text="Checking for updates...", text_color="green"
+            )
+
+            result = updates.check_for_updates()
+
+            if result == "error":
                 self.update_status_label.configure(
                     text="Update check failed", text_color="red"
                 )
+            else:
+                # Native Sparkle/WinSparkle UI handles "up to date" and
+                # "update available" popups.  Clear the status label.
+                self.app.after(3000, lambda: self.update_status_label.configure(text=""))
+                return
+
             self.app.after(5000, lambda: self.update_status_label.configure(text=""))
         except Exception as e:
             logger.error(f"Update check error: {e}")
