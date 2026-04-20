@@ -172,6 +172,11 @@ class MarkdownBubble(customtkinter.CTkFrame):
 
         tw = self.text_widget._textbox
         tw.configure(padx=8, pady=4, wrap="word")
+        # Visible selection so users can see what they're copying.
+        sel_bg = "#264F78" if is_dark else "#B5D4F8"
+        sel_fg = "#FFFFFF" if is_dark else "#000000"
+        tw.configure(selectbackground=sel_bg, selectforeground=sel_fg,
+                     inactiveselectbackground=sel_bg)
         # Prevent horizontal scrolling
         tw.configure(xscrollcommand=lambda *args: None)
         # Redirect scroll events so the outer chat container scrolls, not this bubble
@@ -181,11 +186,17 @@ class MarkdownBubble(customtkinter.CTkFrame):
         self.pack_propagate(False)
 
         # --- Text tags ---
-        mono = ("Menlo", 13) if sys.platform == "darwin" else ("Consolas", 13)
+        # Use CTkFont for all tag fonts so DPI scaling matches the base widget font.
+        # Raw tuples like ("Inter", 15, "bold") bypass CTkFont scaling and render
+        # at a different actual size on Windows with display scaling enabled.
+        mono_family = "Menlo" if sys.platform == "darwin" else "Consolas"
+        mono = customtkinter.CTkFont(family=mono_family, size=13)
 
-        tw.tag_configure("bold", font=("Inter", 15, "bold"),
+        tw.tag_configure("bold",
+                         font=customtkinter.CTkFont(family="Inter", size=15, weight="bold"),
                          foreground=bold_clr)
-        tw.tag_configure("italic", font=("Inter", 15, "italic"))
+        tw.tag_configure("italic",
+                         font=customtkinter.CTkFont(family="Inter", size=15, slant="italic"))
         tw.tag_configure("code_inline",
                          font=mono, foreground=code_fg, background=code_bg,
                          borderwidth=0, relief="flat")
@@ -193,18 +204,29 @@ class MarkdownBubble(customtkinter.CTkFrame):
                          font=mono, foreground=code_fg, background=code_bg,
                          lmargin1=0, lmargin2=0, rmargin=0,
                          spacing1=5, spacing3=5)
-        tw.tag_configure("h1", font=("Inter", 20, "bold"),
+        tw.tag_configure("h1",
+                         font=customtkinter.CTkFont(family="Inter", size=20, weight="bold"),
                          foreground=heading_clr, spacing1=10, spacing3=6)
-        tw.tag_configure("h2", font=("Inter", 18, "bold"),
+        tw.tag_configure("h2",
+                         font=customtkinter.CTkFont(family="Inter", size=18, weight="bold"),
                          foreground=heading_clr, spacing1=8, spacing3=5)
-        tw.tag_configure("h3", font=("Inter", 16, "bold"),
+        tw.tag_configure("h3",
+                         font=customtkinter.CTkFont(family="Inter", size=16, weight="bold"),
                          foreground=heading_clr, spacing1=7, spacing3=4)
-        tw.tag_configure("h4", font=("Inter", 15, "bold"),
+        tw.tag_configure("h4",
+                         font=customtkinter.CTkFont(family="Inter", size=15, weight="bold"),
                          foreground=heading_clr, spacing1=6, spacing3=3)
-        tw.tag_configure("h5", font=("Inter", 14, "bold"),
+        tw.tag_configure("h5",
+                         font=customtkinter.CTkFont(family="Inter", size=14, weight="bold"),
                          foreground=heading_clr, spacing1=5, spacing3=3)
-        tw.tag_configure("h6", font=("Inter", 13, "bold"),
+        tw.tag_configure("h6",
+                         font=customtkinter.CTkFont(family="Inter", size=13, weight="bold"),
                          foreground=quote_clr, spacing1=5, spacing3=3)
+
+        # Raise heading tags above bold so bold inside headings inherits
+        # the heading's font size instead of overriding it to body size.
+        for htag in ("h1", "h2", "h3", "h4", "h5", "h6"):
+            tw.tag_raise(htag)
         tw.tag_configure("strikethrough", overstrike=True)
         tw.tag_configure("bullet", lmargin1=20, lmargin2=36,
                          spacing1=2, spacing3=2)
@@ -214,7 +236,8 @@ class MarkdownBubble(customtkinter.CTkFrame):
                          foreground=quote_clr, spacing1=5, spacing3=5,
                          borderwidth=0, relief="flat")
         tw.tag_configure("link", foreground=link_clr, underline=False)
-        tw.tag_configure("table_header", font=("Inter", 14, "bold"),
+        tw.tag_configure("table_header",
+                         font=customtkinter.CTkFont(family="Inter", size=14, weight="bold"),
                          foreground=heading_clr)
         tw.tag_configure("table_cell", font=mono, lmargin1=12, lmargin2=12)
         tw.tag_configure("paragraph", spacing1=3, spacing3=3)
@@ -621,6 +644,9 @@ class MarkdownBubble(customtkinter.CTkFrame):
                 copy_btn.pack(side="right")
 
         # Code text widget — no wrapping so box diagrams stay aligned
+        is_dark = self._colors.get('is_dark', False)
+        code_sel_bg = "#264F78" if is_dark else "#B5D4F8"
+        code_sel_fg = "#FFFFFF" if is_dark else "#000000"
         code_widget = tk.Text(
             code_frame,
             wrap="none",
@@ -632,7 +658,10 @@ class MarkdownBubble(customtkinter.CTkFrame):
             pady=10,
             highlightthickness=0,
             relief="flat",
-            insertwidth=0  # Hide cursor
+            insertwidth=0,  # Hide cursor
+            selectbackground=code_sel_bg,
+            selectforeground=code_sel_fg,
+            inactiveselectbackground=code_sel_bg,
         )
         code_widget.pack(fill="both", expand=True, padx=0, pady=(6, 10))
         code_widget.insert("1.0", code_text)
@@ -924,7 +953,7 @@ class MarkdownBubble(customtkinter.CTkFrame):
                     text=plain,
                     bg=bg,
                     fg=self._colors['heading_clr'] if is_header else self._colors['text_color'],
-                    font=("Inter", 13, "bold") if is_header else ("Inter", 13),
+                    font=customtkinter.CTkFont(family="Inter", size=13, weight="bold") if is_header else customtkinter.CTkFont(family="Inter", size=13),
                     padx=10, pady=6,
                     anchor="w",
                     justify="left",

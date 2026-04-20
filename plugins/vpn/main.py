@@ -469,7 +469,11 @@ class Plugin(BasePlugin):
         if extension_disabled:
             status_text  = "Extension Disabled"
             status_color = ("#C5221F", "#FF4040")
-            sub_text     = "Enable in System Settings › General › Login Items & Extensions › Network Extensions"
+            mac_major = int(platform.mac_ver()[0].split(".")[0] or "0")
+            if mac_major >= 15:
+                sub_text = "Enable in System Settings › General › Login Items & Extensions › Network Extensions"
+            else:
+                sub_text = "Enable in System Settings › Privacy & Security › scroll to Security › click Allow"
             card_bg      = ("#FDEDEC", "#3A1A1A")
             is_enabled   = False
         elif not selected_conf_file:
@@ -735,8 +739,33 @@ class Plugin(BasePlugin):
             if not hasattr(self, 'main_container') or not self.main_container.winfo_exists():
                 return
             
-            # Scrollbar auto-hide is handled globally in main.py's
-            # _clamp_scrollregion patch for all CTkScrollableFrame instances.
+            # --- Auto-hide Scrollbar Logic ---
+            try:
+                if hasattr(scroll_frame, "_parent_canvas") and hasattr(scroll_frame, "_scrollbar"):
+                    yview = scroll_frame._parent_canvas.yview()
+                    
+                    # Check if currently hidden (hacky check usually works if grid_remove used)
+                    is_mapped = bool(scroll_frame._scrollbar.grid_info())
+                    
+                    # If content fits entirely (0.0 to 1.0)
+                    if yview and (yview[0] <= 0.01 and yview[1] >= 0.99):
+                        if is_mapped:
+                            # Save grid info to restore later if needed, though grid() usually suffices 
+                            # if grid_remove was used. To be safe with CTk internals:
+                            scroll_frame._saved_sb_grid = scroll_frame._scrollbar.grid_info()
+                            scroll_frame._scrollbar.grid_remove()
+                    else:
+                        if not is_mapped:
+                             # Restore
+                             if hasattr(scroll_frame, "_saved_sb_grid") and scroll_frame._saved_sb_grid:
+                                 scroll_frame._scrollbar.grid(**scroll_frame._saved_sb_grid)
+                             else:
+                                 # Default fallback if we somehow didn't save it
+                                 # Standard CTkScrollableFrame layout: row=0, column=1, sticky="ns"
+                                 scroll_frame._scrollbar.grid(row=0, column=1, sticky="ns", pady=0)
+            except Exception:
+                pass
+            # --- End Auto-hide ---
             try:
                 if not scroll_frame.winfo_exists():
                     return
@@ -1031,9 +1060,13 @@ class Plugin(BasePlugin):
 
             if not is_extension_enabled():
                 logger.error("Network extension is disabled in System Settings")
+                mac_major = int(platform.mac_ver()[0].split(".")[0] or "0")
+                if mac_major >= 15:
+                    ext_path = "General > Login Items & Extensions > Network Extensions"
+                else:
+                    ext_path = "Privacy & Security > Security > click Allow"
                 self.app.show_notification(
-                    "VPN extension is disabled. Enable it in System Settings > "
-                    "General > Login Items & Extensions > Network Extensions",
+                    f"VPN extension is disabled. Enable it in System Settings > {ext_path}",
                     type="error",
                 )
                 my_vpn_status = "Stopped"

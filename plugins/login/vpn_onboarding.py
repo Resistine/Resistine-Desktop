@@ -189,9 +189,14 @@ class VPNOnboardingScreen:
         instructions_frame.grid_columnconfigure(0, weight=1)
 
         if self.is_macos:
+            mac_major = int(platform.mac_ver()[0].split(".")[0] or "0")
+            if mac_major >= 15:
+                setting_path = "General > Login Items & Extensions\n    then select Network Extensions"
+            else:
+                setting_path = "Privacy & Security\n    scroll to Security and click Allow"
             steps = [
                 ("1", "A macOS dialog will appear.\n    Click \"Open System Settings\""),
-                ("2", "Go to General > Login Items & Extensions\n    then select Network Extensions"),
+                ("2", f"Go to {setting_path}"),
                 ("3", "Enable the Resistine extension\n    and click Allow"),
             ]
         else:

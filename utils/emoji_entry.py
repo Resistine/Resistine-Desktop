@@ -52,36 +52,6 @@ else:
                 **kw,
             )
 
-            # CTkTextbox's grid layout doesn't let the text widget fill the
-            # full frame height. Switch from grid to place() so we can
-            # position the text widget with exact pixel control, matching
-            # how CTkEntry vertically centers its tk.Entry.
-            self._textbox.grid_forget()
-
-            def _place_centered():
-                try:
-                    import tkinter.font as tkfont
-                    tw = self._textbox
-                    tw.configure(bd=0, highlightthickness=0, pady=0)
-                    self.update_idletasks()
-                    outer_h = self.winfo_height()
-                    outer_w = self.winfo_width()
-                    f = tkfont.Font(font=tw.cget("font"))
-                    line_h = f.metrics("linespace")
-                    ascent = f.metrics("ascent")
-                    descent = f.metrics("descent")
-                    # Vertical: center the line in the frame, then nudge
-                    # down to account for ascenders being taller than
-                    # descenders (visual center != mathematical center).
-                    y = max((outer_h - line_h) // 2, 0) + (ascent - descent) // 10
-                    # Horizontal: inset by corner_radius (like CTkEntry)
-                    x = min(corner_radius, outer_h // 2)
-                    tw.place(x=x, y=y, relwidth=1.0, height=line_h,
-                             width=-x * 2)
-                except Exception:
-                    pass
-            self.after(50, _place_centered)
-
             self._placeholder_text = placeholder_text
             self._placeholder_color = placeholder_text_color or "#888888"
             self._text_color = text_color
@@ -276,9 +246,14 @@ else:
             if self._state == "disabled":
                 return "break"
             self._clear_placeholder()
-            try:
-                clip = self._textbox.clipboard_get()
-            except Exception:
+            clip = None
+            for kwargs in ({}, {"type": "STRING"}, {"type": "UTF8_STRING"}):
+                try:
+                    clip = self._textbox.clipboard_get(**kwargs)
+                    break
+                except Exception:
+                    continue
+            if not clip:
                 return "break"
             # Delete any selection first
             try:

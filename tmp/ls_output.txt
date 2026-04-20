@@ -1,0 +1,2 @@
+-rw-r--r--. 1 root root 43632 Mar 25 21:11 gui/user_interface.py
+-rw-rw-r--. 1 user user 43380 Apr 15 09:49 Resistine-Desktop-develop/gui/user_interface.py

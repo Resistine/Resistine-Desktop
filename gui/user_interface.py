@@ -190,7 +190,7 @@ class AppUI(customtkinter.CTk):
 
             badge = customtkinter.CTkLabel(
                 header,
-                text=str(current_status),
+                text=str(current_status).title(),
                 font=customtkinter.CTkFont(size=11, weight="bold"),
                 text_color=badge_text_color,
                 fg_color=badge_bg,
@@ -251,26 +251,18 @@ class AppUI(customtkinter.CTk):
             except Exception:
                 pass
 
-        _first_configure = [True]
-
         def _schedule_wraplength(event=None, _f=frame, _j=_wrap_job):
             if _j[0] is not None:
                 try:
                     _f.after_cancel(_j[0])
                 except Exception:
                     pass
-            # Skip the first real configure — dimensions aren't final yet.
-            # Apply immediately on the second one.
-            if _first_configure[0] and _f.winfo_width() > 1:
-                _first_configure[0] = False
-            elif not _first_configure[0] and _f.winfo_width() > 1:
-                _first_configure[0] = None  # sentinel: don't enter this branch again
-                _apply_wraplength()
-                return
-            else:
-                _j[0] = _f.after(150, _apply_wraplength)
+            _j[0] = _f.after(150, _apply_wraplength)
 
+        # <Configure> only schedules (cheap); <Map> and the initial after() fire immediately.
         frame.bind("<Configure>", _schedule_wraplength)
+        frame.bind("<Map>", lambda e: _apply_wraplength())
+        frame.after(1, _apply_wraplength)
 
         # --- Interaction ---
         def on_click(_e=None):
@@ -672,10 +664,6 @@ class AppUI(customtkinter.CTk):
         """
         Select and display the specified frame.
         """
-        # Don't reload the current tab
-        if hasattr(self, "current_frame_name") and self.current_frame_name == name:
-            return
-
         self.current_frame_name = name
 
         # Precompute content width hint for smooth initial plugin rendering.
@@ -1009,11 +997,12 @@ class AppUI(customtkinter.CTk):
              self.__class__.plugin_manager = PluginManager(self)
         return self.__class__.plugin_manager
 
-    def show_notification(self, message, type="info"):
+    def show_notification(self, message, type="info", centered=False):
         """
         Show a non-blocking toast notification.
         :param message: The text to display.
         :param type: 'info' (green), 'error' (red), 'warning' (orange).
+        :param centered: If True, center in the full window instead of the content area.
         """
         colors = {
             "info": "#00D100",  # Green
@@ -1021,18 +1010,21 @@ class AppUI(customtkinter.CTk):
             "error": "#FF0000",  # Red
         }
         icon_col = colors.get(type, "#00D100")
-        
-        # Calculate centering relative to content area (excluding sidebar)
-        try:
-            total_w = self.winfo_width()
-            nav_w = self.navigation_frame.winfo_width() if hasattr(self, "navigation_frame") else 200
-            if nav_w < 100: nav_w = 200 # Fallback
-            
-            # relx = (sidebar + remaining/2) / total
-            content_center = nav_w + (total_w - nav_w) / 2
-            target_relx = content_center / total_w
-        except:
+
+        if centered:
             target_relx = 0.5
+        else:
+            # Calculate centering relative to content area (excluding sidebar)
+            try:
+                total_w = self.winfo_width()
+                nav_w = self.navigation_frame.winfo_width() if hasattr(self, "navigation_frame") else 200
+                if nav_w < 100: nav_w = 200 # Fallback
+
+                # relx = (sidebar + remaining/2) / total
+                content_center = nav_w + (total_w - nav_w) / 2
+                target_relx = content_center / total_w
+            except:
+                target_relx = 0.5
 
         # Ensure we use the root window for placement
         root = self.winfo_toplevel()
