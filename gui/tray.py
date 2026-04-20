@@ -292,6 +292,24 @@ class ResistineTray:
         self._refresh_status()
 
     def on_open_app(self, icon, item):
+        """Open the main Resistine window — focus existing instance or launch new."""
+        # Check if main.py is already running by looking for its process
+        try:
+            import ctypes
+            import ctypes.wintypes
+
+            # Find window by title prefix — main.py sets the window title to "Resistine"
+            hwnd = ctypes.windll.user32.FindWindowW(None, "Resistine")
+            if hwnd:
+                # Window exists — bring it to foreground
+                SW_RESTORE = 9
+                ctypes.windll.user32.ShowWindow(hwnd, SW_RESTORE)
+                ctypes.windll.user32.SetForegroundWindow(hwnd)
+                return
+        except Exception:
+            pass
+
+        # No existing window found — launch a new instance
         subprocess.Popen(
             [sys.executable, MAIN_SCRIPT],
             cwd=BASE_DIR,
@@ -322,7 +340,7 @@ class ResistineTray:
                  enabled=not is_connected and not is_connecting),
             item("Disconnect",     self.on_disconnect, enabled=is_connected),
             pystray.Menu.SEPARATOR,
-            item("Open Resistine", self.on_open_app),
+            item("Open Resistine", self.on_open_app, default=True),
             item("Quit",           self.on_quit),
         )
 
