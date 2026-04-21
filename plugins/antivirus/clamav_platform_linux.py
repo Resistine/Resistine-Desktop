@@ -287,6 +287,25 @@ def is_clamonacc_running() -> bool:
         return False
 
 
+def system_clamd_running() -> bool:
+    """Return True if the system clamd service is up.
+
+    We deliberately do NOT rely on ``_ping_socket`` here.  On Fedora
+    the stock SELinux targeted policy forbids ordinary user domains
+    (``user_t``/``staff_t``/``xdm_t``) from connecting to a
+    ``clamd_var_run_t`` socket, so a direct probe from the Resistine UI
+    process would always fail even when the daemon is healthy and
+    clamonacc (running as ``clamscan``) is happily connected.  The
+    authoritative signal is systemd's view of the unit plus the
+    presence of the Unix socket the service was configured to create.
+    """
+    clamd_svc, _fresh, _onacc = _service_names()
+    if not _systemctl_is_active(clamd_svc):
+        return False
+    sock = system_clamd_socket_path()
+    return bool(sock) and os.path.exists(sock)
+
+
 # ── System daemon activation ─────────────────────────────
 
 
@@ -347,24 +366,100 @@ def _shell_quote(s: str) -> str:
 
 
 def _prepare_config_script() -> str:
-    """Shell snippet that comments out 'Example' lines in distro-stock configs.
+    """Shell snippet that normalises the distro-stock ClamAV configs.
 
-    Fedora and older Debian ship clamd.conf/freshclam.conf with a lone
-    ``Example`` line that prevents the daemon from starting until it's
-    removed. This is safe to run on every invocation.
+    Two fixups are applied so clamd can actually start after a fresh
+    package install:
+
+      1. Comment out the lone ``Example`` stanza that Fedora (and older
+         Debian) ship at the top of clamd.conf / freshclam.conf — clamd
+         refuses to run with it in place.
+
+      2. Make sure a ``LocalSocket`` line is active in clamd's config.
+         Fedora's stock scan.conf leaves ``LocalSocket`` commented, so
+         clamd exits with ``Please define server type (local and/or
+         TCP)`` on first start. We append the distro-correct socket
+         path only if no uncommented ``LocalSocket`` is already
+         present, so this is idempotent and non-destructive.
+
+    Both steps are safe to re-run on every invocation.
     """
-    targets = [
+    cmds: list[str] = []
+
+    # (1) Drop the stock 'Example' stanza wherever it appears.
+    example_targets = [
         "/etc/clamav/clamd.conf",
         "/etc/clamav/freshclam.conf",
         "/etc/clamd.d/scan.conf",
         "/etc/freshclam.conf",
     ]
-    cmds = []
-    for t in targets:
+    for t in example_targets:
         q = _shell_quote(t)
         cmds.append(
             f"if [ -f {q} ]; then sed -i 's/^Example$/#Example/' {q}; fi",
         )
+
+    # (2) Ensure LocalSocket AND LocalSocketMode are defined in clamd's
+    # config. Each tuple is (config_path, socket_path) — the socket_path
+    # matches what the distro's systemd unit expects (RuntimeDirectory=)
+    # and what system_clamd_socket_path() probes for.
+    #
+    # LocalSocketMode 0666 is important: when unset, clamd creates the
+    # socket using the service's umask (0022 on Fedora), yielding mode
+    # 0644 — which lets only the owning "clamscan" user connect.  The
+    # Resistine UI polls the socket as the regular desktop user, so
+    # without 0666 we'd get EACCES and the status card would
+    # permanently read "Protection Offline" even though clamd is
+    # running.
+    socket_targets = [
+        ("/etc/clamd.d/scan.conf", "/run/clamd.scan/clamd.sock"),
+        ("/etc/clamav/clamd.conf", "/run/clamav/clamd.ctl"),
+    ]
+    for conf, sock in socket_targets:
+        cq = _shell_quote(conf)
+        append_sock = _shell_quote(f"LocalSocket {sock}")
+        append_mode = _shell_quote("LocalSocketMode 0666")
+        cmds.append(
+            f"if [ -f {cq} ]; then "
+            f"grep -qE '^[[:space:]]*LocalSocket[[:space:]]' {cq} "
+            f"|| echo {append_sock} >> {cq}; "
+            f"grep -qE '^[[:space:]]*LocalSocketMode[[:space:]]' {cq} "
+            f"|| echo {append_mode} >> {cq}; "
+            f"fi",
+        )
+
+    # (3) Loosen /run/clamd.scan mode on Fedora via an ExecStartPost chmod.
+    #
+    # The Fedora clamd@.service unit does NOT declare ``RuntimeDirectory=``
+    # — it just runs clamd, which creates /run/clamd.scan itself when it
+    # drops to the ``User`` declared in scan.conf (clamscan:virusgroup)
+    # with mode 0710.  Because the unit has no RuntimeDirectory=, a
+    # ``RuntimeDirectoryMode=0755`` drop-in is metadata with nothing to
+    # attach to — systemd merges it but never applies it.
+    #
+    # The reliable fix is to chmod the directory after clamd has
+    # created it. A short bash wait-loop handles the (rare) race where
+    # ExecStartPost fires before clamd finishes its initial setup.
+    if LinuxDistro.is_fedora_like():
+        drop_in_dir = "/etc/systemd/system/clamd@scan.service.d"
+        drop_in_path = f"{drop_in_dir}/resistine.conf"
+        drop_in_body = (
+            "[Service]\n"
+            "# Installed by Resistine: Fedora's clamd@.service has no\n"
+            "# RuntimeDirectory= entry, so RuntimeDirectoryMode= is\n"
+            "# ignored. clamd itself creates /run/clamd.scan with mode\n"
+            "# 0710 — blocking non-clamscan users from even stat'ing\n"
+            "# the socket inside. Chmod the dir once clamd has it open.\n"
+            "ExecStartPost=/usr/bin/bash -c 'for i in $(seq 1 20); do "
+            "[ -d /run/clamd.scan ] && break; sleep 0.25; done; "
+            "/usr/bin/chmod 0755 /run/clamd.scan'\n"
+        )
+        cmds.append(
+            f"mkdir -p {_shell_quote(drop_in_dir)} && "
+            f"printf '%s' {_shell_quote(drop_in_body)} "
+            f"> {_shell_quote(drop_in_path)}",
+        )
+
     return "; ".join(cmds)
 
 
@@ -392,13 +487,21 @@ def activate_system_daemons() -> tuple[bool, str]:
 
     prep = _prepare_config_script()
     # Freshclam first so the DB exists before clamd loads. clamonacc is
-    # best-effort (not all distros package it yet).
+    # best-effort (not all distros package it yet).  We use ``enable`` +
+    # ``restart`` (instead of ``enable --now``) so that re-running Start
+    # Protection picks up any config changes we just wrote in `prep` —
+    # e.g. the newly-added LocalSocketMode line.  ``restart`` is
+    # idempotent: it starts the service if it's stopped, and bounces it
+    # if it's running.
     script = (
         f"{prep}; "
         f"systemctl daemon-reload; "
-        f"systemctl enable --now {fresh_svc} || true; "
-        f"systemctl enable --now {clamd_svc}; "
-        f"systemctl enable --now {onacc_svc} || true"
+        f"systemctl enable {fresh_svc} 2>/dev/null || true; "
+        f"systemctl restart {fresh_svc} 2>/dev/null || true; "
+        f"systemctl enable {clamd_svc}; "
+        f"systemctl restart {clamd_svc}; "
+        f"systemctl enable {onacc_svc} 2>/dev/null || true; "
+        f"systemctl restart {onacc_svc} 2>/dev/null || true"
     )
     ok, out = _run_privileged(["sh", "-c", script], timeout=600)
     if not ok:
