@@ -9,8 +9,8 @@ Architecture:
     utils/updates/
     ├── manager.py         ← shared interface (this file)
     ├── darwin.py          ← macOS: Sparkle via PyObjC
-    ├── windows.py         ← Windows: WinSparkle (stub)
-    └── linux.py           ← Linux: AppImage/custom (stub)
+    ├── windows.py         ← Windows: WinSparkle via ctypes
+    └── linux.py           ← Linux: Ed25519-verified tarball
 
 Usage:
     from utils import updates
@@ -125,16 +125,19 @@ def init(app):
     _backend.init_updater(app)
 
     if _backend.is_available():
-        _scheduler.start()
+        # macOS Sparkle and Windows WinSparkle manage their own background
+        # check timers.  Only start the Python scheduler on Linux.
+        if _PLATFORM == "Linux":
+            _scheduler.start()
 
 
 def check_for_updates():
     """Trigger an interactive update check (manual "Check for Updates" button).
 
-    Returns True if the check was started successfully.
+    Returns "update_available", "up_to_date", or "error".
     """
     if _backend is None:
-        return False
+        return "error"
     return _backend.check_for_updates()
 
 
@@ -148,5 +151,7 @@ def is_available():
 def shutdown():
     """Stop the scheduler and clean up. Call from the app's close handler."""
     _scheduler.stop()
+    if _backend is not None and hasattr(_backend, 'shutdown'):
+        _backend.shutdown()
     if _backend is not None and hasattr(_backend, 'stop_runloop_pump'):
         _backend.stop_runloop_pump()

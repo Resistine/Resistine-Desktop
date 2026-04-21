@@ -1,5 +1,12 @@
 <svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
 	 width="100%" viewBox="0 0 2500 625" enable-background="new 0 0 2500 625" xml:space="preserve">
+<defs>
+  <clipPath id="rounded-corners">
+    <rect x="0" y="0" width="2500" height="625" rx="117" ry="117"/>
+  </clipPath>
+</defs>
+<g clip-path="url(#rounded-corners)">
+
 <path fill="#0B5293" opacity="1.000000" stroke="none" 
 	d="
 M1842.000000,626.000000 
@@ -451,4 +458,6 @@ M683.462036,307.640747
 	C585.537720,266.875153 628.234192,258.132690 658.435486,276.818665 
 	C670.208557,284.102844 677.728821,294.916748 683.462036,307.640747 
 z"/>
+
+</g>
 </svg>

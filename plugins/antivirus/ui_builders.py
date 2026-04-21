@@ -9,17 +9,15 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import customtkinter
+from customtkinter import ThemeManager
 
 from plugins.antivirus.theme import (
-    COLOR_CARD_BG,
-    COLOR_CARD_BORDER,
-    COLOR_MUTED,
-    COLOR_WARN_BG,
-    COLOR_WARN_TEXT,
     CORNER_R,
     PAD_X,
+    add_separator,
     font,
     make_card,
+    section_title,
 )
 
 
@@ -28,7 +26,9 @@ from plugins.antivirus.theme import (
 
 def build_status_banner(plugin, parent, row):
     """Build a VPN-style status card with title, subtitle, and action button."""
-    bg = COLOR_WARN_BG
+    t = ThemeManager.theme.get("Theme", {})
+    bg = t.get("protection_bg_warn")
+    title_color = t.get("protection_text_warn")
 
     card = customtkinter.CTkFrame(
         parent, fg_color=bg, corner_radius=CORNER_R, border_width=0,
@@ -42,7 +42,7 @@ def build_status_banner(plugin, parent, row):
     plugin._banner_label = customtkinter.CTkLabel(
         text_col, text="Checking...",
         font=customtkinter.CTkFont(family="Inter", size=28, weight="bold"),
-        text_color=COLOR_WARN_TEXT,
+        text_color=title_color,
     )
     plugin._banner_label.grid(row=0, column=0, sticky="w")
 
@@ -73,29 +73,30 @@ def build_status_banner(plugin, parent, row):
 
 def _build_scan_card(plugin, container):
     card = customtkinter.CTkFrame(
-        container, corner_radius=CORNER_R, fg_color=COLOR_CARD_BG,
-        border_width=1, border_color=COLOR_CARD_BORDER,
+        container, corner_radius=CORNER_R, border_width=1,
     )
-    card.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+    card.grid(row=0, column=0, sticky="nsew")
     card.grid_columnconfigure(0, weight=1)
 
-    customtkinter.CTkLabel(
-        card, text="Scan", font=font(14, bold=True),
-    ).grid(row=0, column=0, padx=16, pady=(14, 10), sticky="w")
+    section_title(card, "Scan").grid(
+        row=0, column=0, padx=16, pady=(14, 3), sticky="w",
+    )
+    add_separator(card, 1)
 
     actions = [
         ("Scan File", "scan_file"),
         ("Scan Directory", "scan_directory"),
+        ("Scan Computer", "scan_computer"),
     ]
     btn_frame = customtkinter.CTkFrame(card, fg_color="transparent")
-    btn_frame.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 14))
+    btn_frame.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 14))
     for i in range(len(actions)):
         btn_frame.grid_columnconfigure(i, weight=1)
 
     for col, (text, key) in enumerate(actions):
         btn = customtkinter.CTkButton(
             btn_frame, text=text, height=34, corner_radius=8,
-            font=font(12),
+            font=font(12), text_color="#F5F5F5",
             command=lambda k=key: plugin._on_action(k),
         )
         px = (0, 4) if col < len(actions) - 1 else (0, 0)
@@ -122,16 +123,14 @@ def build_scan_activity(plugin, parent, row):
     card.grid_columnconfigure(0, weight=1)
 
     header = customtkinter.CTkFrame(card, fg_color="transparent")
-    header.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 6))
+    header.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 3))
     header.grid_columnconfigure(0, weight=1)
 
-    customtkinter.CTkLabel(
-        header, text="Scan Activity", font=font(14, bold=True),
-    ).grid(row=0, column=0, sticky="w")
+    section_title(header, "Scan Activity").grid(row=0, column=0, sticky="w")
 
     plugin._scan_status_label = customtkinter.CTkLabel(
         header, text="No scans yet", font=font(11),
-        text_color=COLOR_MUTED,
+        text_color=ThemeManager.theme.get("Theme", {}).get("text_secondary"),
     )
     plugin._scan_status_label.grid(row=0, column=1, sticky="e")
 
@@ -147,10 +146,12 @@ def build_scan_activity(plugin, parent, row):
     cancel_btn.grid_remove()  # Hidden until a scan starts
     plugin._action_buttons["cancel_scan"] = cancel_btn
 
+    add_separator(card, 1)
+
     plugin._scan_progress = customtkinter.CTkProgressBar(card, height=4)
     plugin._scan_progress.set(0)
     plugin._scan_progress.grid(
-        row=1, column=0, padx=16, pady=(0, 2), sticky="ew",
+        row=2, column=0, padx=16, pady=(8, 2), sticky="ew",
     )
     plugin._scan_progress.grid_remove()
 
@@ -160,6 +161,6 @@ def build_scan_activity(plugin, parent, row):
         state="disabled",
     )
     plugin._scan_log.grid(
-        row=2, column=0, padx=16, pady=(4, 14), sticky="ew",
+        row=3, column=0, padx=16, pady=(4, 14), sticky="ew",
     )
     return row + 1

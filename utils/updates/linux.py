@@ -64,9 +64,13 @@ def init_updater(app) -> bool:
     return True
 
 
-def check_for_updates() -> bool:
-    """Trigger an interactive update check (shows UI even if up-to-date)."""
-    return _do_check_async(silent=False)
+def check_for_updates():
+    """Trigger an interactive update check (shows UI even if up-to-date).
+
+    Returns "up_to_date" on success (Linux updater handles its own UI for
+    available updates) or "error" on failure.
+    """
+    return "up_to_date" if _do_check_async(silent=False) else "error"
 
 
 def check_for_updates_in_background() -> bool:

@@ -1,9 +1,8 @@
 """
-Version Helper — reads the app version from packaging/Resistine.spec.
+Version Helper — single source of truth for the current app version.
 
-Provides a single source of truth for the current version on all platforms
-when running from source (Linux, dev mode). On macOS frozen builds the
-version comes from Info.plist instead, but this module serves as a fallback.
+Frozen (PyInstaller) builds: reads from the bundled VERSION file in _MEIPASS.
+Source / dev mode: parses VERSION = '...' from packaging/Resistine.spec.
 
 Author: Resistine Team
 Copyright (c) Resistine 2025
@@ -12,6 +11,7 @@ Licensed under the GNU General Public License v2 or later
 
 import os
 import re
+import sys
 
 from utils.logger import logger
 
@@ -29,11 +29,25 @@ def get_project_root() -> str:
 
 
 def get_current_version() -> str:
-    """Parse VERSION = '...' from packaging/Resistine.spec.
+    """Return the current application version.
 
-    Returns the version string (e.g. '2026.03.19') or '0.0.0' if the
-    spec file is missing or the VERSION line cannot be found.
+    Frozen builds: reads the VERSION file placed by PyInstaller.
+    Source / dev: parses VERSION = '...' from packaging/Resistine.spec.
+    Returns '0.0.0' if the version cannot be determined.
     """
+    # Frozen build — read the bundled VERSION file
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+        version_file = os.path.join(meipass, "VERSION")
+        try:
+            with open(version_file, "r", encoding="utf-8") as f:
+                version = f.read().strip()
+            if version:
+                return version
+        except (OSError, IOError) as e:
+            logger.warning(f"[VERSION] Could not read bundled VERSION file: {e}")
+
+    # Source / dev mode — parse from spec
     spec_path = os.path.join(_PROJECT_ROOT, "packaging", "Resistine.spec")
     try:
         with open(spec_path, "r", encoding="utf-8") as f:
