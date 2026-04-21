@@ -198,6 +198,9 @@ class Plugin(ChatUIMixin, BasePlugin):
                 self._accumulated_text)
             self.conversation_history.append(
                 {"role": "assistant", "content": self._accumulated_text})
+        elif self._current_asst_bubble:
+            self._current_asst_bubble._stop_thinking()
+            self._current_asst_bubble.destroy()
         self._current_asst_bubble = None
         self._unlock_input()
         self._save_current_session()
