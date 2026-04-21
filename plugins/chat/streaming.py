@@ -7,6 +7,7 @@ to stream OpenAI-compatible chat completions without blocking the GUI.
 from __future__ import annotations
 
 import queue
+import re
 import threading
 from typing import TYPE_CHECKING, Callable
 
@@ -136,9 +137,11 @@ class StreamController:
                         "and the URL in Settings is correct."
                     )
                 else:
-                    msg = f"{e} (endpoint: {endpoint})"
+                    err = re.sub(r'sk-[A-Za-z0-9]+', 'sk-***', str(e))
+                    msg = f"{err} (endpoint: {endpoint})"
             except ImportError:
-                msg = f"{e} (endpoint: {endpoint})"
+                err = re.sub(r'sk-[A-Za-z0-9]+', 'sk-***', str(e))
+                msg = f"{err} (endpoint: {endpoint})"
 
             logger.error(f"StreamController error: {msg}")
             self._queue.put(("error", msg))
@@ -152,8 +155,9 @@ class StreamController:
         if self._poll_id is not None:
             try:
                 self._app.after_cancel(self._poll_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(
+                    f"after_cancel({self._poll_id}) failed: {exc}")
             self._poll_id = None
 
     def _poll(self) -> None:
@@ -184,5 +188,5 @@ class StreamController:
         except queue.Empty:
             pass
 
-        if self._active:
+        if self._active and not self._cancel_event.is_set():
             self._schedule_poll()

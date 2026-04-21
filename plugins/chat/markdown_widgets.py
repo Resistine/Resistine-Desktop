@@ -17,7 +17,7 @@ import tkinter as tk
 
 import customtkinter
 
-from plugins.chat.fonts import get_fonts, get_theme_colors
+from plugins.chat.fonts import RESISTINE_BLUE, get_fonts, get_theme_colors
 from utils.logger import logger
 
 
@@ -77,8 +77,8 @@ class CodeBlockWidget(customtkinter.CTkFrame):
             width=70,
             height=26,
             font=customtkinter.CTkFont(family="Inter", size=11),
-            fg_color="#0D5394" if not is_dark else "#1565B0",
-            hover_color="#1565B0" if not is_dark else "#0D5394",
+            fg_color=RESISTINE_BLUE if not is_dark else "#1565B0",
+            hover_color="#1565B0" if not is_dark else RESISTINE_BLUE,
             text_color="#FFFFFF",
             corner_radius=6,
             command=self._copy_to_clipboard,

@@ -13,6 +13,8 @@ import sys
 
 import customtkinter
 
+from plugins.chat.fonts import _is_dark_mode
+from plugins.chat.markdown_utils import is_box_drawing, strip_inline_md
 from utils.logger import logger
 
 # ---------------------------------------------------------------------------
@@ -38,10 +40,6 @@ if _EMOJI_RE is not None:
     except (ImportError, OSError):
         pass
 
-# Box-drawing characters that indicate ASCII art diagrams
-_BOX_CHARS = set("┌┐└┘├┤┬┴┼─│╭╮╯╰╱╲▲▼◄►═║╔╗╚╝╠╣╦╩╬")
-
-
 # ---------------------------------------------------------------------------
 # MarkdownBubble -- thin CTkFrame that delegates rendering
 # ---------------------------------------------------------------------------
@@ -63,16 +61,15 @@ class MarkdownBubble(customtkinter.CTkFrame):
         super().__init__(master, fg_color="transparent", corner_radius=0, **kwargs)
         self.markdown_content = markdown_content
 
-        # Detect dark mode
         is_dark = self._detect_dark_mode()
-
         try:
             from plugins.chat.markdown_renderer import MarkdownRenderer
             self._renderer = MarkdownRenderer(
                 self, markdown_content, is_dark=is_dark,
             )
         except Exception as exc:
-            logger.warning(f"MarkdownRenderer unavailable, using fallback: {exc}")
+            logger.warning(
+                f"MarkdownRenderer failed, using fallback: {exc}")
             self._render_fallback()
 
     # ------------------------------------------------------------------
@@ -82,22 +79,7 @@ class MarkdownBubble(customtkinter.CTkFrame):
     @staticmethod
     def _detect_dark_mode() -> bool:
         """Return True when the current appearance is dark."""
-        mode = customtkinter.get_appearance_mode()
-        if mode == "Dark":
-            return True
-        if mode == "Light":
-            return False
-        if sys.platform == "darwin":
-            try:
-                import subprocess
-                res = subprocess.run(
-                    ["defaults", "read", "-g", "AppleInterfaceStyle"],
-                    capture_output=True, text=True,
-                )
-                return res.returncode == 0 and "Dark" in res.stdout
-            except Exception:
-                pass
-        return False
+        return _is_dark_mode()
 
     # ------------------------------------------------------------------
     # Fallback -- plain label when the renderer is missing
@@ -224,16 +206,9 @@ class MarkdownBubble(customtkinter.CTkFrame):
     @staticmethod
     def _strip_inline_md(text: str) -> str:
         """Strip inline markdown markers, returning plain text."""
-        text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
-        text = re.sub(r'~~(.+?)~~', r'\1', text)
-        text = re.sub(r'\*(.+?)\*', r'\1', text)
-        text = re.sub(r'`(.+?)`', r'\1', text)
-        text = re.sub(r'\[(.+?)\]\([^)]+\)', r'\1', text)
-        return text
+        return strip_inline_md(text)
 
-    @classmethod
-    def _is_box_drawing(cls, line: str) -> bool:
-        """Return True if the line looks like an ASCII art / box diagram."""
-        if not line:
-            return False
-        return bool(_BOX_CHARS.intersection(line))
+    @staticmethod
+    def _is_box_drawing(line: str) -> bool:
+        """Return True if the line looks like ASCII art / box diagram."""
+        return is_box_drawing(line)

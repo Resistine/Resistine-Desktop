@@ -7,6 +7,8 @@ from typing import Callable
 
 import customtkinter
 
+from plugins.chat.fonts import RESISTINE_BLUE
+
 # Pool of suggestion prompts shown on the welcome screen.
 # 4 are picked at random each time the chat is opened.
 SUGGESTION_POOL = [
@@ -23,9 +25,6 @@ SUGGESTION_POOL = [
     "Explain DNS tunneling and how to detect it",
     "What is ransomware and how do I prevent it?",
 ]
-
-_RESISTINE_BLUE = "#0D5394"
-
 
 def _secondary_color(is_dark: bool) -> str:
     return "#9CA3AF" if is_dark else "#6B7280"
@@ -65,7 +64,7 @@ class WelcomeScreen(customtkinter.CTkFrame):
             self,
             text="Resistine AI",
             font=customtkinter.CTkFont(family="Inter", size=26, weight="bold"),
-            text_color=_RESISTINE_BLUE,
+            text_color=RESISTINE_BLUE,
         )
         greeting_label.pack(pady=(0, 4))
 
@@ -158,7 +157,7 @@ class ApiKeyMissingScreen(customtkinter.CTkFrame):
             self,
             text="Open Settings",
             font=customtkinter.CTkFont(family="Inter", size=13, weight="bold"),
-            fg_color=_RESISTINE_BLUE,
+            fg_color=RESISTINE_BLUE,
             hover_color="#1565B0",
             text_color="#ffffff",
             corner_radius=10,

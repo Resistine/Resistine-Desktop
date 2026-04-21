@@ -17,6 +17,8 @@ import tkinter.font as tkFont
 
 import customtkinter
 
+RESISTINE_BLUE = "#0D5394"
+
 # -- Base metrics (px) --------------------------------------------------------
 _BASE_SIZE = 15
 _MONO_FAMILY = "Menlo" if sys.platform == "darwin" else "Consolas"

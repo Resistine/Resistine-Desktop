@@ -6,7 +6,7 @@ from typing import Callable
 
 import customtkinter
 
-_BLUE = "#0D5394"
+from plugins.chat.fonts import RESISTINE_BLUE
 
 
 def _time_ago(ts: float) -> str:
@@ -75,7 +75,7 @@ class ChatSidebar(customtkinter.CTkFrame):
             hdr, text="+ New",
             font=customtkinter.CTkFont(
                 family="Inter", size=11, weight="bold"),
-            fg_color=_BLUE, hover_color="#1565B0", text_color="#fff",
+            fg_color=RESISTINE_BLUE, hover_color="#1565B0", text_color="#fff",
             corner_radius=7, height=26, width=60,
             command=self._on_new_chat,
         ).grid(row=0, column=1)
