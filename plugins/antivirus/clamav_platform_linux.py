@@ -112,25 +112,29 @@ def _service_names() -> tuple[str, str, str]:
     return ("clamav-daemon", "clamav-freshclam", "clamav-clamonacc")
 
 
-def _packages_to_install() -> list[str]:
-    """Return distro-appropriate list of ClamAV packages to install."""
+def _packages_to_install() -> tuple[list[str], list[str]]:
+    """Return ``(required, optional)`` ClamAV package lists for this distro.
+
+    Required packages must all be available or the install fails.
+    Optional packages (clamonacc on distros that haven't packaged it,
+    for example) are installed in a separate transaction so a missing
+    one doesn't abort the whole setup.
+
+    Fedora/RHEL/CentOS naming differs from Debian:
+        clamav          → clamscan
+        clamd           → clamd binary + /usr/lib/systemd/system/clamd@.service
+        clamav-update   → freshclam
+        clamav-clamonacc → clamonacc (Fedora 42+; missing on older releases)
+    """
     if LinuxDistro.is_fedora_like():
-        return [
-            "clamav",
-            "clamav-scanner",
-            "clamav-scanner-systemd",
-            "clamav-update",
-        ]
+        return ["clamav", "clamd", "clamav-update"], ["clamav-clamonacc"]
     if LinuxDistro.is_arch_like():
-        return ["clamav"]
-    # Debian / Ubuntu / derivatives. clamav-clamonacc is a separate package
-    # and is only present on newer releases; install is best-effort.
-    return [
-        "clamav",
-        "clamav-daemon",
-        "clamav-freshclam",
-        "clamav-clamonacc",
-    ]
+        return ["clamav"], []
+    # Debian / Ubuntu / derivatives.
+    return (
+        ["clamav", "clamav-daemon", "clamav-freshclam"],
+        ["clamav-clamonacc"],
+    )
 
 
 def _systemctl_is_active(service: str) -> bool:
@@ -290,27 +294,40 @@ def _install_packages_if_missing() -> tuple[bool, str]:
     """Install ClamAV packages via the distro package manager.
 
     No-op if ``clamd`` is already on PATH. Returns (success, message).
+
+    Runs the required and optional installs together under one admin
+    prompt: required first, then optional in a ``|| true`` trailer so a
+    missing clamonacc package on older distros doesn't abort setup.
     """
     if shutil.which("clamd"):
         return True, "ClamAV already installed."
 
-    pkgs = _packages_to_install()
-    install_cmd = LinuxDistro.get_install_command(pkgs)
-    if not install_cmd:
+    required, optional = _packages_to_install()
+
+    required_cmd = LinuxDistro.get_install_command(required)
+    if not required_cmd:
         return False, (
             "No supported package manager found. Install ClamAV "
-            f"manually ({', '.join(pkgs)}) and try again."
+            f"manually ({', '.join(required)}) and try again."
         )
 
+    parts: list[str] = []
     # Refresh the package index on Debian-likes so the install doesn't
     # fail on a stale apt cache.
     if LinuxDistro.is_debian_like():
-        refresh_and_install = "apt-get update && " + " ".join(
-            _shell_quote(c) for c in install_cmd
-        )
-        ok, out = _run_privileged(["sh", "-c", refresh_and_install])
-    else:
-        ok, out = _run_privileged(install_cmd)
+        parts.append("apt-get update")
+    parts.append(" ".join(_shell_quote(c) for c in required_cmd))
+
+    if optional:
+        optional_cmd = LinuxDistro.get_install_command(optional)
+        if optional_cmd:
+            parts.append(
+                "(" + " ".join(_shell_quote(c) for c in optional_cmd)
+                + " || true)",
+            )
+
+    script = " && ".join(parts)
+    ok, out = _run_privileged(["sh", "-c", script])
 
     if not ok:
         return False, out or "Package installation failed."
