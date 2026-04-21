@@ -18,6 +18,17 @@ CORNER_R = 12
 PAD_X = 20
 _FONT_FAMILY = "Inter"
 
+# Palette tuples (light, dark) mirroring tokens in resistine_ctk.json.
+# Kept as module constants so ui_cards.py and main.py can import them;
+# values are evaluated once at widget-construction time, which is fine
+# because theme switches trigger a full main-screen rebuild.
+COLOR_MUTED = ("#6B7280", "#9CA3AF")          # text_secondary
+COLOR_OK_TEXT = ("#15803D", "#4ADE80")        # protection_text_ok
+COLOR_BTN_OUTLINE = ("#0D5394", "#60A5FA")    # sidebar_active_text
+COLOR_BTN_OUTLINE_HOVER = ("#DBEAFE", "#1E3A5F")
+COLOR_CARD_BG = None                          # use CTk default
+COLOR_CARD_BORDER = None                      # use CTk default
+
 
 def font(size, bold=False):
     weight = "bold" if bold else "normal"

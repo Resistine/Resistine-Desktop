@@ -20,7 +20,7 @@ from customtkinter import ThemeManager
 
 from plugins.antivirus import clamav, threat_log
 from plugins.antivirus.scanner import ScanResult, scan
-from plugins.antivirus.theme import font
+from plugins.antivirus.theme import COLOR_MUTED, font
 from plugins.antivirus.ui_builders import (
     build_scan_activity,
     build_scan_and_protection,
@@ -193,8 +193,8 @@ class Plugin(BasePlugin):
         row = build_updates_card(self, self.main_frame, row)
         row = build_siem_card(self, self.main_frame, row)
 
-        # Show a development banner on Linux/Windows
-        if platform.system() in ("Linux", "Windows"):
+        # Show a development banner on Windows (Linux is now supported).
+        if platform.system() == "Windows":
             banner = customtkinter.CTkFrame(
                 self.main_frame,
                 fg_color=("#FEF3C7", "#2D1F05"),
@@ -207,7 +207,7 @@ class Plugin(BasePlugin):
             customtkinter.CTkLabel(
                 banner,
                 text=(
-                    "Antivirus is not hooked up on Windows and Linux yet. "
+                    "Antivirus is not hooked up on Windows yet. "
                     "This UI is for development purposes only."
                 ),
                 font=customtkinter.CTkFont(family="Inter", size=12),
@@ -362,6 +362,8 @@ class Plugin(BasePlugin):
         err_bg = t.get("status_badge_bg", {}).get("error")
         err_tx = t.get("status_badge_text", {}).get("error")
 
+        is_linux = platform.system() == "Linux"
+
         # State-driven card configuration matching the VPN status card style
         states = {
             "not_installed": {
@@ -369,11 +371,17 @@ class Plugin(BasePlugin):
                 "title": "Not Installed",
                 "title_color": err_tx,
                 "subtitle": (
+                    "ClamAV is not installed. Tap Install ClamAV to fetch "
+                    "it from your distribution's package manager."
+                    if is_linux else
                     "ClamAV binaries were not found.\n"
                     "Reinstall Resistine or run the build script "
                     "to set up antivirus protection."
                 ),
-                "action": None,
+                "action": (
+                    ("Install ClamAV", self._start_protection)
+                    if is_linux else None
+                ),
             },
             "no_database": {
                 "bg": warn_bg,
@@ -427,8 +435,13 @@ class Plugin(BasePlugin):
                 "subtitle": (
                     "ClamAV daemons are not running"
                     if status.get("in_bundle")
-                    else "On-demand scanning available. "
-                    "Install Resistine.app for real-time protection."
+                    else (
+                        "On-demand scanning available. "
+                        "Enable systemd to start real-time protection."
+                        if is_linux else
+                        "On-demand scanning available. "
+                        "Install Resistine.app for real-time protection."
+                    )
                 ),
                 "action": (
                     ("Start Protection", self._start_protection)
