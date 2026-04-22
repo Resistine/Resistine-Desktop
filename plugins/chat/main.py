@@ -848,12 +848,26 @@ class Plugin(BasePlugin):
             text_color=fg_color,
             corner_radius=0,
             border_width=0,
+            # border_spacing=0 collapses the 3px row/col reservations
+            # CTkTextbox otherwise leaves around its inner tk.Text; without
+            # this, a thin strip is visible at the bottom of the chat area.
+            border_spacing=0,
             activate_scrollbars=True,
         )
         # Bottom padding reserves space so content doesn't render behind
         # the input bar overlaid at the bottom of second_frame.
         self.chat_box.grid(row=0, column=0, padx=0, pady=(0, 58), sticky="nsew")
         self.chat_box._textbox.configure(padx=8)
+
+        # Suppress the horizontal scrollbar entirely. CTkTextbox's poll
+        # (`_check_if_scrollbars_needed`) maps the x-scrollbar whenever
+        # ``self._textbox.xview() != (0.0, 1.0)`` — which happens when an
+        # embedded bubble's measured width overshoots the viewport by a
+        # pixel during layout. Content always wraps (wrap="word") so
+        # horizontal scrolling is never useful; lying about xview keeps
+        # the poll's own logic in the "no x needed" branch forever.
+        self.chat_box._textbox.xview = lambda *_a: (0.0, 1.0)
+        self.chat_box._textbox.configure(xscrollcommand=lambda *_a: None)
 
         # Enable mouse wheel scrolling
         self._bind_mousewheel(self.chat_box._textbox)
