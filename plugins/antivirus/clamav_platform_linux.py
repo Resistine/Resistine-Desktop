@@ -2,7 +2,7 @@
 
 Binary discovery via PATH, systemd daemon management (clamav-daemon /
 clamd@scan, clamav-freshclam, clamav-clamonacc) via pkexec/sudo, and
-distro-aware package installation through utils.distro.LinuxDistro.
+distro-aware package installation driven by /etc/os-release parsing.
 
 See clamav_platform_darwin.py for the macOS reference.
 
@@ -12,12 +12,82 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import os
+import platform
 import shutil
 import subprocess
 import time
 
-from utils.distro import LinuxDistro
 from utils.logger import logger
+
+
+# ── Distro detection (local; avoids depending on utils.distro) ───
+
+def _os_release() -> dict[str, str]:
+    """Parse /etc/os-release; return empty dict on failure."""
+    try:
+        return platform.freedesktop_os_release()
+    except (OSError, AttributeError):
+        pass
+    info: dict[str, str] = {}
+    try:
+        with open("/etc/os-release") as f:
+            for line in f:
+                if "=" not in line:
+                    continue
+                k, v = line.rstrip().split("=", 1)
+                info[k.strip()] = v.strip().strip('"')
+    except OSError:
+        pass
+    return info
+
+
+def _distro_id() -> str:
+    return _os_release().get("ID", "").lower()
+
+
+def _distro_id_like() -> set[str]:
+    like = _os_release().get("ID_LIKE", "")
+    return {tok.strip().lower() for tok in like.split() if tok.strip()}
+
+
+def _is_debian_like() -> bool:
+    return (
+        _distro_id() in {"debian", "ubuntu", "kali", "linuxmint", "zorin", "pop"}
+        or "debian" in _distro_id_like()
+    )
+
+
+def _is_fedora_like() -> bool:
+    return (
+        _distro_id() in {"fedora", "rhel", "centos", "rocky", "almalinux"}
+        or _distro_id_like() & {"fedora", "rhel"}
+    )
+
+
+def _is_arch_like() -> bool:
+    return _distro_id() == "arch" or "arch" in _distro_id_like()
+
+
+def _has_systemd() -> bool:
+    return (
+        shutil.which("systemctl") is not None
+        and os.path.exists("/run/systemd/system")
+    )
+
+
+def _install_command(packages: list[str]) -> list[str] | None:
+    """Return the install command for the first package manager found on PATH."""
+    for pm, prefix in (
+        ("apt", ["apt", "install", "-y"]),
+        ("dnf", ["dnf", "install", "-y"]),
+        ("yum", ["yum", "install", "-y"]),
+        ("pacman", ["pacman", "-S", "--noconfirm"]),
+        ("zypper", ["zypper", "install", "-y"]),
+        ("apk", ["apk", "add"]),
+    ):
+        if shutil.which(pm):
+            return prefix + packages
+    return None
 
 
 # ── Probed system paths ──────────────────────────────────
@@ -106,7 +176,7 @@ def _run_privileged(command: list[str], timeout: int = 300) -> tuple[bool, str]:
 
 def _service_names() -> tuple[str, str, str]:
     """Return (clamd_service, freshclam_service, clamonacc_service)."""
-    if LinuxDistro.is_fedora_like():
+    if _is_fedora_like():
         return ("clamd@scan", "clamav-freshclam", "clamav-clamonacc")
     # Debian/Ubuntu, Arch, openSUSE, and most others use these names.
     return ("clamav-daemon", "clamav-freshclam", "clamav-clamonacc")
@@ -126,9 +196,9 @@ def _packages_to_install() -> tuple[list[str], list[str]]:
         clamav-update   → freshclam
         clamav-clamonacc → clamonacc (Fedora 42+; missing on older releases)
     """
-    if LinuxDistro.is_fedora_like():
+    if _is_fedora_like():
         return ["clamav", "clamd", "clamav-update"], ["clamav-clamonacc"]
-    if LinuxDistro.is_arch_like():
+    if _is_arch_like():
         return ["clamav"], []
     # Debian / Ubuntu / derivatives.
     return (
@@ -197,7 +267,7 @@ def system_clamd_conf_path() -> str:
         if os.path.exists(path):
             return path
     # Fall back to the distro-appropriate default even if not yet written.
-    if LinuxDistro.is_fedora_like():
+    if _is_fedora_like():
         return "/etc/clamd.d/scan.conf"
     return "/etc/clamav/clamd.conf"
 
@@ -238,7 +308,7 @@ def is_app_bundle() -> bool:
     will install the distro package if clamd isn't present yet. This
     makes the Start Protection UI path work the same as on macOS.
     """
-    return LinuxDistro.is_systemd()
+    return _has_systemd()
 
 
 def daemons_approved() -> bool:
@@ -323,7 +393,7 @@ def _install_packages_if_missing() -> tuple[bool, str]:
 
     required, optional = _packages_to_install()
 
-    required_cmd = LinuxDistro.get_install_command(required)
+    required_cmd = _install_command(required)
     if not required_cmd:
         return False, (
             "No supported package manager found. Install ClamAV "
@@ -333,12 +403,12 @@ def _install_packages_if_missing() -> tuple[bool, str]:
     parts: list[str] = []
     # Refresh the package index on Debian-likes so the install doesn't
     # fail on a stale apt cache.
-    if LinuxDistro.is_debian_like():
+    if _is_debian_like():
         parts.append("apt-get update")
     parts.append(" ".join(_shell_quote(c) for c in required_cmd))
 
     if optional:
-        optional_cmd = LinuxDistro.get_install_command(optional)
+        optional_cmd = _install_command(optional)
         if optional_cmd:
             parts.append(
                 "(" + " ".join(_shell_quote(c) for c in optional_cmd)
@@ -440,7 +510,7 @@ def _prepare_config_script() -> str:
     # The reliable fix is to chmod the directory after clamd has
     # created it. A short bash wait-loop handles the (rare) race where
     # ExecStartPost fires before clamd finishes its initial setup.
-    if LinuxDistro.is_fedora_like():
+    if _is_fedora_like():
         drop_in_dir = "/etc/systemd/system/clamd@scan.service.d"
         drop_in_path = f"{drop_in_dir}/resistine.conf"
         drop_in_body = (
@@ -473,7 +543,7 @@ def activate_system_daemons() -> tuple[bool, str]:
       4. Enable + start clamav-clamonacc if the unit exists.
       5. Wait for clamd to become responsive via the Unix socket.
     """
-    if not LinuxDistro.is_systemd():
+    if not _has_systemd():
         return False, (
             "systemd is not available. Start clamd manually for your "
             "init system (OpenRC, runit, etc.)."
@@ -542,7 +612,7 @@ def deactivate_system_daemons() -> tuple[bool, str]:
 
     Leaves the distro packages installed so re-activation is fast.
     """
-    if not LinuxDistro.is_systemd():
+    if not _has_systemd():
         return False, "systemd is not available."
 
     clamd_svc, fresh_svc, onacc_svc = _service_names()
