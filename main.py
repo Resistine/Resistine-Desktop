@@ -224,6 +224,18 @@ if __name__ == "__main__":
     if DEBUG_WINDOW:
         logger.info("Debug window enabled")
 
+    # --- macOS: prevent running from mounted DMG ---
+    if functions.is_running_from_dmg():
+        from gui.dmg_prompt import prompt_move_to_applications
+
+        action = prompt_move_to_applications()
+        if action == "moved":
+            # App was copied to /Applications and relaunched from there — exit this instance
+            sys.exit(0)
+        elif action == "quit":
+            sys.exit(0)
+        # action == "continue" — user chose to run anyway (shouldn't normally happen)
+
     # Start the application
     app = App()
 

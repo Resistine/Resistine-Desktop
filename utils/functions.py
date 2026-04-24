@@ -1,5 +1,61 @@
 import os
+import shutil
+import subprocess
 import sys
+
+
+def is_running_from_dmg() -> bool:
+    """Return True if the app is running from a mounted DMG volume."""
+    if sys.platform != "darwin":
+        return False
+    app_path = _get_bundle_path()
+    if not app_path:
+        return False
+    # Mounted DMGs appear under /Volumes/
+    return app_path.startswith("/Volumes/")
+
+
+def _get_bundle_path() -> str | None:
+    """Return the .app bundle path, or None if not running as a bundle."""
+    if not getattr(sys, "frozen", False):
+        return None
+    # sys.executable is e.g. /Volumes/Resistine Installer/Resistine.app/Contents/MacOS/Resistine
+    path = os.path.realpath(sys.executable)
+    while path != "/":
+        if path.endswith(".app"):
+            return path
+        path = os.path.dirname(path)
+    return None
+
+
+def move_to_applications() -> bool:
+    """Copy the running .app bundle to /Applications and relaunch from there.
+
+    Returns True if the move succeeded (caller should exit).
+    Returns False if the move failed (caller should show an error or continue).
+    """
+    src = _get_bundle_path()
+    if not src:
+        return False
+    app_name = os.path.basename(src)  # e.g. "Resistine.app"
+    dest = os.path.join("/Applications", app_name)
+
+    try:
+        # Remove existing copy if present so we get a clean install
+        if os.path.exists(dest):
+            shutil.rmtree(dest)
+        shutil.copytree(src, dest, symlinks=True)
+
+        # Relaunch from /Applications
+        executable = os.path.join(
+            dest, "Contents", "MacOS", os.path.splitext(app_name)[0]
+        )
+        if not os.path.exists(executable):
+            return False
+        subprocess.Popen([executable])
+        return True
+    except (OSError, shutil.Error):
+        return False
 
 
 def is_running_in_ide():
