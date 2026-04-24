@@ -41,10 +41,9 @@ def move_to_applications() -> bool:
     dest = os.path.join("/Applications", app_name)
 
     try:
-        # Remove existing copy if present so we get a clean install
-        if os.path.exists(dest):
-            shutil.rmtree(dest)
-        shutil.copytree(src, dest, symlinks=True)
+        # Try unprivileged copy first; fall back to osascript for admin auth
+        if not _copy_app_bundle(src, dest):
+            return False
 
         # Relaunch from /Applications
         executable = os.path.join(
@@ -56,6 +55,30 @@ def move_to_applications() -> bool:
         return True
     except (OSError, shutil.Error):
         return False
+
+
+def _copy_app_bundle(src: str, dest: str) -> bool:
+    """Copy .app bundle to dest, requesting admin privileges if needed."""
+    # Try without elevation first
+    try:
+        if os.path.exists(dest):
+            shutil.rmtree(dest)
+        shutil.copytree(src, dest, symlinks=True)
+        return True
+    except PermissionError:
+        pass
+
+    # Elevated fallback via osascript (prompts the user for password)
+    script = (
+        f'do shell script "rm -rf \\"{dest}\\" '
+        f'&& cp -pR \\"{src}\\" \\"{dest}\\"" '
+        f"with administrator privileges"
+    )
+    result = subprocess.run(
+        ["osascript", "-e", script],
+        capture_output=True, timeout=120,
+    )
+    return result.returncode == 0
 
 
 def is_running_in_ide():
