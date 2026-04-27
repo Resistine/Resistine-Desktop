@@ -56,23 +56,29 @@ if [ -z "$TEAM_ID" ]; then
     exit 1
 fi
 
-# Verify notarization credentials are stored
-echo "  Checking notarization credentials..."
-if ! xcrun notarytool history --keychain-profile "resistine-notarize" > /dev/null 2>&1; then
-    echo ""
-    echo "  Warning: Notarization credentials not found."
-    echo "  Store them with:"
-    echo "    xcrun notarytool store-credentials \"resistine-notarize\" \\"
-    echo "      --apple-id \"jackie@resistine.com\" \\"
-    echo "      --team-id \"$TEAM_ID\" \\"
-    echo "      --password \"<your-app-specific-password>\""
-    echo ""
-    echo "  Press Enter to continue without notarization, or Ctrl+C to cancel..."
-    read -r
-    SKIP_NOTARIZE=true
+# Notarization toggle — set to true to skip for faster builds
+SKIP_NOTARIZE=${SKIP_NOTARIZE:-true}
+
+if [ "$SKIP_NOTARIZE" = true ]; then
+    echo "  Skipping notarization (SKIP_NOTARIZE=true)"
 else
-    echo "  Notarization credentials found"
-    SKIP_NOTARIZE=false
+    # Verify notarization credentials are stored
+    echo "  Checking notarization credentials..."
+    if ! xcrun notarytool history --keychain-profile "resistine-notarize" > /dev/null 2>&1; then
+        echo ""
+        echo "  Warning: Notarization credentials not found."
+        echo "  Store them with:"
+        echo "    xcrun notarytool store-credentials \"resistine-notarize\" \\"
+        echo "      --apple-id \"jackie@resistine.com\" \\"
+        echo "      --team-id \"$TEAM_ID\" \\"
+        echo "      --password \"<your-app-specific-password>\""
+        echo ""
+        echo "  Press Enter to continue without notarization, or Ctrl+C to cancel..."
+        read -r
+        SKIP_NOTARIZE=true
+    else
+        echo "  Notarization credentials found"
+    fi
 fi
 
 echo ""

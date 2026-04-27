@@ -18,7 +18,7 @@ from tkinter import filedialog, messagebox
 import customtkinter
 from customtkinter import ThemeManager
 
-from plugins.antivirus import clamav
+from plugins.antivirus import clamav, threat_log
 from plugins.antivirus.scanner import ScanResult, scan
 from plugins.antivirus.theme import font
 from plugins.antivirus.ui_builders import (
@@ -27,6 +27,8 @@ from plugins.antivirus.ui_builders import (
     build_status_banner,
 )
 from plugins.antivirus.ui_cards import (
+    build_scan_exclusions,
+    build_siem_card,
     build_updates_card,
     build_whitelist_and_quarantine,
 )
@@ -35,6 +37,41 @@ from utils import settings
 from utils.logger import logger
 
 _PLUGIN_DIR = os.path.dirname(os.path.realpath(__file__))
+
+
+def _send_notification(title: str, body: str):
+    """Send a macOS system notification. No-op on other platforms."""
+    import platform as _platform
+
+    if _platform.system() != "Darwin":
+        return
+    try:
+        from Foundation import NSUserNotification, NSUserNotificationCenter
+
+        notification = NSUserNotification.alloc().init()
+        notification.setTitle_(title)
+        notification.setInformativeText_(body)
+        notification.setSoundName_("default")
+        center = NSUserNotificationCenter.defaultUserNotificationCenter()
+        center.deliverNotification_(notification)
+    except ImportError:
+        # PyObjC not available — fall back to osascript
+        import subprocess
+
+        safe_body = body.replace("\\", "\\\\").replace('"', '\\"')
+        safe_title = title.replace("\\", "\\\\").replace('"', '\\"')
+        script = (
+            f'display notification "{safe_body}" '
+            f'with title "{safe_title}" sound name "default"'
+        )
+        try:
+            subprocess.Popen(
+                ["osascript", "-e", script],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
 
 
 class Plugin(BasePlugin):
@@ -63,6 +100,7 @@ class Plugin(BasePlugin):
         self._banner_label = None
         self._banner_subtitle = None
         self._banner_action_btn = None
+        self._banner_progress = None
         self._scanning = False
         self._scan_handle = None
         self._last_state = None
@@ -151,7 +189,9 @@ class Plugin(BasePlugin):
         row = build_scan_and_protection(self, self.main_frame, row)
         row = build_scan_activity(self, self.main_frame, row)
         row = build_whitelist_and_quarantine(self, self.main_frame, row)
+        row = build_scan_exclusions(self, self.main_frame, row)
         row = build_updates_card(self, self.main_frame, row)
+        row = build_siem_card(self, self.main_frame, row)
 
         # Show a development banner on Linux/Windows
         if platform.system() in ("Linux", "Windows"):
@@ -184,6 +224,7 @@ class Plugin(BasePlugin):
         self.app.after(100, self._refresh_db_info)
         self.app.after(200, self._refresh_whitelist)
         self.app.after(300, self._refresh_quarantine)
+        self.app.after(400, self._refresh_exclusions)
 
         # If we already know the status from a previous poll, apply it
         # immediately so the card doesn't flash "Checking..." on every visit.
@@ -267,10 +308,10 @@ class Plugin(BasePlugin):
         self._banner_label = None
         self._banner_subtitle = None
         self._banner_action_btn = None
+        self._banner_progress = None
         if hasattr(self, "main_container") and self.main_container:
             self.main_container.destroy()
             self.main_container = None
-        self.main_frame = None
 
     # ── UI Event Handlers ────────────────────────────────────
 
@@ -538,6 +579,9 @@ class Plugin(BasePlugin):
             self._banner_action_btn.configure(
                 state="disabled", text="Starting...",
             )
+        if self._banner_progress:
+            self._banner_progress.grid()
+            self._banner_progress.start()
 
         def _run():
             ok, msg = clamav.activate_system_daemons()
@@ -546,6 +590,9 @@ class Plugin(BasePlugin):
         threading.Thread(target=_run, daemon=True).start()
 
     def _handle_protection_started(self, ok: bool, msg: str):
+        if self._banner_progress:
+            self._banner_progress.stop()
+            self._banner_progress.grid_remove()
         if self._banner_action_btn:
             self._banner_action_btn.configure(
                 state="normal", text="Start Protection",
@@ -633,23 +680,26 @@ class Plugin(BasePlugin):
         self._scan_status_label.configure(text=f"Scanning: {short}")
         self._log_append(f"Scanning: {target}")
 
-        file_count = [0]  # mutable counter for closure
+        file_count = [0]
+        total_files = [0]
+
+        def on_total(total: int):
+            total_files[0] = total
+            self.app.after(0, self._on_scan_total_known, total)
 
         def on_progress(line: str):
             self.app.after(0, self._log_append, line)
-            # Update status label with current file being scanned
             if ":" in line and ("OK" in line or "FOUND" in line):
                 file_count[0] += 1
-                fpath = line.split(":")[0].strip()
-                # Show path relative to scan target for context
-                if os.path.isdir(target):
-                    rel = os.path.relpath(fpath, os.path.dirname(target))
+                total = total_files[0]
+                if total > 0:
+                    status = f"Scanned {file_count[0]} / {total} files"
+                    pct = file_count[0] / total
                 else:
-                    rel = os.path.basename(fpath)
-                count_str = f" ({file_count[0]} scanned)"
+                    status = f"Scanned {file_count[0]} files"
+                    pct = None
                 self.app.after(
-                    0, self._scan_status_label.configure,
-                    {"text": f"Scanning: {rel}{count_str}"},
+                    0, self._on_scan_file_done, status, pct,
                 )
 
         def on_complete(result: ScanResult):
@@ -657,6 +707,7 @@ class Plugin(BasePlugin):
 
         self._scan_handle = scan(
             target, on_progress=on_progress, on_complete=on_complete,
+            on_total=on_total,
         )
 
     def _cancel_scan(self):
@@ -667,6 +718,22 @@ class Plugin(BasePlugin):
             cancel_btn = self._action_buttons.get("cancel_scan")
             if cancel_btn:
                 cancel_btn.configure(state="disabled")
+
+    def _on_scan_total_known(self, total: int):
+        """Switch progress bar to determinate mode when file count is known."""
+        self._scan_progress.stop()
+        if total == 0:
+            self._scan_progress.grid_remove()
+            self._scan_status_label.configure(text="No files matched filters")
+            return
+        self._scan_progress.configure(mode="determinate")
+        self._scan_progress.set(0)
+
+    def _on_scan_file_done(self, status: str, pct: float | None):
+        """Update scan progress label and bar after each file."""
+        self._scan_status_label.configure(text=status)
+        if pct is not None:
+            self._scan_progress.set(min(pct, 1.0))
 
     def _handle_scan_complete(self, result: ScanResult):
         self._scanning = False
@@ -706,20 +773,28 @@ class Plugin(BasePlugin):
             self._scan_status_label.configure(
                 text=f"Threats found: {result.infected}",
             )
-            # Collect infected paths
-            infected_paths = []
+            _send_notification(
+                "Resistine — Threats Detected",
+                f"{result.infected} infected file(s) found during scan.",
+            )
+            infections: dict[str, str] = {}
             for infection_line in result.infections:
-                # Format: "/path/to/file: Virus.Name FOUND"
-                parts = infection_line.rsplit(":", 1)
-                if len(parts) == 2:
-                    infected_paths.append(parts[0].strip())
-            if infected_paths:
-                self._offer_quarantine_batch(infected_paths)
+                filepath, sig = threat_log.parse_infection_line(
+                    infection_line,
+                )
+                infections[filepath] = sig
+                threat_log.log_threat_detected(sig, filepath)
+            if infections:
+                self._offer_quarantine_batch(infections)
         else:
             self._scan_status_label.configure(text="No threats found")
 
-    def _offer_quarantine_batch(self, filepaths: list[str]):
-        """Ask user whether to quarantine all infected files at once."""
+    def _offer_quarantine_batch(self, infections: dict[str, str]):
+        """Ask user whether to quarantine all infected files.
+
+        infections: dict mapping filepath -> ClamAV signature name.
+        """
+        filepaths = list(infections)
         names = [os.path.basename(p) for p in filepaths]
         listing = "\n".join(f"  \u2022 {n}" for n in names[:20])
         if len(names) > 20:
@@ -736,13 +811,16 @@ class Plugin(BasePlugin):
 
         quarantined = 0
         for filepath in filepaths:
-            ok, msg = clamav.quarantine_file(filepath)
+            ok, dest = clamav.quarantine_file(filepath)
             basename = os.path.basename(filepath)
             if ok:
                 self._log_append(f"Quarantined: {basename}")
+                threat_log.log_threat_quarantined(
+                    infections[filepath], filepath, dest,
+                )
                 quarantined += 1
             else:
-                self._log_append(f"Quarantine failed ({basename}): {msg}")
+                self._log_append(f"Quarantine failed ({basename}): {dest}")
         self._refresh_quarantine()
         self._log_append(
             f"Quarantined {quarantined}/{len(filepaths)} files",
@@ -841,6 +919,104 @@ class Plugin(BasePlugin):
         clamav.remove_from_whitelist(path)
         self._refresh_whitelist()
 
+    # ── Scan Exclusions ───────────────────────────────────────
+
+    def _add_excluded_extension(self):
+        """Add extension(s) from the entry field."""
+        raw = self._ext_entry.get().strip()
+        if not raw:
+            return
+        exts = [part.strip() for part in raw.split(",") if part.strip()]
+        if exts:
+            clamav.add_excluded_extensions(exts)
+        self._ext_entry.delete(0, "end")
+        self._refresh_exclusions()
+
+    def _remove_excluded_extension(self, ext: str):
+        clamav.remove_excluded_extension(ext)
+        self._refresh_exclusions()
+
+    def _save_max_file_size(self):
+        """Persist the max file size from the entry field."""
+        raw = self._size_entry.get().strip()
+        try:
+            size = int(raw) if raw else 0
+            size = max(0, min(size, 10000))  # Clamp 0–10 GB
+        except ValueError:
+            size = 0
+        clamav.set_max_file_size(size)
+        self._size_entry.delete(0, "end")
+        self._size_entry.insert(0, str(size))
+
+    def _refresh_exclusions(self):
+        """Rebuild the scan exclusions card contents."""
+        frame = getattr(self, "_exclusions_frame", None)
+        if frame is None:
+            return
+        for w in frame.winfo_children():
+            w.destroy()
+
+        excl = clamav.get_scan_exclusions()
+
+        if not excl["extensions"]:
+            customtkinter.CTkLabel(
+                frame, text="No excluded extensions",
+                font=font(12), text_color=COLOR_MUTED,
+            ).grid(row=0, column=0, sticky="w")
+        else:
+            for i, ext in enumerate(excl["extensions"]):
+                row_frame = customtkinter.CTkFrame(
+                    frame, fg_color="transparent",
+                )
+                row_frame.grid(row=i, column=0, sticky="ew", pady=1)
+                row_frame.grid_columnconfigure(0, weight=1)
+
+                customtkinter.CTkLabel(
+                    row_frame, text=ext, font=font(11), anchor="w",
+                ).grid(row=0, column=0, sticky="w")
+
+                customtkinter.CTkButton(
+                    row_frame, text="\u2715", width=24, height=24,
+                    font=font(10), fg_color="transparent",
+                    hover_color=("#E5E7EB", "#2A2A2C"),
+                    command=lambda e=ext: self._remove_excluded_extension(e),
+                ).grid(row=0, column=1, sticky="e")
+
+        size_entry = getattr(self, "_size_entry", None)
+        if size_entry:
+            size_entry.delete(0, "end")
+            size_entry.insert(0, str(excl["max_size_mb"]))
+
+    # ── SIEM Forwarding ───────────────────────────────────────
+
+    def _setup_wazuh_forwarding(self):
+        """Configure Wazuh agent to forward threat logs."""
+        btn = getattr(self, "_siem_btn", None)
+        if btn:
+            btn.configure(state="disabled", text="Configuring...")
+
+        def _run():
+            ok, msg = threat_log.setup_wazuh_forwarding()
+            self.app.after(0, self._handle_wazuh_setup, ok, msg)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _handle_wazuh_setup(self, ok: bool, msg: str):
+        if not hasattr(self, "main_frame") or not self.main_frame:
+            return
+        btn = getattr(self, "_siem_btn", None)
+        lbl = getattr(self, "_siem_status_label", None)
+        if ok:
+            self._log_append(f"SIEM: {msg}")
+            if btn:
+                btn.configure(text="Configured", state="disabled")
+            if lbl:
+                lbl.configure(text="Forwarding active")
+        else:
+            self._log_append(f"SIEM setup failed: {msg}")
+            if btn:
+                btn.configure(state="normal", text="Configure Forwarding")
+
     # ── Quarantine ─────────────────────────────────────────────
 
     def _refresh_quarantine(self):
@@ -873,12 +1049,34 @@ class Plugin(BasePlugin):
             ).grid(row=0, column=0, sticky="w")
 
             customtkinter.CTkButton(
+                row_frame, text="Restore", width=50, height=22,
+                font=font(10), fg_color="transparent",
+                hover_color=("#DBEAFE", "#1E2A3A"),
+                text_color=("#2563EB", "#60A5FA"),
+                command=lambda p=qpath: self._restore_quarantined(p),
+            ).grid(row=0, column=1, sticky="e", padx=(4, 0))
+
+            customtkinter.CTkButton(
                 row_frame, text="Delete", width=50, height=22,
                 font=font(10), fg_color="transparent",
                 hover_color=("#FEE2E2", "#3B1010"),
                 text_color=("#DC2626", "#F87171"),
                 command=lambda p=qpath: self._delete_quarantined(p),
-            ).grid(row=0, column=1, sticky="e", padx=(4, 0))
+            ).grid(row=0, column=2, sticky="e", padx=(4, 0))
+
+    def _restore_quarantined(self, qpath: str):
+        name = os.path.basename(qpath).replace(".quarantined", "")
+        dest = filedialog.askdirectory(
+            title=f"Restore '{name}' to...", parent=self.app,
+        )
+        if not dest:
+            return
+        target = os.path.join(dest, name)
+        ok, msg = clamav.restore_quarantined(qpath, target)
+        if ok:
+            self._refresh_quarantine()
+        else:
+            messagebox.showerror("Restore Failed", msg, parent=self.app)
 
     def _delete_quarantined(self, qpath: str):
         name = os.path.basename(qpath).replace(".quarantined", "")
@@ -888,4 +1086,5 @@ class Plugin(BasePlugin):
             parent=self.app,
         ):
             clamav.delete_quarantined(qpath)
+            threat_log.log_threat_deleted(name)
             self._refresh_quarantine()

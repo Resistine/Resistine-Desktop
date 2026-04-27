@@ -36,8 +36,8 @@ _SYSTEM_RUN_DIR = os.path.join(_SYSTEM_CLAMAV_DIR, "run")
 # SMAppService daemon plists (in Contents/Library/LaunchDaemons/).
 # Order matters: clamd must be registered before clamonacc.
 _DAEMON_PLISTS = [
-    "com.resistine.clamd.plist",
-    "com.resistine.clamonacc.plist",
+    "com.resistine.desktop.clamd.plist",
+    "com.resistine.desktop.clamonacc.plist",
 ]
 
 # Legacy plist paths from pre-SMAppService installs
@@ -252,7 +252,7 @@ def has_full_disk_access() -> bool:
         try:
             result = subprocess.run(
                 ["launchctl", "print",
-                 "system/com.resistine.clamonacc"],
+                 "system/com.resistine.desktop.clamonacc"],
                 capture_output=True, text=True, timeout=5,
             )
             if result.returncode == 0:
@@ -657,7 +657,7 @@ def activate_system_daemons() -> tuple[bool, str]:
         """Check if the system clamd process is running."""
         try:
             r = subprocess.run(
-                ["launchctl", "print", "system/com.resistine.clamd"],
+                ["launchctl", "print", "system/com.resistine.desktop.clamd"],
                 capture_output=True, text=True, timeout=5,
             )
             if r.returncode != 0:
