@@ -400,6 +400,7 @@ class Plugin(BasePlugin):
         fallback for edge cases (updater unavailable, errors).
         """
         try:
+            import webbrowser
             from utils import updates
 
             if not updates.is_available():

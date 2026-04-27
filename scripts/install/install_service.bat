@@ -28,10 +28,10 @@ if "%SCRIPT_DIR:~-1%"=="\" set SCRIPT_DIR=%SCRIPT_DIR:~0,-1%
 :: where %PROJECT_ROOT% was expanded before it was set.
 for %%I in ("%SCRIPT_DIR%\..\..") do set PROJECT_ROOT=%%~fI
 
-:: Try bundled-installer layout first, then fall back to project-root locations.
+:: Try bundled-installer layout first, then fall back to project-root location.
 set SERVICE_SCRIPT=%SCRIPT_DIR%\windows_vpn_service.py
+if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%SCRIPT_DIR%\plugins\vpn\wireguard\windows_vpn_service.py
 if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%PROJECT_ROOT%\plugins\vpn\wireguard\windows_vpn_service.py
-if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%PROJECT_ROOT%\services\windows_vpn_service.py
 set PROGRAMDATA_DIR=%PROGRAMDATA%\Resistine\wireguard
 set LOG_DIR=%PROGRAMDATA%\Resistine
 set SERVICE_SETUP_LOG=%LOG_DIR%\vpn_service_install.log

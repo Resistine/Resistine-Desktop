@@ -108,6 +108,13 @@ class App(AppUI):
 
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
 
+        # Start system tray icon in a background thread (Windows only).
+        # In dev mode, run.bat launches tray.py as a separate process, but in
+        # the frozen .exe there's no standalone python — so we run it in-process.
+        self._tray = None
+        if sys.platform.startswith("win"):
+            self._start_tray()
+
     def _set_app_icon(self):
         """Set the window and taskbar icon on Linux and Windows.
 
@@ -163,14 +170,61 @@ class App(AppUI):
         except Exception as e:
             logger.warning(f"Failed to set app icon: {e}")
 
+    def on_update_available(self, version, url, description):
+        """Handle when an update is available."""
+        import webbrowser
+
+        response = self.show_notification(
+            f"Update Available: {version}\n\nWould you like to download and install it?",
+            type="info",
+            buttons=["Download", "Later"]
+        )
+
+        if response == "Download":
+            webbrowser.open(url)
+            self.show_notification("Opening download in your browser...", type="info")
+
+    def _start_tray(self):
+        """Launch the system tray icon in a daemon thread."""
+        import threading
+        try:
+            from gui.tray import ResistineTray
+            tray = ResistineTray()
+            # Override on_open_app to show THIS window instead of spawning a new process
+            def _show_window(icon, item):
+                self.after(0, self._restore_window)
+            tray.on_open_app = _show_window
+            # Override on_quit to fully exit the app
+            def _quit_app(icon, item):
+                icon.stop()
+                self.after(0, self._full_quit)
+            tray.on_quit = _quit_app
+            self._tray = tray
+            t = threading.Thread(target=tray.run, daemon=True)
+            t.start()
+        except Exception as e:
+            logger.warning(f"Failed to start system tray: {e}")
+
+    def _restore_window(self):
+        """Show and focus the main window (called from tray 'Open Resistine')."""
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+
     def _on_closing(self):
-        """Clean up resources before closing."""
+        """Hide to tray on window close (X button). Use tray → Quit to exit."""
+        if self._tray is not None:
+            self.withdraw()  # Hide window, keep process alive for tray
+        else:
+            self._full_quit()
+
+    def _full_quit(self):
+        """Actually exit the application (called from tray Quit or if no tray)."""
         try:
             from utils import updates
             updates.shutdown()
         except Exception:
             pass
-        # Clean up temp ICO if we created one
         if hasattr(self, "_icon_tmp"):
             try:
                 os.unlink(self._icon_tmp)

@@ -32,9 +32,16 @@ from unittest.mock import MagicMock, patch
 # ---------------------------------------------------------------------------
 
 def _make_mock_socket(response_data: dict):
-    """Return a mock socket whose recv() returns JSON then b'' (simulating TCP FIN)."""
+    # NOTE: same trap as tray's _mock_socket... service_client._recv_response
+    # loops on recv() until it gets b"". recv.return_value=data would feed
+    # the same bytes every call and the loop would never terminate, running
+    # the process out of memory. Keep it as side_effect=[data, b""] so the
+    # second call signals FIN. If you're tweaking IPC recv behavior in the
+    # future, please double-check both this helper and the tray one so you
+    # don't run into any issues related to this. - Austin
     sock = MagicMock()
-    sock.recv.side_effect = [json.dumps(response_data).encode("utf-8"), b""]
+    data = json.dumps(response_data).encode("utf-8")
+    sock.recv.side_effect = [data, b""]
     return sock
 
 
@@ -62,16 +69,18 @@ class TestSendCommand:
         monkeypatch.setenv("RESISTINE_IPC_TOKEN", self.FAKE_TOKEN)
 
     def test_payload_contains_ipc_token(self):
-        """send_command must include the IPC token in the JSON payload."""
+        """send_command must include the IPC token loaded from the shared file."""
         from plugins.vpn.wireguard.service_client import send_command
 
         ctx, mock_sock = _patch_socket({"status": "ok", "state": "Running"})
-        with ctx:
-            send_command("status", "wg0")
+        with patch("plugins.vpn.wireguard.service_client._load_ipc_token",
+                   return_value="test_token_abc123"):
+            with ctx:
+                send_command("status", "wg0")
 
         sent_bytes = mock_sock.sendall.call_args[0][0]
         payload = json.loads(sent_bytes.decode("utf-8"))
-        assert payload["token"] == self.FAKE_TOKEN
+        assert payload["token"] == "test_token_abc123"
 
     def test_payload_contains_command_and_tunnel(self):
         """Payload must have 'command' and 'tunnel' fields matching the arguments."""

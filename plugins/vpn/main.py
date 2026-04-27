@@ -173,9 +173,14 @@ class Plugin(BasePlugin):
         self.config_manager = _config_manager
         self.active_interface = None
         self._extension_poll_id = None
+        self._windows_poll_id = None
         self._last_extension_state = None
         # Set status dynamically after super().__init__
         self.status = self.get_status()
+        # Start background polling so my_vpn_status stays fresh at all times
+        # (needed for both the VPN toggle page and the dashboard banner)
+        if IS_WINDOWS:
+            self.app.after(2000, self._start_windows_service_polling)
 
     def check_status(self):
         """Dynamic check of the VPN status."""
@@ -994,6 +999,54 @@ class Plugin(BasePlugin):
         if self._extension_poll_id:
             self.app.after_cancel(self._extension_poll_id)
             self._extension_poll_id = None
+
+    def _start_windows_service_polling(self):
+        """Poll the Windows VPN service every 5 seconds to detect external state changes.
+
+        Mirrors _start_extension_polling for macOS. Detects when the tray,
+        another tool, or the service itself changes the VPN state.
+        Runs regardless of which page is active so my_vpn_status stays fresh
+        for both the VPN page toggle and the dashboard protection banner.
+        """
+        if not IS_WINDOWS:
+            return
+        self._stop_windows_service_polling()
+
+        def poll():
+            global my_vpn_status, active_client_name
+            tunnel = self.get_selected_conf_file_name()
+            if not tunnel:
+                self._windows_poll_id = self.app.after(5000, poll)
+                return
+
+            try:
+                result = get_status(tunnel)
+                new_state = result.get("state", "Stopped")
+            except Exception:
+                self._windows_poll_id = self.app.after(5000, poll)
+                return
+
+            if new_state != my_vpn_status:
+                logger.info(f"VPN state changed externally: {my_vpn_status} -> {new_state}")
+                my_vpn_status = new_state
+                active_client_name = tunnel if new_state == "Running" else None
+                # Rebuild the VPN page if it's currently shown
+                self.update_plugin(self.id)
+                # Also refresh the dashboard if it's currently shown
+                for p in self.app.plugin_list:
+                    if p.get_name() == "Dashboard":
+                        self.update_plugin(p.id)
+                        break
+
+            self._windows_poll_id = self.app.after(5000, poll)
+
+        self._windows_poll_id = self.app.after(5000, poll)
+
+    def _stop_windows_service_polling(self):
+        """Cancel any active Windows service polling."""
+        if self._windows_poll_id:
+            self.app.after_cancel(self._windows_poll_id)
+            self._windows_poll_id = None
 
     def update_plugin(self, plugin_id):
         """Reloads the plugin UI to reflect state changes, but only if it's the active tab."""

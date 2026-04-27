@@ -98,7 +98,7 @@ if (Test-Path $installServiceSrc) {
     Write-Warning "install_service.bat not found at $installServiceSrc"
 }
 
-$vpnServiceSrc = Join-Path $ProjectRoot "services\windows_vpn_service.py"
+$vpnServiceSrc = Join-Path $ProjectRoot "plugins\vpn\wireguard\windows_vpn_service.py"
 $vpnServiceDir = Join-Path $sourceDir "plugins\vpn\wireguard"
 New-Item -ItemType Directory -Force -Path $vpnServiceDir | Out-Null
 if (Test-Path $vpnServiceSrc) {

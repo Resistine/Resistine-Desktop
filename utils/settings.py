@@ -53,26 +53,27 @@ def _get_master_key() -> bytes:
     Retrieve the master key from the system keyring.
     If it doesn't exist, generate one and store it.
     """
-    try:
-        key = keyring.get_password(MASTER_KEY_SERVICE, MASTER_KEY_USERNAME)
-        if key:
-            return key.encode()
-    except Exception as e:
-        logger.warning(f"Failed to retrieve master key from keyring: {e}")
+    with _lock:
+        try:
+            key = keyring.get_password(MASTER_KEY_SERVICE, MASTER_KEY_USERNAME)
+            if key:
+                return key.encode()
+        except Exception as e:
+            logger.warning(f"Failed to retrieve master key from keyring: {e}")
 
-    # Generate new key if not found or retrieval failed
-    logger.info("Generating new master key...")
-    new_key = Fernet.generate_key()
+        # Generate new key if not found or retrieval failed
+        logger.info("Generating new master key...")
+        new_key = Fernet.generate_key()
 
-    try:
-        keyring.set_password(MASTER_KEY_SERVICE, MASTER_KEY_USERNAME, new_key.decode())
-        logger.info("Master key saved to keyring.")
-    except Exception as e:
-        logger.error(f"Failed to save master key to keyring: {e}")
-        # Fallback: Save to a protected file if keyring fails
-        _save_master_key_fallback(new_key)
+        try:
+            keyring.set_password(MASTER_KEY_SERVICE, MASTER_KEY_USERNAME, new_key.decode())
+            logger.info("Master key saved to keyring.")
+        except Exception as e:
+            logger.error(f"Failed to save master key to keyring: {e}")
+            # Fallback: Save to a protected file if keyring fails
+            _save_master_key_fallback(new_key)
 
-    return new_key
+        return new_key
 
 
 def _save_master_key_fallback(key: bytes):
@@ -109,21 +110,22 @@ def _get_master_key_fallback() -> Optional[bytes]:
 
 def _get_fernet() -> Fernet:
     """Get Fernet instance with the master key."""
-    # Try keyring first
-    try:
-        key_str = keyring.get_password(MASTER_KEY_SERVICE, MASTER_KEY_USERNAME)
-        if key_str:
-            return Fernet(key_str.encode())
-    except Exception:
-        pass
+    with _lock:
+        # Try keyring first
+        try:
+            key_str = keyring.get_password(MASTER_KEY_SERVICE, MASTER_KEY_USERNAME)
+            if key_str:
+                return Fernet(key_str.encode())
+        except Exception:
+            pass
 
-    # Try fallback file
-    key_bytes = _get_master_key_fallback()
-    if key_bytes:
-        return Fernet(key_bytes)
+        # Try fallback file
+        key_bytes = _get_master_key_fallback()
+        if key_bytes:
+            return Fernet(key_bytes)
 
-    # If neither exists, _get_master_key() will generate and store one
-    return Fernet(_get_master_key())
+        # If neither exists, _get_master_key() will generate and store one
+        return Fernet(_get_master_key())
 
 
 def _get_file_path(namespace: str) -> str:
