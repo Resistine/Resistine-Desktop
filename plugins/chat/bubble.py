@@ -69,7 +69,7 @@ class UserBubble(customtkinter.CTkFrame):
     """
 
     _CORNER_RADIUS = 18
-    _PAD_X = 18
+    _PAD_X = 9
     _PAD_Y = 11
 
     def __init__(
@@ -117,7 +117,7 @@ class UserBubble(customtkinter.CTkFrame):
         self._label = SelectableLabel(
             self, text=text, bg=self._bg, fg=self._fg,
             font=customtkinter.CTkFont(family="Inter", size=15),
-            max_width=max_width,
+            max_width=max_width, center=True,
         )
         self._label.pack(padx=self._PAD_X, pady=self._PAD_Y)
 

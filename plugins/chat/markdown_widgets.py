@@ -33,7 +33,7 @@ class SelectableLabel(tk.Text):
 
     def __init__(
         self, master, text: str, font, fg: str, bg: str,
-        max_width: int = 600, **kwargs,
+        max_width: int = 600, center: bool = False, **kwargs,
     ):
         kwargs.pop("padx", None)
         kwargs.pop("pady", None)
@@ -43,7 +43,11 @@ class SelectableLabel(tk.Text):
             insertwidth=0, cursor="", selectbackground="#3A6DB5",
             selectforeground="#FFFFFF", height=1, **kwargs,
         )
-        self.insert("1.0", text)
+        if center:
+            self.tag_configure("center", justify="center")
+            self.insert("1.0", text, "center")
+        else:
+            self.insert("1.0", text)
         self.bind("<Key>", self._readonly)
         self._max_width = max_width
         self._in_autoheight = False
@@ -61,7 +65,7 @@ class SelectableLabel(tk.Text):
             text_px = measure_font.measure(text)
             width_px = min(text_px + 4, max_width)
             avg_char = measure_font.measure("0") or 8
-            char_width = max(1, width_px // avg_char)
+            char_width = max(1, -(-width_px // avg_char) + 1)
             self.configure(width=char_width)
         except Exception:
             pass
