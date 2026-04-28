@@ -46,7 +46,25 @@ class SelectableLabel(tk.Text):
         self.insert("1.0", text)
         self.bind("<Key>", self._readonly)
         self._max_width = max_width
+        self._in_autoheight = False
+        self._fit_width(font, text, max_width)
         self.bind("<Configure>", self._autoheight, add="+")
+
+    def _fit_width(self, font, text: str, max_width: int) -> None:
+        """Set widget width to fit text content, up to max_width."""
+        try:
+            import tkinter.font as tkfont
+            if hasattr(font, "actual"):
+                measure_font = font
+            else:
+                measure_font = tkfont.Font(font=font)
+            text_px = measure_font.measure(text)
+            width_px = min(text_px + 4, max_width)
+            avg_char = measure_font.measure("0") or 8
+            char_width = max(1, width_px // avg_char)
+            self.configure(width=char_width)
+        except Exception:
+            pass
 
     @staticmethod
     def _readonly(event) -> str | None:
@@ -55,14 +73,21 @@ class SelectableLabel(tk.Text):
         return "break"
 
     def _autoheight(self, _event=None) -> None:
-        self.update_idletasks()
+        if self._in_autoheight:
+            return
+        self._in_autoheight = True
         try:
             result = self.count("1.0", "end-1c", "displaylines")
             lines = (result[0] if isinstance(result, (list, tuple))
                      else result) or 1
-            self.configure(height=max(1, int(lines)))
+            new_h = max(1, int(lines))
+            cur_h = int(self.cget("height"))
+            if new_h != cur_h:
+                self.configure(height=new_h)
         except Exception:
             pass
+        finally:
+            self._in_autoheight = False
 
     def set_width(self, max_width: int) -> None:
         self._max_width = max_width

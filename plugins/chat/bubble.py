@@ -119,8 +119,7 @@ class UserBubble(customtkinter.CTkFrame):
             font=customtkinter.CTkFont(family="Inter", size=15),
             max_width=max_width,
         )
-        self._label.pack(
-            fill="x", padx=self._PAD_X, pady=self._PAD_Y)
+        self._label.pack(padx=self._PAD_X, pady=self._PAD_Y)
 
     def _build_emoji(self, text: str, max_width: int) -> None:
         """Linux emoji path: tk.Text with inline emoji images."""

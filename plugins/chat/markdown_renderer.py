@@ -42,10 +42,12 @@ class MarkdownRenderer:
     """Parse markdown and pack CTkLabel / block widgets into *parent*."""
 
     def __init__(self, parent: tk.Widget, markdown_text: str,
-                 is_dark: bool = False, max_width: int = 700) -> None:
+                 is_dark: bool = False, max_width: int = 700,
+                 selectable: bool = False) -> None:
         self._parent = parent
         self._is_dark = is_dark
         self._max_width = max_width
+        self._selectable = selectable
         self._fonts = {}
         for key, tf in get_fonts(is_dark).items():
             kw = {"family": tf.cget("family"),
@@ -265,12 +267,19 @@ class MarkdownRenderer:
             pady = (top, bottom)
         else:
             pady = (1, 1)
-        bg = self._colors["prose_bg"]
         wraplength = max(100, self._max_width - padx_left - 8)
-        lbl = SelectableLabel(
-            self._parent, text=display_text, font=font,
-            fg=fg, bg=bg, max_width=wraplength,
-        )
+        if self._selectable:
+            bg = self._colors["prose_bg"]
+            lbl = SelectableLabel(
+                self._parent, text=display_text, font=font,
+                fg=fg, bg=bg, max_width=wraplength,
+            )
+        else:
+            lbl = customtkinter.CTkLabel(
+                self._parent, text=display_text, font=font,
+                text_color=fg, fg_color="transparent",
+                wraplength=wraplength, justify="left", anchor="w",
+            )
         lbl.pack(fill="x", padx=(padx_left, 8), pady=pady)
         self._labels.append(lbl)
 
@@ -279,9 +288,13 @@ class MarkdownRenderer:
     def _update_width(self, max_width: int) -> None:
         """Refit all labels after a resize."""
         self._max_width = max_width
+        w = max(100, max_width - 28)
         for lbl in self._labels:
             try:
-                lbl.set_width(max(100, max_width - 28))
+                if hasattr(lbl, "set_width"):
+                    lbl.set_width(w)
+                else:
+                    lbl.configure(wraplength=w)
             except Exception:
                 pass
 

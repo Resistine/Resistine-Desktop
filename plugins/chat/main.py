@@ -168,8 +168,8 @@ class Plugin(ChatUIMixin, BasePlugin):
         was_near = self._is_near_bottom()
         self._add_user_bubble(user_text, is_dark)
         self._current_asst_bubble = self._add_assistant_bubble(is_dark)
-        if was_near:
-            self.chat_scroll.after(50, self._scroll_to_bottom)
+        self.chat_scroll.after(50, self._scroll_to_last_user_bubble)
+        self.chat_scroll.after(100, self._update_scrollbar_visibility)
         self.conversation_history.append(
             {"role": "user", "content": user_text})
         self.chat_entry.configure(state="disabled")
@@ -224,8 +224,9 @@ class Plugin(ChatUIMixin, BasePlugin):
         self._unlock_input()
         self._save_current_session()
         self._refresh_sidebar()
-        self.chat_scroll.after(50, self._scroll_to_bottom)
-        self.chat_scroll.after(200, self._scroll_to_bottom)
+        self.chat_scroll.after(50, self._scroll_to_last_user_bubble)
+        self.chat_scroll.after(200, self._scroll_to_last_user_bubble)
+        self.chat_scroll.after(250, self._update_scrollbar_visibility)
 
     def _on_stream_error(self, error_msg: str) -> None:
         if (self._accumulated_text.strip()

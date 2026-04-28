@@ -45,6 +45,8 @@ class ChatUIMixin:
             self._chat_area, fg_color="transparent", corner_radius=0)
         self.chat_scroll.grid(
             row=0, column=0, padx=0, pady=(0, 76), sticky="nsew")
+        # Hide scrollbar initially; show only when content overflows
+        self._hide_scrollbar()
 
         self._bubble_rows.clear()
         self._welcome_frame = None
@@ -237,3 +239,67 @@ class ChatUIMixin:
                 elif isinstance(child, AssistantBubble):
                     child.set_width(aw)
         self._check_scroll_btn()
+        self._update_scrollbar_visibility()
+
+    # -- Scrollbar visibility ----------------------------------------------
+
+    def _hide_scrollbar(self) -> None:
+        try:
+            scrollbar = self.chat_scroll._scrollbar
+            scrollbar.grid_remove()
+        except Exception:
+            pass
+
+    def _show_scrollbar(self) -> None:
+        try:
+            scrollbar = self.chat_scroll._scrollbar
+            scrollbar.grid()
+        except Exception:
+            pass
+
+    def _update_scrollbar_visibility(self) -> None:
+        try:
+            canvas = self.chat_scroll._parent_canvas
+            canvas.update_idletasks()
+            bbox = canvas.bbox("all")
+            if not bbox:
+                self._hide_scrollbar()
+                return
+            content_h = bbox[3] - bbox[1]
+            visible_h = canvas.winfo_height()
+            if content_h > visible_h:
+                self._show_scrollbar()
+            else:
+                self._hide_scrollbar()
+        except Exception:
+            pass
+
+    # -- Scroll to last user bubble ----------------------------------------
+
+    def _scroll_to_last_user_bubble(self) -> None:
+        """Scroll so the last user message is at the top of the view."""
+        try:
+            canvas = self.chat_scroll._parent_canvas
+            canvas.update_idletasks()
+            # Find the last user bubble row
+            last_user_row = None
+            for row in self._bubble_rows:
+                for child in row.winfo_children():
+                    if isinstance(child, UserBubble):
+                        last_user_row = row
+                        break
+            if last_user_row is None:
+                return
+            # Get the y position of the user row relative to the scroll content
+            row_y = last_user_row.winfo_y()
+            bbox = canvas.bbox("all")
+            if not bbox:
+                return
+            content_h = bbox[3] - bbox[1]
+            if content_h <= 0:
+                return
+            # Scroll so the user row is near the top (with a small offset)
+            frac = max(0.0, (row_y - 8) / content_h)
+            canvas.yview_moveto(frac)
+        except Exception:
+            self._scroll_to_bottom()
