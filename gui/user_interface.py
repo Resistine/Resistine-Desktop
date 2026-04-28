@@ -545,6 +545,53 @@ class AppUI(customtkinter.CTk):
                 logger.error(f"Error loading plugin button {plugin.get_name()}: {e}")
             row += 1
 
+        # Bottom-of-sidebar Back/Forward navigation history buttons.
+        # Sits in the row after the weight=1 spacer so it hugs the bottom.
+        history_row = spacer_row + 1
+        nav_history_frame = customtkinter.CTkFrame(
+            self.navigation_frame, fg_color="transparent"
+        )
+        nav_history_frame.grid(
+            row=history_row, column=0, sticky="ew", padx=12, pady=(8, 16)
+        )
+        nav_history_frame.grid_columnconfigure(0, weight=1)
+        nav_history_frame.grid_columnconfigure(1, weight=1)
+
+        nav_text_color = self._get_theme_color("CTkLabel", "text_color")
+        nav_hover_bg = ThemeManager.theme.get("Theme", {}).get(
+            "sidebar_hover_bg", ["#F0F0F5", "#1F1F22"]
+        )
+
+        self._nav_back_btn = customtkinter.CTkButton(
+            nav_history_frame,
+            text="◀",
+            width=40,
+            height=32,
+            corner_radius=8,
+            fg_color="transparent",
+            text_color=nav_text_color,
+            hover_color=nav_hover_bg,
+            font=customtkinter.CTkFont(size=14, weight="bold"),
+            command=self.navigate_back,
+        )
+        self._nav_back_btn.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+
+        self._nav_fwd_btn = customtkinter.CTkButton(
+            nav_history_frame,
+            text="▶",
+            width=40,
+            height=32,
+            corner_radius=8,
+            fg_color="transparent",
+            text_color=nav_text_color,
+            hover_color=nav_hover_bg,
+            font=customtkinter.CTkFont(size=14, weight="bold"),
+            command=self.navigate_forward,
+        )
+        self._nav_fwd_btn.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+
+        self._update_nav_history_buttons()
+
     def create_dashboard(self):
         """
         Create the main dashboard of the application.
@@ -660,10 +707,32 @@ class AppUI(customtkinter.CTk):
 
         self.select_frame_by_name("frame_Dashboard")
 
+    _NAV_HISTORY_MAX = 50
+
     def select_frame_by_name(self, name, button=None):
         """
         Select and display the specified frame.
         """
+        # Browser-style back/forward history. Skip when invoked by a back/forward
+        # click itself — those mutate the cursor before calling.
+        if not getattr(self, "_nav_suppress", False):
+            history = getattr(self, "_nav_history", None)
+            if history is None:
+                self._nav_history = history = []
+                self._nav_cursor = -1
+            cursor = self._nav_cursor
+            if not history or cursor < 0 or history[cursor] != name:
+                # New navigation invalidates any forward stack.
+                del history[cursor + 1:]
+                history.append(name)
+                cursor = len(history) - 1
+                if len(history) > self._NAV_HISTORY_MAX:
+                    overflow = len(history) - self._NAV_HISTORY_MAX
+                    del history[:overflow]
+                    cursor -= overflow
+                self._nav_cursor = cursor
+        self._update_nav_history_buttons()
+
         self.current_frame_name = name
 
         # Precompute content width hint for smooth initial plugin rendering.
@@ -737,6 +806,62 @@ class AppUI(customtkinter.CTk):
             )
             error_label.pack(expand=True, padx=20, pady=20)
             self._current_main_screen = error_frame
+
+    def navigate_back(self):
+        """Move one step back in the navigation history."""
+        history = getattr(self, "_nav_history", [])
+        cursor = getattr(self, "_nav_cursor", -1)
+        frames = getattr(self, "frames", {})
+        target_idx = cursor - 1
+        while target_idx >= 0:
+            if history[target_idx] in frames:
+                self._nav_cursor = target_idx
+                self._nav_suppress = True
+                try:
+                    self.select_frame_by_name(history[target_idx])
+                finally:
+                    self._nav_suppress = False
+                return
+            target_idx -= 1
+        self._update_nav_history_buttons()
+
+    def navigate_forward(self):
+        """Move one step forward in the navigation history."""
+        history = getattr(self, "_nav_history", [])
+        cursor = getattr(self, "_nav_cursor", -1)
+        frames = getattr(self, "frames", {})
+        target_idx = cursor + 1
+        while target_idx < len(history):
+            if history[target_idx] in frames:
+                self._nav_cursor = target_idx
+                self._nav_suppress = True
+                try:
+                    self.select_frame_by_name(history[target_idx])
+                finally:
+                    self._nav_suppress = False
+                return
+            target_idx += 1
+        self._update_nav_history_buttons()
+
+    def _update_nav_history_buttons(self):
+        """Sync the bottom-of-sidebar Back/Forward buttons with the cursor position."""
+        history = getattr(self, "_nav_history", [])
+        cursor = getattr(self, "_nav_cursor", -1)
+        can_back = cursor > 0 and any(
+            h in getattr(self, "frames", {}) for h in history[:cursor]
+        )
+        can_fwd = cursor < len(history) - 1 and any(
+            h in getattr(self, "frames", {}) for h in history[cursor + 1:]
+        )
+        for btn, enabled in (
+            (getattr(self, "_nav_back_btn", None), can_back),
+            (getattr(self, "_nav_fwd_btn", None), can_fwd),
+        ):
+            try:
+                if btn and btn.winfo_exists():
+                    btn.configure(state="normal" if enabled else "disabled")
+            except (tk.TclError, RuntimeError, AttributeError):
+                pass
 
     def refresh_ui_theme(self):
         """Refresh sidebar colors (if needed beyond automatic CTk updates)."""
