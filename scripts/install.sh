@@ -103,7 +103,7 @@ Linux*)
 	*arch* | *manjaro* | *endeavouros*)
 		# python on Arch is Python 3 and ships with venv; libarchive provides bsdtar for RPM extraction
 		PACKAGES_TO_INSTALL=""
-		for pkg in python python-pip tk wireguard-tools libarchive; do
+		for pkg in python python-pip tk wireguard-tools openresolv libarchive; do
 			if ! pacman -Qi "$pkg" &>/dev/null; then
 				PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL $pkg"
 			fi
