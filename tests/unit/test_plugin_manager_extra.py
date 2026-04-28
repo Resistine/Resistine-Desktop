@@ -77,7 +77,7 @@ class TestGetPluginsPath:
         monkeypatch.setattr("sys.frozen", True, raising=False)
         monkeypatch.setattr("sys._MEIPASS", "/tmp/meipass", raising=False)
         path = mgr.get_plugins_path()
-        assert path == "/tmp/meipass/plugins"
+        assert path == os.path.join("/tmp/meipass", "plugins")
 
 
 # ---------------------------------------------------------------------------

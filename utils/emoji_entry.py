@@ -246,9 +246,14 @@ else:
             if self._state == "disabled":
                 return "break"
             self._clear_placeholder()
-            try:
-                clip = self._textbox.clipboard_get()
-            except Exception:
+            clip = None
+            for kwargs in ({}, {"type": "STRING"}, {"type": "UTF8_STRING"}):
+                try:
+                    clip = self._textbox.clipboard_get(**kwargs)
+                    break
+                except Exception:
+                    continue
+            if not clip:
                 return "break"
             # Delete any selection first
             try:

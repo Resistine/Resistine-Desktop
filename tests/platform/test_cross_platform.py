@@ -205,10 +205,44 @@ class TestAgentIdentityCrossPlatform:
 
 
 # ===========================================================================
-# P3-A: Wazuh Windows/Linux stubs raise NotImplementedError
+# Wazuh platform modules are importable on any host
+#
+# Earlier versions of this codebase used NotImplementedError stubs for the
+# non-native platform modules. Those stubs are gone — every platform module
+# has a real implementation. These tests verify only that the modules import
+# cleanly and expose the expected symbols, without invoking any function
+# that would touch the real system (start_agent/stop_agent would call
+# NET STOP / sudo against the host).
+#
+# NOTE: the previous version of this section was a pair of
+# TestWazuhWindowsStubs/TestWazuhLinuxStubs classes that called
+# start_agent/stop_agent/full_install directly and expected
+# NotImplementedError. Those tests were from when the platform modules
+# were stubs. By the time the tests became relevant, the implementations
+# had been filled in and the tests were attempting to run NET STOP
+# WazuhSvc, Stop-Service -Force, pkexec, and sudo commands on my real
+# system during every suite run. The symbol check shape chosen below is
+# intentionally defensive... it confirms the functions exist without
+# actually invoking them. If you ever add a test that needs to call
+# these functions going forward please make sure it's inside a
+# subprocess-mocking context (or uses the allow_subprocess if truly
+# necessary), otherwise you'll run into the same "real commands" issue
+# described above. - Austin
 # ===========================================================================
-class TestWazuhWindowsStubs:
-    """All Wazuh functions on Windows must raise NotImplementedError."""
+class TestWazuhPlatformModulesImportable:
+    @pytest.mark.parametrize("func_name", [
+        "get_agent_name",
+        "get_agent_group",
+        "get_package_url",
+        "is_agent_installed",
+        "get_agent_status",
+        "start_agent",
+        "stop_agent",
+        "full_install",
+    ])
+    def test_windows_module_exposes_symbol(self, func_name):
+        from plugins.wazuh.agent import wazuh_functions_windows as wfw
+        assert callable(getattr(wfw, func_name)), f"{func_name} missing from wazuh_functions_windows"
 
     @pytest.mark.parametrize("func_name", [
         "get_agent_name",
@@ -218,52 +252,12 @@ class TestWazuhWindowsStubs:
         "get_agent_status",
         "start_agent",
         "stop_agent",
+        "full_install",
     ])
-    def test_raises_not_implemented(self, func_name):
-        from plugins.wazuh.agent import wazuh_functions_windows as wfw
-        func = getattr(wfw, func_name)
-        with pytest.raises(NotImplementedError):
-            func()
-
-    def test_full_install_raises_not_implemented(self):
-        from plugins.wazuh.agent import wazuh_functions_windows as wfw
-        with pytest.raises(NotImplementedError):
-            wfw.full_install()
-
-    def test_error_message_mentions_windows(self):
-        from plugins.wazuh.agent import wazuh_functions_windows as wfw
-        try:
-            wfw.get_agent_status()
-        except NotImplementedError as e:
-            assert "Windows" in str(e) or "windows" in str(e).lower()
-
-
-class TestWazuhLinuxStubs:
-    """All Wazuh functions on Linux must raise NotImplementedError."""
-
-    @pytest.mark.parametrize("func_name", [
-        "get_agent_name",
-        "get_agent_group",
-        "get_package_url",
-        "is_agent_installed",
-        "get_agent_status",
-        "start_agent",
-        "stop_agent",
-    ])
-    def test_raises_not_implemented(self, func_name):
+    def test_linux_module_exposes_symbol(self, func_name):
         from plugins.wazuh.agent import wazuh_functions_linux as wfl
-        func = getattr(wfl, func_name)
-        with pytest.raises(NotImplementedError):
-            func()
+        assert callable(getattr(wfl, func_name)), f"{func_name} missing from wazuh_functions_linux"
 
-    def test_full_install_raises_not_implemented(self):
-        from plugins.wazuh.agent import wazuh_functions_linux as wfl
-        with pytest.raises(NotImplementedError):
-            wfl.full_install()
-
-    def test_error_message_mentions_linux(self):
-        from plugins.wazuh.agent import wazuh_functions_linux as wfl
-        try:
-            wfl.get_agent_status()
-        except NotImplementedError as e:
-            assert "Linux" in str(e) or "linux" in str(e).lower()
+    def test_darwin_module_exposes_symbol(self):
+        from plugins.wazuh.agent import wazuh_functions_darwin as wfd
+        assert callable(getattr(wfd, "get_agent_status"))

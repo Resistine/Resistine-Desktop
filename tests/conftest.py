@@ -7,9 +7,13 @@ Key design goals:
 - Never touch the real system keyring
 - Never make real network requests unless the test is explicitly marked @pytest.mark.network
 - Never call real subprocess commands unless explicitly mocked
+- Never open real log file handles or create real ProgramData directories
 """
 import json
+import logging
+import os
 import sys
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -21,6 +25,57 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+
+# ---------------------------------------------------------------------------
+# Prevent module-load-time side effects from Windows code paths.
+#
+# Importing services.windows_vpn_service triggers:
+#   logging.basicConfig(filename=r"C:\ProgramData\Resistine\vpn_service.log", ...)
+#   os.makedirs(r"C:\ProgramData\Resistine\wireguard", exist_ok=True)
+# On non-Windows or on real Windows outside the test env those would open
+# real file handles / create real directories. Redirect them to a temp path
+# BEFORE any test module imports the service.
+# ---------------------------------------------------------------------------
+_TEST_TMP_ROOT = Path(tempfile.gettempdir()) / "resistine_tests"
+_TEST_TMP_ROOT.mkdir(exist_ok=True)
+# NOTE: make sure it's an assignment here... not os.environ.setdefault. On
+# Windows PROGRAMDATA is always pre-set, so setdefault was silently a no-op
+# and tests were writing real files into C:\ProgramData\Resistine\. - Austin
+_ORIGINAL_PROGRAMDATA = os.environ.get("PROGRAMDATA")
+_ORIGINAL_APPDATA = os.environ.get("APPDATA")
+os.environ["PROGRAMDATA"] = str(_TEST_TMP_ROOT / "ProgramData")
+os.environ["APPDATA"] = str(_TEST_TMP_ROOT / "AppData")
+(_TEST_TMP_ROOT / "ProgramData").mkdir(exist_ok=True)
+(_TEST_TMP_ROOT / "AppData").mkdir(exist_ok=True)
+
+# Seed a stub IPC token at the path the service_client / tray expect, so
+# send_command() tests don't short-circuit with "IPC token unavailable"
+# before their mocks run. Path mirrors plugins/vpn/wireguard/
+# windows_vpn_service.IPC_TOKEN_FILE.
+_TEST_TOKEN_DIR = _TEST_TMP_ROOT / "ProgramData" / "Resistine" / "wireguard"
+_TEST_TOKEN_DIR.mkdir(parents=True, exist_ok=True)
+(_TEST_TOKEN_DIR / ".ipc_token").write_text("test_stub_ipc_token_" + "0" * 40)
+
+# NOTE: this logging.basicConfig wrapper is here because
+# services.windows_vpn_service calls logging.basicConfig(filename=...) at
+# module import time, and the path it hands over is a real
+# C:\ProgramData\Resistine\vpn_service.log location. Without this sandbox
+# every test import opens a real log file handle on your system and keeps
+# appending to it across runs. Please don't try to simplify this (even if
+# that module later stops configuring logging at import time) without
+# checking that no other module is still doing the same, and if you add
+# any new "filename=" bail-outs in the test tree please route them
+# through here too, otherwise you'll have to deal with real log files
+# growing in C:\ProgramData. - Austin
+_original_basic_config = logging.basicConfig
+def _sandboxed_basic_config(*args, **kwargs):
+    """Redirect any filename= into the test tmp root so imports don't open real log paths."""
+    if "filename" in kwargs and kwargs["filename"]:
+        name = os.path.basename(str(kwargs["filename"]))
+        kwargs["filename"] = str(_TEST_TMP_ROOT / name)
+    return _original_basic_config(*args, **kwargs)
+logging.basicConfig = _sandboxed_basic_config
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +134,126 @@ def _stub_gui_modules():
 
 
 _stub_gui_modules()
+
+
+# ---------------------------------------------------------------------------
+# Win32 module stubs. On non-Windows these modules don't exist; on Windows
+# we still stub them during tests so we never touch real services/registry.
+#
+# MagicMock records every call in call_args_list, which grows unboundedly
+# across the suite. We keep the stubs in _WIN32_STUBS and reset all of them
+# between tests via the autouse fixture below.
+# ---------------------------------------------------------------------------
+_WIN32_STUBS = {}
+def _stub_win32_modules():
+    for mod_name in [
+        "win32serviceutil", "win32service", "win32event",
+        "servicemanager", "win32con", "pywintypes", "pythoncom",
+        "winreg",
+    ]:
+        if mod_name not in sys.modules:
+            stub = MagicMock()
+            sys.modules[mod_name] = stub
+            _WIN32_STUBS[mod_name] = stub
+        elif isinstance(sys.modules[mod_name], MagicMock):
+            _WIN32_STUBS[mod_name] = sys.modules[mod_name]
+
+    # ctypes exists on all platforms but .windll is Windows-only.
+    # Provide a MagicMock .windll so ctypes.windll.shell32.IsUserAnAdmin() works.
+    try:
+        import ctypes
+        if not hasattr(ctypes, "windll") or not isinstance(getattr(ctypes, "windll", None), MagicMock):
+            ctypes.windll = MagicMock()
+        _WIN32_STUBS["ctypes.windll"] = ctypes.windll
+    except ImportError:
+        pass
+
+_stub_win32_modules()
+
+
+@pytest.fixture(autouse=True)
+def _reset_win32_mocks():
+    # NOTE: the reset_mock call below is what keeps the suite's memory from
+    # accumulating. These win32 stubs (servicemanager, win32event, winreg,
+    # etc.) are shared across every test, and MagicMock quietly records every
+    # call it ever receives into .call_args_list/.mock_calls. Over ~700 tests
+    # that pile of references added up per run and was part of what pushed
+    # older implementations toward 100% memory. If you add more module-level
+    # stubs in the future, please register them in _WIN32_STUBS so they get
+    # reset here too, otherwise you run the risk of memory problems. - Austin
+    yield
+    for stub in _WIN32_STUBS.values():
+        try:
+            stub.reset_mock(return_value=False, side_effect=False)
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Subprocess safety net.
+#
+# NOTE: this guard is here because I noticed that the suite actually ran
+# `NET STOP WazuhSvc`, `Stop-Service`, and `sudo` on my real system during
+# one of the earlier successful runs... some production helpers like
+# start_agent/stop_agent/install_tunnel shell out to real system commands,
+# and a test that forgets to mock subprocess will easily execute them on
+# the host. Please don't remove this without a good reason (redone
+# implementation etc.) and if a specific test needs a real subprocess, use
+# the `allow_subprocess` that's already there instead of deleting the guard
+# so nobody else runs into any issues related to this. - Austin
+#
+# This fixture replaces subprocess.run with a stub that returns a harmless
+# result and records the attempt. Tests that need specific subprocess
+# behavior must opt in by calling `allow_subprocess()` or patching
+# subprocess.run themselves within a local patch context.
+# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _block_real_subprocess(request, monkeypatch):
+    """Prevent any unmocked test from shelling out to the real machine.
+
+    Opt out in a test by requesting the `allow_subprocess` fixture, or by
+    patching subprocess.run inside the test (the inner patch wins).
+    """
+    if "allow_subprocess" in request.fixturenames:
+        yield
+        return
+
+    import subprocess as _sp
+    _real_run = _sp.run
+    _real_check_output = _sp.check_output
+    _real_popen = _sp.Popen
+
+    def _blocked_run(*args, **kwargs):
+        # Return a neutral "command not run" result so functions that call
+        # subprocess.run at import time don't crash. Tests that want specific
+        # behavior must set up their own patch.
+        result = MagicMock()
+        result.returncode = 1
+        result.stdout = ""
+        result.stderr = "blocked by _block_real_subprocess"
+        result.args = args[0] if args else kwargs.get("args", [])
+        return result
+
+    def _blocked_check_output(*args, **kwargs):
+        raise _sp.CalledProcessError(1, args[0] if args else "", "blocked by _block_real_subprocess")
+
+    def _blocked_popen(*args, **kwargs):
+        m = MagicMock()
+        m.communicate.return_value = (b"", b"blocked")
+        m.returncode = 1
+        return m
+
+    monkeypatch.setattr("subprocess.run", _blocked_run)
+    monkeypatch.setattr("subprocess.check_output", _blocked_check_output)
+    monkeypatch.setattr("subprocess.Popen", _blocked_popen)
+    yield
+
+
+@pytest.fixture
+def allow_subprocess():
+    """Opt-in marker to allow real subprocess calls in a test. Use only for
+    explicit integration tests marked @pytest.mark.slow or @pytest.mark.network."""
+    return True
 
 
 # ---------------------------------------------------------------------------

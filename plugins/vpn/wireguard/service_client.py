@@ -14,6 +14,11 @@ SERVICE_PORT = 51888
 
 # Token file is written by the service on first start and shared via ProgramData.
 # Both the service (SYSTEM) and the GUI (current user) can access ProgramData.
+# IMPORTANT: this path must match IPC_TOKEN_FILE in
+# plugins/vpn/wireguard/windows_vpn_service.py — the service writes to
+# %PROGRAMDATA%\Resistine\wireguard\.ipc_token (dot-prefixed, inside the
+# wireguard/ subdirectory). The client reads from that same location so
+# both sides authenticate against the same token value.
 _PROGRAMDATA = os.environ.get("PROGRAMDATA", r"C:\ProgramData")
 _IPC_TOKEN_FILE = os.path.join(_PROGRAMDATA, "Resistine", "wireguard", ".ipc_token")
 

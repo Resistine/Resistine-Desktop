@@ -207,7 +207,7 @@ class TestOfferQuarantineBatch:
             mock_mb.askyesno.return_value = True
             mock_clamav.quarantine_file.return_value = (True, "/quarantine/virus.exe.quarantined")
 
-            plugin._offer_quarantine_batch(["/tmp/virus.exe"])
+            plugin._offer_quarantine_batch({"/tmp/virus.exe": "Win.Trojan"})
 
             mock_clamav.quarantine_file.assert_called_once_with("/tmp/virus.exe")
 
@@ -216,7 +216,7 @@ class TestOfferQuarantineBatch:
              patch("plugins.antivirus.main.clamav") as mock_clamav:
             mock_mb.askyesno.return_value = False
 
-            plugin._offer_quarantine_batch(["/tmp/virus.exe"])
+            plugin._offer_quarantine_batch({"/tmp/virus.exe": "Win.Trojan"})
 
             mock_clamav.quarantine_file.assert_not_called()
 
@@ -227,18 +227,18 @@ class TestOfferQuarantineBatch:
             mock_clamav.quarantine_file.return_value = (False, "Permission denied")
             mock_clamav.list_quarantined.return_value = []
 
-            plugin._offer_quarantine_batch(["/tmp/virus.exe"])
+            plugin._offer_quarantine_batch({"/tmp/virus.exe": "Win.Trojan"})
 
             # Should still complete without raising
             mock_clamav.quarantine_file.assert_called_once()
 
     def test_truncates_long_listing(self, plugin):
         """Message shows first 20 files and '... and N more'."""
-        files = [f"/tmp/virus{i}.exe" for i in range(25)]
+        infections = {f"/tmp/virus{i}.exe": f"Sig.{i}" for i in range(25)}
         with patch("plugins.antivirus.main.messagebox") as mock_mb, \
              patch("plugins.antivirus.main.clamav") as mock_clamav:
             mock_mb.askyesno.return_value = False
-            plugin._offer_quarantine_batch(files)
+            plugin._offer_quarantine_batch(infections)
             msg = mock_mb.askyesno.call_args[0][1]
             assert "25 infected" in msg
             assert "5 more" in msg
@@ -282,7 +282,7 @@ class TestDestroy:
         plugin._banner_label = MagicMock()
         plugin._banner_subtitle = MagicMock()
         plugin._banner_action_btn = MagicMock()
-        plugin.main_frame = MagicMock()
+        plugin.main_container = MagicMock()
 
         with patch.object(plugin, "_stop_auto_update_scheduler") as mock_stop:
             plugin.destroy()
@@ -292,7 +292,7 @@ class TestDestroy:
         assert plugin._banner_label is None
         assert plugin._banner_subtitle is None
         assert plugin._banner_action_btn is None
-        assert plugin.main_frame is None
+        assert plugin.main_container is None
 
     def test_destroy_no_main_frame(self, plugin):
         plugin.main_frame = None

@@ -74,7 +74,7 @@ if (-not (Test-Path $venvPython)) {
 if (-not $SkipDependencyInstall) {
     Write-Host "Installing build/runtime dependencies into .venv..."
     & $venvPython -m pip install --upgrade pip
-    & $venvPython -m pip install -r (Join-Path $ProjectRoot "requirements\requirements-windows.txt")
+    & $venvPython -m pip install -r (Join-Path $ProjectRoot "scripts\requirements\requirements-windows.txt")
     & $venvPython -m pip install pyinstaller
 }
 
@@ -86,6 +86,25 @@ if (-not $SkipPyInstaller) {
 $sourceDir = Join-Path $ProjectRoot "dist\Resistine"
 if (-not (Test-Path (Join-Path $sourceDir "Resistine.exe"))) {
     throw "Expected PyInstaller output not found at $sourceDir\Resistine.exe"
+}
+
+# Copy installer helper files into distribution directory
+Write-Host "Copying installer helper files..."
+$installServiceSrc = Join-Path $ProjectRoot "scripts\install\install_service.bat"
+$installServiceDst = Join-Path $sourceDir "install_service.bat"
+if (Test-Path $installServiceSrc) {
+    Copy-Item $installServiceSrc $installServiceDst -Force
+} else {
+    Write-Warning "install_service.bat not found at $installServiceSrc"
+}
+
+$vpnServiceSrc = Join-Path $ProjectRoot "plugins\vpn\wireguard\windows_vpn_service.py"
+$vpnServiceDir = Join-Path $sourceDir "plugins\vpn\wireguard"
+New-Item -ItemType Directory -Force -Path $vpnServiceDir | Out-Null
+if (Test-Path $vpnServiceSrc) {
+    Copy-Item $vpnServiceSrc (Join-Path $vpnServiceDir "windows_vpn_service.py") -Force
+} else {
+    Write-Warning "windows_vpn_service.py not found at $vpnServiceSrc"
 }
 
 $outputDir = Join-Path $ProjectRoot "dist\installers"

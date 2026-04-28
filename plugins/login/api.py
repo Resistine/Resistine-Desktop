@@ -86,7 +86,7 @@ class LoginAPI:
                 "host_url": host_url,
                 "vpn_name": vpn_name,
                 "client_public_key": public_key,
-                "hostname": hostname or socket.gethostname(),
+                "hostname": hostname or socket.gethostname().split(".")[0],
             }
 
             logger.info(f"[LOGIN] verify_otp -> POST {api_url} | email={email} | hostname={payload['hostname']}")
