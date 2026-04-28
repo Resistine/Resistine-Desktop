@@ -74,41 +74,6 @@ def _send_notification(title: str, body: str):
             pass
 
 
-def _send_notification(title: str, body: str):
-    """Send a macOS system notification. No-op on other platforms."""
-    import platform as _platform
-
-    if _platform.system() != "Darwin":
-        return
-    try:
-        from Foundation import NSUserNotification, NSUserNotificationCenter
-
-        notification = NSUserNotification.alloc().init()
-        notification.setTitle_(title)
-        notification.setInformativeText_(body)
-        notification.setSoundName_("default")
-        center = NSUserNotificationCenter.defaultUserNotificationCenter()
-        center.deliverNotification_(notification)
-    except ImportError:
-        # PyObjC not available — fall back to osascript
-        import subprocess
-
-        safe_body = body.replace("\\", "\\\\").replace('"', '\\"')
-        safe_title = title.replace("\\", "\\\\").replace('"', '\\"')
-        script = (
-            f'display notification "{safe_body}" '
-            f'with title "{safe_title}" sound name "default"'
-        )
-        try:
-            subprocess.Popen(
-                ["osascript", "-e", script],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except Exception:
-            pass
-
-
 class Plugin(BasePlugin):
     """Antivirus plugin powered by ClamAV."""
 
@@ -996,7 +961,10 @@ class Plugin(BasePlugin):
         if not excl["extensions"]:
             customtkinter.CTkLabel(
                 frame, text="No excluded extensions",
-                font=font(12), text_color=COLOR_MUTED,
+                font=font(12),
+                text_color=ThemeManager.theme.get("Theme", {}).get(
+                    "text_secondary",
+                ),
             ).grid(row=0, column=0, sticky="w")
         else:
             for i, ext in enumerate(excl["extensions"]):
