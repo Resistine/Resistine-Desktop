@@ -1,5 +1,84 @@
 import os
+import shutil
+import subprocess
 import sys
+
+
+def is_running_from_dmg() -> bool:
+    """Return True if the app is running from a mounted DMG volume."""
+    if sys.platform != "darwin":
+        return False
+    app_path = _get_bundle_path()
+    if not app_path:
+        return False
+    # Mounted DMGs appear under /Volumes/
+    return app_path.startswith("/Volumes/")
+
+
+def _get_bundle_path() -> str | None:
+    """Return the .app bundle path, or None if not running as a bundle."""
+    if not getattr(sys, "frozen", False):
+        return None
+    # sys.executable is e.g. /Volumes/Resistine Installer/Resistine.app/Contents/MacOS/Resistine
+    path = os.path.realpath(sys.executable)
+    while path != "/":
+        if path.endswith(".app"):
+            return path
+        path = os.path.dirname(path)
+    return None
+
+
+def move_to_applications() -> bool:
+    """Copy the running .app bundle to /Applications and relaunch from there.
+
+    Returns True if the move succeeded (caller should exit).
+    Returns False if the move failed (caller should show an error or continue).
+    """
+    src = _get_bundle_path()
+    if not src:
+        return False
+    app_name = os.path.basename(src)  # e.g. "Resistine.app"
+    dest = os.path.join("/Applications", app_name)
+
+    try:
+        # Try unprivileged copy first; fall back to osascript for admin auth
+        if not _copy_app_bundle(src, dest):
+            return False
+
+        # Relaunch from /Applications
+        executable = os.path.join(
+            dest, "Contents", "MacOS", os.path.splitext(app_name)[0]
+        )
+        if not os.path.exists(executable):
+            return False
+        subprocess.Popen([executable])
+        return True
+    except (OSError, shutil.Error):
+        return False
+
+
+def _copy_app_bundle(src: str, dest: str) -> bool:
+    """Copy .app bundle to dest, requesting admin privileges if needed."""
+    # Try without elevation first
+    try:
+        if os.path.exists(dest):
+            shutil.rmtree(dest)
+        shutil.copytree(src, dest, symlinks=True)
+        return True
+    except PermissionError:
+        pass
+
+    # Elevated fallback via osascript (prompts the user for password)
+    script = (
+        f'do shell script "rm -rf \\"{dest}\\" '
+        f'&& cp -pR \\"{src}\\" \\"{dest}\\"" '
+        f"with administrator privileges"
+    )
+    result = subprocess.run(
+        ["osascript", "-e", script],
+        capture_output=True, timeout=120,
+    )
+    return result.returncode == 0
 
 
 def is_running_in_ide():

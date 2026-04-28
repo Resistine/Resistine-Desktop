@@ -787,10 +787,116 @@ echo ""
 echo "  All signatures verified"
 
 # ============================================================
-# Step 6: Create DMG
+# Step 6: Create PKG installer (primary distribution format)
 # ============================================================
 echo ""
-echo "Step 6: Creating DMG installer..."
+echo "Step 6: Creating PKG installer..."
+
+# Detect version from spec file
+APP_VERSION=$(python3 -c "
+import re, pathlib
+spec = pathlib.Path('$PYTHON_UI_PATH/packaging/Resistine.spec').read_text()
+m = re.search(r\"VERSION\s*=\s*'([^']+)'\", spec)
+print(m.group(1) if m else '1.0.0')
+")
+echo "  App version: $APP_VERSION"
+
+# Detect Developer ID Installer certificate
+INSTALLER_IDENTITY=$(security find-identity -v -p basic 2>/dev/null | grep "Developer ID Installer" | head -1 | awk '{print $2}')
+INSTALLER_NAME=""
+if [ -n "$INSTALLER_IDENTITY" ]; then
+    INSTALLER_NAME=$(security find-identity -v -p basic 2>/dev/null | grep "$INSTALLER_IDENTITY" | sed 's/.*"\(.*\)".*/\1/')
+    echo "  Installer signing with: $INSTALLER_NAME"
+else
+    echo "  Warning: No Developer ID Installer certificate found"
+    echo "  PKG will not be signed (install one for distribution)"
+fi
+
+# Create postinstall script for LaunchServices + pluginkit registration
+PKG_SCRIPTS_DIR="$DIST_DIR/pkg-scripts"
+mkdir -p "$PKG_SCRIPTS_DIR"
+
+cat > "$PKG_SCRIPTS_DIR/postinstall" << 'POSTEOF'
+#!/bin/bash
+# Register with LaunchServices so Spotlight / Finder recognise the app
+/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -f "/Applications/Resistine.app" 2>/dev/null || true
+
+# Register the network extension with pluginkit
+pluginkit -a "/Applications/Resistine.app/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension" 2>/dev/null || true
+
+exit 0
+POSTEOF
+chmod +x "$PKG_SCRIPTS_DIR/postinstall"
+
+# Build the component package
+echo "  - Building component package..."
+pkgbuild \
+    --root "$PYTHON_APP" \
+    --install-location "/Applications/$APP_NAME.app" \
+    --identifier "$BUNDLE_ID" \
+    --version "$APP_VERSION" \
+    --scripts "$PKG_SCRIPTS_DIR" \
+    "$DIST_DIR/$APP_NAME-component.pkg"
+
+# Create distribution XML for customized installer UI
+cat > "$DIST_DIR/distribution.xml" << DISTEOF
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>$APP_NAME</title>
+    <organization>com.resistine</organization>
+    <domains enable_localSystem="true"/>
+    <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+    <volume-check>
+        <allowed-os-versions>
+            <os-version min="13.0"/>
+        </allowed-os-versions>
+    </volume-check>
+    <choices-outline>
+        <line choice="default">
+            <line choice="$BUNDLE_ID"/>
+        </line>
+    </choices-outline>
+    <choice id="default"/>
+    <choice id="$BUNDLE_ID" visible="false">
+        <pkg-ref id="$BUNDLE_ID"/>
+    </choice>
+    <pkg-ref id="$BUNDLE_ID" version="$APP_VERSION" onConclusion="none">$APP_NAME-component.pkg</pkg-ref>
+</installer-gui-script>
+DISTEOF
+
+# Build the final product archive
+echo "  - Building product archive..."
+PKG_PATH="$DIST_DIR/$APP_NAME-Installer.pkg"
+
+if [ -n "$INSTALLER_NAME" ]; then
+    productbuild \
+        --distribution "$DIST_DIR/distribution.xml" \
+        --package-path "$DIST_DIR" \
+        --sign "$INSTALLER_NAME" \
+        --timestamp \
+        "$PKG_PATH"
+    echo "  PKG signed with: $INSTALLER_NAME"
+else
+    productbuild \
+        --distribution "$DIST_DIR/distribution.xml" \
+        --package-path "$DIST_DIR" \
+        "$PKG_PATH"
+    echo "  PKG created (unsigned)"
+fi
+
+# Clean up intermediate files
+rm -f "$DIST_DIR/$APP_NAME-component.pkg"
+rm -f "$DIST_DIR/distribution.xml"
+rm -rf "$PKG_SCRIPTS_DIR"
+
+PKG_SIZE=$(du -h "$PKG_PATH" | cut -f1)
+echo "  PKG created: $PKG_PATH ($PKG_SIZE)"
+
+# ============================================================
+# Step 6b: Create DMG (secondary — for users who prefer drag-and-drop)
+# ============================================================
+echo ""
+echo "Step 6b: Creating DMG installer..."
 
 if ! command -v create-dmg &> /dev/null; then
     echo "  - create-dmg not found. Installing via Homebrew..."
@@ -846,53 +952,63 @@ codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DIST_DIR/$APP_NAME-Instal
 echo "  DMG signed"
 
 # ============================================================
-# Step 7: Notarization
+# Step 7: Notarization (both PKG and DMG)
 # ============================================================
 echo ""
 echo "Step 7: Notarization..."
 
-if [ "$SKIP_NOTARIZE" = true ]; then
-    echo "  Skipping notarization (no credentials configured)"
-    echo ""
-    echo "  To notarize manually later:"
-    echo "    xcrun notarytool submit $DIST_DIR/$APP_NAME-Installer.dmg \\"
-    echo "      --keychain-profile \"resistine-notarize\" --wait"
-    echo "    xcrun stapler staple $DIST_DIR/$APP_NAME-Installer.dmg"
-else
-    echo "  Submitting DMG for notarization..."
-    xcrun notarytool submit "$DIST_DIR/$APP_NAME-Installer.dmg" \
+notarize_and_staple() {
+    local artifact="$1"
+    local label="$2"
+    local log_file="/tmp/resistine-notarize-${label}.txt"
+
+    echo "  Submitting $label for notarization..."
+    xcrun notarytool submit "$artifact" \
         --keychain-profile "resistine-notarize" \
-        --wait 2>&1 | tee /tmp/resistine-notarize-output.txt
+        --wait 2>&1 | tee "$log_file"
 
-    # Check if notarization succeeded
-    if grep -q "status: Accepted" /tmp/resistine-notarize-output.txt; then
-        echo "  Notarization accepted"
-
-        echo "  Stapling notarization ticket..."
-        xcrun stapler staple "$DIST_DIR/$APP_NAME-Installer.dmg" && {
-            echo "  DMG stapled successfully"
+    if grep -q "status: Accepted" "$log_file"; then
+        echo "  $label notarization accepted"
+        echo "  Stapling notarization ticket to $label..."
+        xcrun stapler staple "$artifact" && {
+            echo "  $label stapled successfully"
         } || {
-            echo "  Warning: Stapling failed (DMG is still notarized, just not stapled)"
+            echo "  Warning: $label stapling failed (still notarized, just not stapled)"
         }
+        rm -f "$log_file"
+        return 0
     else
         echo ""
-        echo "  Notarization failed. Fetching detailed log..."
-
-        # Extract submission ID from output
-        SUBMISSION_ID=$(grep "id:" /tmp/resistine-notarize-output.txt | head -1 | awk '{print $2}')
+        echo "  $label notarization failed. Fetching detailed log..."
+        SUBMISSION_ID=$(grep "id:" "$log_file" | head -1 | awk '{print $2}')
         if [ -n "$SUBMISSION_ID" ]; then
             echo ""
             xcrun notarytool log "$SUBMISSION_ID" \
                 --keychain-profile "resistine-notarize" 2>&1
         fi
-
-        echo ""
-        echo "  Fix the issues above and re-run this script."
-        rm -f /tmp/resistine-notarize-output.txt
-        exit 1
+        rm -f "$log_file"
+        return 1
     fi
+}
 
-    rm -f /tmp/resistine-notarize-output.txt
+if [ "$SKIP_NOTARIZE" = true ]; then
+    echo "  Skipping notarization (no credentials configured)"
+    echo ""
+    echo "  To notarize manually later:"
+    echo "    xcrun notarytool submit $DIST_DIR/$APP_NAME-Installer.pkg \\"
+    echo "      --keychain-profile \"resistine-notarize\" --wait"
+    echo "    xcrun stapler staple $DIST_DIR/$APP_NAME-Installer.pkg"
+else
+    # Notarize PKG (primary)
+    notarize_and_staple "$DIST_DIR/$APP_NAME-Installer.pkg" "PKG" || {
+        echo "  Fix the issues above and re-run this script."
+        exit 1
+    }
+
+    # Notarize DMG (secondary)
+    notarize_and_staple "$DIST_DIR/$APP_NAME-Installer.dmg" "DMG" || {
+        echo "  Warning: DMG notarization failed (PKG is still valid)"
+    }
 fi
 
 # Clean up temporary entitlements files
@@ -938,8 +1054,9 @@ echo "==================================="
 echo "  Distribution Build Complete!"
 echo "==================================="
 echo ""
-echo "  Installer: $DIST_DIR/$APP_NAME-Installer.dmg"
-echo "  App Bundle: $PYTHON_APP"
+echo "  PKG Installer: $DIST_DIR/$APP_NAME-Installer.pkg  (recommended)"
+echo "  DMG Installer: $DIST_DIR/$APP_NAME-Installer.dmg  (drag-and-drop alternative)"
+echo "  App Bundle:    $PYTHON_APP"
 echo ""
 if [ "$SKIP_NOTARIZE" = true ]; then
     echo "  Status: Signed with Developer ID (NOT notarized)"
