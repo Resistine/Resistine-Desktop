@@ -33,7 +33,7 @@ class SelectableLabel(tk.Text):
 
     def __init__(
         self, master, text: str, font, fg: str, bg: str,
-        max_width: int = 600, center: bool = False, **kwargs,
+        max_width: int = 600, **kwargs,
     ):
         kwargs.pop("padx", None)
         kwargs.pop("pady", None)
@@ -43,15 +43,13 @@ class SelectableLabel(tk.Text):
             insertwidth=0, cursor="", selectbackground="#3A6DB5",
             selectforeground="#FFFFFF", height=1, **kwargs,
         )
-        if center:
-            self.tag_configure("center", justify="center")
-            self.insert("1.0", text, "center")
-        else:
-            self.insert("1.0", text)
+        self.tag_configure("center", justify="center")
+        self.insert("1.0", text)
         self.bind("<Key>", self._readonly)
         self._max_width = max_width
         self._in_autoheight = False
         self._fit_width(font, text, max_width)
+        self._update_justify()
         self.bind("<Configure>", self._autoheight, add="+")
 
     def _fit_width(self, font, text: str, max_width: int) -> None:
@@ -65,7 +63,7 @@ class SelectableLabel(tk.Text):
             text_px = measure_font.measure(text)
             width_px = min(text_px + 4, max_width)
             avg_char = measure_font.measure("0") or 8
-            char_width = max(1, -(-width_px // avg_char) + 1)
+            char_width = max(1, -(-width_px // avg_char))
             self.configure(width=char_width)
         except Exception:
             pass
@@ -88,10 +86,24 @@ class SelectableLabel(tk.Text):
             cur_h = int(self.cget("height"))
             if new_h != cur_h:
                 self.configure(height=new_h)
+            self._update_justify()
         except Exception:
             pass
         finally:
             self._in_autoheight = False
+
+    def _update_justify(self) -> None:
+        """Center text when it fits on one line, left-align otherwise."""
+        try:
+            result = self.count("1.0", "end-1c", "displaylines")
+            lines = (result[0] if isinstance(result, (list, tuple))
+                     else result) or 1
+            if int(lines) <= 1:
+                self.tag_add("center", "1.0", "end")
+            else:
+                self.tag_remove("center", "1.0", "end")
+        except Exception:
+            pass
 
     def set_width(self, max_width: int) -> None:
         self._max_width = max_width
@@ -278,6 +290,7 @@ class TableWidget(customtkinter.CTkFrame):
                     pady=6,
                     anchor="w",
                     justify="left",
+                    wraplength=0,
                 )
                 lbl.grid(
                     row=idx, column=j, sticky="nsew",
@@ -297,8 +310,7 @@ class TableWidget(customtkinter.CTkFrame):
         if width <= 1 or self._num_cols == 0:
             return
 
-        usable = width - 40
-        col_width = max(int(usable / self._num_cols) - 24, 50)
+        col_width = max(int(width / self._num_cols) - 12, 50)
 
         for lbl in self._labels:
             try:

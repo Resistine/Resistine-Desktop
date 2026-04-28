@@ -106,8 +106,7 @@ class AssistantBubble(customtkinter.CTkFrame):
             self._streaming_label = None
         try:
             self._renderer = MarkdownRenderer(
-                self, markdown_text, self._is_dark, self._max_width,
-                selectable=True)
+                self, markdown_text, self._is_dark, self._max_width)
         except Exception as exc:
             logger.warning(
                 f"MarkdownRenderer failed, using fallback: {exc}")

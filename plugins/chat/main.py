@@ -156,6 +156,11 @@ class Plugin(ChatUIMixin, BasePlugin):
         user_text = self.chat_entry.get().strip()
         if not user_text:
             return
+        if len(user_text) > 15000:
+            self.app.show_notification(
+                "Message too long (15,000 character limit).",
+                type="warning")
+            return
         if self._stream_ctrl and self._stream_ctrl.is_active:
             self._stop_streaming()
             return
