@@ -17,6 +17,7 @@ import customtkinter
 
 from plugins.chat.assistant_bubble import AssistantBubble  # noqa: F401
 from plugins.chat.fonts import get_theme_colors
+from plugins.chat.markdown_widgets import SelectableLabel
 
 # ---------------------------------------------------------------------------
 # Width constants
@@ -113,13 +114,13 @@ class UserBubble(customtkinter.CTkFrame):
             return False
 
     def _build_label(self, text: str, max_width: int) -> None:
-        self._label = customtkinter.CTkLabel(
-            self, text=text, fg_color="transparent",
-            text_color=self._fg, wraplength=max_width,
+        self._label = SelectableLabel(
+            self, text=text, bg=self._bg, fg=self._fg,
             font=customtkinter.CTkFont(family="Inter", size=15),
-            justify="left", anchor="w",
+            max_width=max_width,
         )
-        self._label.pack(padx=self._PAD_X, pady=self._PAD_Y)
+        self._label.pack(
+            fill="x", padx=self._PAD_X, pady=self._PAD_Y)
 
     def _build_emoji(self, text: str, max_width: int) -> None:
         """Linux emoji path: tk.Text with inline emoji images."""
@@ -201,6 +202,6 @@ class UserBubble(customtkinter.CTkFrame):
         """Update wraplength on resize."""
         self._max_width = max_width
         if self._label is not None:
-            self._label.configure(wraplength=max_width)
+            self._label.set_width(max_width)
         elif self._emoji_widget is not None:
             self._layout_emoji(self._emoji_widget, max_width)

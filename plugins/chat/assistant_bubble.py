@@ -28,8 +28,8 @@ class AssistantBubble(customtkinter.CTkFrame):
         self._bubble_bg = colors["bubble_bg"]
         self._bubble_fg = colors["bubble_fg"]
 
-        kwargs.setdefault("fg_color", self._bubble_bg)
-        kwargs.setdefault("corner_radius", self._CORNER_RADIUS)
+        kwargs.setdefault("fg_color", "transparent")
+        kwargs.setdefault("corner_radius", 0)
         super().__init__(master, **kwargs)
         self.pack(side="left", fill="x", expand=True, padx=(12, 48))
 

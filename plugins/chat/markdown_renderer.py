@@ -13,7 +13,7 @@ import customtkinter
 from plugins.chat.fonts import get_fonts, get_theme_colors
 from plugins.chat.markdown_utils import is_box_drawing, strip_inline_md
 from plugins.chat.markdown_widgets import (
-    CodeBlockWidget, HorizontalRule, TableWidget,
+    CodeBlockWidget, HorizontalRule, SelectableLabel, TableWidget,
 )
 
 # Detect markdown formatting inside code fences (to unwrap non-code blocks).
@@ -233,7 +233,7 @@ class MarkdownRenderer:
         return lines
 
     def _pack_prose_label(self, raw_text: str, all_tags: set[str]) -> None:
-        """Create and pack a CTkLabel for one prose line."""
+        """Create and pack a selectable label for one prose line."""
         display_text = strip_inline_md(raw_text)
         heading_tag = next(
             (t for t in all_tags
@@ -265,11 +265,11 @@ class MarkdownRenderer:
             pady = (top, bottom)
         else:
             pady = (1, 1)
+        bg = self._colors["prose_bg"]
         wraplength = max(100, self._max_width - padx_left - 8)
-        lbl = customtkinter.CTkLabel(
+        lbl = SelectableLabel(
             self._parent, text=display_text, font=font,
-            text_color=fg, fg_color="transparent",
-            wraplength=wraplength, justify="left", anchor="w",
+            fg=fg, bg=bg, max_width=wraplength,
         )
         lbl.pack(fill="x", padx=(padx_left, 8), pady=pady)
         self._labels.append(lbl)
@@ -281,7 +281,7 @@ class MarkdownRenderer:
         self._max_width = max_width
         for lbl in self._labels:
             try:
-                lbl.configure(wraplength=max(100, max_width - 28))
+                lbl.set_width(max(100, max_width - 28))
             except Exception:
                 pass
 

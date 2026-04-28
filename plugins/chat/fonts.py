@@ -121,6 +121,7 @@ def get_theme_colors(is_dark: bool) -> dict[str, str]:
             "hr": "#2A2A2A",
             "table_header_bg": "#252528",
             "table_alt_bg": "#1E1E20",
+            "prose_bg": "#242424",
         }
     return {
         "bg": "transparent",
@@ -138,4 +139,5 @@ def get_theme_colors(is_dark: bool) -> dict[str, str]:
         "hr": "#E5E7EB",
         "table_header_bg": "#E8E8EA",
         "table_alt_bg": "#F5F5F7",
+        "prose_bg": "#EBEBEB",
     }

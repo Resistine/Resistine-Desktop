@@ -13,12 +13,59 @@ Licensed under the GNU General Public License v2 or later
 
 from __future__ import annotations
 
+import sys
 import tkinter as tk
 
 import customtkinter
 
 from plugins.chat.fonts import RESISTINE_BLUE, get_fonts, get_theme_colors
 from utils.logger import logger
+
+_COPY_MOD = 0x8 if sys.platform == "darwin" else 0x4  # Cmd on mac, Ctrl elsewhere
+
+
+# ---------------------------------------------------------------------------
+# SelectableLabel
+# ---------------------------------------------------------------------------
+
+class SelectableLabel(tk.Text):
+    """Read-only text widget that looks like a label but allows selection + copy."""
+
+    def __init__(
+        self, master, text: str, font, fg: str, bg: str,
+        max_width: int = 600, **kwargs,
+    ):
+        kwargs.pop("padx", None)
+        kwargs.pop("pady", None)
+        super().__init__(
+            master, wrap="word", font=font, fg=fg, bg=bg,
+            borderwidth=0, highlightthickness=0, relief="flat",
+            insertwidth=0, cursor="", selectbackground="#3A6DB5",
+            selectforeground="#FFFFFF", height=1, **kwargs,
+        )
+        self.insert("1.0", text)
+        self.bind("<Key>", self._readonly)
+        self._max_width = max_width
+        self.bind("<Configure>", self._autoheight, add="+")
+
+    @staticmethod
+    def _readonly(event) -> str | None:
+        if event.state & _COPY_MOD and event.keysym.lower() in ("c", "a"):
+            return None
+        return "break"
+
+    def _autoheight(self, _event=None) -> None:
+        self.update_idletasks()
+        try:
+            result = self.count("1.0", "end-1c", "displaylines")
+            lines = (result[0] if isinstance(result, (list, tuple))
+                     else result) or 1
+            self.configure(height=max(1, int(lines)))
+        except Exception:
+            pass
+
+    def set_width(self, max_width: int) -> None:
+        self._max_width = max_width
 
 
 # ---------------------------------------------------------------------------
