@@ -1008,7 +1008,7 @@ class Plugin(BasePlugin):
                     if hasattr(self, 'main_container'):
                         try: self.main_container.destroy()
                         except: pass
-                    plugin.create_main_screen().grid(row=0, column=1, sticky="nsew")
+                    plugin.create_main_screen().grid(row=1, column=1, sticky="nsew")
                 return    
 
     def get_configuration_values(self, tunnel_name):

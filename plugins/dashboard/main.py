@@ -207,7 +207,7 @@ class Plugin(BasePlugin):
                     f"frame_{p.get_name()}", button=p.get_button()
                 )
             except Exception:
-                p.create_main_screen().grid(row=0, column=1, sticky="nsew")
+                p.create_main_screen().grid(row=1, column=1, sticky="nsew")
 
         for index, plugin in enumerate(plugins):
             r = index // len(cols)

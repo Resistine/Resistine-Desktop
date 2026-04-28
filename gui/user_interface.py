@@ -545,53 +545,6 @@ class AppUI(customtkinter.CTk):
                 logger.error(f"Error loading plugin button {plugin.get_name()}: {e}")
             row += 1
 
-        # Bottom-of-sidebar Back/Forward navigation history buttons.
-        # Sits in the row after the weight=1 spacer so it hugs the bottom.
-        history_row = spacer_row + 1
-        nav_history_frame = customtkinter.CTkFrame(
-            self.navigation_frame, fg_color="transparent"
-        )
-        nav_history_frame.grid(
-            row=history_row, column=0, sticky="ew", padx=12, pady=(8, 16)
-        )
-        nav_history_frame.grid_columnconfigure(0, weight=1)
-        nav_history_frame.grid_columnconfigure(1, weight=1)
-
-        nav_text_color = self._get_theme_color("CTkLabel", "text_color")
-        nav_hover_bg = ThemeManager.theme.get("Theme", {}).get(
-            "sidebar_hover_bg", ["#F0F0F5", "#1F1F22"]
-        )
-
-        self._nav_back_btn = customtkinter.CTkButton(
-            nav_history_frame,
-            text="◀",
-            width=40,
-            height=32,
-            corner_radius=8,
-            fg_color="transparent",
-            text_color=nav_text_color,
-            hover_color=nav_hover_bg,
-            font=customtkinter.CTkFont(size=14, weight="bold"),
-            command=self.navigate_back,
-        )
-        self._nav_back_btn.grid(row=0, column=0, sticky="ew", padx=(0, 4))
-
-        self._nav_fwd_btn = customtkinter.CTkButton(
-            nav_history_frame,
-            text="▶",
-            width=40,
-            height=32,
-            corner_radius=8,
-            fg_color="transparent",
-            text_color=nav_text_color,
-            hover_color=nav_hover_bg,
-            font=customtkinter.CTkFont(size=14, weight="bold"),
-            command=self.navigate_forward,
-        )
-        self._nav_fwd_btn.grid(row=0, column=1, sticky="ew", padx=(4, 0))
-
-        self._update_nav_history_buttons()
-
     def create_dashboard(self):
         """
         Create the main dashboard of the application.
@@ -602,7 +555,10 @@ class AppUI(customtkinter.CTk):
             widget.destroy()
 
         # Re-configure the main window
-        self.grid_rowconfigure(0, weight=1)
+        # Row 0: top header (fixed height, holds back/forward buttons).
+        # Row 1: page content (takes remaining space).
+        self.grid_rowconfigure(0, weight=0)
+        self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(0, weight=0)  # Navigation column
         self.grid_columnconfigure(1, weight=1)  # Content column
 
@@ -615,7 +571,7 @@ class AppUI(customtkinter.CTk):
         self.navigation_frame = customtkinter.CTkFrame(
             self, corner_radius=0, fg_color=sidebar_bg
         )
-        self.navigation_frame.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
+        self.navigation_frame.grid(row=0, column=0, rowspan=2, sticky="nsew", padx=0, pady=0)
         self.grid_columnconfigure(0, minsize=250)
         self.navigation_frame.grid_columnconfigure(0, weight=1)
 
@@ -705,7 +661,73 @@ class AppUI(customtkinter.CTk):
         # Use the surgical refresh to handle the buttons
         self.refresh_navigation()
 
+        self._build_header_frame()
+
         self.select_frame_by_name("frame_Dashboard")
+
+    def _build_header_frame(self):
+        """Top header row holding the back/forward navigation buttons (left-aligned)."""
+        if hasattr(self, "_header_frame") and self._header_frame and self._header_frame.winfo_exists():
+            self._header_frame.destroy()
+
+        header_bg = ThemeManager.theme.get("Theme", {}).get(
+            "sidebar_bg", self._get_theme_color("CTkFrame", "fg_color")
+        )
+        divider_color = ThemeManager.theme.get("Theme", {}).get(
+            "divider_color", ["#E5E7EB", "#2A2A2A"]
+        )
+
+        self._header_frame = customtkinter.CTkFrame(
+            self, corner_radius=0, fg_color=header_bg, height=44
+        )
+        self._header_frame.grid(row=0, column=1, sticky="nsew")
+        self._header_frame.grid_propagate(False)
+        self._header_frame.grid_rowconfigure(0, weight=1)
+        # Buttons cluster on the left; spacer column eats remaining width.
+        self._header_frame.grid_columnconfigure(0, weight=0)
+        self._header_frame.grid_columnconfigure(1, weight=0)
+        self._header_frame.grid_columnconfigure(2, weight=1)
+
+        nav_text_color = self._get_theme_color("CTkLabel", "text_color")
+        nav_hover_bg = ThemeManager.theme.get("Theme", {}).get(
+            "sidebar_hover_bg", ["#F0F0F5", "#1F1F22"]
+        )
+
+        self._nav_back_btn = customtkinter.CTkButton(
+            self._header_frame,
+            text="◀",
+            width=36,
+            height=30,
+            corner_radius=8,
+            fg_color="transparent",
+            text_color=nav_text_color,
+            hover_color=nav_hover_bg,
+            font=customtkinter.CTkFont(size=14, weight="bold"),
+            command=self.navigate_back,
+        )
+        self._nav_back_btn.grid(row=0, column=0, padx=(12, 4), pady=6, sticky="w")
+
+        self._nav_fwd_btn = customtkinter.CTkButton(
+            self._header_frame,
+            text="▶",
+            width=36,
+            height=30,
+            corner_radius=8,
+            fg_color="transparent",
+            text_color=nav_text_color,
+            hover_color=nav_hover_bg,
+            font=customtkinter.CTkFont(size=14, weight="bold"),
+            command=self.navigate_forward,
+        )
+        self._nav_fwd_btn.grid(row=0, column=1, padx=(0, 4), pady=6, sticky="w")
+
+        # 1px divider line below the header.
+        self._header_divider = customtkinter.CTkFrame(
+            self, height=1, fg_color=divider_color, corner_radius=0
+        )
+        self._header_divider.grid(row=0, column=1, sticky="sew")
+
+        self._update_nav_history_buttons()
 
     _NAV_HISTORY_MAX = 50
 
@@ -772,7 +794,7 @@ class AppUI(customtkinter.CTk):
 
         try:
             main_screen = frame.create_main_screen()
-            main_screen.grid(row=0, column=1, sticky="nsew")
+            main_screen.grid(row=1, column=1, sticky="nsew")
             main_screen.grid_columnconfigure(0, weight=1)
             main_screen.grid_rowconfigure(0, weight=1)
             self._current_main_screen = main_screen
@@ -793,7 +815,7 @@ class AppUI(customtkinter.CTk):
 
             # Show error message in place of the plugin content
             error_frame = customtkinter.CTkFrame(self)
-            error_frame.grid(row=0, column=1, sticky="nsew")
+            error_frame.grid(row=1, column=1, sticky="nsew")
             error_frame.grid_columnconfigure(0, weight=1)
             error_frame.grid_rowconfigure(0, weight=1)
 

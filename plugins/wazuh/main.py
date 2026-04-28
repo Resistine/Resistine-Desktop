@@ -502,7 +502,7 @@ class Plugin(BasePlugin):
                 self.main_container.destroy()
             except Exception:
                 pass
-        self.create_main_screen().grid(row=0, column=1, sticky="nsew")
+        self.create_main_screen().grid(row=1, column=1, sticky="nsew")
 
     def destroy(self):
         """Clean up polling. Agent removal is handled by platform-specific uninstallers."""
