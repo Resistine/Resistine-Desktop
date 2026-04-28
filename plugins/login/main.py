@@ -448,7 +448,7 @@ class Plugin(BasePlugin):
 
         if config_data:
             logger.info("Saving VPN config from API response...")
-            config_path = save_vpn_configuration(config_data, config_name="resistine_default")
+            config_path = save_vpn_configuration(config_data, config_name="resistine")
             if config_path:
                 from plugins.vpn.config_manager import VPNConfigManager, RESISTINE_CONFIG_NAME
                 mgr = VPNConfigManager(os.path.dirname(config_path))

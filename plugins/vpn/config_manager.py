@@ -12,7 +12,7 @@ import re
 from utils import settings as app_settings
 from utils.logger import logger
 
-RESISTINE_CONFIG_NAME = "resistine_default"
+RESISTINE_CONFIG_NAME = "resistine"
 SETTINGS_NAMESPACE = "vpn"
 
 
@@ -26,7 +26,7 @@ class VPNConfigManager:
         """List all available .conf files.
 
         Returns a list of dicts sorted with Resistine default first:
-        [{"name": "resistine_default", "display_name": "Resistine (Default)",
+        [{"name": "resistine", "display_name": "Resistine (Default)",
           "source": "api", "path": "/path/to/file.conf"}, ...]
         """
         names = self._list_conf_files()
@@ -49,14 +49,14 @@ class VPNConfigManager:
     def get_active_config_name(self):
         """Get the name of the currently active config.
 
-        Falls back to resistine_default, then first found config.
+        Falls back to resistine, then first found config.
         Returns None if no configs exist.
         """
         active = app_settings.get(SETTINGS_NAMESPACE, "active_config")
         if active and os.path.exists(os.path.join(self.wireguard_folder, f"{active}.conf")):
             return active
 
-        # Fallback: try resistine_default
+        # Fallback: try resistine
         if os.path.exists(os.path.join(self.wireguard_folder, f"{RESISTINE_CONFIG_NAME}.conf")):
             self.set_active_config(RESISTINE_CONFIG_NAME)
             return RESISTINE_CONFIG_NAME
@@ -137,7 +137,7 @@ class VPNConfigManager:
             registry.pop(config_name, None)
             app_settings.set(SETTINGS_NAMESPACE, "config_registry", registry)
 
-            # If deleted config was active, switch to resistine_default or first available
+            # If deleted config was active, switch to resistine or first available
             active = app_settings.get(SETTINGS_NAMESPACE, "active_config")
             if active == config_name:
                 self.get_active_config_name()  # triggers fallback logic to set a new active config
@@ -190,7 +190,7 @@ class VPNConfigManager:
         """Sanitize a filename for use as a config name.
 
         Removes .conf extension, replaces non-alphanumeric chars with underscore,
-        prevents collision with resistine_default.
+        prevents collision with resistine.
         """
         name = os.path.splitext(filename)[0]
         name = re.sub(r"[^a-zA-Z0-9_-]", "_", name)

@@ -48,7 +48,7 @@ class TestListConfigs:
         assert len(configs) == 1
         assert configs[0]["name"] == RESISTINE_CONFIG_NAME
 
-    def test_resistine_default_sorted_first(self, mgr, write_conf, isolated_settings):
+    def test_resistine_sorted_first(self, mgr, write_conf, isolated_settings):
         write_conf("zzz_user")
         write_conf(RESISTINE_CONFIG_NAME)
         write_conf("aaa_user")
@@ -92,7 +92,7 @@ class TestGetActiveConfigName:
         isolated_settings.set("vpn", "active_config", "my_vpn")
         assert mgr.get_active_config_name() == "my_vpn"
 
-    def test_falls_back_to_resistine_default(self, mgr, write_conf, isolated_settings):
+    def test_falls_back_to_resistine(self, mgr, write_conf, isolated_settings):
         write_conf(RESISTINE_CONFIG_NAME)
         # No active_config set in settings
         assert mgr.get_active_config_name() == RESISTINE_CONFIG_NAME
@@ -105,7 +105,7 @@ class TestGetActiveConfigName:
         """If the saved active config file no longer exists, fall back."""
         write_conf(RESISTINE_CONFIG_NAME)
         isolated_settings.set("vpn", "active_config", "deleted_config")
-        # deleted_config.conf doesn't exist → should fall back to resistine_default
+        # deleted_config.conf doesn't exist → should fall back to resistine
         assert mgr.get_active_config_name() == RESISTINE_CONFIG_NAME
 
 
@@ -124,7 +124,7 @@ class TestSetActiveConfig:
         result = mgr.set_active_config("ghost_config")
         assert result is False
 
-    def test_set_resistine_default(self, mgr, write_conf):
+    def test_set_resistine(self, mgr, write_conf):
         write_conf(RESISTINE_CONFIG_NAME)
         result = mgr.set_active_config(RESISTINE_CONFIG_NAME)
         assert result is True
@@ -182,7 +182,7 @@ class TestImportConfig:
         ok, msg = mgr.import_config("tunnel.conf", "   \n\t  ")
         assert ok is False
 
-    def test_cannot_import_as_resistine_default(self, mgr, sample_wireguard_conf):
+    def test_cannot_import_as_resistine(self, mgr, sample_wireguard_conf):
         """Importing with the reserved name must be suffixed."""
         ok, name = mgr.import_config(f"{RESISTINE_CONFIG_NAME}.conf", sample_wireguard_conf)
         assert ok is True
@@ -217,7 +217,7 @@ class TestDeleteConfig:
         ok, msg = mgr.delete_config("ghost")
         assert ok is True
 
-    def test_refuses_to_delete_resistine_default(self, mgr, write_conf):
+    def test_refuses_to_delete_resistine(self, mgr, write_conf):
         write_conf(RESISTINE_CONFIG_NAME)
         ok, msg = mgr.delete_config(RESISTINE_CONFIG_NAME)
         assert ok is False
@@ -260,7 +260,7 @@ class TestSanitizeFilename:
         result = mgr.sanitize_filename("@@@.conf")
         assert result == "imported"
 
-    def test_resistine_default_name_gets_user_suffix(self, mgr):
+    def test_resistine_name_gets_user_suffix(self, mgr):
         result = mgr.sanitize_filename(f"{RESISTINE_CONFIG_NAME}.conf")
         assert result == f"{RESISTINE_CONFIG_NAME}_user"
 

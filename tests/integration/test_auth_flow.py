@@ -145,7 +145,7 @@ class TestSaveVpnConfig:
             "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
             return_value=str(tmp_path),
         ):
-            path = save_vpn_configuration(json.dumps(server_vpn_config), "resistine_default")
+            path = save_vpn_configuration(json.dumps(server_vpn_config), "resistine")
 
         assert path is not None
         assert os.path.exists(path)

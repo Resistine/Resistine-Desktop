@@ -67,8 +67,8 @@ class TestConfigLifecycle:
         assert mgr.get_active_config_name() == "config_b"
 
     def test_delete_switches_active_config(self, mgr, sample_wireguard_conf, write_conf):
-        write_conf("resistine_default")
-        mgr.register_config("resistine_default", source="api")
+        write_conf("resistine")
+        mgr.register_config("resistine", source="api")
         mgr.import_config("secondary.conf", sample_wireguard_conf)
         mgr.set_active_config("secondary")
         mgr.delete_config("secondary")
@@ -76,11 +76,11 @@ class TestConfigLifecycle:
         active = mgr.get_active_config_name()
         assert active != "secondary"
 
-    def test_resistine_default_always_in_list(self, mgr, write_conf):
-        write_conf("resistine_default")
-        mgr.register_config("resistine_default", source="api")
+    def test_resistine_always_in_list(self, mgr, write_conf):
+        write_conf("resistine")
+        mgr.register_config("resistine", source="api")
         configs = mgr.list_configs()
-        assert configs[0]["name"] == "resistine_default"
+        assert configs[0]["name"] == "resistine"
 
     def test_imported_config_registered(self, mgr, sample_wireguard_conf, isolated_settings):
         mgr.import_config("work_vpn.conf", sample_wireguard_conf)
@@ -101,26 +101,26 @@ class TestVpnConnectDisconnect:
             stdout="Interface for wg0 is utun8\n",
             stderr="",
         )
-        config_path = str(tmp_path / "resistine_default.conf")
-        (tmp_path / "resistine_default.conf").write_text("[Interface]\n[Peer]\n")
+        config_path = str(tmp_path / "resistine.conf")
+        (tmp_path / "resistine.conf").write_text("[Interface]\n[Peer]\n")
 
         with patch.object(vpn_funcs.vpn_helper, "activate_extension", return_value=True):
             result = vpn_funcs.start_vpn(config_path)
         assert result is True
         # Interface cache should be populated
-        assert "resistine_default" in vpn_funcs._interface_cache
+        assert "resistine" in vpn_funcs._interface_cache
 
     @patch("plugins.vpn.wireguard.vpn_functions_darwin.subprocess.run")
     def test_stop_vpn_clears_interface_cache(self, mock_run, vpn_funcs, tmp_path):
         # Pre-populate cache
-        vpn_funcs._interface_cache["resistine_default"] = "utun8"
-        config_path = str(tmp_path / "resistine_default.conf")
-        (tmp_path / "resistine_default.conf").write_text("[Interface]\n[Peer]\n")
+        vpn_funcs._interface_cache["resistine"] = "utun8"
+        config_path = str(tmp_path / "resistine.conf")
+        (tmp_path / "resistine.conf").write_text("[Interface]\n[Peer]\n")
 
         mock_run.return_value = MagicMock(returncode=0, stdout="Stopped\n", stderr="")
         result = vpn_funcs.stop_vpn(config_path)
         assert result is True
-        assert "resistine_default" not in vpn_funcs._interface_cache
+        assert "resistine" not in vpn_funcs._interface_cache
 
     @patch("plugins.vpn.wireguard.vpn_functions_darwin.subprocess.run")
     def test_check_status_after_start_returns_running(self, mock_run, vpn_funcs):
