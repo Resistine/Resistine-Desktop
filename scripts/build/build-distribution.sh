@@ -57,7 +57,7 @@ if [ -z "$TEAM_ID" ]; then
 fi
 
 # Notarization toggle — set to true to skip for faster builds
-SKIP_NOTARIZE=${SKIP_NOTARIZE:-true}
+SKIP_NOTARIZE=${SKIP_NOTARIZE:-false}
 
 if [ "$SKIP_NOTARIZE" = true ]; then
     echo "  Skipping notarization (SKIP_NOTARIZE=true)"
