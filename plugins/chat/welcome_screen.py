@@ -64,7 +64,7 @@ class WelcomeScreen(customtkinter.CTkFrame):
             self,
             text="Resistine AI",
             font=customtkinter.CTkFont(family="Inter", size=26, weight="bold"),
-            text_color=RESISTINE_BLUE,
+            text_color=fg_color,
         )
         greeting_label.pack(pady=(0, 4))
 

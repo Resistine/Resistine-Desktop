@@ -44,7 +44,7 @@ class ChatUIMixin:
         self.chat_scroll = customtkinter.CTkScrollableFrame(
             self._chat_area, fg_color="transparent", corner_radius=0)
         self.chat_scroll.grid(
-            row=0, column=0, padx=0, pady=(0, 76), sticky="nsew")
+            row=0, column=0, padx=0, pady=(50, 76), sticky="nsew")
         # Hide scrollbar initially; show only when content overflows
         self._hide_scrollbar()
 
@@ -52,9 +52,11 @@ class ChatUIMixin:
         self._welcome_frame = None
         self._bottom_spacer: customtkinter.CTkFrame | None = None
         self._current_asst_bubble: AssistantBubble | None = None
-        self._restore_history(is_dark)
+        self._header_visible = False
+        self._header_label = None
         self._build_input_bar(is_dark)
         self._build_overlay_buttons(is_dark)
+        self._restore_history(is_dark)
         self.chat_scroll.bind("<Configure>", self._on_resize, add="+")
         try:
             canvas = self.chat_scroll._parent_canvas
@@ -78,6 +80,7 @@ class ChatUIMixin:
             elif role == "assistant":
                 self._add_assistant_bubble(is_dark, md=content)
         if has_history:
+            self._show_header()
             return
         if self.client is not None:
             self._welcome_frame = WelcomeScreen(
@@ -122,13 +125,36 @@ class ChatUIMixin:
         btn_bg = "#2A2A2C" if is_dark else "#E8E8EA"
         hover_bg = "#3A3A3C" if is_dark else "#D8D8DC"
 
+        # Header bar with menu button, title, and new chat button
+        header = customtkinter.CTkFrame(
+            self._chat_area, fg_color="transparent", height=42)
+        header.place(relx=0, rely=0, relwidth=1.0, y=4)
+        header.grid_columnconfigure(1, weight=1)
+
+        btn_size = 32
         self._toggle_btn = customtkinter.CTkButton(
-            self._chat_area, text="\u2630", width=34, height=34,
-            corner_radius=9, fg_color=btn_bg, hover_color=hover_bg,
+            header, text="\u2630", width=btn_size, height=btn_size,
+            corner_radius=8, fg_color=btn_bg, hover_color=hover_bg,
             text_color=fg,
             font=customtkinter.CTkFont(size=16),
             command=self._toggle_sidebar)
-        self._toggle_btn.place(x=12, y=8)
+        self._toggle_btn.grid(row=0, column=0, padx=(12, 0), pady=4)
+
+        self._header_label = customtkinter.CTkLabel(
+            header, text="Resistine AI",
+            font=customtkinter.CTkFont(
+                family="Inter", size=16, weight="bold"),
+            text_color=fg, fg_color="transparent")
+        # Hidden initially; shown after first message
+        self._header_visible = False
+
+        self._new_chat_btn = customtkinter.CTkButton(
+            header, text="+", width=btn_size, height=btn_size,
+            corner_radius=8, fg_color=btn_bg, hover_color=hover_bg,
+            text_color=fg,
+            font=customtkinter.CTkFont(size=20, weight="bold"),
+            command=self._new_chat)
+        self._new_chat_btn.grid(row=0, column=2, padx=(0, 12), pady=4)
 
         self._scroll_btn = customtkinter.CTkButton(
             self._chat_area, text="\u25bc", width=30, height=30,
@@ -170,6 +196,11 @@ class ChatUIMixin:
             self._sidebar.refresh(
                 self._history.list_sessions(),
                 self._history.get_active_id())
+
+    def _show_header(self) -> None:
+        if not self._header_visible and self._header_label is not None:
+            self._header_label.grid(row=0, column=1, pady=4)
+            self._header_visible = True
 
     # -- Bubble helpers ----------------------------------------------------
 

@@ -35,7 +35,7 @@ class Plugin(ChatUIMixin, BasePlugin):
         self._stream_ctrl: StreamController | None = None
         self._welcome_frame: object | None = None
         self._history = ChatHistoryManager()
-        self._sidebar_visible = True
+        self._sidebar_visible = False
         self._accumulated_text = ""
         self.reinitialize_client()
         self.status = self.get_status()
@@ -168,6 +168,7 @@ class Plugin(ChatUIMixin, BasePlugin):
         if self._welcome_frame is not None:
             self._welcome_frame.destroy()
             self._welcome_frame = None
+        self._show_header()
         self.chat_entry.delete(0, "end")
         is_dark = _is_dark_mode()
         was_near = self._is_near_bottom()
