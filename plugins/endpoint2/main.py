@@ -190,7 +190,18 @@ class Plugin(BasePlugin):
         self._tab_content_holder.grid_rowconfigure(0, weight=1)
 
         for name in _TAB_NAMES:
-            pane = customtkinter.CTkFrame(self._tab_content_holder, fg_color="transparent")
+            if name == "Overview":
+                # Overview can overflow vertically (3x3 grid + top card + alerts);
+                # use a scrollable frame so the content stays accessible at small
+                # window heights. AppUI._install_scroll_behaviors picks this up
+                # automatically and adds smooth-scroll + auto-hide scrollbar.
+                pane = customtkinter.CTkScrollableFrame(
+                    self._tab_content_holder, fg_color="transparent"
+                )
+            else:
+                pane = customtkinter.CTkFrame(
+                    self._tab_content_holder, fg_color="transparent"
+                )
             pane.grid_columnconfigure(0, weight=1)
             pane.grid_rowconfigure(0, weight=1)
             self._tab_panes[name] = pane
@@ -262,11 +273,11 @@ class Plugin(BasePlugin):
     # ----- Overview pane -----------------------------------------------------
 
     def _build_overview_pane(self, parent):
+        # Inside a scrollable frame: keep all rows weight=0 so each section
+        # takes its natural height and overflow drives the scrollbar.
         parent.grid_columnconfigure(0, weight=1)
-        parent.grid_rowconfigure(0, weight=0)
-        parent.grid_rowconfigure(1, weight=0)
-        parent.grid_rowconfigure(2, weight=0)
-        parent.grid_rowconfigure(3, weight=1)
+        for r in range(4):
+            parent.grid_rowconfigure(r, weight=0)
 
         self._build_top_device_widget(parent, row=0)
         self._build_alert_bar(parent, row=1)
