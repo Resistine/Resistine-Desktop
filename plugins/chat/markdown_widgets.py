@@ -216,19 +216,7 @@ class CodeBlockWidget(customtkinter.CTkFrame):
 # ---------------------------------------------------------------------------
 
 class TableWidget(customtkinter.CTkFrame):
-    """GitHub-style markdown table rendered as a grid of labels.
-
-    Constructor
-    -----------
-    master : widget
-        Parent container.
-    headers : list[str]
-        Column header strings.
-    rows : list[list[str]]
-        Data rows; each inner list has one string per column.
-    is_dark : bool
-        True for dark-mode palette, False for light.
-    """
+    """GitHub-style markdown table with horizontal scroll for wide tables."""
 
     def __init__(
         self,
@@ -240,19 +228,31 @@ class TableWidget(customtkinter.CTkFrame):
     ):
         colors = get_theme_colors(is_dark)
         border_clr = colors.get("table_header_bg", "#D4D4D8")
+        canvas_bg = colors.get("table_alt_bg", border_clr)
 
-        super().__init__(master, fg_color=border_clr, corner_radius=0, **kwargs)
+        super().__init__(master, fg_color=border_clr, corner_radius=0,
+                         **kwargs)
 
-        self._num_cols = max(len(headers), *(len(r) for r in rows)) if rows else len(headers)
+        self._num_cols = (max(len(headers), *(len(r) for r in rows))
+                          if rows else len(headers))
         self._labels: list[tk.Label] = []
 
-        # Inner frame that holds the actual grid (sits inside the border)
-        self._grid = tk.Frame(self, bg=border_clr, highlightthickness=1,
-                              highlightbackground=border_clr, bd=0)
-        self._grid.pack(fill="both", expand=True)
-
-        for j in range(self._num_cols):
-            self._grid.grid_columnconfigure(j, weight=1)
+        # Scrollable canvas wrapper
+        self._canvas = tk.Canvas(
+            self, bg=canvas_bg, highlightthickness=0, bd=0)
+        sb_color = "#3A3A3C" if is_dark else "#C8C8CC"
+        sb_hover = "#555558" if is_dark else "#A8A8AC"
+        self._scrollbar = customtkinter.CTkScrollbar(
+            self, orientation="horizontal",
+            command=self._canvas.xview,
+            height=10, corner_radius=5,
+            fg_color=border_clr,
+            button_color=sb_color,
+            button_hover_color=sb_hover)
+        self._canvas.configure(xscrollcommand=self._scrollbar.set)
+        self._canvas.pack(fill="both", expand=True)
+        # Scrollbar hidden initially; shown only when needed
+        self._scrollbar_visible = False
 
         all_rows: list[tuple[list[str], bool]] = [(headers, True)]
         for r in rows:
@@ -262,8 +262,32 @@ class TableWidget(customtkinter.CTkFrame):
                                             weight="bold")
         body_font = customtkinter.CTkFont(family="Inter", size=13)
 
+        # Measure content to set minimum column widths
+        import tkinter.font as tkfont
+        measure = tkfont.Font(family="Inter", size=13)
+        self._col_min_px = [0] * self._num_cols
+        for row_cells, _ in all_rows:
+            for j in range(self._num_cols):
+                txt = row_cells[j] if j < len(row_cells) else ""
+                self._col_min_px[j] = max(
+                    self._col_min_px[j], measure.measure(txt) + 24)
+        self._col_min_px = [max(px, 60) for px in self._col_min_px]
+
+        # Grid frame inside the canvas — set explicit min width
+        self._natural_width = sum(self._col_min_px) + self._num_cols
+        self._grid = tk.Frame(self._canvas, bg=border_clr,
+                              highlightthickness=0, bd=0,
+                              width=self._natural_width)
+        self._grid.grid_propagate(True)
+        self._canvas_window = self._canvas.create_window(
+            (0, 0), window=self._grid, anchor="nw",
+            width=self._natural_width)
+
+        for j in range(self._num_cols):
+            self._grid.grid_columnconfigure(
+                j, weight=1, minsize=self._col_min_px[j])
+
         for idx, (row_cells, is_header) in enumerate(all_rows):
-            # Pad short rows
             while len(row_cells) < self._num_cols:
                 row_cells.append("")
 
@@ -281,15 +305,11 @@ class TableWidget(customtkinter.CTkFrame):
 
             for j, cell_text in enumerate(row_cells):
                 lbl = tk.Label(
-                    self._grid,
-                    text=cell_text,
-                    bg=bg,
-                    fg=(colors["heading"] if is_header else colors["fg"]),
+                    self._grid, text=cell_text, bg=bg,
+                    fg=(colors["heading"] if is_header
+                        else colors["fg"]),
                     font=header_font if is_header else body_font,
-                    padx=10,
-                    pady=6,
-                    anchor="w",
-                    justify="left",
+                    padx=10, pady=6, anchor="w", justify="left",
                     wraplength=0,
                 )
                 lbl.grid(
@@ -299,24 +319,86 @@ class TableWidget(customtkinter.CTkFrame):
                 )
                 self._labels.append(lbl)
 
-        # Reflow column widths when the parent resizes
+        self._in_resize = False
+        self._last_width = 0
+        self._grid.bind("<Configure>", self._on_grid_configure)
         self.bind("<Configure>", self._on_configure)
+        self.after(200, self._deferred_resize)
 
-    # -- Reflow -------------------------------------------------------------
+    def _on_grid_configure(self, _event=None) -> None:
+        """Update canvas scroll region and height when grid changes."""
+        try:
+            bbox = self._canvas.bbox("all")
+            if bbox:
+                self._canvas.configure(
+                    scrollregion=bbox,
+                    height=bbox[3] - bbox[1],
+                )
+        except Exception:
+            pass
+
+    def _deferred_resize(self) -> None:
+        """Re-layout after stretch has taken effect."""
+        try:
+            w = self.winfo_width()
+            if w > 1:
+                self._resize_to_width(w)
+        except Exception:
+            pass
 
     def _on_configure(self, event) -> None:
-        """Recalculate wraplength for labels when the widget width changes."""
         width = event.width
-        if width <= 1 or self._num_cols == 0:
+        if width > 1 and self._num_cols > 0 and width != self._last_width:
+            self._resize_to_width(width)
+
+    def _resize_to_width(self, width: int) -> None:
+        """Resize table internals to the given width."""
+        if self._in_resize:
             return
+        self._in_resize = True
+        self._last_width = width
+        try:
+            natural_width = self._natural_width
+            if natural_width <= width:
+                self._canvas.configure(width=width)
+                self._canvas.itemconfigure(
+                    self._canvas_window, width=width)
+                col_width = max(int(width / self._num_cols) - 12, 50)
+                for lbl in self._labels:
+                    try:
+                        lbl.configure(wraplength=col_width)
+                    except tk.TclError:
+                        pass
+            else:
+                self._canvas.itemconfigure(
+                    self._canvas_window, width=natural_width)
+                for lbl in self._labels:
+                    try:
+                        lbl.configure(wraplength=0)
+                    except tk.TclError:
+                        pass
+            self._on_grid_configure()
+            self._update_scrollbar()
+        finally:
+            self._in_resize = False
 
-        col_width = max(int(width / self._num_cols) - 12, 50)
-
-        for lbl in self._labels:
-            try:
-                lbl.configure(wraplength=col_width)
-            except tk.TclError:
-                pass
+    def _update_scrollbar(self) -> None:
+        """Show scrollbar only when content overflows horizontally."""
+        try:
+            self._canvas.update_idletasks()
+            bbox = self._canvas.bbox("all")
+            if not bbox:
+                return
+            content_w = bbox[2] - bbox[0]
+            visible_w = self._canvas.winfo_width()
+            if content_w > visible_w and not self._scrollbar_visible:
+                self._scrollbar.pack(fill="x")
+                self._scrollbar_visible = True
+            elif content_w <= visible_w and self._scrollbar_visible:
+                self._scrollbar.pack_forget()
+                self._scrollbar_visible = False
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------

@@ -59,6 +59,8 @@ class MarkdownRenderer:
         self._colors = get_theme_colors(is_dark)
         self._first_line = True
         self._resize_timer = None
+        self._tables: list[TableWidget] = []
+        self._in_resize = False
 
         self._build_textbox()
         self._configure_tags()
@@ -265,6 +267,7 @@ class MarkdownRenderer:
             )
             self._tw.window_create("end", window=w, padx=0, pady=4,
                                    stretch=1)
+            self._tables.append(w)
             self._first_line = False
         return i
 
@@ -315,6 +318,9 @@ class MarkdownRenderer:
 
     def _resize_to_fit(self) -> None:
         """Set the parent frame height to fit content."""
+        if self._in_resize:
+            return
+        self._in_resize = True
         try:
             tw = self._tw
             tw.update_idletasks()
@@ -345,8 +351,21 @@ class MarkdownRenderer:
 
             self._parent.configure(height=h)
             self.text_widget.configure(height=h)
+            # Resize tables to textbox width
+            try:
+                tw_width = tw.winfo_width()
+                if tw_width > 1:
+                    padx = int(str(tw.cget("padx") or 0))
+                    table_w = tw_width - padx * 2
+                    for tbl in self._tables:
+                        tbl.configure(width=table_w)
+                        tbl._resize_to_width(table_w)
+            except Exception:
+                pass
         except Exception:
             pass
+        finally:
+            self._in_resize = False
 
     def _update_width(self, max_width: int) -> None:
         """Refit after a resize."""
