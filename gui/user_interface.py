@@ -685,41 +685,15 @@ class AppUI(customtkinter.CTk):
         self._header_frame.grid_rowconfigure(0, weight=1)
         # Buttons cluster on the left; spacer column eats remaining width.
         self._header_frame.grid_columnconfigure(0, weight=0)
-        self._header_frame.grid_columnconfigure(1, weight=0)
-        self._header_frame.grid_columnconfigure(2, weight=1)
+        self._header_frame.grid_columnconfigure(1, weight=1)
 
-        nav_text_color = self._get_theme_color("CTkLabel", "text_color")
-        nav_hover_bg = ThemeManager.theme.get("Theme", {}).get(
-            "sidebar_hover_bg", ["#F0F0F5", "#1F1F22"]
+        # Breadcrumb container — populated dynamically by _render_breadcrumbs().
+        self._breadcrumb_container = customtkinter.CTkFrame(
+            self._header_frame, fg_color="transparent"
         )
-
-        self._nav_back_btn = customtkinter.CTkButton(
-            self._header_frame,
-            text="◀",
-            width=36,
-            height=30,
-            corner_radius=8,
-            fg_color="transparent",
-            text_color=nav_text_color,
-            hover_color=nav_hover_bg,
-            font=customtkinter.CTkFont(size=14, weight="bold"),
-            command=self.navigate_back,
+        self._breadcrumb_container.grid(
+            row=0, column=0, padx=(12, 4), pady=6, sticky="w"
         )
-        self._nav_back_btn.grid(row=0, column=0, padx=(12, 4), pady=6, sticky="w")
-
-        self._nav_fwd_btn = customtkinter.CTkButton(
-            self._header_frame,
-            text="▶",
-            width=36,
-            height=30,
-            corner_radius=8,
-            fg_color="transparent",
-            text_color=nav_text_color,
-            hover_color=nav_hover_bg,
-            font=customtkinter.CTkFont(size=14, weight="bold"),
-            command=self.navigate_forward,
-        )
-        self._nav_fwd_btn.grid(row=0, column=1, padx=(0, 4), pady=6, sticky="w")
 
         # 1px divider line below the header.
         self._header_divider = customtkinter.CTkFrame(
@@ -727,7 +701,7 @@ class AppUI(customtkinter.CTk):
         )
         self._header_divider.grid(row=0, column=1, sticky="sew")
 
-        self._update_nav_history_buttons()
+        self._render_breadcrumbs()
 
     _NAV_HISTORY_MAX = 50
 
@@ -758,7 +732,7 @@ class AppUI(customtkinter.CTk):
                     del history[:overflow]
                     cursor -= overflow
                 self._nav_cursor = cursor
-        self._update_nav_history_buttons()
+        self._render_breadcrumbs()
 
         self.current_frame_name = name
 
@@ -841,43 +815,6 @@ class AppUI(customtkinter.CTk):
         except Exception as e:
             logger.warning(f"apply_state failed for {name}: {e}")
 
-    def navigate_back(self):
-        """Move one step back in the navigation history."""
-        self._navigate_step(-1)
-
-    def navigate_forward(self):
-        """Move one step forward in the navigation history."""
-        self._navigate_step(+1)
-
-    def _navigate_step(self, direction):
-        """Walk the cursor in the given direction (-1 or +1), skipping stale entries."""
-        history = getattr(self, "_nav_history", [])
-        cursor = getattr(self, "_nav_cursor", -1)
-        frames = getattr(self, "frames", {})
-        target_idx = cursor + direction
-        while 0 <= target_idx < len(history):
-            target_name, target_state = history[target_idx]
-            if target_name in frames:
-                self._nav_cursor = target_idx
-                if target_name == getattr(self, "current_frame_name", None):
-                    # Same page — restore state without rebuilding.
-                    plugin = frames.get(target_name)
-                    try:
-                        if plugin and hasattr(plugin, "apply_state"):
-                            plugin.apply_state(target_state)
-                    except Exception as e:
-                        logger.warning(f"apply_state failed during back/forward: {e}")
-                    self._update_nav_history_buttons()
-                else:
-                    self._nav_suppress = True
-                    try:
-                        self.select_frame_by_name(target_name, state=target_state)
-                    finally:
-                        self._nav_suppress = False
-                return
-            target_idx += direction
-        self._update_nav_history_buttons()
-
     def record_page_state(self, state_key):
         """Record per-page state (e.g. an active tab) without re-rendering the page."""
         if getattr(self, "_nav_suppress", False):
@@ -901,28 +838,118 @@ class AppUI(customtkinter.CTk):
             del history[:overflow]
             cursor -= overflow
         self._nav_cursor = cursor
-        self._update_nav_history_buttons()
+        self._render_breadcrumbs()
 
-    def _update_nav_history_buttons(self):
-        """Sync the header-row Back/Forward buttons with the cursor position."""
+    def _crumb_label(self, frame_name, state):
+        """Format a history entry as a human-readable breadcrumb label."""
+        name = (
+            frame_name[len("frame_"):]
+            if frame_name.startswith("frame_")
+            else frame_name
+        )
+        if state:
+            return f"{name} · {state}"
+        return name
+
+    def _jump_to_crumb(self, target_idx):
+        """Navigate back to the entry at target_idx, dropping anything after it."""
+        history = getattr(self, "_nav_history", [])
+        if target_idx < 0 or target_idx >= len(history):
+            return
+        target_name, target_state = history[target_idx]
+        frames = getattr(self, "frames", {})
+        if target_name not in frames:
+            return
+
+        # Truncate everything after the chosen crumb (no forward, no resurrection).
+        del history[target_idx + 1:]
+        self._nav_cursor = target_idx
+
+        if target_name == getattr(self, "current_frame_name", None):
+            plugin = frames.get(target_name)
+            try:
+                if plugin and hasattr(plugin, "apply_state"):
+                    plugin.apply_state(target_state)
+            except Exception as e:
+                logger.warning(f"apply_state failed during crumb jump: {e}")
+            self._render_breadcrumbs()
+        else:
+            self._nav_suppress = True
+            try:
+                self.select_frame_by_name(target_name, state=target_state)
+            finally:
+                self._nav_suppress = False
+
+    def _render_breadcrumbs(self):
+        """Render the last 3 history entries as a breadcrumb trail."""
+        container = getattr(self, "_breadcrumb_container", None)
+        if not container:
+            return
+        try:
+            if not container.winfo_exists():
+                return
+        except (tk.TclError, RuntimeError, AttributeError):
+            return
+
+        for w in container.winfo_children():
+            try:
+                w.destroy()
+            except Exception:
+                pass
+
         history = getattr(self, "_nav_history", [])
         cursor = getattr(self, "_nav_cursor", -1)
-        frames = getattr(self, "frames", {})
-        can_back = cursor > 0 and any(
-            entry[0] in frames for entry in history[:cursor]
+        if cursor < 0 or not history:
+            return
+
+        text_color = self._get_theme_color("CTkLabel", "text_color")
+        hover_bg = ThemeManager.theme.get("Theme", {}).get(
+            "sidebar_hover_bg", ["#F0F0F5", "#1F1F22"]
         )
-        can_fwd = cursor < len(history) - 1 and any(
-            entry[0] in frames for entry in history[cursor + 1:]
+        muted = ThemeManager.theme.get("Theme", {}).get(
+            "text_secondary", ["#6B7280", "#9CA3AF"]
         )
-        for btn, enabled in (
-            (getattr(self, "_nav_back_btn", None), can_back),
-            (getattr(self, "_nav_fwd_btn", None), can_fwd),
-        ):
-            try:
-                if btn and btn.winfo_exists():
-                    btn.configure(state="normal" if enabled else "disabled")
-            except (tk.TclError, RuntimeError, AttributeError):
-                pass
+
+        start = max(0, cursor - 2)
+        visible = history[start:cursor + 1]
+        col = 0
+        for offset, entry in enumerate(visible):
+            idx = start + offset
+            is_current = (idx == cursor)
+            label = self._crumb_label(*entry)
+
+            if is_current:
+                crumb = customtkinter.CTkLabel(
+                    container,
+                    text=label,
+                    text_color=muted,
+                    font=customtkinter.CTkFont(size=14, weight="bold"),
+                )
+            else:
+                crumb = customtkinter.CTkButton(
+                    container,
+                    text=label,
+                    fg_color="transparent",
+                    text_color=text_color,
+                    hover_color=hover_bg,
+                    width=0,
+                    height=28,
+                    corner_radius=6,
+                    font=customtkinter.CTkFont(size=14, weight="normal"),
+                    command=lambda i=idx: self._jump_to_crumb(i),
+                )
+            crumb.grid(row=0, column=col, padx=(0, 4), sticky="w")
+            col += 1
+
+            if offset < len(visible) - 1:
+                sep = customtkinter.CTkLabel(
+                    container,
+                    text=">",
+                    text_color=muted,
+                    font=customtkinter.CTkFont(size=14, weight="normal"),
+                )
+                sep.grid(row=0, column=col, padx=(0, 4), sticky="w")
+                col += 1
 
     def refresh_ui_theme(self):
         """Refresh sidebar colors (if needed beyond automatic CTk updates)."""
