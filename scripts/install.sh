@@ -101,9 +101,15 @@ Linux*)
 		fi
 		;;
 	*arch* | *manjaro* | *endeavouros*)
+		# openresolv conflicts with systemd-resolvconf (both provide /usr/bin/resolvconf)
+		if pacman -Qi openresolv &>/dev/null; then
+			echo "Removing openresolv (conflicts with systemd-resolvconf)..."
+			sudo pacman -Rns --noconfirm openresolv
+		fi
+
 		# python on Arch is Python 3 and ships with venv; libarchive provides bsdtar for RPM extraction
 		PACKAGES_TO_INSTALL=""
-		for pkg in python python-pip tk wireguard-tools openresolv libarchive; do
+		for pkg in python python-pip tk wireguard-tools systemd-resolvconf libarchive; do
 			if ! pacman -Qi "$pkg" &>/dev/null; then
 				PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL $pkg"
 			fi
@@ -115,6 +121,10 @@ Linux*)
 		else
 			echo "All required packages are already installed."
 		fi
+
+		# Mirror Fedora: enable systemd-resolved and point /etc/resolv.conf at its stub
+		sudo systemctl enable --now systemd-resolved
+		sudo ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 		;;
 	*)
 		# TODO: This should be improved to support more distros
