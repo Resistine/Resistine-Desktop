@@ -731,9 +731,13 @@ class AppUI(customtkinter.CTk):
 
     _NAV_HISTORY_MAX = 50
 
-    def select_frame_by_name(self, name, button=None):
+    def select_frame_by_name(self, name, button=None, state=None):
         """
         Select and display the specified frame.
+
+        history entries are (frame_name, state_key) tuples. state_key is None for
+        plain page entries; a string when the entry represents per-page state
+        (e.g. an active tab inside a plugin).
         """
         # Browser-style back/forward history. Skip when invoked by a back/forward
         # click itself — those mutate the cursor before calling.
@@ -743,10 +747,11 @@ class AppUI(customtkinter.CTk):
                 self._nav_history = history = []
                 self._nav_cursor = -1
             cursor = self._nav_cursor
-            if not history or cursor < 0 or history[cursor] != name:
+            entry = (name, state)
+            if not history or cursor < 0 or history[cursor] != entry:
                 # New navigation invalidates any forward stack.
                 del history[cursor + 1:]
-                history.append(name)
+                history.append(entry)
                 cursor = len(history) - 1
                 if len(history) > self._NAV_HISTORY_MAX:
                     overflow = len(history) - self._NAV_HISTORY_MAX
@@ -829,51 +834,85 @@ class AppUI(customtkinter.CTk):
             error_label.pack(expand=True, padx=20, pady=20)
             self._current_main_screen = error_frame
 
+        # Optional per-page state restore (e.g. active tab inside a plugin).
+        try:
+            if hasattr(frame, "apply_state"):
+                frame.apply_state(state)
+        except Exception as e:
+            logger.warning(f"apply_state failed for {name}: {e}")
+
     def navigate_back(self):
         """Move one step back in the navigation history."""
-        history = getattr(self, "_nav_history", [])
-        cursor = getattr(self, "_nav_cursor", -1)
-        frames = getattr(self, "frames", {})
-        target_idx = cursor - 1
-        while target_idx >= 0:
-            if history[target_idx] in frames:
-                self._nav_cursor = target_idx
-                self._nav_suppress = True
-                try:
-                    self.select_frame_by_name(history[target_idx])
-                finally:
-                    self._nav_suppress = False
-                return
-            target_idx -= 1
-        self._update_nav_history_buttons()
+        self._navigate_step(-1)
 
     def navigate_forward(self):
         """Move one step forward in the navigation history."""
+        self._navigate_step(+1)
+
+    def _navigate_step(self, direction):
+        """Walk the cursor in the given direction (-1 or +1), skipping stale entries."""
         history = getattr(self, "_nav_history", [])
         cursor = getattr(self, "_nav_cursor", -1)
         frames = getattr(self, "frames", {})
-        target_idx = cursor + 1
-        while target_idx < len(history):
-            if history[target_idx] in frames:
+        target_idx = cursor + direction
+        while 0 <= target_idx < len(history):
+            target_name, target_state = history[target_idx]
+            if target_name in frames:
                 self._nav_cursor = target_idx
-                self._nav_suppress = True
-                try:
-                    self.select_frame_by_name(history[target_idx])
-                finally:
-                    self._nav_suppress = False
+                if target_name == getattr(self, "current_frame_name", None):
+                    # Same page — restore state without rebuilding.
+                    plugin = frames.get(target_name)
+                    try:
+                        if plugin and hasattr(plugin, "apply_state"):
+                            plugin.apply_state(target_state)
+                    except Exception as e:
+                        logger.warning(f"apply_state failed during back/forward: {e}")
+                    self._update_nav_history_buttons()
+                else:
+                    self._nav_suppress = True
+                    try:
+                        self.select_frame_by_name(target_name, state=target_state)
+                    finally:
+                        self._nav_suppress = False
                 return
-            target_idx += 1
+            target_idx += direction
+        self._update_nav_history_buttons()
+
+    def record_page_state(self, state_key):
+        """Record per-page state (e.g. an active tab) without re-rendering the page."""
+        if getattr(self, "_nav_suppress", False):
+            return
+        name = getattr(self, "current_frame_name", None)
+        if not name:
+            return
+        history = getattr(self, "_nav_history", None)
+        if history is None:
+            self._nav_history = history = []
+            self._nav_cursor = -1
+        cursor = self._nav_cursor
+        entry = (name, state_key)
+        if history and 0 <= cursor < len(history) and history[cursor] == entry:
+            return
+        del history[cursor + 1:]
+        history.append(entry)
+        cursor = len(history) - 1
+        if len(history) > self._NAV_HISTORY_MAX:
+            overflow = len(history) - self._NAV_HISTORY_MAX
+            del history[:overflow]
+            cursor -= overflow
+        self._nav_cursor = cursor
         self._update_nav_history_buttons()
 
     def _update_nav_history_buttons(self):
-        """Sync the bottom-of-sidebar Back/Forward buttons with the cursor position."""
+        """Sync the header-row Back/Forward buttons with the cursor position."""
         history = getattr(self, "_nav_history", [])
         cursor = getattr(self, "_nav_cursor", -1)
+        frames = getattr(self, "frames", {})
         can_back = cursor > 0 and any(
-            h in getattr(self, "frames", {}) for h in history[:cursor]
+            entry[0] in frames for entry in history[:cursor]
         )
         can_fwd = cursor < len(history) - 1 and any(
-            h in getattr(self, "frames", {}) for h in history[cursor + 1:]
+            entry[0] in frames for entry in history[cursor + 1:]
         )
         for btn, enabled in (
             (getattr(self, "_nav_back_btn", None), can_back),
@@ -892,7 +931,14 @@ class AppUI(customtkinter.CTk):
         try:
             name = getattr(self, "current_frame_name", None)
             if name:
-                self.select_frame_by_name(name)
+                history = getattr(self, "_nav_history", [])
+                cursor = getattr(self, "_nav_cursor", -1)
+                state = (
+                    history[cursor][1]
+                    if 0 <= cursor < len(history)
+                    else None
+                )
+                self.select_frame_by_name(name, state=state)
         except Exception:
             pass
 
