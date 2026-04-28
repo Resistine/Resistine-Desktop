@@ -317,6 +317,7 @@ reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "Resistine" /
 echo       OK
 
 echo [4/4] Removing VPN services...
+call :remove_wireguard_tunnel_service resistine
 call :remove_wireguard_tunnel_service resistine_default
 call :remove_wireguard_tunnel_service resistine_vpn
 

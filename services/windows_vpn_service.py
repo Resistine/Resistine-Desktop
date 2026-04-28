@@ -431,7 +431,7 @@ class ResistineVPNService(win32serviceutil.ServiceFramework):
         self.ReportServiceStatus(win32service.SERVICE_RUNNING)
         servicemanager.LogInfoMsg("ResistineVPN service reported as RUNNING")
 
-        DEFAULT_TUNNEL = "resistine_default"
+        DEFAULT_TUNNEL = "resistine"
 
         # Start IPC server first in background
         socket_thread = threading.Thread(

@@ -457,6 +457,7 @@ begin
   StopAndDeleteService('ResistineVPN');
 
   Log('Uninstall cleanup: stopping/removing Resistine WireGuard tunnel services');
+  RemoveNamedWireGuardTunnel('resistine');
   RemoveNamedWireGuardTunnel('resistine_default');
   RemoveNamedWireGuardTunnel('resistine_vpn');
 end;
@@ -1503,7 +1504,7 @@ begin
         'What will be removed:' + #13#10 +
         '- Application files in: ' + ExistingInstallDir + #13#10 +
         '- Start Menu / desktop shortcuts' + #13#10 +
-        '- VPN services: ResistineVPN, WireGuardTunnel$resistine_default, WireGuardTunnel$resistine_vpn' + #13#10;
+        '- VPN services: ResistineVPN, WireGuardTunnel$resistine, WireGuardTunnel$resistine_default, WireGuardTunnel$resistine_vpn' + #13#10;
 
       if WantsRemoveData then
         ConfirmText := ConfirmText + '- User data: settings, logs, and VPN service data' + #13#10 +
@@ -1642,6 +1643,7 @@ begin
     ExpandConstant('{app}') + #13#10#13#10 +
     'The uninstaller will also remove:' + #13#10 +
     '- ResistineVPN service' + #13#10 +
+    '- WireGuardTunnel$resistine' + #13#10 +
     '- WireGuardTunnel$resistine_default' + #13#10 +
     '- WireGuardTunnel$resistine_vpn' + #13#10 +
     '- SIEM agent (WazuhSvc)' + #13#10 +
