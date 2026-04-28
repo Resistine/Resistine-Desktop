@@ -335,11 +335,16 @@ def full_install(progress_callback=None):
     elif os_type == "rpm":
         install_cmd = f"WAZUH_MANAGER='{WAZUH_MANAGER}' WAZUH_AGENT_NAME='{agent_name}' WAZUH_AGENT_GROUP='{agent_group}' rpm -ihv '{pkg_path}'"
     elif os_type == "arch":
-        # No postinst runs when extracting with bsdtar, so stamp manager + group into ossec.conf manually
+        # No postinst runs when extracting with bsdtar — create the wazuh user/group, extract,
+        # fix ownership, then stamp manager + group into ossec.conf manually
         install_cmd = (
+            "(getent group wazuh >/dev/null || groupadd --system wazuh) && "
+            "(getent passwd wazuh >/dev/null || useradd --system --no-create-home "
+            "--home /var/ossec --shell /sbin/nologin -g wazuh wazuh) && "
             f"bsdtar -xpf '{pkg_path}' -C / && "
+            "chown -R wazuh:wazuh /var/ossec && "
             f"sed -i \"s|<address>.*</address>|<address>{WAZUH_MANAGER}</address>|\" '{ossec_conf}' && "
-            f"sed -i \"s|<groups>.*</groups>|<groups>{agent_group}</groups>|\" '{ossec_conf}' || true"
+            f"sed -i \"s|<groups>.*</groups>|<groups>{agent_group}</groups>|\" '{ossec_conf}'"
         )
 
     agent_auth = f"{LINUX_WAZUH_DIR}/bin/agent-auth"
