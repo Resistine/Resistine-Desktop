@@ -117,7 +117,7 @@ def needs_reenrollment():
     return False
 
 def _get_os_info():
-    """Determine if OS is DEB or RPM based."""
+    """Determine package family: deb, rpm, or arch (pacman)."""
     try:
         with open("/etc/os-release") as f:
             content = f.read().lower()
@@ -125,14 +125,18 @@ def _get_os_info():
                 return "deb"
             if "fedora" in content or "centos" in content or "rhel" in content or "red hat" in content:
                 return "rpm"
+            if "arch" in content or "manjaro" in content or "endeavouros" in content:
+                return "arch"
     except Exception:
         pass
-    
+
     # Fallback checking commands
     if subprocess.run(["which", "dpkg"], capture_output=True).returncode == 0:
         return "deb"
     if subprocess.run(["which", "rpm"], capture_output=True).returncode == 0:
         return "rpm"
+    if subprocess.run(["which", "pacman"], capture_output=True).returncode == 0:
+        return "arch"
     return None
 
 def get_package_url():
@@ -141,7 +145,8 @@ def get_package_url():
     if os_type == "deb":
         arch_suffix = LINUX_PKG_ARCH_MAP_DEB.get(arch, "amd64")
         return LINUX_WAZUH_DEB_URL.format(arch=arch_suffix)
-    elif os_type == "rpm":
+    elif os_type == "rpm" or os_type == "arch":
+        # Arch uses the RPM artifact and extracts it with bsdtar (libarchive); upstream Wazuh ships no pacman package
         arch_suffix = LINUX_PKG_ARCH_MAP_RPM.get(arch, "x86_64")
         return LINUX_WAZUH_RPM_URL.format(arch=arch_suffix)
     return None
@@ -287,6 +292,13 @@ def remove_agent():
         uninstall_cmd = "apt-get remove -y wazuh-agent"
     elif os_type == "rpm":
         uninstall_cmd = "yum remove -y wazuh-agent || dnf remove -y wazuh-agent"
+    elif os_type == "arch":
+        # bsdtar-extracted install isn't tracked by pacman, so tear down by path
+        uninstall_cmd = (
+            "systemctl disable wazuh-agent 2>/dev/null; "
+            "rm -f /usr/lib/systemd/system/wazuh-agent.service /etc/systemd/system/wazuh-agent.service; "
+            "systemctl daemon-reload"
+        )
         
     script = f"""
         systemctl stop wazuh-agent 2>/dev/null
@@ -316,13 +328,20 @@ def full_install(progress_callback=None):
         agent_group = "default"
         
     os_type = _get_os_info()
+    ossec_conf = f"{LINUX_WAZUH_DIR}/etc/ossec.conf"
     install_cmd = ""
     if os_type == "deb":
         install_cmd = f"WAZUH_MANAGER='{WAZUH_MANAGER}' WAZUH_AGENT_NAME='{agent_name}' WAZUH_AGENT_GROUP='{agent_group}' dpkg -i '{pkg_path}'"
     elif os_type == "rpm":
         install_cmd = f"WAZUH_MANAGER='{WAZUH_MANAGER}' WAZUH_AGENT_NAME='{agent_name}' WAZUH_AGENT_GROUP='{agent_group}' rpm -ihv '{pkg_path}'"
+    elif os_type == "arch":
+        # No postinst runs when extracting with bsdtar, so stamp manager + group into ossec.conf manually
+        install_cmd = (
+            f"bsdtar -xpf '{pkg_path}' -C / && "
+            f"sed -i \"s|<address>.*</address>|<address>{WAZUH_MANAGER}</address>|\" '{ossec_conf}' && "
+            f"sed -i \"s|<groups>.*</groups>|<groups>{agent_group}</groups>|\" '{ossec_conf}' || true"
+        )
 
-    ossec_conf = f"{LINUX_WAZUH_DIR}/etc/ossec.conf"
     agent_auth = f"{LINUX_WAZUH_DIR}/bin/agent-auth"
     backup_dir = os.path.dirname(_KEY_BACKUP)
     

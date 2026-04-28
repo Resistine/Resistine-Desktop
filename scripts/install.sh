@@ -100,6 +100,22 @@ Linux*)
 			echo "All required packages are already installed."
 		fi
 		;;
+	*arch* | *manjaro* | *endeavouros*)
+		# python on Arch is Python 3 and ships with venv; libarchive provides bsdtar for RPM extraction
+		PACKAGES_TO_INSTALL=""
+		for pkg in python python-pip tk wireguard-tools libarchive; do
+			if ! pacman -Qi "$pkg" &>/dev/null; then
+				PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL $pkg"
+			fi
+		done
+
+		if [ -n "$PACKAGES_TO_INSTALL" ]; then
+			echo "Installing missing packages:$PACKAGES_TO_INSTALL"
+			sudo pacman -Sy --noconfirm --needed $PACKAGES_TO_INSTALL
+		else
+			echo "All required packages are already installed."
+		fi
+		;;
 	*)
 		# TODO: This should be improved to support more distros
 		echo "Unsupported Linux distribution: ${ID:-unknown}"
