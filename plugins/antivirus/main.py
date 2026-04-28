@@ -961,7 +961,10 @@ class Plugin(BasePlugin):
         if not excl["extensions"]:
             customtkinter.CTkLabel(
                 frame, text="No excluded extensions",
-                font=font(12), text_color=COLOR_MUTED,
+                font=font(12),
+                text_color=ThemeManager.theme.get("Theme", {}).get(
+                    "text_secondary",
+                ),
             ).grid(row=0, column=0, sticky="w")
         else:
             for i, ext in enumerate(excl["extensions"]):

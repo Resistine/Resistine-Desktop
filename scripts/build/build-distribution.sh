@@ -328,7 +328,7 @@ if [ -d "$CLAMAV_ARTIFACTS_DIR/binaries" ]; then
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.resistine.clamonacc</string>
+    <string>com.resistine.desktop.clamonacc</string>
     <key>CFBundleName</key>
     <string>ResistineClamAV</string>
     <key>CFBundleExecutable</key>
