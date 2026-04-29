@@ -174,8 +174,10 @@ class CodeBlockWidget(customtkinter.CTkFrame):
 
         # -- Code body ------------------------------------------------------
         mono_font = fonts["code"]
+        self.pack_propagate(False)
+
         self._code_widget = tk.Text(
-            self, wrap="none",
+            self, wrap="none", width=1,
             bg=colors["code_bg"], fg=colors["code_fg"],
             font=mono_font, borderwidth=0,
             padx=14, pady=10, highlightthickness=0,
@@ -188,6 +190,16 @@ class CodeBlockWidget(customtkinter.CTkFrame):
         self._code_widget.configure(state="disabled", height=visible)
         self._code_widget.pack(
             fill="both", expand=True, padx=0, pady=(0, 0))
+
+        # Set frame height: header(32) + text lines + padding + scrollbar
+        import tkinter.font as tkfont
+        try:
+            line_h = tkfont.Font(font=mono_font).metrics("linespace")
+        except Exception:
+            line_h = 20
+        # header(32) + text(lines*lineheight + pady*2) + scrollbar(14) + buffer
+        frame_h = 32 + visible * line_h + 20 + 14 + 10
+        self.configure(height=frame_h)
 
         # -- Horizontal scrollbar (always visible) --------------------------
         scrollbar = customtkinter.CTkScrollbar(
