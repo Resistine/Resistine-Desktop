@@ -110,6 +110,17 @@ def _format_relative(iso_ts):
     return f"{months // 12}y ago"
 
 
+def _format_timestamp(iso_ts):
+    """Format an ISO-8601 timestamp as 'MMM DD HH:MM:SS' (e.g. 'Apr 29 15:55:00')."""
+    if not iso_ts:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+    except ValueError:
+        return iso_ts
+    return dt.strftime("%b %d %H:%M:%S")
+
+
 def _short_benchmark_name(name):
     """Tidy a CIS-style policy name like CIS_Apple_macOS_15.0_Sequoia_Benchmark_v1.0.0."""
     if not name:
@@ -153,6 +164,10 @@ class Plugin(BasePlugin):
         self._event_count_label = None
         self._event_chart_canvas = None
         self._event_chart_figure = None
+        self._chart_ax = None
+        self._chart_buckets = []
+        self._chart_counts = {}
+        self._selected_bucket = None  # datetime of the active 30-min bucket filter, or None
 
     def check_status(self):
         return None
@@ -180,6 +195,9 @@ class Plugin(BasePlugin):
         # so _switch_tab doesn't short-circuit on the stale "previous session"
         # value and skip gridding the Overview pane.
         self._active_tab = None
+        # Drop any stale chart filter — the rebuilt chart computes fresh
+        # bucket datetimes; an old _selected_bucket might no longer match.
+        self._selected_bucket = None
         self._build_tab_strip()
         self._build_content_area()
         self._switch_tab("Overview")
@@ -626,6 +644,7 @@ class Plugin(BasePlugin):
             "status": "INFO",
             "description": "Threats and security incidents detected",
             "stats": (("No data available", "muted"),),
+            "target_tab": "Events",
         })
 
         # Vulnerabilities — vulnerabilities object is empty
@@ -636,6 +655,7 @@ class Plugin(BasePlugin):
                 "status": "WARNING",
                 "description": "CVEs across installed packages",
                 "stats": ((str(len(vulns)) + " items", "warning"),),
+                "target_tab": "Vulnerabilities",
             })
         else:
             cards.append({
@@ -643,6 +663,7 @@ class Plugin(BasePlugin):
                 "status": "INFO",
                 "description": "CVEs across installed packages",
                 "stats": (("No scan results", "muted"),),
+                "target_tab": "Vulnerabilities",
             })
 
         # Compliance · SCA
@@ -841,6 +862,7 @@ class Plugin(BasePlugin):
 
     def _make_module_card(self, parent, row, column, card_data):
         text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
+        target_tab = card_data.get("target_tab")
 
         card = customtkinter.CTkFrame(parent, corner_radius=12, border_width=1)
         card.grid(row=row, column=column, sticky="nsew", padx=6, pady=6)
@@ -848,49 +870,68 @@ class Plugin(BasePlugin):
         card.grid_columnconfigure(1, weight=0)
         card.grid_rowconfigure(2, weight=1)
 
-        customtkinter.CTkLabel(
+        title = customtkinter.CTkLabel(
             card,
             text=card_data["title"],
             font=customtkinter.CTkFont(family="Inter", size=14, weight="bold"),
             anchor="w",
-        ).grid(row=0, column=0, sticky="w", padx=14, pady=(12, 0))
+        )
+        title.grid(row=0, column=0, sticky="w", padx=14, pady=(12, 0))
 
         bg, fg = self._badge_colors(card_data["status"])
-        customtkinter.CTkLabel(
+        badge = customtkinter.CTkLabel(
             card,
             text=f"  ●  {card_data['status']}  ",
             fg_color=bg,
             text_color=fg,
             corner_radius=6,
             font=customtkinter.CTkFont(size=10, weight="bold"),
-        ).grid(row=0, column=1, sticky="ne", padx=(0, 14), pady=(12, 0))
+        )
+        badge.grid(row=0, column=1, sticky="ne", padx=(0, 14), pady=(12, 0))
 
-        customtkinter.CTkLabel(
+        desc = customtkinter.CTkLabel(
             card,
             text=card_data["description"],
             text_color=text_secondary,
             font=customtkinter.CTkFont(size=11),
             anchor="w",
-        ).grid(row=1, column=0, columnspan=2, sticky="w", padx=14, pady=(2, 8))
+        )
+        desc.grid(row=1, column=0, columnspan=2, sticky="w", padx=14, pady=(2, 8))
 
         stats = customtkinter.CTkFrame(card, fg_color="transparent")
         stats.grid(row=2, column=0, sticky="sw", padx=14, pady=(0, 12))
+        stat_labels = []
         for i, (text, color_key) in enumerate(card_data["stats"]):
             color = self._segment_color(color_key)
             weight = "bold" if color_key not in ("muted",) else "normal"
-            customtkinter.CTkLabel(
+            lbl = customtkinter.CTkLabel(
                 stats,
                 text=text,
                 text_color=color,
                 font=customtkinter.CTkFont(size=12, weight=weight),
-            ).grid(row=0, column=i, sticky="w")
+            )
+            lbl.grid(row=0, column=i, sticky="w")
+            stat_labels.append(lbl)
 
-        customtkinter.CTkLabel(
+        arrow = customtkinter.CTkLabel(
             card,
             text="›",
             text_color=text_secondary,
             font=customtkinter.CTkFont(size=18),
-        ).grid(row=2, column=1, sticky="se", padx=(0, 14), pady=(0, 12))
+        )
+        arrow.grid(row=2, column=1, sticky="se", padx=(0, 14), pady=(0, 12))
+
+        # Make clickable cards navigate to a sibling tab on the same plugin.
+        if target_tab and target_tab in _TAB_NAMES:
+            def on_click(_e=None, t=target_tab):
+                self._switch_tab(t)
+
+            for w in (card, title, desc, stats, arrow, *stat_labels):
+                w.bind("<Button-1>", on_click)
+                try:
+                    w.configure(cursor="hand2")
+                except Exception:
+                    pass
 
     def _bind_module_resize(self):
         last_size = [0, 0]
@@ -1069,29 +1110,64 @@ class Plugin(BasePlugin):
         wrapper.grid_columnconfigure(0, weight=1)
         wrapper.grid_rowconfigure(0, weight=1)
 
-        buckets, counts = self._bucket_events_30min()
+        # Compute the bucket data once per page render. Click-to-filter mutates
+        # self._selected_bucket and triggers _render_event_chart for repaint.
+        self._chart_buckets, self._chart_counts = self._bucket_events_30min()
+
         fig = Figure(figsize=(8, 1.7), dpi=100, facecolor=chart_theme["bg"])
         ax = fig.add_subplot(111)
+        self._chart_ax = ax
+        self._event_chart_figure = fig
+
+        canvas = FigureCanvasTkAgg(fig, master=wrapper)
+        canvas_widget = canvas.get_tk_widget()
+        canvas_widget.configure(highlightthickness=0, bd=0, bg=chart_theme["bg"])
+        canvas_widget.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
+        self._event_chart_canvas = canvas
+
+        canvas.mpl_connect("button_press_event", self._on_chart_click)
+
+        self._render_event_chart()
+
+    def _render_event_chart(self):
+        ax = self._chart_ax
+        canvas = self._event_chart_canvas
+        if ax is None or canvas is None:
+            return
+
+        chart_theme = self._chart_theme()
+        ax.clear()
         ax.set_facecolor(chart_theme["bg"])
 
+        buckets = self._chart_buckets
+        counts = self._chart_counts
+        sel = self._selected_bucket
+
         if buckets:
+            import matplotlib.colors as mcolors
             x = list(range(len(buckets)))
             bottoms = [0] * len(buckets)
             for level in _SEVERITY_LEVELS:
                 heights = [counts[b][level] for b in buckets]
-                color = self._resolve_severity_color(level, chart_theme["is_dark"])
+                base = self._resolve_severity_color(level, chart_theme["is_dark"])
+                rgb = mcolors.to_rgb(base)
+                # Per-bar alpha: full when no filter, full for the selected
+                # bucket, dim for the rest while a filter is active.
+                colors = [
+                    (rgb[0], rgb[1], rgb[2], 1.0 if (sel is None or b == sel) else 0.25)
+                    for b in buckets
+                ]
                 ax.bar(
                     x,
                     heights,
                     bottom=bottoms,
                     width=0.85,
-                    color=color,
+                    color=colors,
                     edgecolor="none",
                     label=level.capitalize(),
                 )
                 bottoms = [a + b for a, b in zip(bottoms, heights)]
 
-            # Sparse x ticks: every 4th bucket (covers 2 hours per label)
             tick_step = max(1, len(buckets) // 6)
             tick_positions = list(range(0, len(buckets), tick_step))
             tick_labels = [buckets[i].strftime("%H:%M") for i in tick_positions]
@@ -1119,16 +1195,34 @@ class Plugin(BasePlugin):
         ax.spines["bottom"].set_color(chart_theme["text"])
         ax.yaxis.grid(True, color=chart_theme["grid"], linewidth=0.4, alpha=0.5)
         ax.set_axisbelow(True)
-        fig.tight_layout()
+        self._event_chart_figure.tight_layout()
+        canvas.draw_idle()
 
-        canvas = FigureCanvasTkAgg(fig, master=wrapper)
-        canvas.draw()
-        canvas_widget = canvas.get_tk_widget()
-        canvas_widget.configure(highlightthickness=0, bd=0, bg=chart_theme["bg"])
-        canvas_widget.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
+    def _on_chart_click(self, event):
+        # Resolve the click into a bucket index, or clear selection if the
+        # click misses an event-bearing bucket.
+        prev = self._selected_bucket
+        new_selection = None
 
-        self._event_chart_figure = fig
-        self._event_chart_canvas = canvas
+        if (
+            event.inaxes is self._chart_ax
+            and event.xdata is not None
+            and self._chart_buckets
+        ):
+            idx = int(round(event.xdata))
+            if 0 <= idx < len(self._chart_buckets):
+                bucket = self._chart_buckets[idx]
+                bucket_total = sum(self._chart_counts.get(bucket, {}).values())
+                if bucket_total > 0:
+                    # Toggle: same bucket clears, different bucket sets.
+                    new_selection = None if bucket == prev else bucket
+
+        if new_selection == prev:
+            return  # nothing changed
+        self._selected_bucket = new_selection
+        self._render_event_chart()
+        query = self._event_search_var.get() if self._event_search_var else ""
+        self._render_event_list(query)
 
     # ----- EVENT STREAM header -----
 
@@ -1219,20 +1313,38 @@ class Plugin(BasePlugin):
             ).grid(row=0, column=col, sticky="w", padx=(0, 12) if col < 4 else (0, 0))
 
     def _filter_events(self, query):
-        if not query:
-            return list(_EVENTS)
-        q = query.lower().strip()
+        sel = self._selected_bucket
+        q = (query or "").lower().strip()
         out = []
         for ev in _EVENTS:
-            haystack = " ".join((
-                str(ev.get("rule_id", "")),
-                ev.get("description", ""),
-                ev.get("ip", ""),
-                (ev.get("severity") or ""),
-                " ".join(ev.get("mitre", []) or []),
-            )).lower()
-            if q in haystack:
-                out.append(ev)
+            # Bucket filter (from clicking a bar in the chart)
+            if sel is not None:
+                ts = ev.get("timestamp")
+                if not ts:
+                    continue
+                try:
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                floored = dt.replace(
+                    minute=0 if dt.minute < 30 else 30,
+                    second=0,
+                    microsecond=0,
+                )
+                if floored != sel:
+                    continue
+            # Search-text filter
+            if q:
+                haystack = " ".join((
+                    str(ev.get("rule_id", "")),
+                    ev.get("description", ""),
+                    ev.get("ip", ""),
+                    (ev.get("severity") or ""),
+                    " ".join(ev.get("mitre", []) or []),
+                )).lower()
+                if q not in haystack:
+                    continue
+            out.append(ev)
         return out
 
     def _render_event_list(self, query=""):
@@ -1252,6 +1364,10 @@ class Plugin(BasePlugin):
             total = len(_EVENTS)
             shown = len(events)
             text = f"{shown} events" if shown == total else f"{shown}/{total} events"
+            sel = self._selected_bucket
+            if sel is not None:
+                end = sel + timedelta(minutes=30)
+                text += f" · {sel.strftime('%H:%M')}–{end.strftime('%H:%M')}"
             self._event_count_label.configure(text=text)
 
         # Ensure selection still exists in filtered list; otherwise pick first.
@@ -1325,7 +1441,7 @@ class Plugin(BasePlugin):
             font=customtkinter.CTkFont(size=11),
         )
         labeled(
-            4, _format_relative(ev.get("timestamp")),
+            4, _format_timestamp(ev.get("timestamp")),
             text_color=text_secondary,
             font=customtkinter.CTkFont(size=11),
         )
