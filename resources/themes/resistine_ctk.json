@@ -47,16 +47,20 @@
         "#1E3A5F"
       ],
       "warning": [
-        "#FEF3C7",
-        "#78350F"
+        "#FFEDD5",
+        "#3F1D0E"
+      ],
+      "high": [
+        "#FEE2E2",
+        "#7F1D1D"
       ],
       "error": [
         "#FEE2E2",
         "#7F1D1D"
       ],
       "critical": [
-        "#FEE2E2",
-        "#7F1D1D"
+        "#DDD6FE",
+        "#4C1D95"
       ]
     },
     "status_badge_text": {
@@ -69,16 +73,20 @@
         "#60A5FA"
       ],
       "warning": [
-        "#B45309",
-        "#FBBF24"
+        "#C2410C",
+        "#FB923C"
+      ],
+      "high": [
+        "#DC2626",
+        "#F87171"
       ],
       "error": [
         "#DC2626",
         "#F87171"
       ],
       "critical": [
-        "#991B1B",
-        "#F87171"
+        "#6D28D9",
+        "#A78BFA"
       ]
     }
   },
