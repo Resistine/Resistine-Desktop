@@ -90,6 +90,7 @@ def _stub_gui_modules():
         "customtkinter",
         "tkinter",
         "tkinter.ttk",
+        "tkinter.font",
         "PIL",
         "PIL.Image",
         "pystray",
