@@ -139,62 +139,67 @@ class CodeBlockWidget(customtkinter.CTkFrame):
         colors = get_theme_colors(is_dark)
         fonts = get_fonts(is_dark)
 
-        super().__init__(master, fg_color=colors["code_bg"], corner_radius=10, **kwargs)
+        muted_fg = "#888888"
+        sb_color = "#3A3A3C" if is_dark else "#C8C8CC"
+        sb_hover = "#555558" if is_dark else "#A8A8AC"
+
+        super().__init__(
+            master, fg_color=colors["code_bg"], corner_radius=12,
+            **kwargs)
 
         self._code_text = code_text
 
-        # -- Header row (language label + copy button) ----------------------
-        header = customtkinter.CTkFrame(self, fg_color=colors["code_header_bg"],
-                                        corner_radius=0)
-        header.pack(fill="x", padx=14, pady=(10, 0))
+        # -- Header row (flush with body, children have padding) ------------
+        header = customtkinter.CTkFrame(
+            self, fg_color=colors["code_header_bg"], corner_radius=0)
+        header.pack(fill="x", padx=0, pady=0)
 
         if language:
             lang_label = customtkinter.CTkLabel(
-                header,
-                text=language.lower(),
-                font=customtkinter.CTkFont(family="Inter", size=11,
-                                           weight="bold"),
-                text_color=colors["fg"],
-                anchor="w",
+                header, text=language.lower(),
+                font=customtkinter.CTkFont(
+                    family="Inter", size=10),
+                text_color=muted_fg, anchor="w",
             )
-            lang_label.pack(side="left", padx=(4, 0))
+            lang_label.pack(side="left", padx=(14, 0), pady=6)
 
         self._copy_btn = customtkinter.CTkButton(
-            header,
-            text="Copy",
-            width=70,
-            height=26,
-            font=customtkinter.CTkFont(family="Inter", size=11),
-            fg_color=RESISTINE_BLUE if not is_dark else "#1565B0",
-            hover_color="#1565B0" if not is_dark else RESISTINE_BLUE,
+            header, text="Copy", width=56, height=24,
+            font=customtkinter.CTkFont(family="Inter", size=10),
+            fg_color=RESISTINE_BLUE, hover_color="#1565B0",
             text_color="#FFFFFF",
-            corner_radius=6,
-            command=self._copy_to_clipboard,
+            corner_radius=6, command=self._copy_to_clipboard,
         )
-        self._copy_btn.pack(side="right", padx=(0, 4))
+        self._copy_btn.pack(side="right", padx=(0, 10), pady=5)
 
         # -- Code body ------------------------------------------------------
         mono_font = fonts["code"]
         self._code_widget = tk.Text(
-            self,
-            wrap="none",
-            bg=colors["code_bg"],
-            fg=colors["code_fg"],
-            font=mono_font,
-            borderwidth=0,
-            padx=14,
-            pady=10,
-            highlightthickness=0,
-            relief="flat",
-            insertwidth=0,
+            self, wrap="none",
+            bg=colors["code_bg"], fg=colors["code_fg"],
+            font=mono_font, borderwidth=0,
+            padx=14, pady=10, highlightthickness=0,
+            relief="flat", insertwidth=0,
         )
-        self._code_widget.pack(fill="both", expand=True, padx=0, pady=(6, 10))
         self._code_widget.insert("1.0", code_text)
 
-        # Auto-height: cap at 25 visible lines to avoid giant blocks
         line_count = code_text.count("\n") + 1
-        visible = min(25, max(3, line_count + 1))
+        visible = min(line_count, 25)
         self._code_widget.configure(state="disabled", height=visible)
+        self._code_widget.pack(
+            fill="both", expand=True, padx=0, pady=(0, 0))
+
+        # -- Horizontal scrollbar (always visible) --------------------------
+        scrollbar = customtkinter.CTkScrollbar(
+            self, orientation="horizontal",
+            command=self._code_widget.xview,
+            height=10, corner_radius=5,
+            fg_color=colors["code_bg"],
+            button_color=sb_color,
+            button_hover_color=sb_hover)
+        self._code_widget.configure(
+            xscrollcommand=scrollbar.set)
+        scrollbar.pack(fill="x", padx=8, pady=(0, 4))
 
     # -- Clipboard ----------------------------------------------------------
 
@@ -204,11 +209,11 @@ class CodeBlockWidget(customtkinter.CTkFrame):
             self.clipboard_clear()
             self.clipboard_append(self._code_text)
             self._copy_btn.configure(text="Copied!")
-            self.after(1500, lambda: self._copy_btn.configure(text="Copy"))
+            self.after(1200, lambda: self._copy_btn.configure(text="Copy"))
         except Exception as exc:
             logger.warning(f"Clipboard copy failed: {exc}")
             self._copy_btn.configure(text="Failed")
-            self.after(1500, lambda: self._copy_btn.configure(text="Copy"))
+            self.after(1200, lambda: self._copy_btn.configure(text="Copy"))
 
 
 # ---------------------------------------------------------------------------

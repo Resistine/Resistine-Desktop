@@ -60,6 +60,7 @@ class MarkdownRenderer:
         self._first_line = True
         self._resize_timer = None
         self._tables: list[TableWidget] = []
+        self._code_blocks: list[CodeBlockWidget] = []
         self._in_resize = False
 
         self._build_textbox()
@@ -236,6 +237,7 @@ class MarkdownRenderer:
             )
             self._tw.window_create("end", window=w, padx=0, pady=4,
                                    stretch=1)
+            self._code_blocks.append(w)
             self._first_line = False
         return i
 
@@ -251,6 +253,7 @@ class MarkdownRenderer:
         )
         self._tw.window_create("end", window=w, padx=0, pady=4,
                                stretch=1)
+        self._code_blocks.append(w)
         self._first_line = False
         return i
 
@@ -351,15 +354,17 @@ class MarkdownRenderer:
 
             self._parent.configure(height=h)
             self.text_widget.configure(height=h)
-            # Resize tables to textbox width
+            # Resize embedded widgets to textbox width
             try:
                 tw_width = tw.winfo_width()
                 if tw_width > 1:
                     padx = int(str(tw.cget("padx") or 0))
-                    table_w = tw_width - padx * 2
+                    embed_w = tw_width - padx * 2
                     for tbl in self._tables:
-                        tbl.configure(width=table_w)
-                        tbl._resize_to_width(table_w)
+                        tbl.configure(width=embed_w)
+                        tbl._resize_to_width(embed_w)
+                    for cb in self._code_blocks:
+                        cb.configure(width=embed_w)
             except Exception:
                 pass
         except Exception:
