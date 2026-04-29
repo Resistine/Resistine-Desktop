@@ -14,10 +14,35 @@ class ChatHistoryManager:
     """Manage multiple chat sessions persisted in the settings store."""
 
     def list_sessions(self) -> list[dict]:
-        """Return session metadata sorted newest-first."""
+        """Return session metadata sorted newest-first, pruning empties."""
+        self._cleanup_empty()
         index = settings.get(_NS, "index", default=[])
         return sorted(
             index, key=lambda s: s.get("updated_at", 0), reverse=True)
+
+    def _cleanup_empty(self) -> None:
+        """Remove sessions that have no user messages."""
+        index = settings.get(_NS, "index", default=[])
+        active = self.get_active_id()
+        to_remove = []
+        for meta in index:
+            sid = meta["id"]
+            if sid == active:
+                continue
+            if meta.get("title", "") != "New Chat":
+                continue
+            msgs = self.load_messages(sid)
+            if not any(m.get("role") == "user" for m in msgs):
+                to_remove.append(sid)
+        if not to_remove:
+            return
+        index = [s for s in index if s["id"] not in to_remove]
+        settings.set(_NS, "index", index)
+        for sid in to_remove:
+            try:
+                settings.delete(_NS, f"msg_{sid}")
+            except Exception:
+                pass
 
     def get_active_id(self) -> str | None:
         return settings.get(_NS, "active_id")
