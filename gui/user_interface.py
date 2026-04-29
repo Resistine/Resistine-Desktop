@@ -816,7 +816,14 @@ class AppUI(customtkinter.CTk):
             logger.warning(f"apply_state failed for {name}: {e}")
 
     def record_page_state(self, state_key):
-        """Record per-page state (e.g. an active tab) without re-rendering the page."""
+        """Update history with per-page state (e.g. an active tab).
+
+        - If the current entry already equals (page, state_key), no-op.
+        - If the current entry is the same page with state=None — i.e. the entry
+          pushed by the sidebar click that landed us here — promote it in place
+          so the breadcrumb reads "Page/State" rather than just "Page".
+        - Otherwise append a new entry (a real tab change).
+        """
         if getattr(self, "_nav_suppress", False):
             return
         name = getattr(self, "current_frame_name", None)
@@ -828,8 +835,14 @@ class AppUI(customtkinter.CTk):
             self._nav_cursor = -1
         cursor = self._nav_cursor
         entry = (name, state_key)
-        if history and 0 <= cursor < len(history) and history[cursor] == entry:
-            return
+        if history and 0 <= cursor < len(history):
+            current = history[cursor]
+            if current == entry:
+                return
+            if current[0] == name and current[1] is None:
+                history[cursor] = entry
+                self._render_breadcrumbs()
+                return
         del history[cursor + 1:]
         history.append(entry)
         cursor = len(history) - 1
@@ -848,7 +861,7 @@ class AppUI(customtkinter.CTk):
             else frame_name
         )
         if state:
-            return f"{name} · {state}"
+            return f"{name}/{state}"
         return name
 
     def _jump_to_crumb(self, target_idx):

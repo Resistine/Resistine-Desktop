@@ -86,11 +86,11 @@ class Plugin(BasePlugin):
             id="013",
             version="2026.01.04-alpha",
             order=5.5,
-            name="Endpoint 2",
+            name="Wazuh",
             status=None,
             description="Placeholder for the redesigned endpoint page.",
             supported_systems=["Darwin", "Linux", "Windows"],
-            translations={"US": "Endpoint 2", "ES": "Endpoint 2", "FR": "Endpoint 2"},
+            translations={"US": "Wazuh", "ES": "Wazuh", "FR": "Wazuh"},
             icon_light_path=os.path.join(_WAZUH_DIR, "add_user_light.png"),
             icon_dark_path=os.path.join(_WAZUH_DIR, "add_user_dark.png"),
             uninstall_enabled=True,
@@ -126,6 +126,11 @@ class Plugin(BasePlugin):
         self._page.grid_rowconfigure(0, weight=0)  # tab strip — fixed height
         self._page.grid_rowconfigure(1, weight=1)  # content — takes remaining space
 
+        # _build_tab_strip / _build_content_area replaced the widgets in
+        # _tab_buttons and _tab_panes with fresh instances. Reset _active_tab
+        # so _switch_tab doesn't short-circuit on the stale "previous session"
+        # value and skip gridding the Overview pane.
+        self._active_tab = None
         self._build_tab_strip()
         self._build_content_area()
         self._switch_tab("Overview")
@@ -234,12 +239,15 @@ class Plugin(BasePlugin):
         col = _TAB_NAMES.index(name)
         self._tab_underline.grid(row=1, column=col, sticky="ew", padx=(0, 24), pady=(0, 0))
 
-    def _on_tab_click(self, name):
-        if self._active_tab == name:
-            return
-        self._switch_tab(name)
+        # Record the active tab as page state. record_page_state checks
+        # _nav_suppress internally so back/forward replays are a no-op, and it
+        # promotes a stateless landing entry (e.g. (Wazuh, None) from a sidebar
+        # click) in place rather than appending a duplicate.
         if hasattr(self.app, "record_page_state"):
             self.app.record_page_state(name)
+
+    def _on_tab_click(self, name):
+        self._switch_tab(name)
 
     def apply_state(self, state):
         target = state if state in _TAB_NAMES else "Overview"
