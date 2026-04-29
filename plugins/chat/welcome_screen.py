@@ -99,9 +99,9 @@ class WelcomeScreen(customtkinter.CTkFrame):
             chips_box, text="TRY ASKING",
             font=customtkinter.CTkFont(
                 family="Inter", size=11, weight="bold"),
-            text_color=secondary, anchor="w",
+            text_color=RESISTINE_BLUE, anchor="w",
         )
-        section_label.pack(anchor="w", pady=(0, 8))
+        section_label.pack(anchor="w", pady=(16, 8))
 
         for suggestion in suggestions:
             chip = customtkinter.CTkFrame(
@@ -112,8 +112,8 @@ class WelcomeScreen(customtkinter.CTkFrame):
 
             # Bullet dot
             dot = customtkinter.CTkLabel(
-                chip, text="\u2022", width=16,
-                font=customtkinter.CTkFont(size=14),
+                chip, text="\u25CF", width=18,
+                font=customtkinter.CTkFont(size=8),
                 text_color=RESISTINE_BLUE, fg_color="transparent")
             dot.pack(side="left", padx=(14, 4), pady=8)
 
