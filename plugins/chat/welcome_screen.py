@@ -55,22 +55,24 @@ class WelcomeScreen(customtkinter.CTkFrame):
 
         fg_color = "#ffffff" if is_dark else "#000000"
         secondary = _secondary_color(is_dark)
-        card_bg = "#1A1A1C" if is_dark else "#ffffff"
-        card_hover = "#242426" if is_dark else "#F0F0F5"
-        divider = _divider_color(is_dark)
+        card_bg = "#2A2A2C" if is_dark else "#F5F5F7"
+        card_hover = "#353538" if is_dark else "#E8E8EC"
+        chip_fg = "#e0e0e0" if is_dark else "#1a1a1a"
+        arrow_fg = "#6B7280" if is_dark else "#9CA3AF"
 
         # Greeting
         greeting_label = customtkinter.CTkLabel(
             self,
-            text="Resistine AI",
-            font=customtkinter.CTkFont(family="Inter", size=26, weight="bold"),
+            text="How can I help you today?",
+            font=customtkinter.CTkFont(
+                family="Inter", size=24, weight="bold"),
             text_color=fg_color,
         )
         greeting_label.pack(pady=(0, 4))
 
         subtitle_label = customtkinter.CTkLabel(
             self,
-            text="Your AI security assistant. Ask me anything.",
+            text="Ask me anything about cybersecurity",
             font=customtkinter.CTkFont(family="Inter", size=14),
             text_color=secondary,
         )
@@ -81,30 +83,72 @@ class WelcomeScreen(customtkinter.CTkFrame):
             SUGGESTION_POOL, min(4, len(SUGGESTION_POOL))
         )
 
-        chips_frame = customtkinter.CTkFrame(self, fg_color="transparent")
-        chips_frame.pack()
+        # Measure longest text to set uniform chip width
+        import tkinter.font as tkfont
+        measure_font = tkfont.Font(family="Inter", size=13)
+        longest_px = max(measure_font.measure(s) for s in suggestions)
+        # dot(16+18) + text + arrow(20+18) + padding
+        chip_width = longest_px + 100
 
-        # 2x2 grid of suggestion chips
-        for i, suggestion in enumerate(suggestions):
-            row = i // 2
-            col = i % 2
+        # Container for TRY ASKING + chips, centered
+        chips_box = customtkinter.CTkFrame(
+            self, fg_color="transparent", width=chip_width)
+        chips_box.pack(pady=0)
 
-            chip = customtkinter.CTkButton(
-                chips_frame,
-                text=suggestion,
+        section_label = customtkinter.CTkLabel(
+            chips_box, text="TRY ASKING",
+            font=customtkinter.CTkFont(
+                family="Inter", size=11, weight="bold"),
+            text_color=secondary, anchor="w",
+        )
+        section_label.pack(anchor="w", pady=(0, 8))
+
+        for suggestion in suggestions:
+            chip = customtkinter.CTkFrame(
+                chips_box, fg_color=card_bg, corner_radius=12,
+                width=chip_width, height=48, cursor="hand2")
+            chip.pack(pady=4)
+            chip.pack_propagate(False)
+
+            # Bullet dot
+            dot = customtkinter.CTkLabel(
+                chip, text="\u2022", width=16,
+                font=customtkinter.CTkFont(size=14),
+                text_color=RESISTINE_BLUE, fg_color="transparent")
+            dot.pack(side="left", padx=(14, 4), pady=8)
+
+            # Suggestion text
+            lbl = customtkinter.CTkLabel(
+                chip, text=suggestion,
                 font=customtkinter.CTkFont(family="Inter", size=13),
-                fg_color=card_bg,
-                hover_color=card_hover,
-                text_color=fg_color,
-                corner_radius=10,
-                border_width=1,
-                border_color=divider,
-                height=44,
-                width=260,
-                anchor="w",
-                command=lambda s=suggestion: self._on_suggestion_click(s),
-            )
-            chip.grid(row=row, column=col, padx=6, pady=6)
+                text_color=chip_fg, fg_color="transparent",
+                anchor="w", justify="left")
+            lbl.pack(side="left", fill="x", expand=True, pady=8)
+
+            # Arrow
+            arrow = customtkinter.CTkLabel(
+                chip, text=">", width=20,
+                font=customtkinter.CTkFont(size=16),
+                text_color=arrow_fg, fg_color="transparent")
+            arrow.pack(side="right", padx=(4, 14), pady=8)
+
+            # Click bindings on all children
+            for widget in (chip, dot, lbl, arrow):
+                widget.bind(
+                    "<Button-1>",
+                    lambda _e, s=suggestion: self._on_suggestion_click(s))
+                widget.configure(cursor="hand2")
+
+            # Hover effect
+            def _enter(e, c=chip, bg=card_hover):
+                c.configure(fg_color=bg)
+
+            def _leave(e, c=chip, bg=card_bg):
+                c.configure(fg_color=bg)
+
+            for widget in (chip, dot, lbl, arrow):
+                widget.bind("<Enter>", _enter)
+                widget.bind("<Leave>", _leave)
 
 
 class ApiKeyMissingScreen(customtkinter.CTkFrame):

@@ -88,7 +88,7 @@ class ChatUIMixin:
         else:
             self._welcome_frame = ApiKeyMissingScreen(
                 self.chat_scroll, self._open_settings, is_dark)
-        self._welcome_frame.pack(expand=True, pady=(80, 0))
+        self._welcome_frame.pack(expand=True, fill="both", pady=(80, 0))
 
     def _build_input_bar(self, is_dark: bool) -> None:
         fg = "#ffffff" if is_dark else "#000000"
@@ -145,8 +145,8 @@ class ChatUIMixin:
             font=customtkinter.CTkFont(
                 family="Inter", size=16, weight="bold"),
             text_color=fg, fg_color="transparent")
-        # Hidden initially; shown after first message
-        self._header_visible = False
+        self._header_label.grid(row=0, column=1, pady=4)
+        self._header_visible = True
 
         self._new_chat_btn = customtkinter.CTkButton(
             header, text="+", width=btn_size, height=btn_size,
