@@ -863,34 +863,12 @@ class Plugin(BasePlugin):
     def _make_module_card(self, parent, row, column, card_data):
         text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
         target_tab = card_data.get("target_tab")
-        _, strip_color = self._badge_colors(card_data["status"])
 
-        # Container holds two siblings: a colored "strip" placed BEHIND the
-        # card body, same dimensions, shifted 10px to the left. Only the
-        # strip's leftmost 10px is visible — everything past that is hidden
-        # by the opaque card body, so the card's rounded right corners can't
-        # expose any severity color.
-        container = customtkinter.CTkFrame(parent, fg_color="transparent")
-        container.grid(row=row, column=column, sticky="nsew", padx=6, pady=6)
-        container.grid_columnconfigure(0, weight=1)
-        container.grid_rowconfigure(0, weight=1)
-
-        # Create the strip FIRST so default Tk stacking order puts it below
-        # the card naturally — no lower() needed (which on CTkFrame can sink
-        # the widget beneath the parent's internal canvas and hide the fill).
-        strip = customtkinter.CTkFrame(
-            container, corner_radius=12, fg_color=strip_color, border_width=0
-        )
-
-        card = customtkinter.CTkFrame(container, corner_radius=12, border_width=1)
-        card.grid(row=0, column=0, sticky="nsew", padx=(10, 0))
+        card = customtkinter.CTkFrame(parent, corner_radius=12, border_width=1)
+        card.grid(row=row, column=column, sticky="nsew", padx=6, pady=6)
         card.grid_columnconfigure(0, weight=1)
         card.grid_columnconfigure(1, weight=0)
         card.grid_rowconfigure(2, weight=1)
-
-        # Place the strip relative to the card's geometry; place(in_=...)
-        # tracks the card if it ever resizes.
-        strip.place(in_=card, x=-10, y=0, relwidth=1, relheight=1)
 
         title = customtkinter.CTkLabel(
             card,
@@ -948,7 +926,7 @@ class Plugin(BasePlugin):
             def on_click(_e=None, t=target_tab):
                 self._switch_tab(t)
 
-            for w in (container, strip, card, title, desc, stats, arrow, *stat_labels):
+            for w in (card, title, desc, stats, arrow, *stat_labels):
                 w.bind("<Button-1>", on_click)
                 try:
                     w.configure(cursor="hand2")
