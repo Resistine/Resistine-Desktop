@@ -846,6 +846,9 @@ cat > "$DIST_DIR/distribution.xml" << DISTEOF
     <organization>com.resistine</organization>
     <domains enable_localSystem="true"/>
     <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+    <welcome file="welcome.html" mime-type="text/html"/>
+    <license file="license.html" mime-type="text/html"/>
+    <conclusion file="conclusion.html" mime-type="text/html"/>
     <volume-check>
         <allowed-os-versions>
             <os-version min="13.0"/>
@@ -864,6 +867,13 @@ cat > "$DIST_DIR/distribution.xml" << DISTEOF
 </installer-gui-script>
 DISTEOF
 
+# Resources directory containing welcome/license/conclusion HTML
+PKG_RESOURCES_DIR="$PYTHON_UI_PATH/packaging/pkg-resources"
+if [ ! -d "$PKG_RESOURCES_DIR" ]; then
+    echo "  Error: pkg resources directory not found at: $PKG_RESOURCES_DIR"
+    exit 1
+fi
+
 # Build the final product archive
 echo "  - Building product archive..."
 PKG_PATH="$DIST_DIR/$APP_NAME-Installer.pkg"
@@ -872,6 +882,7 @@ if [ -n "$INSTALLER_NAME" ]; then
     productbuild \
         --distribution "$DIST_DIR/distribution.xml" \
         --package-path "$DIST_DIR" \
+        --resources "$PKG_RESOURCES_DIR" \
         --sign "$INSTALLER_NAME" \
         --timestamp \
         "$PKG_PATH"
@@ -880,6 +891,7 @@ else
     productbuild \
         --distribution "$DIST_DIR/distribution.xml" \
         --package-path "$DIST_DIR" \
+        --resources "$PKG_RESOURCES_DIR" \
         "$PKG_PATH"
     echo "  PKG created (unsigned)"
 fi
