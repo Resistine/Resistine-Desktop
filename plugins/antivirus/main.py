@@ -103,6 +103,7 @@ class Plugin(BasePlugin):
         self._banner_progress = None
         self._scanning = False
         self._scan_handle = None
+        self._cancel_requested = False
         self._last_state = None
         self._last_status = None
         self._auto_update_timer = None
@@ -457,6 +458,16 @@ class Plugin(BasePlugin):
         can_scan = state not in ("not_installed", "no_database")
         self._set_scan_buttons_state("normal" if can_scan else "disabled")
 
+        # Scan Computer is gated on real-time protection: only users with
+        # clamonacc running get full-disk scans, since on-demand-only mode
+        # doesn't carry the same trust assumptions about FDA + daemons.
+        realtime_on = bool(status.get("clamonacc_running"))
+        computer_btn = self._action_buttons.get("scan_computer")
+        if computer_btn:
+            computer_btn.configure(
+                state="normal" if (can_scan and realtime_on) else "disabled",
+            )
+
     def _schedule_status_poll(self):
         """Schedule the next realtime status poll if the UI is still alive."""
         try:
@@ -570,6 +581,19 @@ class Plugin(BasePlugin):
             btn = self._action_buttons.get(key)
             if btn:
                 btn.configure(state=state)
+        # scan_computer is gated separately on real-time protection — only
+        # re-enable it if the last poll said clamonacc is running.
+        computer_btn = self._action_buttons.get("scan_computer")
+        if computer_btn:
+            realtime_on = bool(
+                self._last_status and self._last_status.get("clamonacc_running"),
+            )
+            if state == "disabled":
+                computer_btn.configure(state="disabled")
+            else:
+                computer_btn.configure(
+                    state="normal" if realtime_on else "disabled",
+                )
 
     # ── System Daemon Activation ────────────────────────────────
 
@@ -611,7 +635,7 @@ class Plugin(BasePlugin):
         actions = {
             "scan_file": self._start_file_scan,
             "scan_directory": self._start_directory_scan,
-            "scan_computer": self.full_computer_scan_placeholder,
+            "scan_computer": self._start_computer_scan,
             "update_sigs": self._start_sig_update,
             "whitelist_add": self._add_whitelist_entry,
         }
@@ -659,8 +683,194 @@ class Plugin(BasePlugin):
             return
         self._run_scan(path)
 
-    def full_computer_scan_placeholder(self):
-        pass
+    def _computer_scan_targets(self) -> list[str]:
+        """Return the fixed list of directories scanned by 'Scan Computer'.
+
+        Picks user-data and app dirs that exist on disk and aren't
+        whitelisted. Skips system roots that would balloon scan time
+        (/System on macOS, C:\\Windows on Windows) — clamonacc handles
+        real-time coverage there.
+        """
+        system = platform.system()
+        home = os.path.expanduser("~")
+        if system == "Darwin":
+            candidates = [
+                home,
+                "/Applications",
+                "/Library/LaunchAgents",
+                "/Library/LaunchDaemons",
+                "/usr/local/bin",
+                "/opt/homebrew/bin",
+                "/tmp",
+            ]
+        elif system == "Windows":
+            candidates = [
+                home,
+                os.environ.get("PROGRAMFILES", r"C:\Program Files"),
+                os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"),
+                os.environ.get("PROGRAMDATA", r"C:\ProgramData"),
+                os.environ.get("TEMP", r"C:\Windows\Temp"),
+            ]
+        else:  # Linux / other POSIX
+            candidates = [
+                home,
+                "/opt",
+                "/usr/local/bin",
+                "/tmp",
+            ]
+        targets = []
+        for path in candidates:
+            if not path or not os.path.isdir(path):
+                continue
+            if clamav.is_path_whitelisted(path):
+                continue
+            targets.append(path)
+        return targets
+
+    def _start_computer_scan(self):
+        """Scan a fixed set of directories (Documents, Applications, etc.)."""
+        if self._scanning:
+            return
+        targets = self._computer_scan_targets()
+        if not targets:
+            messagebox.showinfo(
+                "Nothing to Scan",
+                "No scannable directories found. Check your whitelist.",
+                parent=self.app,
+            )
+            return
+        self._run_multi_scan(targets)
+
+    def _run_multi_scan(self, targets: list[str]):
+        """Run scans on multiple targets sequentially, aggregating results."""
+        self._scanning = True
+        self._cancel_requested = False
+        self._set_scan_buttons_state("disabled")
+        self._log_clear()
+
+        self._scan_progress.grid()
+        self._scan_progress.configure(mode="indeterminate")
+        self._scan_progress.start()
+
+        cancel_btn = self._action_buttons.get("cancel_scan")
+        if cancel_btn:
+            cancel_btn.grid()
+
+        self._log_append(
+            f"Scanning computer ({len(targets)} location"
+            f"{'s' if len(targets) != 1 else ''})...",
+        )
+        for t in targets:
+            self._log_append(f"  • {t}")
+
+        # Cumulative counters across all targets
+        agg = {
+            "scanned": 0,
+            "infected": 0,
+            "infections": [],
+            "files_seen": 0,
+            "total_files": 0,
+            "cancelled": False,
+        }
+
+        def _worker():
+            for idx, target in enumerate(targets, 1):
+                if agg["cancelled"] or self._cancel_requested:
+                    agg["cancelled"] = True
+                    break
+                self.app.after(
+                    0, self._on_multi_scan_target_start, idx, len(targets), target,
+                )
+                # Visibility: $HOME and similar large dirs spend 30s–2min in
+                # _walk_files before scan_path emits anything. Print the
+                # target so the UI doesn't look frozen during the walk.
+                self.app.after(
+                    0, self._log_append,
+                    f"[{idx}/{len(targets)}] Indexing {target}...",
+                )
+                done = threading.Event()
+                target_total = [0]
+
+                def on_total(total: int, _t=target_total):
+                    _t[0] = total
+                    self.app.after(
+                        0, self._on_scan_total_known_multi, total, agg,
+                    )
+
+                def on_progress(line: str):
+                    self.app.after(0, self._log_append, line)
+                    if ":" in line and ("OK" in line or "FOUND" in line):
+                        agg["files_seen"] += 1
+                        total = agg["total_files"]
+                        if total > 0:
+                            status = (
+                                f"Scanned {agg['files_seen']} / {total} files"
+                            )
+                            pct = agg["files_seen"] / total
+                        else:
+                            status = f"Scanned {agg['files_seen']} files"
+                            pct = None
+                        self.app.after(
+                            0, self._on_scan_file_done, status, pct,
+                        )
+
+                def on_complete(result: ScanResult):
+                    if result.error and "cancelled" in result.error.lower():
+                        agg["cancelled"] = True
+                    elif result.error:
+                        # Don't abort the whole sweep on a single-dir error;
+                        # log it and move on.
+                        self.app.after(
+                            0, self._log_append,
+                            f"Error scanning {result.target}: {result.error}",
+                        )
+                    else:
+                        agg["scanned"] += result.scanned
+                        agg["infected"] += result.infected
+                        agg["infections"].extend(result.infections)
+                    done.set()
+
+                self._scan_handle = scan(
+                    target,
+                    on_progress=on_progress,
+                    on_complete=on_complete,
+                    on_total=on_total,
+                )
+                done.wait()
+                self._scan_handle = None
+
+            final = ScanResult(
+                target="Computer",
+                scanned=agg["scanned"],
+                infected=agg["infected"],
+                infections=agg["infections"],
+                error="Scan cancelled." if agg["cancelled"] else "",
+            )
+            self.app.after(0, self._handle_scan_complete, final)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_multi_scan_target_start(
+        self, idx: int, total: int, target: str,
+    ):
+        """Update the status label as each directory in the sweep starts."""
+        short = os.path.basename(target.rstrip(os.sep)) or target
+        self._scan_status_label.configure(
+            text=f"[{idx}/{total}] Scanning: {short}",
+        )
+
+    def _on_scan_total_known_multi(self, total: int, agg: dict):
+        """Add this directory's file count to the aggregate progress total."""
+        agg["total_files"] += total
+        if agg["total_files"] > 0:
+            self._scan_progress.stop()
+            self._scan_progress.configure(mode="determinate")
+            if agg["files_seen"] > 0:
+                self._scan_progress.set(
+                    min(agg["files_seen"] / agg["total_files"], 1.0),
+                )
+            else:
+                self._scan_progress.set(0)
 
     def _run_scan(self, target: str):
         self._scanning = True
@@ -712,12 +922,16 @@ class Plugin(BasePlugin):
 
     def _cancel_scan(self):
         """Cancel the running scan."""
+        # Set the multi-scan cancel flag first so the worker loop won't
+        # start the next directory even if the click lands between targets
+        # (when self._scan_handle is briefly None).
+        self._cancel_requested = True
         if self._scan_handle and not self._scan_handle.cancelled:
             self._scan_handle.cancel()
-            self._log_append("Cancelling scan...")
-            cancel_btn = self._action_buttons.get("cancel_scan")
-            if cancel_btn:
-                cancel_btn.configure(state="disabled")
+        self._log_append("Cancelling scan...")
+        cancel_btn = self._action_buttons.get("cancel_scan")
+        if cancel_btn:
+            cancel_btn.configure(state="disabled")
 
     def _on_scan_total_known(self, total: int):
         """Switch progress bar to determinate mode when file count is known."""
@@ -738,6 +952,7 @@ class Plugin(BasePlugin):
     def _handle_scan_complete(self, result: ScanResult):
         self._scanning = False
         self._scan_handle = None
+        self._cancel_requested = False
         self._scan_progress.stop()
         self._scan_progress.set(1.0 if not result.error else 0)
         self._scan_progress.configure(mode="determinate")

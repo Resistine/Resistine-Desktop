@@ -522,7 +522,14 @@ def _scan_dir_socket(
     excl = get_scan_exclusions()
     excluded_ext = frozenset(excl["extensions"])
     max_bytes = excl["max_size_mb"] * 1048576 if excl["max_size_mb"] else 0
-    files = list(_walk_files(target, whitelist, excluded_ext, max_bytes))
+    # Walk incrementally so cancel takes effect within ~a second on huge
+    # trees (e.g. $HOME). Materializing the full walk first can take 30+s.
+    files = []
+    for fpath in _walk_files(target, whitelist, excluded_ext, max_bytes):
+        if cancel and cancel.is_set():
+            result["error"] = "Scan cancelled."
+            return result
+        files.append(fpath)
 
     if not files:
         result["duration"] = "0.000 sec (0 s)"
