@@ -101,8 +101,10 @@ Linux*)
 		fi
 		;;
 	*arch* | *manjaro* | *endeavouros*)
-		# openresolv conflicts with systemd-resolvconf (both provide /usr/bin/resolvconf)
-		if pacman -Qi openresolv &>/dev/null; then
+		# openresolv conflicts with systemd-resolvconf (both provide /usr/bin/resolvconf).
+		# `pacman -Qi` resolves the Provides field, and systemd-resolvconf provides openresolv,
+		# so we use `pacman -Qq | grep -Fxq` to match the literal installed package name only.
+		if pacman -Qq | grep -Fxq openresolv; then
 			echo "Removing openresolv (conflicts with systemd-resolvconf)..."
 			sudo pacman -Rns --noconfirm openresolv
 		fi
