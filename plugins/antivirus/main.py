@@ -84,7 +84,7 @@ class Plugin(BasePlugin):
             order=6,
             name="Antivirus",
             status=None,
-            description="Scan, quarantine, and protect against malware with ClamAV.",
+            description="Scan, quarantine and protect against malware.",
             supported_systems=["Darwin", "Linux", "Windows"],
             translations={"US": "Antivirus", "ES": "Antivirus", "FR": "Antivirus"},
             icon_light_path=os.path.join(_PLUGIN_DIR, "antivirus_light.png"),
@@ -193,8 +193,8 @@ class Plugin(BasePlugin):
         row = build_updates_card(self, self.main_frame, row)
         row = build_siem_card(self, self.main_frame, row)
 
-        # Show a development banner on Linux/Windows
-        if platform.system() in ("Linux", "Windows"):
+        # Show a development banner on Linux (Windows now wired up via Defender).
+        if platform.system() == "Linux":
             banner = customtkinter.CTkFrame(
                 self.main_frame,
                 fg_color=("#FEF3C7", "#2D1F05"),
@@ -207,7 +207,7 @@ class Plugin(BasePlugin):
             customtkinter.CTkLabel(
                 banner,
                 text=(
-                    "Antivirus is not hooked up on Windows and Linux yet. "
+                    "Antivirus is not hooked up on Linux yet. "
                     "This UI is for development purposes only."
                 ),
                 font=customtkinter.CTkFont(family="Inter", size=12),

@@ -43,6 +43,7 @@ from plugins.antivirus.clamav_common import (  # noqa: F401
     add_excluded_extensions,
     add_to_whitelist,
     delete_quarantined,
+    engine_name,
     ensure_config,
     get_binaries,
     get_db_info,
@@ -122,19 +123,38 @@ elif _system == "Linux":
     )
 
 elif _system == "Windows":
-    from plugins.antivirus.clamav_platform_windows import (  # noqa: F401
+    # Defender overrides: shadow the equivalent ClamAV symbols imported
+    # from clamav_common above so plugins.antivirus.clamav.* dispatches to
+    # Defender on Windows.
+    from plugins.antivirus.defender_windows import (  # noqa: F401
         activate_system_daemons,
         clamav_env,
         daemons_approved,
         deactivate_system_daemons,
+        delete_quarantined,
+        engine_name,
         ensure_daemons_registered,
         find_binary,
         find_certs_dir,
+        get_db_info,
+        get_realtime_status,
+        has_database,
         has_full_disk_access,
         is_app_bundle,
+        is_available,
+        is_clamav_installed,
+        is_clamd_running,
         is_clamonacc_running,
+        list_quarantined,
         open_fda_settings,
         open_login_items_settings,
+        quarantine_file,
+        refresh_system_configs,
+        restore_quarantined,
+        run_freshclam,
+        scan_path,
+        start_clamd,
+        stop_clamd,
         system_clamd_conf_path,
         system_clamd_socket_path,
         system_db_dir,

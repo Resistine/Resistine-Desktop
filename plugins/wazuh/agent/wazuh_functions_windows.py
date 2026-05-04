@@ -48,6 +48,13 @@ _SYSMON_LOCALFILE_BLOCK = """
     <log_format>eventchannel</log_format>
   </localfile>"""
 
+# Windows Defender localfile block to inject into ossec.conf
+_DEFENDER_LOCALFILE_BLOCK = """
+  <localfile>
+    <location>Microsoft-Windows-Windows Defender/Operational</location>
+    <log_format>eventchannel</log_format>
+  </localfile>"""
+
 
 def _is_admin():
     """Check if the current process has admin privileges."""
@@ -399,6 +406,66 @@ def _inject_sysmon_config():
     return success
 
 
+def inject_defender_config():
+    """Add Windows Defender eventchannel monitoring to ossec.conf if not present.
+
+    ossec.conf lives in Program Files and requires admin to write.
+    Uses a temp file + privileged copy to avoid a direct open() on a protected path.
+    """
+    if not os.path.exists(_OSSEC_CONF):
+        logger.warning("ossec.conf not found, cannot inject Defender config")
+        return False
+
+    try:
+        with open(_OSSEC_CONF, "r", encoding="utf-8") as f:
+            content = f.read()
+    except Exception as e:
+        logger.error(f"Failed to read ossec.conf: {e}")
+        return False
+
+    if "Microsoft-Windows-Windows Defender/Operational" in content:
+        logger.info("Defender monitoring already configured in ossec.conf")
+        return True
+
+    if "</ossec_config>" not in content:
+        logger.error("Could not find </ossec_config> tag in ossec.conf")
+        return False
+
+    updated = content.replace(
+        "</ossec_config>",
+        f"{_DEFENDER_LOCALFILE_BLOCK}\n</ossec_config>",
+    )
+
+    try:
+        tmp_conf = os.path.join(tempfile.gettempdir(), "resistine_ossec.conf")
+        with open(tmp_conf, "w", encoding="utf-8") as f:
+            f.write(updated)
+    except Exception as e:
+        logger.error(f"Failed to write temp ossec.conf: {e}")
+        return False
+
+    # Restart only if the service is currently running, so we don't fail
+    # mid-install when the agent hasn't been started yet.
+    copy_cmd = (
+        f"Copy-Item -Path '{tmp_conf}' -Destination '{_OSSEC_CONF}' -Force; "
+        f"$svc = Get-Service -Name '{_SERVICE_NAME}' -ErrorAction SilentlyContinue; "
+        f"if ($svc -and $svc.Status -eq 'Running') {{ "
+        f"Restart-Service -Name '{_SERVICE_NAME}' -Force "
+        f"}}"
+    )
+    success, output = _run_privileged(copy_cmd)
+    try:
+        os.unlink(tmp_conf)
+    except Exception:
+        pass
+
+    if success:
+        logger.info("Injected Defender monitoring config into ossec.conf")
+    else:
+        logger.error(f"Failed to copy updated ossec.conf: {output}")
+    return success
+
+
 def download_package(progress_callback=None):
     """Download the Wazuh MSI to a temporary directory.
 
@@ -570,8 +637,9 @@ def full_install(progress_callback=None):
     )
     _run_privileged(patch_cmd)
 
-    # Phase 6: Inject Sysmon monitoring into ossec.conf
+    # Phase 6: Inject Sysmon and Defender monitoring into ossec.conf
     _inject_sysmon_config()
+    inject_defender_config()
 
     # Phase 7: Enrollment — restore existing key or enroll fresh
     backup_dir = os.path.dirname(_KEY_BACKUP)

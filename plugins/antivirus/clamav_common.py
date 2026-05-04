@@ -95,10 +95,18 @@ def _get_platform():
     elif system == "Linux":
         from plugins.antivirus import clamav_platform_linux as mod
     elif system == "Windows":
-        from plugins.antivirus import clamav_platform_windows as mod
+        from plugins.antivirus import defender_windows as mod
     else:
         raise RuntimeError(f"Unsupported platform: {system}")
     return mod
+
+
+# ── Engine identity ──────────────────────────────────────
+
+
+def engine_name() -> str:
+    """Return the human-readable name of the antivirus engine."""
+    return "ClamAV"
 
 
 # ── Binary discovery (delegates to platform) ──────────────

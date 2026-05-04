@@ -37,6 +37,17 @@ def get_log_path() -> str:
     return os.path.join(_log_dir(), "threats.log")
 
 
+def get_log_display() -> str:
+    """Return a UI-friendly description of where threat events come from.
+
+    Defender writes to the Windows event log, not a syslog file, so the
+    file path on Mac/Linux maps to an event-channel name on Windows.
+    """
+    if platform.system() == "Windows":
+        return "Microsoft-Windows-Windows Defender/Operational"
+    return get_log_path()
+
+
 def _hostname() -> str:
     return platform.node() or "localhost"
 
@@ -175,7 +186,7 @@ def setup_wazuh_forwarding() -> tuple[bool, str]:
     if system == "Linux":
         return _inject_linux(conf)
     if system == "Windows":
-        return False, "Wazuh integration not yet supported on Windows."
+        return _inject_windows()
     return False, f"Unknown platform: {system}"
 
 
@@ -283,3 +294,21 @@ def _inject_linux(conf: str) -> tuple[bool, str]:
         except Exception as exc:
             return False, str(exc)
     return False, "Could not obtain admin privileges."
+
+
+def _inject_windows() -> tuple[bool, str]:
+    """Register the Windows Defender event channel with the Wazuh agent.
+
+    Defender writes to Microsoft-Windows-Windows Defender/Operational, which
+    the Wazuh agent reads directly via an <eventchannel> localfile entry — no
+    syslog file needed (unlike the ClamAV path used on Mac/Linux).
+    """
+    from plugins.wazuh.agent.wazuh_functions_windows import inject_defender_config
+
+    try:
+        ok = inject_defender_config()
+    except Exception as exc:
+        return False, str(exc)
+    if ok:
+        return True, "Configured. Defender events will forward to Wazuh."
+    return False, "Failed to update ossec.conf. See logs for details."
