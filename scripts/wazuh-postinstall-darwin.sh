@@ -128,7 +128,11 @@ if [ "$RESTORE_KEYS" = "true" ]; then
 
     if [ "$ENROLLMENT_RESULT" = "restored" ] && [ -s "$CLIENT_KEYS" ]; then
         chmod 640 "$CLIENT_KEYS"
-        chown root:wazuh "$CLIENT_KEYS"
+        if dscl . -read /Groups/wazuh PrimaryGroupID &>/dev/null; then
+            chown root:wazuh "$CLIENT_KEYS"
+        else
+            chown root:wheel "$CLIENT_KEYS"
+        fi
     else
         ENROLLMENT_RESULT="none"
     fi
@@ -159,7 +163,10 @@ CURRENT_STEP="launchd"
 write_status '{"status":"running","step":"launchd","pid":'"$$"'}'
 PLIST="/Library/LaunchDaemons/com.wazuh.agent.plist"
 launchctl bootout system "$PLIST" 2>/dev/null || true
-launchctl bootstrap system "$PLIST"
+if ! launchctl bootstrap system "$PLIST"; then
+    write_status "{\"status\":\"failed\",\"step\":\"launchd\",\"error\":\"launchctl bootstrap failed\"}"
+    exit 1
+fi
 
 # --- Done ---
 write_status "{\"status\":\"success\",\"step\":\"done\",\"enrollment\":\"${ENROLLMENT_RESULT}\"}"

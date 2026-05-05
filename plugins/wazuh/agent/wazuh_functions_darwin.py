@@ -65,15 +65,18 @@ def get_agent_name():
     """
     import re
     hostname = socket.gethostname()
-    uuid = _get_hardware_uuid()
-    if uuid:
-        suffix = uuid.replace("-", "")[-12:].upper()
+    hw_uuid = _get_hardware_uuid()
+    if hw_uuid:
+        suffix = hw_uuid.replace("-", "")[-12:].upper()
         name = f"{hostname}-{suffix}"
     else:
         name = hostname
     # Strip any character that isn't safe in a shell argument or Wazuh agent
     # name.  Wazuh allows: alphanumerics, hyphens, underscores, dots.
-    return re.sub(r"[^A-Za-z0-9.\-_]", "", name)
+    name = re.sub(r"[^A-Za-z0-9.\-_]", "", name)
+    if not name:
+        raise ValueError(f"Agent name is empty after sanitizing hostname: {hostname!r}")
+    return name
 
 
 def get_agent_group():
@@ -516,8 +519,11 @@ def _launch_postinstall(pkg_path, agent_name, agent_group, restore_keys):
 
     Returns (launched_ok, status_file_path).
     """
-    status_file = f"/tmp/resistine-wazuh-install-{int(time.time())}-{os.getpid()}.status"
-    log_file = f"/tmp/resistine-wazuh-install-{int(time.time())}-{os.getpid()}.log"
+    import uuid
+
+    unique_id = uuid.uuid4().hex[:12]
+    status_file = f"/tmp/resistine-wazuh-install-{unique_id}.status"
+    log_file = f"/tmp/resistine-wazuh-install-{unique_id}.log"
     script_path = _get_script_path()
 
     parts = [
