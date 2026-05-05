@@ -170,3 +170,10 @@ fi
 
 # --- Done ---
 write_status "{\"status\":\"success\",\"step\":\"done\",\"enrollment\":\"${ENROLLMENT_RESULT}\"}"
+
+# --- Self-cleanup: remove our one-shot LaunchDaemon plist ---
+INSTALLER_PLIST="/Library/LaunchDaemons/com.resistine.wazuh-installer.plist"
+if [ -f "$INSTALLER_PLIST" ]; then
+    launchctl bootout system "$INSTALLER_PLIST" 2>/dev/null || true
+    rm -f "$INSTALLER_PLIST"
+fi

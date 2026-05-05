@@ -228,14 +228,21 @@ def _run_privileged(script, timeout=120):
         return (False, str(e))
 
 
-def download_package(progress_callback=None):
-    """Download the Wazuh .pkg to a temporary directory using curl.
+def download_package(progress_callback=None, output_path=None):
+    """Download the Wazuh .pkg using curl.
+
+    If output_path is given, downloads directly to that location (creating
+    parent dirs as needed).  Otherwise uses a temporary directory.
 
     Returns the local path on success, or None on failure.
     """
     url = get_package_url()
-    tmp_dir = tempfile.mkdtemp(prefix="wazuh_")
-    pkg_path = os.path.join(tmp_dir, "wazuh-agent.pkg")
+    if output_path:
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        pkg_path = output_path
+    else:
+        tmp_dir = tempfile.mkdtemp(prefix="wazuh_")
+        pkg_path = os.path.join(tmp_dir, "wazuh-agent.pkg")
 
     if progress_callback:
         progress_callback("Downloading Wazuh agent...")
@@ -515,10 +522,25 @@ def _get_script_path():
 
 
 def _launch_postinstall(pkg_path, agent_name, agent_group, restore_keys):
-    """Launch the postinstall script detached from this process.
+    """Launch the postinstall script with admin privileges via osascript.
+
+    Copies the script to /tmp/ before execution because macOS Sequoia's
+    com.apple.provenance extended attribute blocks both execution AND
+    reading of files created by non-trusted apps (git, editors, etc.)
+    when running in a privileged context.  The copy in /tmp/ does not
+    inherit the provenance attribute.
+
+    In a signed .app bundle this isn't needed (the bundle signature
+    satisfies Gatekeeper), but the copy approach works in both dev and
+    production.
+
+    Uses subprocess.Popen so Python doesn't block waiting for the script
+    to finish.  start_new_session=True keeps osascript alive if the app
+    quits mid-install.
 
     Returns (launched_ok, status_file_path).
     """
+    import shutil
     import uuid
 
     unique_id = uuid.uuid4().hex[:12]
@@ -526,8 +548,13 @@ def _launch_postinstall(pkg_path, agent_name, agent_group, restore_keys):
     log_file = f"/tmp/resistine-wazuh-install-{unique_id}.log"
     script_path = _get_script_path()
 
-    parts = [
-        f"nohup {shlex.quote(script_path)}",
+    # Copy script to /tmp/ to strip com.apple.provenance xattr
+    tmp_script = f"/tmp/resistine-wazuh-postinstall-{unique_id}.sh"
+    shutil.copy2(script_path, tmp_script)
+    os.chmod(tmp_script, 0o755)
+
+    # Build the argument list for the script
+    args = [
         f"--pkg-path {shlex.quote(pkg_path)}",
         f"--agent-name {shlex.quote(agent_name)}",
         f"--agent-group {shlex.quote(agent_group)}",
@@ -536,12 +563,38 @@ def _launch_postinstall(pkg_path, agent_name, agent_group, restore_keys):
         f"--log-file {shlex.quote(log_file)}",
     ]
     if restore_keys:
-        parts.append("--restore-keys")
-    parts.append("</dev/null >/dev/null 2>&1 &")
+        args.append("--restore-keys")
 
-    launch_cmd = " ".join(parts)
-    success, _output = _run_privileged(launch_cmd, timeout=30)
-    return success, status_file
+    shell_cmd = f"{shlex.quote(tmp_script)} {' '.join(args)}"
+    escaped = shell_cmd.replace("\\", "\\\\").replace('"', '\\"')
+
+    try:
+        proc = subprocess.Popen(
+            [
+                "osascript", "-e",
+                f'do shell script "{escaped}" with administrator privileges',
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        # Wait briefly to catch immediate failures (user cancelled password)
+        try:
+            proc.wait(timeout=2)
+            # If it returned in <2s, user likely cancelled
+            if proc.returncode != 0:
+                stderr = proc.stderr.read().decode() if proc.stderr else ""
+                logger.error(f"osascript failed immediately: rc={proc.returncode} {stderr}")
+                return False, status_file
+        except subprocess.TimeoutExpired:
+            # Still running = admin prompt accepted, script executing
+            pass
+        logger.info(f"Postinstall launched (pid={proc.pid}), status_file={status_file}")
+        return True, status_file
+    except Exception as e:
+        logger.error(f"Failed to launch postinstall: {e}")
+        return False, status_file
 
 
 def _poll_install_status(status_file):
@@ -591,7 +644,7 @@ def full_install(progress_callback=None):
         return False
 
     # 3. Launch the standalone postinstall script with admin privileges.
-    #    The script runs detached (nohup ... &) so it survives app quit.
+    #    Runs via osascript Popen (start_new_session) so it survives app quit.
     if progress_callback:
         progress_callback("Installing Wazuh agent (admin password required)...")
 

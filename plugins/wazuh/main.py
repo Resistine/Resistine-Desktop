@@ -14,8 +14,8 @@ import customtkinter
 from customtkinter import ThemeManager
 
 from plugins.base_plugin import BasePlugin
-from plugins.vpn.main import is_vpn_connected
 from plugins.wazuh.config import WAZUH_MANAGER
+from utils import settings
 from utils.logger import logger
 
 _PLATFORM = platform.system()
@@ -259,79 +259,186 @@ class Plugin(BasePlugin):
         self._progress_label.grid(row=row, column=0, columnspan=2, padx=20, pady=(12, 0), sticky="w")
         row += 1
 
-        customtkinter.CTkButton(
+        self._install_btn = customtkinter.CTkButton(
             card,
             text="Reinstall Agent",
             height=40,
             corner_radius=8,
             font=customtkinter.CTkFont(size=14, weight="bold"),
-            command=self._start_installation,
-        ).grid(row=row, column=0, columnspan=2, sticky="ew", padx=20, pady=(8, 20))
+            command=self._start_reinstall,
+        )
+        self._install_btn.grid(row=row, column=0, columnspan=2, sticky="ew", padx=20, pady=(8, 20))
         row += 1
 
         return row
 
-    # --- Card: Not Installed ---
+    # --- Card: Not Installed (state-driven) ---
 
     def _build_install_section(self, card, row):
+        from plugins.wazuh.agent.installer_service import (
+            STATE_DOWNLOADED,
+            STATE_DOWNLOAD_FAILED,
+            STATE_DOWNLOADING,
+            STATE_INSTALL_FAILED,
+            STATE_INSTALLING,
+            STATE_NOT_STARTED,
+            get_failure_reason,
+            get_install_state,
+        )
+
+        state = get_install_state()
+        logged_in = settings.get("auth", "logged_in", False)
+
+        # Title
         customtkinter.CTkLabel(
             card,
-            text="SIEM Agent",
+            text="Security Agent",
             font=customtkinter.CTkFont(**_FONT_TITLE),
         ).grid(row=row, column=0, columnspan=2, padx=20, pady=(20, 4), sticky="w")
         row += 1
 
-        customtkinter.CTkLabel(
-            card,
-            text=(
-                "The SIEM agent collects security telemetry from this machine "
-                "and reports to the Resistine SIEM dashboard."
-            ),
-            font=customtkinter.CTkFont(size=13),
-            text_color=_COLOR_MUTED,
-            wraplength=460,
-            justify="left",
-        ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 12), sticky="w")
-        row += 1
-
-        row = self._add_separator(card, row)
-
-        row = self._add_detail_rows(card, row, {
-            "Agent Name": get_agent_name(),
-            "Agent Group": get_agent_group(),
-            "Manager": WAZUH_MANAGER,
-        })
-
-        vpn_ok = is_vpn_connected()
-        if not vpn_ok:
+        # State-specific content
+        if state == STATE_NOT_STARTED and not logged_in:
             customtkinter.CTkLabel(
                 card,
-                text="Connect VPN to install the SIEM agent",
-                font=customtkinter.CTkFont(size=13, weight="bold"),
-                text_color=_COLOR_ERROR,
-            ).grid(row=row, column=0, columnspan=2, padx=20, pady=(12, 0), sticky="w")
+                text="Log in to enable endpoint protection.",
+                font=customtkinter.CTkFont(size=13),
+                text_color=_COLOR_MUTED,
+                wraplength=460, justify="left",
+            ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="w")
             row += 1
 
-        self._progress_label = customtkinter.CTkLabel(
-            card,
-            text="",
-            font=customtkinter.CTkFont(size=13),
-            text_color=_COLOR_ACCENT,
-        )
-        self._progress_label.grid(row=row, column=0, columnspan=2, padx=20, pady=(12, 0), sticky="w")
-        row += 1
+        elif state in (STATE_NOT_STARTED, STATE_DOWNLOADING):
+            customtkinter.CTkLabel(
+                card,
+                text="Downloading security agent...",
+                font=customtkinter.CTkFont(size=13),
+                text_color=_COLOR_ACCENT,
+                wraplength=460, justify="left",
+            ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 8), sticky="w")
+            row += 1
+            bar = customtkinter.CTkProgressBar(card, mode="indeterminate", width=300)
+            bar.grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="ew")
+            bar.start()
+            row += 1
 
-        self._install_btn = customtkinter.CTkButton(
-            card,
-            text="Install Agent",
-            height=40,
-            corner_radius=8,
-            font=customtkinter.CTkFont(size=14, weight="bold"),
-            command=self._start_installation,
-            state="normal" if vpn_ok else "disabled",
-        )
-        self._install_btn.grid(row=row, column=0, columnspan=2, sticky="ew", padx=20, pady=(8, 20))
-        row += 1
+        elif state == STATE_DOWNLOAD_FAILED:
+            reason = get_failure_reason()
+            _REASON_MSG = {
+                "dns_failed": "Download failed — check your internet connection.",
+                "network_timeout": "Download timed out. Please try again.",
+                "signature_invalid": "Package signature invalid. Will retry with a fresh download.",
+            }
+            msg = _REASON_MSG.get(reason, f"Download failed ({reason}).")
+            customtkinter.CTkLabel(
+                card, text=msg,
+                font=customtkinter.CTkFont(size=13),
+                text_color=_COLOR_ERROR, wraplength=460, justify="left",
+            ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 8), sticky="w")
+            row += 1
+            customtkinter.CTkButton(
+                card, text="Retry", height=36, corner_radius=8,
+                font=customtkinter.CTkFont(size=13, weight="bold"),
+                command=self._retry_download,
+            ).grid(row=row, column=0, columnspan=2, sticky="ew", padx=20, pady=(4, 20))
+            row += 1
+
+        elif state == STATE_DOWNLOADED:
+            # Pre-consent card
+            customtkinter.CTkLabel(
+                card,
+                text=(
+                    "We're about to install a system security component "
+                    "that monitors your device for threats."
+                ),
+                font=customtkinter.CTkFont(size=13),
+                text_color=_COLOR_MUTED, wraplength=460, justify="left",
+            ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 4), sticky="w")
+            row += 1
+            customtkinter.CTkLabel(
+                card,
+                text="This requires your password to allow the installation.",
+                font=customtkinter.CTkFont(size=13),
+                text_color=_COLOR_MUTED, wraplength=460, justify="left",
+            ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 12), sticky="w")
+            row += 1
+
+            row = self._add_separator(card, row)
+            row = self._add_detail_rows(card, row, {
+                "Agent Name": get_agent_name(),
+                "Agent Group": get_agent_group(),
+                "Manager": WAZUH_MANAGER,
+            })
+
+            self._progress_label = customtkinter.CTkLabel(
+                card, text="",
+                font=customtkinter.CTkFont(size=13), text_color=_COLOR_ACCENT,
+            )
+            self._progress_label.grid(
+                row=row, column=0, columnspan=2, padx=20, pady=(12, 0), sticky="w"
+            )
+            row += 1
+
+            self._install_btn = customtkinter.CTkButton(
+                card, text="Install Security", height=40, corner_radius=8,
+                font=customtkinter.CTkFont(size=14, weight="bold"),
+                command=self._start_installation,
+            )
+            self._install_btn.grid(
+                row=row, column=0, columnspan=2, sticky="ew", padx=20, pady=(8, 20)
+            )
+            row += 1
+
+        elif state == STATE_INSTALLING:
+            self._progress_label = customtkinter.CTkLabel(
+                card, text="Installing...",
+                font=customtkinter.CTkFont(size=13), text_color=_COLOR_ACCENT,
+            )
+            self._progress_label.grid(
+                row=row, column=0, columnspan=2, padx=20, pady=(0, 8), sticky="w"
+            )
+            row += 1
+            bar = customtkinter.CTkProgressBar(card, mode="indeterminate", width=300)
+            bar.grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="ew")
+            bar.start()
+            row += 1
+            # Start polling progress
+            self._poll_install()
+
+        elif state == STATE_INSTALL_FAILED:
+            reason = get_failure_reason()
+            _REASON_MSG = {
+                "user_canceled": "Installation was cancelled.",
+                "script_failed": "Installation script encountered an error.",
+                "pkg_corrupted": "Package file is corrupted. Retry to re-download.",
+            }
+            msg = _REASON_MSG.get(reason, f"Installation failed ({reason}).")
+            customtkinter.CTkLabel(
+                card, text=msg,
+                font=customtkinter.CTkFont(size=13),
+                text_color=_COLOR_ERROR, wraplength=460, justify="left",
+            ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 8), sticky="w")
+            row += 1
+
+            # Don't show retry for user_canceled — they chose to cancel
+            if reason != "user_canceled":
+                customtkinter.CTkButton(
+                    card, text="Retry", height=36, corner_radius=8,
+                    font=customtkinter.CTkFont(size=13, weight="bold"),
+                    command=self._retry_install,
+                ).grid(row=row, column=0, columnspan=2, sticky="ew", padx=20, pady=(4, 20))
+                row += 1
+            else:
+                # Show "Install Security" again for user-canceled
+                self._install_btn = customtkinter.CTkButton(
+                    card, text="Install Security", height=40, corner_radius=8,
+                    font=customtkinter.CTkFont(size=14, weight="bold"),
+                    command=self._start_installation,
+                )
+                self._install_btn.grid(
+                    row=row, column=0, columnspan=2, sticky="ew", padx=20, pady=(4, 20)
+                )
+                row += 1
 
         return row
 
@@ -377,15 +484,6 @@ class Plugin(BasePlugin):
         self._agent_toggle.grid(row=row, column=0, columnspan=2, padx=20, pady=(4, 12), sticky="w")
         row += 1
 
-        if not is_vpn_connected():
-            customtkinter.CTkLabel(
-                card,
-                text="VPN disconnected \u2014 agent cannot reach the manager",
-                font=customtkinter.CTkFont(size=12),
-                text_color=_COLOR_ERROR,
-            ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 8), sticky="w")
-            row += 1
-
         row = self._add_separator(card, row)
 
         row = self._add_detail_rows(card, row, {
@@ -420,32 +518,114 @@ class Plugin(BasePlugin):
     # --- Installation (background thread) ---
 
     def _start_installation(self):
+        """User clicked 'Install Security' — trigger via installer service."""
+        from plugins.wazuh.agent.installer_service import trigger_install
+
         if self._installing:
             return
         self._installing = True
-        self._install_btn.configure(state="disabled", text="Installing...")
+        self._install_poll_count = 0
+        if hasattr(self, "_install_btn") and self._install_btn.winfo_exists():
+            self._install_btn.configure(state="disabled", text="Installing...")
+
+        def _run():
+            try:
+                launched = trigger_install(self.app)
+            except Exception as e:
+                logger.error(f"Installation trigger error: {e}")
+                launched = False
+            if launched:
+                self.app.after(0, self._poll_install)
+            else:
+                self._installing = False
+                self.app.after(0, self._refresh_screen)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    _MAX_POLL_COUNT = 100  # 100 * 3s = 5 minutes max
+
+    def _poll_install(self):
+        """Poll installer service for progress, update UI."""
+        from plugins.wazuh.agent.installer_service import poll_install_progress
+
+        if not hasattr(self, "main_container") or not self.main_container.winfo_exists():
+            self._installing = False
+            return
+
+        self._install_poll_count = getattr(self, "_install_poll_count", 0) + 1
+        if self._install_poll_count > self._MAX_POLL_COUNT:
+            self._installing = False
+            self.app.show_notification("Installation timed out", type="error")
+            self._refresh_screen()
+            return
+
+        result = poll_install_progress()
+        step = result.get("step", "")
+
+        _STEP_LABELS = {
+            "install_pkg": "Installing package...",
+            "patch_config": "Configuring agent...",
+            "enrollment": "Enrolling agent...",
+            "key_backup": "Backing up keys...",
+            "launchd": "Starting agent service...",
+            "done": "Finishing up...",
+        }
+
+        if hasattr(self, "_progress_label") and self._progress_label.winfo_exists():
+            label = _STEP_LABELS.get(step, f"Installing... ({step})" if step else "Installing...")
+            self._progress_label.configure(text=label)
+
+        if result["finished"]:
+            self._installing = False
+            if result["success"]:
+                self.app.show_notification("Security agent installed!", type="success")
+            else:
+                self.app.show_notification("Installation failed", type="error")
+            self._refresh_screen()
+        else:
+            # Poll again in 3 seconds
+            self.app.after(3000, self._poll_install)
+
+    def _retry_download(self):
+        """User clicked Retry on download failure."""
+        from plugins.wazuh.agent.installer_service import retry
+        threading.Thread(target=retry, daemon=True).start()
+        # Refresh to show downloading state
+        self.app.after(500, self._refresh_screen)
+
+    def _retry_install(self):
+        """User clicked Retry on install failure."""
+        from plugins.wazuh.agent.installer_service import retry
+        retry()
+        self._refresh_screen()
+
+    def _start_reinstall(self):
+        """Re-enrollment: remove agent and run full_install directly."""
+        if self._installing:
+            return
+        self._installing = True
+        self._install_btn.configure(state="disabled", text="Reinstalling...")
 
         def _progress(msg):
             self.app.after(0, lambda: self._progress_label.configure(text=msg))
 
-        def _done(success):
-            logger.info(f"SIEM install done: success={success}")
-            self._installing = False
-            if success:
-                self.app.show_notification("SIEM agent installed successfully!", type="success")
-                self._refresh_screen()
-            else:
-                self._install_btn.configure(state="normal", text="Retry Install")
-                self.app.show_notification("SIEM agent installation failed", type="error")
-
         def _run():
+            from plugins.wazuh.agent.wazuh_functions_darwin import remove_agent
+            _progress("Removing old agent...")
+            remove_agent()
             try:
                 ok = full_install(progress_callback=_progress)
             except Exception as e:
-                logger.error(f"Installation error: {e}")
+                logger.error(f"Reinstall error: {e}")
                 ok = False
-                _progress(f"Error: {e}")
-            self.app.after(100, lambda s=ok: _done(s))
+            self._installing = False
+            if ok:
+                self.app.after(0, lambda: self.app.show_notification(
+                    "Agent reinstalled!", type="success"))
+            else:
+                self.app.after(0, lambda: self.app.show_notification(
+                    "Reinstall failed", type="error"))
+            self.app.after(100, self._refresh_screen)
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -456,11 +636,6 @@ class Plugin(BasePlugin):
         want_start = switch_value == 1
 
         if want_start == is_running:
-            return
-
-        if want_start and not is_vpn_connected():
-            self.app.show_notification("Connect VPN first", type="error")
-            self._agent_toggle.deselect()
             return
 
         self._agent_toggle.configure(state="disabled")
