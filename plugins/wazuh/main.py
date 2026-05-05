@@ -411,6 +411,7 @@ class Plugin(BasePlugin):
                 "user_canceled": "Installation was cancelled.",
                 "script_failed": "Installation script encountered an error.",
                 "pkg_corrupted": "Package file is corrupted. Retry to re-download.",
+                "no_status_file": "Installation was interrupted. Click Retry.",
             }
             msg = _REASON_MSG.get(reason, f"Installation failed ({reason}).")
             customtkinter.CTkLabel(
@@ -519,10 +520,18 @@ class Plugin(BasePlugin):
 
     def _start_installation(self):
         """User clicked 'Install Security' — trigger via installer service."""
-        from plugins.wazuh.agent.installer_service import trigger_install
+        from plugins.wazuh.agent.installer_service import (
+            get_install_state,
+            retry,
+            trigger_install,
+            STATE_INSTALL_FAILED,
+        )
 
         if self._installing:
             return
+        # If state is install_failed (e.g. user canceled), reset to downloaded first
+        if get_install_state() == STATE_INSTALL_FAILED:
+            retry()
         self._installing = True
         self._install_poll_count = 0
         if hasattr(self, "_install_btn") and self._install_btn.winfo_exists():

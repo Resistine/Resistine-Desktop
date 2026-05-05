@@ -165,6 +165,10 @@ def poll_install_progress() -> dict:
 
     status_file = settings.get(_NAMESPACE, "install_status_file", "")
     if not status_file:
+        # No status file means install was never properly launched — fail the state
+        # to break any polling loop.
+        if get_install_state() == STATE_INSTALLING:
+            _fail(STATE_INSTALL_FAILED, "no_status_file")
         return {"finished": True, "success": False, "step": "", "error": "no status file"}
 
     finished, success, details = _poll_install_status(status_file)
