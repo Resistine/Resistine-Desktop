@@ -187,9 +187,11 @@ class Plugin(BasePlugin):
         if installed and not needs_reenrollment():
             self._start_status_polling()
             # If the agent is stopped, try restoring client.keys from backup
-            # (covers the case where the app was reinstalled and the key was lost).
+            # (covers key loss from disk corruption, manual deletion, etc.).
+            # Wrapped in _deferred_restore to avoid a spurious admin prompt
+            # right after fresh install (launchd may still be bootstrapping).
             if get_agent_status() != "Running":
-                threading.Thread(target=restore_client_key_if_needed, daemon=True).start()
+                threading.Thread(target=self._deferred_restore, daemon=True).start()
 
         return self.main_container
 
@@ -395,6 +397,25 @@ class Plugin(BasePlugin):
         })
 
         return row
+
+    # --- Key Restore (background thread) ---
+
+    def _deferred_restore(self):
+        """Wait briefly for launchd to finish bootstrapping, then restore keys if needed.
+
+        After a fresh install the agent may appear "Stopped" for a few seconds
+        while launchd is still starting wazuh-agentd.  Without this delay,
+        restore_client_key_if_needed would fire immediately and show a
+        pointless admin password prompt (the key is already in place).
+        """
+        import time
+
+        # Allow launchd time to fully bootstrap wazuh-agentd after install.
+        _LAUNCHD_SETTLE_SECONDS = 8
+        time.sleep(_LAUNCHD_SETTLE_SECONDS)
+        if get_agent_status() == "Running":
+            return
+        restore_client_key_if_needed()
 
     # --- Installation (background thread) ---
 

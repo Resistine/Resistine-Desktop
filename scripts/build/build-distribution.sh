@@ -821,8 +821,34 @@ cat > "$PKG_SCRIPTS_DIR/postinstall" << 'POSTEOF'
 # Register with LaunchServices so Spotlight / Finder recognise the app
 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -f "/Applications/Resistine.app" 2>/dev/null || true
 
-# Register the network extension with pluginkit
-pluginkit -a "/Applications/Resistine.app/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension" 2>/dev/null || true
+# NOTE: System Extensions (.systemextension) are NOT managed by pluginkit.
+# They are activated via OSSystemExtensionRequest from the running app.
+# The app triggers extension activation/replacement on launch automatically.
+
+# Clean up stale log files from previous versions (the network extension
+# used to write to ~/Library/Logs/resistine.log but this can contain
+# outdated error messages that confuse diagnostics).
+CONSOLE_USER=$( /usr/bin/stat -f "%Su" /dev/console 2>/dev/null || echo "" )
+if [ -n "$CONSOLE_USER" ]; then
+    STALE_LOG=$( eval echo "~$CONSOLE_USER/Library/Logs/resistine.log" )
+    if [ -f "$STALE_LOG" ]; then
+        rm -f "$STALE_LOG" 2>/dev/null || true
+    fi
+    STALE_ERR=$( eval echo "~$CONSOLE_USER/Library/Logs/resistine-error.log" )
+    if [ -f "$STALE_ERR" ]; then
+        rm -f "$STALE_ERR" 2>/dev/null || true
+    fi
+fi
+
+# Clean up legacy ClamAV daemon labels from versions <= 4.12
+# Old versions registered these directly; new versions use SMAppService.
+for label in com.resistine.clamd com.resistine.freshclam; do
+    plist="/Library/LaunchDaemons/${label}.plist"
+    if [ -f "$plist" ]; then
+        launchctl bootout system "$plist" 2>/dev/null || true
+        rm -f "$plist" 2>/dev/null || true
+    fi
+done
 
 exit 0
 POSTEOF
@@ -1045,12 +1071,13 @@ cp -R "$PYTHON_APP" "/Applications/$APP_NAME.app" && {
     echo "  Failed to install (may need sudo)"
 }
 
-# Register with LaunchServices and pluginkit so macOS discovers the network extension
+# Register with LaunchServices so Spotlight / Finder recognise the new build
 echo "  - Registering app with LaunchServices..."
 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -f "/Applications/$APP_NAME.app" 2>/dev/null || true
 
-echo "  - Registering network extension with pluginkit..."
-pluginkit -a "/Applications/$APP_NAME.app/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension" 2>/dev/null || true
+# NOTE: System Extensions are activated via OSSystemExtensionRequest at app
+# launch, not via pluginkit (which is for PlugIn Kit extensions only).
+# The app will detect the version mismatch and request replacement on first run.
 
 # ── ClamAV system setup ──
 # System directories, configs, and DB seeding are handled at runtime by

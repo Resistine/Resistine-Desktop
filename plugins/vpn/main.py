@@ -181,6 +181,23 @@ class Plugin(BasePlugin):
         # (needed for both the VPN toggle page and the dashboard banner)
         if IS_WINDOWS:
             self.app.after(2000, self._start_windows_service_polling)
+        elif IS_MACOS:
+            # Request system extension activation after the main loop starts.
+            # If the bundled extension is newer than the installed one, macOS
+            # prompts for replacement — preventing stale-extension XPC failures.
+            self.app.after(1000, self._activate_extension_if_needed)
+
+    def _activate_extension_if_needed(self):
+        """Request system extension activation (macOS only).
+
+        Called once via app.after() so the NSRunLoop is running when the
+        OSSystemExtensionRequest is submitted.  If the bundled extension
+        matches the installed one, sysextd returns immediately (no dialog).
+        """
+        try:
+            vpn_helper.activate_extension()
+        except Exception as e:
+            logger.warning(f"Extension activation request failed: {e}")
 
     def check_status(self):
         """Dynamic check of the VPN status."""
