@@ -322,6 +322,54 @@ def run_freshclam(on_line: Callable | None = None) -> tuple[bool, str]:
 
 # ── Scanning ──────────────────────────────────────────────
 
+# MpCmdRun exit codes: 0 = clean, 2 = threat found
+_MPCMDRUN: str | None = None
+
+
+def _find_mpcmdrun() -> str | None:
+    """Locate MpCmdRun.exe (cached after first lookup)."""
+    global _MPCMDRUN
+    if _MPCMDRUN is not None:
+        return _MPCMDRUN or None
+    for base in (
+        os.environ.get("ProgramFiles", r"C:\Program Files"),
+        os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+    ):
+        path = os.path.join(base, "Windows Defender", "MpCmdRun.exe")
+        if os.path.isfile(path):
+            _MPCMDRUN = path
+            return path
+    _MPCMDRUN = ""
+    return None
+
+
+def _scan_single_file(filepath: str) -> str:
+    """Scan one file with MpCmdRun and return a ClamAV-style result line.
+
+    Returns  "<filepath>: <ThreatName> FOUND"  or  "<filepath>: OK".
+    """
+    exe = _find_mpcmdrun()
+    if not exe:
+        return f"{filepath}: OK"
+    try:
+        proc = subprocess.run(
+            [exe, "-Scan", "-ScanType", "3", "-File", filepath,
+             "-DisableRemediation"],
+            capture_output=True, text=True, timeout=60,
+            creationflags=_NO_WINDOW,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return f"{filepath}: OK"
+    if proc.returncode == 2:
+        # Try to extract threat name from stdout
+        for line in proc.stdout.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("Threat"):
+                name = stripped.split(":", 1)[-1].strip() if ":" in stripped else "Malware"
+                return f"{filepath}: {name} FOUND"
+        return f"{filepath}: Malware FOUND"
+    return f"{filepath}: OK"
+
 
 def scan_path(
     target: str,
@@ -330,13 +378,13 @@ def scan_path(
     proc_ref: "list | None" = None,
     on_total: Callable | None = None,
 ) -> dict:
-    """Scan a file or directory via Start-MpScan -ScanType CustomScan.
+    """Scan a file or directory with Windows Defender.
 
-    Defender doesn't emit a per-file stream like clamscan, so:
-      - on_total is reported as 1 (we treat the whole scan as one unit)
-      - on_line gets a start message and a per-detection summary at the end
-      - infections come from Get-MpThreatDetection deltas
+    Uses MpCmdRun.exe per-file for fast scanning with real-time progress,
+    matching the ClamAV backend's per-file callback behaviour.
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     result = {
         "target": target,
         "scanned": 0,
@@ -350,70 +398,76 @@ def scan_path(
         result["error"] = "Windows Defender is not available."
         return result
 
+    # Single file scan
+    if os.path.isfile(target):
+        if on_total:
+            on_total(1)
+        if on_line:
+            on_line(f"Scanning {os.path.basename(target)}...")
+        start = time.monotonic()
+        line = _scan_single_file(target)
+        if on_line:
+            on_line(line)
+        result["scanned"] = 1
+        if "FOUND" in line:
+            result["infected"] = 1
+            result["infections"] = [line]
+        result["duration"] = _format_duration(time.monotonic() - start)
+        return result
+
+    # Directory scan — walk, then scan per-file with parallel workers
+    whitelist = set(get_whitelist())
+    excl = get_scan_exclusions()
+    excluded_ext = frozenset(excl["extensions"])
+    max_bytes = excl["max_size_mb"] * 1048576 if excl["max_size_mb"] else 0
+    files = list(_walk_files(target, whitelist, excluded_ext, max_bytes))
+
+    if not files:
+        if on_line:
+            on_line("No files matched scan filters.")
+        result["duration"] = "0.000 sec (0 s)"
+        return result
+
     if on_total:
-        on_total(1)
-
-    pre_ids = _detection_ids()
-
-    target_q = target.replace("'", "''")
-    cmd = (
-        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
-        f"Start-MpScan -ScanType CustomScan -ScanPath '{target_q}'"
-    )
-
+        on_total(len(files))
     if on_line:
-        on_line(f"Scanning {target} with Windows Defender...")
+        on_line(
+            f"Scanning {len(files)} files in "
+            f"{os.path.basename(target) or target}...",
+        )
 
     start = time.monotonic()
-    try:
-        proc = subprocess.Popen(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-             "-Command", cmd],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            creationflags=_NO_WINDOW,
-        )
-    except Exception as exc:
-        result["error"] = f"Could not start Defender scan: {exc}"
-        return result
+    scanned = 0
+    infected = 0
+    infections: list[str] = []
 
-    if proc_ref is not None:
-        proc_ref[0] = proc
-
+    pool = ThreadPoolExecutor(max_workers=_PARALLEL_WORKERS)
     try:
-        while proc.poll() is None:
+        futures = {
+            pool.submit(_scan_single_file, f): f for f in files
+        }
+        for future in as_completed(futures):
             if cancel and cancel.is_set():
-                proc.kill()
-                proc.wait(timeout=5)
+                pool.shutdown(wait=False, cancel_futures=True)
                 result["error"] = "Scan cancelled."
                 return result
-            time.sleep(0.5)
-        proc.wait(timeout=5)
-    except Exception as exc:
-        try:
-            proc.kill()
-        except OSError:
-            pass
-        result["error"] = str(exc)
-        return result
+            try:
+                line = future.result()
+            except Exception:
+                continue
+            scanned += 1
+            if on_line:
+                on_line(line)
+            if "FOUND" in line:
+                infected += 1
+                infections.append(line)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
-    new_detections = [
-        d for d in _list_detections() if d.get("id") not in pre_ids
-    ]
-    infections = [
-        f"{d.get('resource', target)}: {d.get('name', 'Unknown')} FOUND"
-        for d in new_detections
-    ]
-    if on_line:
-        for line in infections:
-            on_line(line)
-        on_line(f"Scan complete: {len(infections)} threat(s) detected.")
-
-    result["scanned"] = 1
-    result["infected"] = len(infections)
+    result["scanned"] = scanned
+    result["infected"] = infected
     result["infections"] = infections
     result["duration"] = _format_duration(time.monotonic() - start)
-    if proc.returncode not in (0, None) and not infections:
-        logger.debug(f"Defender: Start-MpScan rc={proc.returncode}")
     return result
 
 
