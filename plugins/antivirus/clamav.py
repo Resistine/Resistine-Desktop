@@ -126,12 +126,15 @@ elif _system == "Windows":
     # Defender overrides: shadow the equivalent ClamAV symbols imported
     # from clamav_common above so plugins.antivirus.clamav.* dispatches to
     # Defender on Windows.
+    # Quarantine functions (list_quarantined, restore_quarantined,
+    # delete_quarantined, quarantine_file) are intentionally NOT overridden —
+    # the clamav_common versions use the local quarantine directory, which is
+    # correct since we scan with -DisableRemediation.
     from plugins.antivirus.defender_windows import (  # noqa: F401
         activate_system_daemons,
         clamav_env,
         daemons_approved,
         deactivate_system_daemons,
-        delete_quarantined,
         engine_name,
         ensure_daemons_registered,
         find_binary,
@@ -145,12 +148,9 @@ elif _system == "Windows":
         is_clamav_installed,
         is_clamd_running,
         is_clamonacc_running,
-        list_quarantined,
         open_fda_settings,
         open_login_items_settings,
-        quarantine_file,
         refresh_system_configs,
-        restore_quarantined,
         run_freshclam,
         scan_path,
         start_clamd,

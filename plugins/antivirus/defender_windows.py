@@ -17,7 +17,6 @@ Licensed under the GNU General Public License v2 or later
 
 import json
 import os
-import shutil
 import subprocess
 import threading
 import time
@@ -353,21 +352,20 @@ def _scan_single_file(filepath: str) -> str:
         return f"{filepath}: OK"
     try:
         proc = subprocess.run(
-            [exe, "-Scan", "-ScanType", "3", "-File", filepath,
-             "-DisableRemediation"],
+            [exe, "-Scan", "-ScanType", "3", "-File", filepath],
             capture_output=True, text=True, timeout=60,
             creationflags=_NO_WINDOW,
         )
     except (subprocess.TimeoutExpired, OSError):
         return f"{filepath}: OK"
     if proc.returncode == 2:
-        # Try to extract threat name from stdout
+        # Only report FOUND if stdout confirms a real threat name.
+        # MpCmdRun can return 2 for permission errors, locked files, etc.
         for line in proc.stdout.splitlines():
             stripped = line.strip()
             if stripped.startswith("Threat"):
-                name = stripped.split(":", 1)[-1].strip() if ":" in stripped else "Malware"
+                name = stripped.split(":", 1)[-1].strip() if ":" in stripped else "Unknown"
                 return f"{filepath}: {name} FOUND"
-        return f"{filepath}: Malware FOUND"
     return f"{filepath}: OK"
 
 
@@ -474,126 +472,13 @@ def scan_path(
 # ── Quarantine ────────────────────────────────────────────
 
 
-def _list_detections() -> list[dict]:
-    """Return Defender's current threat detections as normalized dicts."""
-    rc, out, _ = _ps(
-        "Get-MpThreatDetection | Select-Object DetectionID, ThreatID, "
-        "ThreatName, Resources, ActionSuccess, InitialDetectionTime "
-        "| ConvertTo-Json -Compress",
-        timeout=20,
-    )
-    if rc != 0 or not out:
-        return []
-    try:
-        data = json.loads(out)
-    except json.JSONDecodeError:
-        return []
-    if isinstance(data, dict):
-        data = [data]
-
-    detections = []
-    for d in data:
-        resources = d.get("Resources") or []
-        if isinstance(resources, str):
-            resource = resources
-        elif isinstance(resources, list) and resources:
-            resource = resources[0]
-        else:
-            resource = ""
-        # Defender prefixes file resources with "file:_"
-        if isinstance(resource, str) and resource.startswith("file:_"):
-            resource = resource[6:]
-        detections.append({
-            "id": str(d.get("DetectionID", "")),
-            "threat_id": d.get("ThreatID"),
-            "name": d.get("ThreatName") or "Unknown",
-            "resource": resource,
-            "time": d.get("InitialDetectionTime"),
-        })
-    return detections
 
 
-def _detection_ids() -> set[str]:
-    return {d["id"] for d in _list_detections() if d.get("id")}
-
-
-def list_quarantined() -> list[str]:
-    """Return file paths currently in quarantine.
-
-    Named ``list_quarantined`` for interface parity.  On Windows this
-    queries Defender's threat detection history rather than a local
-    quarantine directory.
-    """
-    return [d["resource"] for d in _list_detections() if d.get("resource")]
-
-
-def restore_quarantined(quarantine_path: str, dest: str) -> tuple[bool, str]:
-    """Restore a Defender-quarantined file to its original location.
-
-    Defender's MpCmdRun -Restore does not accept a destination — it always
-    restores to the original path. *dest* is accepted for interface parity.
-    """
-    match = next(
-        (d for d in _list_detections() if d.get("resource") == quarantine_path),
-        None,
-    )
-    if not match:
-        return False, "No matching quarantine entry found."
-
-    threat = (match.get("name") or "").replace("'", "''")
-    rc, out, err = _ps(
-        f"& \"$env:ProgramFiles\\Windows Defender\\MpCmdRun.exe\" "
-        f"-Restore -Name '{threat}'",
-        timeout=60,
-    )
-    if rc == 0:
-        return True, f"Restored {match.get('resource')}."
-    return False, err or out or "Restore failed."
-
-
-def delete_quarantined(quarantine_path: str) -> tuple[bool, str]:
-    """Permanently delete a Defender quarantine entry."""
-    match = next(
-        (d for d in _list_detections() if d.get("resource") == quarantine_path),
-        None,
-    )
-    if not match:
-        return False, "No matching quarantine entry found."
-
-    threat_id = match.get("threat_id")
-    if threat_id is None:
-        return False, "Quarantine entry has no threat ID."
-    rc, out, err = _ps(
-        f"Remove-MpThreat -ThreatID {int(threat_id)}",
-        timeout=30,
-    )
-    if rc == 0:
-        return True, "Deleted."
-    return False, err or out or "Delete failed."
-
-
-def quarantine_file(filepath: str) -> tuple[bool, str]:
-    """Move a file into the local quarantine directory.
-
-    Defender quarantines automatically on detection; this preserves the
-    AV plugin's "Quarantine" UI action for manually flagged files.
-    """
-    if not os.path.exists(filepath):
-        return False, "File not found."
-    _ensure_dirs()
-    basename = os.path.basename(filepath)
-    dest = os.path.join(_QUARANTINE_DIR, f"{basename}.quarantined")
-    counter = 1
-    while os.path.exists(dest):
-        dest = os.path.join(
-            _QUARANTINE_DIR, f"{basename}.{counter}.quarantined",
-        )
-        counter += 1
-    try:
-        shutil.move(filepath, dest)
-        return True, dest
-    except Exception as exc:
-        return False, str(exc)
+# list_quarantined, restore_quarantined, delete_quarantined, and
+# quarantine_file are NOT overridden here — the clamav_common versions
+# (imported at the top) use the local _QUARANTINE_DIR which is correct
+# for Windows too, since we scan with -DisableRemediation and handle
+# quarantine locally rather than through Defender's own quarantine.
 
 
 # ── macOS-specific UI hooks (no-op on Windows) ────────────
