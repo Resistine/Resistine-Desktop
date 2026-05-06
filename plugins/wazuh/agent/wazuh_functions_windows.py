@@ -7,7 +7,6 @@ Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
 
-import ctypes
 import os
 import platform
 import re
@@ -19,6 +18,8 @@ import zipfile
 
 from utils import settings
 from utils.logger import logger
+from utils.windows_admin import is_admin as _is_admin  # noqa: F401
+from utils.windows_admin import run_privileged as _run_privileged
 
 from plugins.wazuh.config import (
     WAZUH_MANAGER,
@@ -56,74 +57,6 @@ _DEFENDER_LOCALFILE_BLOCK = """
   </localfile>"""
 
 
-def _is_admin():
-    """Check if the current process has admin privileges."""
-    try:
-        return ctypes.windll.shell32.IsUserAnAdmin() != 0
-    except Exception:
-        return False
-
-
-def _run_privileged(command, timeout=300):
-    """Run a PowerShell command with admin privileges.
-
-    If already admin, runs directly. Otherwise uses RunAs elevation.
-    Returns (success, output).
-    """
-    ps_cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command]
-
-    if _is_admin():
-        try:
-            result = subprocess.run(
-                ps_cmd, capture_output=True, text=True, timeout=timeout,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-            )
-            output = result.stdout.strip() or result.stderr.strip()
-            logger.info(f"_run_privileged: rc={result.returncode} output={output!r}")
-            return (result.returncode == 0, output)
-        except subprocess.TimeoutExpired:
-            return (False, "Command timed out")
-        except Exception as e:
-            return (False, str(e))
-
-    # Not admin: write script to temp file and elevate via Start-Process -Verb RunAs
-    try:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".ps1", delete=False, encoding="utf-8") as f:
-            # Write command output to a result file so we can read it back
-            result_file = f.name + ".result"
-            f.write(f"try {{\n{command}\n'SUCCESS' | Out-File -FilePath '{result_file}' -Encoding utf8\n}}\n")
-            f.write(f"catch {{ $_.Exception.Message | Out-File -FilePath '{result_file}' -Encoding utf8 }}\n")
-            script_path = f.name
-
-        # Launch elevated process and wait for it — WindowStyle Hidden suppresses the console
-        elevate_cmd = (
-            f"Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden "
-            f"-ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-NonInteractive','-File','{script_path}'"
-        )
-        subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", elevate_cmd],
-            capture_output=True, text=True, timeout=timeout,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-
-        # Read result
-        if os.path.exists(result_file):
-            with open(result_file, "r", encoding="utf-8") as rf:
-                output = rf.read().strip()
-            os.unlink(result_file)
-            success = "SUCCESS" in output
-            return (success, output)
-
-        return (False, "No result from elevated process")
-    except subprocess.TimeoutExpired:
-        return (False, "Command timed out")
-    except Exception as e:
-        return (False, str(e))
-    finally:
-        try:
-            os.unlink(script_path)
-        except Exception:
-            pass
 
 
 def _get_machine_guid():

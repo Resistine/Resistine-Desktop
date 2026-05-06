@@ -24,6 +24,7 @@ import time
 from collections.abc import Callable
 
 from utils.logger import logger
+from utils.windows_admin import run_privileged
 
 # ── Shared file-based bookkeeping ─────────────────────────
 # Whitelist and scan-exclusion settings are user-level config, identical
@@ -61,6 +62,12 @@ from plugins.antivirus.clamav_common import (  # noqa: F401
 
 _NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW — keep PowerShell windows hidden
 
+# ── Status cache ──────────────────────────────────────────
+_status_cache: dict = {}
+_status_cache_time: float = 0.0
+_status_cache_lock = threading.Lock()
+_STATUS_TTL: float = 8.0  # seconds; fits within the 10 s UI poll cycle
+
 
 # ── PowerShell helpers ─────────────────────────────────────
 
@@ -84,7 +91,19 @@ def _ps(command: str, timeout: int = 30) -> tuple[int, str, str]:
 
 
 def _mp_status() -> dict:
-    """Return a parsed Get-MpComputerStatus snapshot, or {} on failure."""
+    """Return a parsed Get-MpComputerStatus snapshot, or {} on failure.
+
+    Results are cached for *_STATUS_TTL* seconds to avoid spawning
+    redundant PowerShell processes when multiple callers query status
+    in the same UI poll cycle.
+    """
+    global _status_cache, _status_cache_time
+
+    now = time.monotonic()
+    with _status_cache_lock:
+        if _status_cache and (now - _status_cache_time) < _STATUS_TTL:
+            return _status_cache
+
     rc, out, _ = _ps(
         "Get-MpComputerStatus | Select-Object "
         "AntivirusEnabled, RealTimeProtectionEnabled, "
@@ -94,11 +113,26 @@ def _mp_status() -> dict:
         timeout=15,
     )
     if rc != 0 or not out:
-        return {}
-    try:
-        return json.loads(out)
-    except json.JSONDecodeError:
-        return {}
+        result = {}
+    else:
+        try:
+            result = json.loads(out)
+        except json.JSONDecodeError:
+            result = {}
+
+    with _status_cache_lock:
+        _status_cache = result
+        _status_cache_time = time.monotonic()
+
+    return result
+
+
+def _invalidate_status_cache() -> None:
+    """Force the next _mp_status() call to re-query Defender."""
+    global _status_cache, _status_cache_time
+    with _status_cache_lock:
+        _status_cache = {}
+        _status_cache_time = 0.0
 
 
 def _parse_mp_date(value) -> float | None:
@@ -139,12 +173,21 @@ def is_available() -> bool:
 
 
 def is_clamav_installed() -> bool:
-    """Alias kept for interface parity — Defender is the AV engine here."""
+    """Check whether the antivirus engine is installed.
+
+    Named ``is_clamav_installed`` for interface parity with the ClamAV
+    backend.  On Windows this delegates to Defender's availability check.
+    """
     return is_available()
 
 
 def is_clamd_running() -> bool:
-    """True if Defender's real-time protection service is active."""
+    """Check whether real-time protection is active.
+
+    Named ``is_clamd_running`` for interface parity with the ClamAV
+    backend (clamd daemon).  On Windows this checks Defender's
+    RealTimeProtectionEnabled status.
+    """
     return bool(_mp_status().get("RealTimeProtectionEnabled"))
 
 
@@ -201,34 +244,54 @@ def get_realtime_status() -> dict:
 
 
 def start_clamd() -> tuple[bool, str]:
-    """Defender's RT service is OS-managed — nothing to start."""
+    """Start the antivirus daemon (no-op on Windows).
+
+    Named ``start_clamd`` for interface parity.  Defender's real-time
+    protection service is managed by Windows and cannot be started
+    independently.  Use activate_system_daemons() instead.
+    """
     return True, "Defender is managed by Windows."
 
 
 def stop_clamd() -> tuple[bool, str]:
+    """Stop the antivirus daemon (no-op on Windows).
+
+    Named ``stop_clamd`` for interface parity.  Defender's service is
+    OS-managed.  Use deactivate_system_daemons() instead.
+    """
     return True, "Defender is managed by Windows."
 
 
 def activate_system_daemons() -> tuple[bool, str]:
-    """Enable Defender real-time protection (requires admin)."""
-    rc, _, err = _ps(
+    """Enable Defender real-time protection (requires admin).
+
+    Uses UAC elevation if the current process is not running as
+    administrator.  Maps to the ClamAV interface's daemon-start action.
+    """
+    ok, output = run_privileged(
         "Set-MpPreference -DisableRealtimeMonitoring $false",
         timeout=15,
     )
-    if rc == 0:
+    _invalidate_status_cache()
+    if ok:
         return True, "Real-time protection enabled."
-    return False, err or "Failed to enable real-time protection."
+    return False, output or "Failed to enable real-time protection."
 
 
 def deactivate_system_daemons() -> tuple[bool, str]:
-    """Disable Defender real-time protection (requires admin)."""
-    rc, _, err = _ps(
+    """Disable Defender real-time protection (requires admin).
+
+    Uses UAC elevation if the current process is not running as
+    administrator.  Maps to the ClamAV interface's daemon-stop action.
+    """
+    ok, output = run_privileged(
         "Set-MpPreference -DisableRealtimeMonitoring $true",
         timeout=15,
     )
-    if rc == 0:
+    _invalidate_status_cache()
+    if ok:
         return True, "Real-time protection disabled."
-    return False, err or "Failed to disable real-time protection."
+    return False, output or "Failed to disable real-time protection."
 
 
 def ensure_daemons_registered():
@@ -243,7 +306,12 @@ def refresh_system_configs():
 
 
 def run_freshclam(on_line: Callable | None = None) -> tuple[bool, str]:
-    """Refresh Defender's signature database via Update-MpSignature."""
+    """Update antivirus signature definitions.
+
+    Named ``run_freshclam`` for interface parity with the ClamAV
+    backend (freshclam tool).  On Windows this invokes Defender's
+    Update-MpSignature cmdlet.
+    """
     if on_line:
         on_line("Updating Windows Defender signatures...")
     rc, out, err = _ps("Update-MpSignature", timeout=300)
@@ -396,7 +464,12 @@ def _detection_ids() -> set[str]:
 
 
 def list_quarantined() -> list[str]:
-    """Return resource paths of Defender's current quarantine entries."""
+    """Return file paths currently in quarantine.
+
+    Named ``list_quarantined`` for interface parity.  On Windows this
+    queries Defender's threat detection history rather than a local
+    quarantine directory.
+    """
     return [d["resource"] for d in _list_detections() if d.get("resource")]
 
 
@@ -480,7 +553,11 @@ def open_fda_settings():
     logger.info("Defender: full disk access is granted by Windows automatically.")
 
 
-# ── Platform interface stubs (kept for clamav_common dispatch) ──
+# ── Platform interface stubs ──────────────────────────────
+# The functions below exist solely for interface parity with the ClamAV
+# backend on macOS/Linux.  They return safe no-op values because
+# Windows Defender does not use ClamAV binaries, sockets, configs,
+# bundle detection, or FDA/Login Items approval.
 
 
 def system_db_dir() -> str | None:
@@ -524,4 +601,10 @@ def has_full_disk_access() -> bool:
 
 
 def is_clamonacc_running() -> bool:
+    """Check whether on-access scanning is active.
+
+    Named ``is_clamonacc_running`` for interface parity with the ClamAV
+    backend (clamonacc daemon).  On Windows, Defender's real-time
+    protection serves the same role.
+    """
     return is_clamd_running()
