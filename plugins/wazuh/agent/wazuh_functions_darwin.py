@@ -7,11 +7,14 @@ Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
 
+import json
 import os
 import platform
+import shlex
 import socket
 import subprocess
 import tempfile
+import time
 
 from utils import settings
 from utils.logger import logger
@@ -62,26 +65,33 @@ def get_agent_name():
     """
     import re
     hostname = socket.gethostname()
-    uuid = _get_hardware_uuid()
-    if uuid:
-        suffix = uuid.replace("-", "")[-12:].upper()
+    hw_uuid = _get_hardware_uuid()
+    if hw_uuid:
+        suffix = hw_uuid.replace("-", "")[-12:].upper()
         name = f"{hostname}-{suffix}"
     else:
         name = hostname
     # Strip any character that isn't safe in a shell argument or Wazuh agent
     # name.  Wazuh allows: alphanumerics, hyphens, underscores, dots.
-    return re.sub(r"[^A-Za-z0-9.\-_]", "", name)
+    name = re.sub(r"[^A-Za-z0-9.\-_]", "", name)
+    if not name:
+        raise ValueError(f"Agent name is empty after sanitizing hostname: {hostname!r}")
+    return name
 
 
 def get_agent_group():
     """Return the user's email (sanitized) as the agent group.
 
-    Replaces '@' with '.' so the group name is a valid Wazuh identifier.
+    Replaces '@' with '.' and strips unsafe characters so the group name
+    is a valid Wazuh identifier (alphanumerics, hyphens, underscores, dots).
     Falls back to 'default' if no email is stored.
     """
+    import re
+
     email = settings.get("auth", "email", "default")
     if email and email != "default":
-        return email.replace("@", ".")
+        raw = email.replace("@", ".")
+        return re.sub(r"[^A-Za-z0-9.\-_]", "", raw) or "default"
     return "default"
 
 
@@ -218,14 +228,21 @@ def _run_privileged(script, timeout=120):
         return (False, str(e))
 
 
-def download_package(progress_callback=None):
-    """Download the Wazuh .pkg to a temporary directory using curl.
+def download_package(progress_callback=None, output_path=None):
+    """Download the Wazuh .pkg using curl.
+
+    If output_path is given, downloads directly to that location (creating
+    parent dirs as needed).  Otherwise uses a temporary directory.
 
     Returns the local path on success, or None on failure.
     """
     url = get_package_url()
-    tmp_dir = tempfile.mkdtemp(prefix="wazuh_")
-    pkg_path = os.path.join(tmp_dir, "wazuh-agent.pkg")
+    if output_path:
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        pkg_path = output_path
+    else:
+        tmp_dir = tempfile.mkdtemp(prefix="wazuh_")
+        pkg_path = os.path.join(tmp_dir, "wazuh-agent.pkg")
 
     if progress_callback:
         progress_callback("Downloading Wazuh agent...")
@@ -490,11 +507,117 @@ def remove_agent():
     return success
 
 
+def _get_script_path():
+    """Return the absolute path to the postinstall shell script."""
+    import sys
+
+    if getattr(sys, "frozen", False):
+        # PyInstaller bundle: scripts/ is in the _MEIPASS resource dir
+        return os.path.join(sys._MEIPASS, "scripts", "wazuh-postinstall-darwin.sh")
+    # Dev mode: project root is 3 levels up from this file
+    project_root = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    )
+    return os.path.join(project_root, "scripts", "wazuh-postinstall-darwin.sh")
+
+
+def _launch_postinstall(pkg_path, agent_name, agent_group, restore_keys):
+    """Launch the postinstall script with admin privileges via osascript.
+
+    Copies the script to /tmp/ before execution because macOS Sequoia's
+    com.apple.provenance extended attribute blocks both execution AND
+    reading of files created by non-trusted apps (git, editors, etc.)
+    when running in a privileged context.  The copy in /tmp/ does not
+    inherit the provenance attribute.
+
+    In a signed .app bundle this isn't needed (the bundle signature
+    satisfies Gatekeeper), but the copy approach works in both dev and
+    production.
+
+    Uses subprocess.Popen so Python doesn't block waiting for the script
+    to finish.  start_new_session=True keeps osascript alive if the app
+    quits mid-install.
+
+    Returns (launched_ok, status_file_path).
+    """
+    import shutil
+    import uuid
+
+    unique_id = uuid.uuid4().hex[:12]
+    status_file = f"/tmp/resistine-wazuh-install-{unique_id}.status"
+    log_file = f"/tmp/resistine-wazuh-install-{unique_id}.log"
+    script_path = _get_script_path()
+
+    # Copy script to /tmp/ to strip com.apple.provenance xattr
+    tmp_script = f"/tmp/resistine-wazuh-postinstall-{unique_id}.sh"
+    shutil.copy2(script_path, tmp_script)
+    os.chmod(tmp_script, 0o755)
+
+    # Build the argument list for the script
+    args = [
+        f"--pkg-path {shlex.quote(pkg_path)}",
+        f"--agent-name {shlex.quote(agent_name)}",
+        f"--agent-group {shlex.quote(agent_group)}",
+        f"--manager {shlex.quote(WAZUH_MANAGER)}",
+        f"--status-file {shlex.quote(status_file)}",
+        f"--log-file {shlex.quote(log_file)}",
+    ]
+    if restore_keys:
+        args.append("--restore-keys")
+
+    shell_cmd = f"{shlex.quote(tmp_script)} {' '.join(args)}"
+    escaped = shell_cmd.replace("\\", "\\\\").replace('"', '\\"')
+
+    try:
+        proc = subprocess.Popen(
+            [
+                "osascript", "-e",
+                f'do shell script "{escaped}" with administrator privileges',
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        # Wait briefly to catch immediate failures (user cancelled password)
+        try:
+            proc.wait(timeout=2)
+            # If it returned in <2s, user likely cancelled
+            if proc.returncode != 0:
+                stderr = proc.stderr.read().decode() if proc.stderr else ""
+                logger.error(f"osascript failed immediately: rc={proc.returncode} {stderr}")
+                return False, status_file
+        except subprocess.TimeoutExpired:
+            # Still running = admin prompt accepted, script executing
+            pass
+        logger.info(f"Postinstall launched (pid={proc.pid}), status_file={status_file}")
+        return True, status_file
+    except Exception as e:
+        logger.error(f"Failed to launch postinstall: {e}")
+        return False, status_file
+
+
+def _poll_install_status(status_file):
+    """Read the JSON status file. Returns (finished, success, details_dict)."""
+    try:
+        with open(status_file) as f:
+            data = json.load(f)
+        status = data.get("status", "")
+        if status == "running":
+            return False, False, data
+        if status == "success":
+            return True, True, data
+        return True, False, data  # "failed"
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return False, False, {}
+
+
 def full_install(progress_callback=None):
     """Orchestrate the complete install flow: download, write env, install, start.
 
-    Combines install + start into a **single** privileged osascript call so
-    the user only sees one password prompt instead of two.
+    Launches a standalone shell script with admin privileges that runs
+    detached from this process — survives app quit.  Python polls a
+    status file to track progress.
     """
     # 1. Download
     if progress_callback:
@@ -520,115 +643,79 @@ def full_install(progress_callback=None):
             progress_callback("Failed to write environment file")
         return False
 
-    # 3. Install the package AND start the agent in a single privileged call.
-    #    This avoids a second osascript password dialog.  The script:
-    #      a) Runs the installer — if this fails we capture INSTALL_FAIL
-    #      b) Directly patches <agent_name> in ossec.conf to our UUID-suffixed
-    #         name.  The installer reads the env file but its behavior is
-    #         unreliable; patching ossec.conf post-install is the authoritative
-    #         way to set the name.
-    #      c) If a key backup exists for this account (same email), restores it
-    #         so the agent reconnects as the same agent on the manager (avoids
-    #         creating a duplicate "NewAgent" entry on reinstall).  Only if no
-    #         backup is available does it call agent-auth for fresh enrollment.
-    #      d) Bootstraps the launchd plist so launchd manages all processes.
-    #    We use launchctl bootstrap (not wazuh-control start) so that all
-    #    agent processes live under launchd's supervision.  This ensures
-    #    bootout can cleanly terminate them later without orphans.
+    # 3. Launch the standalone postinstall script with admin privileges.
+    #    Runs via osascript Popen (start_new_session) so it survives app quit.
     if progress_callback:
         progress_callback("Installing Wazuh agent (admin password required)...")
 
-    ossec_conf = f"{WAZUH_INSTALL_DIR}/etc/ossec.conf"
-    plist = WAZUH_LAUNCHD_PLIST
-    agent_auth = f"{WAZUH_INSTALL_DIR}/bin/agent-auth"
-    backup_dir = os.path.dirname(_KEY_BACKUP)
-
-    # Prefer restoring the existing enrollment key so the agent reconnects as
-    # the same agent on the manager instead of registering a new one.
-    # Skip restore if the backup belongs to a different account.
     can_restore = (not needs_reenrollment()) and os.path.exists(_KEY_BACKUP)
-
     if can_restore:
         logger.info("[WAZUH] Key backup found — will restore existing enrollment on reinstall")
         if progress_callback:
             progress_callback("Restoring previous Wazuh enrollment...")
-        enrollment_script = (
-            # Try Keychain first (encrypted at rest); fall back to file backup.
-            f"KC=$(security find-generic-password -k '{_KEYCHAIN}' -s '{_KC_SERVICE}' -a '{_KC_ACCOUNT}' -w 2>/dev/null); "
-            f"if [ -n \"$KC\" ]; then "
-            f"  printf '%s' \"$KC\" > '{_CLIENT_KEYS}'; "
-            f"elif [ -s '{_KEY_BACKUP}' ]; then "
-            f"  cp '{_KEY_BACKUP}' '{_CLIENT_KEYS}'; "
-            f"fi; "
-            f"if [ -s '{_CLIENT_KEYS}' ]; then "
-            f"  chmod 640 '{_CLIENT_KEYS}' && chown root:wazuh '{_CLIENT_KEYS}' && echo KEY_RESTORED; "
-            f"else "
-            # Backup was inaccessible — fall through to fresh enrollment.
-            f"  rm -f '{_CLIENT_KEYS}'; "
-            f"  '{agent_auth}' -m '{WAZUH_MANAGER}' -A '{agent_name}' -G '{agent_group}' && echo KEY_ENROLLED || echo ENROLL_FAILED; "
-            f"  if [ -s '{_CLIENT_KEYS}' ]; then "
-            f"    mkdir -p '{backup_dir}' && cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}'; "
-            f"    security add-generic-password -U "
-            f"    -k '{_KEYCHAIN}' -s '{_KC_SERVICE}' -a '{_KC_ACCOUNT}' "
-            f"    -w \"$(cat '{_CLIENT_KEYS}')\" 2>/dev/null; "
-            f"  fi; "
-            f"fi"
-        )
-    else:
-        logger.info("[WAZUH] No key backup — performing fresh enrollment with agent-auth")
-        enrollment_script = (
-            f"rm -f '{_CLIENT_KEYS}'; "
-            f"'{agent_auth}' -m '{WAZUH_MANAGER}' -A '{agent_name}' -G '{agent_group}' && echo KEY_ENROLLED || echo ENROLL_FAILED; "
-            # Persist the newly issued key to Keychain + file backup so that
-            # future reinstalls can restore it and skip re-enrollment.
-            f"if [ -s '{_CLIENT_KEYS}' ]; then "
-            f"  mkdir -p '{backup_dir}' && cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}'; "
-            f"  security add-generic-password -U "
-            f"  -k '{_KEYCHAIN}' -s '{_KC_SERVICE}' -a '{_KC_ACCOUNT}' "
-            f"  -w \"$(cat '{_CLIENT_KEYS}')\" 2>/dev/null; "
-            f"fi"
-        )
 
-    install_and_start_script = (
-        f"installer -pkg '{pkg_path}' -target / || echo INSTALL_FAIL; "
-        # Patch agent_name directly in ossec.conf — more reliable than the
-        # env file, which the installer may ignore or read inconsistently.
-        f"sed -i '' 's|<agent_name>.*</agent_name>|<agent_name>{agent_name}</agent_name>|' '{ossec_conf}'; "
-        + enrollment_script +
-        f"; launchctl bootout system '{plist}' 2>/dev/null; "
-        f"launchctl bootstrap system '{plist}' 2>/dev/null; "
-        f"echo DONE"
+    launched, status_file = _launch_postinstall(
+        pkg_path, agent_name, agent_group, can_restore
     )
-    logger.info("Running privileged install+start script")
-    success, output = _run_privileged(install_and_start_script, timeout=300)
-    logger.info(f"install+start output: {output!r}")
-
-    # The osascript call itself may fail (user cancelled the dialog, timeout).
-    # However, a timeout doesn't necessarily mean the install failed — the
-    # installer may have finished in the background.  Check the disk before
-    # giving up.
-    if not success:
-        if is_agent_installed():
-            logger.warning(f"Privileged call reported failure ({output}), but agent binary exists on disk — treating as success")
-        else:
-            logger.error(f"Privileged call failed: {output or 'user cancelled'}")
-            if progress_callback:
-                progress_callback("Installation failed")
-            return False
-
-    # Check if the installer step itself failed
-    if "INSTALL_FAIL" in output:
-        logger.error(f"Installer command failed: {output}")
+    if not launched:
+        logger.error("Failed to launch postinstall script (user cancelled or osascript error)")
         if progress_callback:
             progress_callback("Installation failed")
         return False
 
+    # Poll the status file until the script finishes.  full_install() is
+    # called from a background thread (_start_installation), so sleeping is OK.
+    _STEP_LABELS = {
+        "install_pkg": "Installing package...",
+        "patch_config": "Configuring agent...",
+        "enrollment": "Enrolling agent...",
+        "key_backup": "Backing up keys...",
+        "launchd": "Starting agent service...",
+        "done": "Finishing up...",
+    }
+    deadline = time.monotonic() + 300  # 5-minute timeout
+    success = False
+    details = {}
+    while time.monotonic() < deadline:
+        time.sleep(3)
+        finished, success, details = _poll_install_status(status_file)
+        step = details.get("step", "")
+        if progress_callback and step:
+            progress_callback(_STEP_LABELS.get(step, f"Installing... ({step})"))
+        if finished:
+            try:
+                os.unlink(status_file)
+            except OSError:
+                pass
+            break
+    else:
+        # Timeout — clean up status file and check if agent installed anyway
+        try:
+            os.unlink(status_file)
+        except OSError:
+            pass
+        success = is_agent_installed()
+        if not success:
+            logger.error("Postinstall script timed out")
+            if progress_callback:
+                progress_callback("Installation timed out")
+            return False
+        logger.warning("Poll timed out but agent is installed on disk")
+
+    if not success:
+        error = details.get("error", "unknown error")
+        logger.error(f"Postinstall script failed: {error}")
+        if progress_callback:
+            progress_callback(f"Installation failed: {error}")
+        return False
+
     # Log enrollment outcome for diagnostics
-    if "KEY_RESTORED" in output:
+    enrollment = details.get("enrollment", "")
+    if enrollment == "restored":
         logger.info("[WAZUH] Existing enrollment key restored — agent will reconnect as same agent")
-    elif "KEY_ENROLLED" in output:
+    elif enrollment == "enrolled":
         logger.info("[WAZUH] Fresh enrollment succeeded — new agent registered on manager")
-    elif "ENROLL_FAILED" in output:
+    elif enrollment == "enroll_failed":
         logger.warning("[WAZUH] agent-auth enrollment failed — agent may connect via auto-enrollment")
 
     # Verify the agent is actually running via launchd

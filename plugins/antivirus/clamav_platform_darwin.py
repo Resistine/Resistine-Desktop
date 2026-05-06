@@ -9,7 +9,6 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import os
-import re
 import shlex
 import shutil
 import subprocess
@@ -404,8 +403,6 @@ def ensure_daemons_registered():
         logger.warning("ServiceManagement framework not available")
         return
 
-    _cleanup_legacy_plists()
-
     needs_approval = False
 
     for plist_name in _DAEMON_PLISTS:
@@ -447,84 +444,6 @@ def ensure_daemons_registered():
 
     if needs_approval:
         logger.warning("ClamAV daemons require user approval in Login Items")
-
-
-def _legacy_labels_loaded() -> list[str]:
-    """Return any legacy daemon labels still loaded in system launchd.
-
-    Reads `launchctl print system` (no sudo needed for read) and matches
-    against _LEGACY_DAEMON_LABELS. Used to gate the sudo prompt so users
-    on a clean install never see it.
-    """
-    try:
-        result = subprocess.run(
-            ["launchctl", "print", "system"],
-            capture_output=True, text=True, timeout=10,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return []
-    # launchctl print system emits labels in two formats we care about:
-    #   "com.resistine.clamd" => enabled    (services listing)
-    #   70165\t1\tcom.resistine.clamd       (process table)
-    # Allow whitespace, slash, or quote on either side so both match;
-    # the boundary still prevents substring false-positives.
-    found = []
-    for label in _LEGACY_DAEMON_LABELS:
-        pattern = re.compile(
-            rf'(?:^|[\s"/]){re.escape(label)}(?:[\s"/]|$)', re.MULTILINE,
-        )
-        if pattern.search(result.stdout):
-            found.append(label)
-    return found
-
-
-def _cleanup_legacy_plists():
-    """Remove old plists and unregister stale SMAppService labels.
-
-    Covers two migration paths:
-    1. Pre-SMAppService installs that dropped plists in /Library/LaunchDaemons/
-    2. ≤4.12 SMAppService installs using the old com.resistine.{clamd,clamonacc}
-       labels (renamed to com.resistine.desktop.* in commit 57aa3dd).
-    Both leave residue that fights the current daemons over the clamd
-    socket and causes crash loops.
-    """
-    found_paths = [p for p in _LEGACY_PLIST_PATHS if os.path.exists(p)]
-    loaded_labels = _legacy_labels_loaded()
-    if not found_paths and not loaded_labels:
-        return
-
-    cmds = []
-    # Bootout legacy labels first so they release the socket before
-    # the new daemons try to claim it.
-    for label in loaded_labels:
-        cmds.append(
-            f"launchctl bootout system/{shlex.quote(label)} 2>/dev/null",
-        )
-    for plist in found_paths:
-        quoted = shlex.quote(plist)
-        cmds.append(f"launchctl bootout system {quoted} 2>/dev/null")
-        cmds.append(f"rm -f {quoted}")
-    # Clear the stale socket/pid so the new clamd has a clean slate.
-    sock = shlex.quote(_SYSTEM_RUN_DIR + "/clamd.sock")
-    pid = shlex.quote(_SYSTEM_RUN_DIR + "/clamd.pid")
-    cmds.append(f"rm -f {sock} {pid}")
-
-    script = "; ".join(cmds)
-    try:
-        subprocess.run(
-            [
-                "osascript", "-e",
-                "do shell script " + _applescript_quote(script)
-                + " with administrator privileges",
-            ],
-            capture_output=True, text=True, timeout=30,
-        )
-        logger.info(
-            f"Cleaned up legacy ClamAV state — "
-            f"labels: {loaded_labels}, plists: {found_paths}",
-        )
-    except Exception as e:
-        logger.warning(f"Could not clean up legacy ClamAV state: {e}")
 
 
 # ── System daemon activation ─────────────────────────────

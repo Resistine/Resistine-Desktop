@@ -1553,34 +1553,3 @@ class TestOpenSettings:
             clamav.open_fda_settings()
 
 
-# ---------------------------------------------------------------------------
-# Legacy plist cleanup
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestLegacyPlists:
-    def test_cleanup_no_legacy_found(self, monkeypatch):
-        monkeypatch.setattr(os.path, "exists", lambda p: False)
-        # Should not call subprocess
-        with patch("subprocess.run") as mock_run:
-            clamav_platform_darwin._cleanup_legacy_plists()
-            mock_run.assert_not_called()
-
-    def test_cleanup_runs_osascript(self, monkeypatch):
-        # Pretend all legacy plists exist
-        original_exists = os.path.exists
-        monkeypatch.setattr(
-            os.path, "exists",
-            lambda p: p in clamav_platform_darwin._LEGACY_PLIST_PATHS or original_exists(p),
-        )
-
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            clamav_platform_darwin._cleanup_legacy_plists()
-            mock_run.assert_called_once()
-            cmd = mock_run.call_args[0][0]
-            assert "osascript" in cmd
-            # Should include launchctl bootout and rm -f commands
-            script_arg = cmd[2]
-            assert "launchctl bootout" in script_arg
-            assert "rm -f" in script_arg

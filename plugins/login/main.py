@@ -460,6 +460,13 @@ class Plugin(BasePlugin):
         else:
             logger.warning("No VPN config in API response (keys: %s)", list(result.keys()))
 
+        # Start Wazuh download while public internet is available
+        # (VPN DNS cannot resolve packages.wazuh.com)
+        if platform.system() == "Darwin":
+            import threading as _thr
+            from plugins.wazuh.agent.installer_service import ensure_download_started
+            _thr.Thread(target=ensure_download_started, daemon=True).start()
+
         # Phase 4: Transition to next screen
         from utils import settings as app_settings
         needs_onboarding = (

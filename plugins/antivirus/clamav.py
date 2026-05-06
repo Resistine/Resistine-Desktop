@@ -81,7 +81,6 @@ if _system == "Darwin":
         _SYSTEM_FRESHCLAM_CONF,
         _SYSTEM_LOG_DIR,
         _SYSTEM_RUN_DIR,
-        _cleanup_legacy_plists,
         activate_system_daemons,
         clamav_env,
         daemons_approved,

@@ -41,6 +41,7 @@ datas = [
     (_src('gui'), 'gui'),
     (_src('utils'), 'utils'),
     (_src('docs'), 'docs'),
+    (_src('scripts/wazuh-postinstall-darwin.sh'), 'scripts'),
 ]
 
 # Hidden imports (modules not auto-detected)

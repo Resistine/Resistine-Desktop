@@ -416,13 +416,39 @@ def _remove_wireguard_configs():
 
 def _remove_app_config(admin_cmds):
     """Remove application configuration directories (user + system level)."""
+    home = os.path.expanduser("~")
+
     # User-level config (no admin needed)
-    config_dir = os.path.expanduser("~/Library/Application Support/Resistine")
+    config_dir = os.path.join(home, "Library", "Application Support", "Resistine")
     if os.path.exists(config_dir):
         shutil.rmtree(config_dir)
         logger.info(f"[UNINSTALL] Removed {config_dir}")
     else:
         logger.info("[UNINSTALL] User config dir not found, skipping")
+
+    # Stale log files — the network extension wrote these as root; old entries
+    # persist across builds and cause diagnostic confusion.  Must use admin
+    # because the files are root-owned.
+    for log_name in ("resistine.log", "resistine-error.log"):
+        log_path = os.path.join(home, "Library", "Logs", log_name)
+        if os.path.exists(log_path):
+            escaped = log_path.replace("'", "'\\''")
+            admin_cmds.append(f"rm -f '{escaped}'")
+
+    # Sandbox containers — macOS creates these for sandboxed app bundles.
+    # The OS may recreate them, but clearing stale data prevents confusion.
+    containers_dir = os.path.join(home, "Library", "Containers")
+    if os.path.isdir(containers_dir):
+        for entry in os.listdir(containers_dir):
+            if entry.startswith("com.resistine"):
+                container_path = os.path.join(containers_dir, entry)
+                try:
+                    shutil.rmtree(container_path)
+                    logger.info(f"[UNINSTALL] Removed container {container_path}")
+                except OSError as e:
+                    logger.warning(
+                        f"[UNINSTALL] Could not remove {container_path}: {e}"
+                    )
 
     # System-level directory — batch with other admin commands
     sys_dir = "/Library/Application Support/Resistine"

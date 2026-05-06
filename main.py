@@ -79,6 +79,11 @@ class App(AppUI):
         if settings.get("auth", "logged_in", False):
             logger.info("✅ User already logged in.")
             self.create_dashboard()
+            # Resume any pending Wazuh install
+            if sys.platform == "darwin":
+                import threading
+                from plugins.wazuh.agent.installer_service import check_and_advance
+                threading.Thread(target=check_and_advance, daemon=True).start()
         else:
             # Always show login screen since we're using Odoo authentication
             logger.info("🔐 Creating login screen...")
