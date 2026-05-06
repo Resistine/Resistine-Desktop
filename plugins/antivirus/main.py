@@ -173,8 +173,24 @@ class Plugin(BasePlugin):
         self.main_container = customtkinter.CTkFrame(
             self.app, corner_radius=0, fg_color="transparent",
         )
+        # Compute a reasonable initial content width so the first frame
+        # isn't squeezed to 100px while _do_layout hasn't fired yet.
+        _init_w = 750
+        try:
+            _app_w = self.app.winfo_width()
+            _nav = getattr(self.app, "navigation_frame", None)
+            _nav_w = _nav.winfo_width() if (_nav and _nav.winfo_exists()) else 250
+            _nav_w = max(_nav_w, 250)
+            _avail = _app_w - _nav_w
+            _breathing = 60 if platform.system() == "Windows" else 40
+            if _avail > 750 + 40:
+                _init_w = 750
+            elif _avail > 10:
+                _init_w = max(100, _avail - _breathing)
+        except Exception:
+            pass
         self.main_container.grid_columnconfigure(0, weight=1)
-        self.main_container.grid_columnconfigure(1, weight=0, minsize=100)
+        self.main_container.grid_columnconfigure(1, weight=0, minsize=_init_w)
         self.main_container.grid_columnconfigure(2, weight=1)
         self.main_container.grid_rowconfigure(0, weight=1)
 
