@@ -1,6 +1,7 @@
 @echo off
 :: ============================================================
-:: Resistine VPN — Uninstaller
+:: Resistine — Full Uninstaller
+:: Removes services, configs, registry entries, and data dirs.
 :: ============================================================
 setlocal EnableDelayedExpansion
 
@@ -9,27 +10,20 @@ if "%SCRIPT_DIR:~-1%"=="\" set SCRIPT_DIR=%SCRIPT_DIR:~0,-1%
 
 set SERVICE_NAME=ResistineVPN
 
-:: Project root is always two levels up from scripts\install\.
-:: Resolved unconditionally so VENV_DIR, MAIN_SCRIPT, etc. below always expand
-:: correctly — regardless of which SERVICE_SCRIPT path matches.
+:: Project root is always two levels up from scripts\uninstall\.
 for %%I in ("%SCRIPT_DIR%\..\..") do set PROJECT_ROOT=%%~fI
 
 :: Try bundled-installer layout first, then fall back to the project-root layout.
 set SERVICE_SCRIPT=%SCRIPT_DIR%\windows_vpn_service.py
 if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%PROJECT_ROOT%\plugins\vpn\wireguard\windows_vpn_service.py
-set MAIN_SCRIPT=%PROJECT_ROOT%\main.py
-set TRAY_SCRIPT=%PROJECT_ROOT%\gui\tray.py
-set ICON=%PROJECT_ROOT%\resources\icons\icon.ico
 set VENV_DIR=%PROJECT_ROOT%\.venv
 set VENV_PYTHON=%VENV_DIR%\Scripts\python.exe
-set VENV_PIP=%VENV_DIR%\Scripts\pip.exe
-set REQUIREMENTS=%PROJECT_ROOT%\requirements\requirements-windows.txt
 set APPDATA_DIR=%APPDATA%\Resistine
 set WG_DIR=%APPDATA_DIR%\wireguard
 set PROGRAMDATA_DIR=%PROGRAMDATA%\Resistine
 set PROGRAMDATA_WG=%PROGRAMDATA_DIR%\wireguard
 set SHORTCUT=%USERPROFILE%\Desktop\Resistine VPN.lnk
-set STARTUP_KEY=HKCU\Software\Microsoft\Windows\CurrentVersion\Run
+set SHORTCUT2=%USERPROFILE%\Desktop\Resistine.lnk
 set WG_EXE=%PROGRAMFILES%\WireGuard\wireguard.exe
 
 :: ============================================================
@@ -41,34 +35,50 @@ if "%1"=="/service" goto :remove_service
 :: PART 1 — User level
 :: ============================================================
 echo ============================================================
-echo  Resistine VPN Uninstaller
+echo  Resistine Full Uninstaller
 echo ============================================================
 echo.
 
-:: ---- Kill tray process ----
-echo [1/4] Stopping tray icon...
-powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe' OR Name='pythonw.exe'\" | Where-Object { $_.CommandLine -like '*tray.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+:: ---- Kill all Resistine processes ----
+echo [1/6] Stopping Resistine processes...
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe' OR Name='pythonw.exe'\" | Where-Object { $_.CommandLine -like '*tray.py*' -or $_.CommandLine -like '*main.py*' -or $_.CommandLine -like '*Resistine*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+taskkill /F /IM "Resistine.exe" >nul 2>&1
 echo       OK
 
-:: ---- Remove startup registry entries ----
-echo [2/4] Removing startup entries...
-reg delete "%STARTUP_KEY%" /v "%SERVICE_NAME%Tray" /f >nul 2>&1
-reg delete "%STARTUP_KEY%" /v "%SERVICE_NAME%"     /f >nul 2>&1
+:: ---- Remove startup registry entries (HKCU) ----
+echo [2/6] Removing user startup entries...
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "ResistineVPNTray" /f >nul 2>&1
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "ResistineVPN" /f >nul 2>&1
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "Resistine" /f >nul 2>&1
 echo       OK
 
-:: ---- Remove desktop shortcut ----
-echo [3/4] Removing desktop shortcut...
-if exist "%SHORTCUT%" (
-    del "%SHORTCUT%"
-    echo       OK - Shortcut removed
+:: ---- Remove desktop shortcuts ----
+echo [3/6] Removing desktop shortcuts...
+if exist "%SHORTCUT%" del "%SHORTCUT%" >nul 2>&1
+if exist "%SHORTCUT2%" del "%SHORTCUT2%" >nul 2>&1
+echo       OK
+
+:: ---- Remove user config and data ----
+echo [4/6] Removing user config and data...
+if exist "%APPDATA_DIR%" (
+    rmdir /s /q "%APPDATA_DIR%"
+    echo       Removed: %APPDATA_DIR%
+) else (
+    echo       Not found: %APPDATA_DIR%
+)
+echo       OK
+
+:: ---- Remove venv ----
+echo [5/6] Removing virtual environment...
+if exist "%VENV_DIR%" (
+    rmdir /s /q "%VENV_DIR%"
+    echo       Removed: %VENV_DIR%
 ) else (
     echo       Not found, skipping
 )
+echo       OK
 
 :: ---- Find system Python to pass to elevated section ----
-:: The service was installed with system Python (not venv), so removal
-:: must also use system Python. Pass the path across the UAC boundary
-:: via a temp file, same pattern as install.bat.
 set PYTHON_FULL=
 for /f "tokens=*" %%i in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do (
     if not defined PYTHON_FULL set PYTHON_FULL=%%i
@@ -84,14 +94,11 @@ if defined PYTHON_FULL (
     echo %PYTHON_FULL%> "%TEMP%\resistine_python_path.txt"
 )
 
-:: ---- Remove service (needs admin) ----
-echo [4/4] Removing Windows service ^(requires Admin^)...
+:: ---- Remove services + system data (needs admin) ----
+echo [6/6] Removing services and system data ^(requires Admin^)...
 set "SERVICE_LOG=%PROGRAMDATA_DIR%\uninstall_service.log"
 set "UNINSTALL_WRAPPER=%TEMP%\resistine_uninstall_service_wrapper.bat"
 if not exist "%PROGRAMDATA_DIR%" mkdir "%PROGRAMDATA_DIR%" >nul 2>&1
-:: PowerShell's -ArgumentList doesn't reliably pass `>` and nested quotes
-:: through cmd's argument parser. Write a wrapper bat with the redirect
-:: in plain cmd syntax, then elevate that.
 > "%UNINSTALL_WRAPPER%" echo @echo off
 >> "%UNINSTALL_WRAPPER%" echo call "%~f0" /service ^> "%SERVICE_LOG%" 2^>^&1
 powershell -Command "Start-Process -FilePath '%UNINSTALL_WRAPPER%' -Verb RunAs -Wait"
@@ -99,31 +106,19 @@ if %errorlevel% neq 0 (
     echo WARNING: Service removal failed or was cancelled.
 )
 del "%UNINSTALL_WRAPPER%" >nul 2>&1
-echo       Service removal log: %SERVICE_LOG%
 
 del "%TEMP%\resistine_python_path.txt" >nul 2>&1
 
 echo.
 echo ============================================================
-echo  Uninstall complete.
-echo.
-echo  The following were kept ^(delete manually if needed^):
-echo    Config  : %APPDATA_DIR%
-echo    Logs    : %PROGRAMDATA_DIR%
-echo    Venv    : %VENV_DIR%
-echo.
-echo  To fully clean up run:
-echo    rmdir /s /q "%APPDATA_DIR%"
-echo    rmdir /s /q "%PROGRAMDATA_DIR%"
-echo    rmdir /s /q "%VENV_DIR%"
+echo  Uninstall complete. All Resistine data has been removed.
 echo ============================================================
 echo.
 exit /b 0
 
 
 :: ============================================================
-:: SERVICE REMOVAL (elevated)
-:: Uses system Python to match how install.bat registers the service.
+:: SERVICE REMOVAL + SYSTEM CLEANUP (elevated)
 :: ============================================================
 :remove_service
 net session >nul 2>&1
@@ -133,7 +128,7 @@ if %errorlevel% neq 0 (
 )
 
 echo ============================================================
-echo  Removing ResistineVPN Service ^(Admin^)
+echo  Removing Resistine Services and System Data ^(Admin^)
 echo ============================================================
 
 :: Read system Python path from temp file
@@ -159,7 +154,6 @@ if defined SYS_PYTHON (
 :: ---- Discover and remove all WireGuard tunnels ----
 echo Removing WireGuard tunnels...
 if exist "%WG_EXE%" (
-
     :: Tunnels from ProgramData
     if exist "%PROGRAMDATA_WG%" (
         for %%f in ("%PROGRAMDATA_WG%\*.conf") do (
@@ -195,11 +189,9 @@ if exist "%WG_EXE%" (
 echo       OK
 
 :: ---- Stop and remove ResistineVPN service ----
-:: Flattened control flow (no labels inside parenthesized blocks) so cmd's
-:: parser can't choke with ". was unexpected at this time".
 echo Removing ResistineVPN service...
 sc query %SERVICE_NAME% >nul 2>&1
-if %errorlevel% neq 0 goto :service_not_present
+if %errorlevel% neq 0 goto :vpn_service_not_present
 
 echo       Stopping service...
 sc stop %SERVICE_NAME% >nul 2>&1
@@ -211,23 +203,86 @@ if defined SYS_PYTHON (
 ) else if exist "%VENV_PYTHON%" (
     "%VENV_PYTHON%" "%SERVICE_SCRIPT%" remove >nul 2>&1
 )
-
-:: Safety net: always follow up with sc delete in case the python-based
-:: remove failed silently (pywin32 mismatch, stale registration, etc.).
-:: Idempotent — harmless if the service is already gone.
 sc delete %SERVICE_NAME% >nul 2>&1
-
 call :wait_for_absence 10
-goto :service_removal_done
+goto :vpn_service_done
 
-:service_not_present
+:vpn_service_not_present
 echo       Not found, skipping
 
-:service_removal_done
+:vpn_service_done
+
+:: ---- Stop and remove Wazuh agent service ----
+echo Removing Wazuh agent service...
+sc query WazuhSvc >nul 2>&1
+if %errorlevel% neq 0 goto :wazuh_not_present
+echo       Stopping WazuhSvc...
+sc stop WazuhSvc >nul 2>&1
+timeout /t 5 /nobreak >nul
+sc delete WazuhSvc >nul 2>&1
+echo       OK - WazuhSvc removed
+goto :wazuh_done
+:wazuh_not_present
+echo       Not found, skipping
+:wazuh_done
+
+:: ---- Stop and remove Sysmon service ----
+echo Removing Sysmon service...
+sc query Sysmon64 >nul 2>&1
+if %errorlevel% neq 0 goto :sysmon_not_present
+echo       Stopping Sysmon64...
+sc stop Sysmon64 >nul 2>&1
+timeout /t 3 /nobreak >nul
+:: Use Sysmon's own uninstall if available
+set "SYSMON_EXE=%PROGRAMFILES%\Resistine\Sysmon\Sysmon64.exe"
+if exist "%SYSMON_EXE%" (
+    "%SYSMON_EXE%" -u force >nul 2>&1
+) else (
+    sc delete Sysmon64 >nul 2>&1
+)
+echo       OK - Sysmon removed
+goto :sysmon_done
+:sysmon_not_present
+echo       Not found, skipping
+:sysmon_done
+
+:: ---- Remove startup registry entries (HKLM, requires admin) ----
+echo Removing system startup and registry entries...
+reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "ResistineVPNTray" /f >nul 2>&1
+reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "ResistineVPN" /f >nul 2>&1
+reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "Resistine" /f >nul 2>&1
+
+:: Remove Resistine registry keys
+reg delete "HKLM\Software\Resistine" /f >nul 2>&1
+reg delete "HKCU\Software\Resistine" /f >nul 2>&1
+echo       OK
+
+:: ---- Remove ProgramData ----
+echo Removing system data...
+if exist "%PROGRAMDATA_DIR%" (
+    rmdir /s /q "%PROGRAMDATA_DIR%"
+    echo       Removed: %PROGRAMDATA_DIR%
+) else (
+    echo       Not found: %PROGRAMDATA_DIR%
+)
+
+:: Remove Sysmon directory
+set "SYSMON_DIR=%PROGRAMFILES%\Resistine\Sysmon"
+if exist "%SYSMON_DIR%" (
+    rmdir /s /q "%SYSMON_DIR%"
+    echo       Removed: %SYSMON_DIR%
+)
+
+:: Remove Resistine under Program Files if empty
+set "PF_RESISTINE=%PROGRAMFILES%\Resistine"
+if exist "%PF_RESISTINE%" (
+    rmdir "%PF_RESISTINE%" >nul 2>&1
+)
+echo       OK
 
 echo.
 echo ============================================================
-echo  Service removal complete.
+echo  Service removal and system cleanup complete.
 echo ============================================================
 exit /b 0
 
@@ -235,11 +290,6 @@ exit /b 0
 :: ============================================================
 :: Subroutine: wait_for_stopped <max_seconds>
 :: ============================================================
-:: Polls `sc query %SERVICE_NAME%` until STATE is STOPPED, up to <max_seconds>.
-:: sc stop is async — calling sc delete on a still-stopping service only
-:: marks it for deletion, leaving a zombie registration that blocks reinstalls.
-:: Flattened goto-based flow so no labels sit inside parenthesized blocks
-:: (cmd's parser chokes with ". was unexpected" on multi-label blocks).
 :wait_for_stopped
 set /a _WAIT_MAX=%~1
 set /a _WAIT_COUNT=0
@@ -260,8 +310,6 @@ goto :eof
 :: ============================================================
 :: Subroutine: wait_for_absence <max_seconds>
 :: ============================================================
-:: Polls `sc query %SERVICE_NAME%` until the service is absent (not registered),
-:: up to <max_seconds>. Prints a final "OK - Service removed" or a warning.
 :wait_for_absence
 set /a _ABS_MAX=%~1
 set /a _ABS_COUNT=0

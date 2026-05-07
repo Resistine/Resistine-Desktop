@@ -1818,7 +1818,12 @@ begin
 
   if CurUninstallStep = usPostUninstall then
   begin
-    if StandaloneUninstallRemoveUserData then
-      DeleteResistineUserData;
+    { Always remove user data and configs on uninstall }
+    DeleteResistineUserData;
+
+    { Remove all Resistine registry keys }
+    RegDeleteKeyIncludingSubkeys(HKLM64, 'Software\Resistine');
+    RegDeleteKeyIncludingSubkeys(HKLM, 'Software\Resistine');
+    RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Resistine');
   end;
 end;
