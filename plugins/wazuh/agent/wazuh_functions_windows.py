@@ -7,6 +7,7 @@ Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
 
+import base64
 import os
 import platform
 import re
@@ -286,117 +287,83 @@ def _install_sysmon(progress_callback=None):
     return True
 
 
-def _inject_sysmon_config():
-    """Add Sysmon eventchannel monitoring to ossec.conf if not already present.
+def _inject_ossec_localfiles(blocks):
+    """Inject one or more <localfile> blocks into ossec.conf under elevation.
 
-    ossec.conf lives in Program Files and requires admin to write.
-    Uses a temp file + privileged copy to avoid a direct open() on a protected path.
+    The Wazuh agent restricts ACLs on ossec.conf so a non-admin process can't
+    even read it. This helper does the entire read/check/modify/write inside
+    a single elevated PowerShell call, producing exactly one UAC prompt for
+    the whole batch. Already-present blocks (matched by `marker`) are skipped.
+
+    blocks: list of (marker, xml_block) tuples. `marker` is a substring whose
+        presence in ossec.conf means the block is already installed.
     """
-    if not os.path.exists(_OSSEC_CONF):
-        logger.warning("ossec.conf not found, cannot inject Sysmon config")
-        return False
-
-    try:
-        with open(_OSSEC_CONF, "r", encoding="utf-8") as f:
-            content = f.read()
-    except Exception as e:
-        logger.error(f"Failed to read ossec.conf: {e}")
-        return False
-
-    if "Microsoft-Windows-Sysmon/Operational" in content:
-        logger.info("Sysmon monitoring already configured in ossec.conf")
+    if not blocks:
         return True
 
-    if "</ossec_config>" not in content:
-        logger.error("Could not find </ossec_config> tag in ossec.conf")
+    if not os.path.exists(_OSSEC_CONF):
+        logger.warning("ossec.conf not found, cannot inject localfile blocks")
         return False
 
-    updated = content.replace(
-        "</ossec_config>",
-        f"{_SYSMON_LOCALFILE_BLOCK}\n</ossec_config>",
+    # Markers and blocks go through Base64 to dodge any quoting headaches
+    # when embedded in the elevated PowerShell script.
+    entries_ps = []
+    for marker, block in blocks:
+        m_b64 = base64.b64encode(marker.encode("utf-8")).decode("ascii")
+        b_b64 = base64.b64encode(block.encode("utf-8")).decode("ascii")
+        entries_ps.append(
+            "    @{ "
+            f"Marker = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{m_b64}')); "
+            f"Block  = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{b_b64}')) "
+            "}"
+        )
+    entries_ps_str = ",`n".join(entries_ps)
+
+    script = (
+        f"$conf = '{_OSSEC_CONF}'\n"
+        "if (-not (Test-Path $conf)) { throw 'ossec.conf missing' }\n"
+        "$utf8NoBom = New-Object System.Text.UTF8Encoding($false)\n"
+        "$content = [System.IO.File]::ReadAllText($conf, $utf8NoBom)\n"
+        "if (-not $content.Contains('</ossec_config>')) { throw 'closing tag not found in ossec.conf' }\n"
+        "$entries = @(\n"
+        f"{entries_ps_str}\n"
+        ")\n"
+        "$changed = $false\n"
+        "foreach ($e in $entries) {\n"
+        "    if (-not $content.Contains($e.Marker)) {\n"
+        "        $content = $content.Replace('</ossec_config>', $e.Block + \"`n</ossec_config>\")\n"
+        "        $changed = $true\n"
+        "    }\n"
+        "}\n"
+        "if ($changed) {\n"
+        "    [System.IO.File]::WriteAllText($conf, $content, $utf8NoBom)\n"
+        f"    $svc = Get-Service -Name '{_SERVICE_NAME}' -ErrorAction SilentlyContinue\n"
+        "    if ($svc -and $svc.Status -eq 'Running') {\n"
+        f"        Restart-Service -Name '{_SERVICE_NAME}' -Force\n"
+        "    }\n"
+        "}\n"
     )
 
-    # Write to temp file first, then copy into Program Files with elevation
-    try:
-        tmp_conf = os.path.join(tempfile.gettempdir(), "resistine_ossec.conf")
-        with open(tmp_conf, "w", encoding="utf-8") as f:
-            f.write(updated)
-    except Exception as e:
-        logger.error(f"Failed to write temp ossec.conf: {e}")
-        return False
-
-    copy_cmd = f"Copy-Item -Path '{tmp_conf}' -Destination '{_OSSEC_CONF}' -Force"
-    success, output = _run_privileged(copy_cmd)
-    try:
-        os.unlink(tmp_conf)
-    except Exception:
-        pass
-
+    success, output = _run_privileged(script)
     if success:
-        logger.info("Injected Sysmon monitoring config into ossec.conf")
+        logger.info("Injected ossec.conf localfile blocks under elevation")
     else:
-        logger.error(f"Failed to copy updated ossec.conf: {output}")
+        logger.error(f"Failed to inject ossec.conf localfile blocks: {output}")
     return success
+
+
+def _inject_sysmon_config():
+    """Add Sysmon eventchannel monitoring to ossec.conf (UAC prompt)."""
+    return _inject_ossec_localfiles([
+        ("Microsoft-Windows-Sysmon/Operational", _SYSMON_LOCALFILE_BLOCK),
+    ])
 
 
 def inject_defender_config():
-    """Add Windows Defender eventchannel monitoring to ossec.conf if not present.
-
-    ossec.conf lives in Program Files and requires admin to write.
-    Uses a temp file + privileged copy to avoid a direct open() on a protected path.
-    """
-    if not os.path.exists(_OSSEC_CONF):
-        logger.warning("ossec.conf not found, cannot inject Defender config")
-        return False
-
-    try:
-        with open(_OSSEC_CONF, "r", encoding="utf-8") as f:
-            content = f.read()
-    except Exception as e:
-        logger.error(f"Failed to read ossec.conf: {e}")
-        return False
-
-    if "Microsoft-Windows-Windows Defender/Operational" in content:
-        logger.info("Defender monitoring already configured in ossec.conf")
-        return True
-
-    if "</ossec_config>" not in content:
-        logger.error("Could not find </ossec_config> tag in ossec.conf")
-        return False
-
-    updated = content.replace(
-        "</ossec_config>",
-        f"{_DEFENDER_LOCALFILE_BLOCK}\n</ossec_config>",
-    )
-
-    try:
-        tmp_conf = os.path.join(tempfile.gettempdir(), "resistine_ossec.conf")
-        with open(tmp_conf, "w", encoding="utf-8") as f:
-            f.write(updated)
-    except Exception as e:
-        logger.error(f"Failed to write temp ossec.conf: {e}")
-        return False
-
-    # Restart only if the service is currently running, so we don't fail
-    # mid-install when the agent hasn't been started yet.
-    copy_cmd = (
-        f"Copy-Item -Path '{tmp_conf}' -Destination '{_OSSEC_CONF}' -Force; "
-        f"$svc = Get-Service -Name '{_SERVICE_NAME}' -ErrorAction SilentlyContinue; "
-        f"if ($svc -and $svc.Status -eq 'Running') {{ "
-        f"Restart-Service -Name '{_SERVICE_NAME}' -Force "
-        f"}}"
-    )
-    success, output = _run_privileged(copy_cmd)
-    try:
-        os.unlink(tmp_conf)
-    except Exception:
-        pass
-
-    if success:
-        logger.info("Injected Defender monitoring config into ossec.conf")
-    else:
-        logger.error(f"Failed to copy updated ossec.conf: {output}")
-    return success
+    """Add Windows Defender eventchannel monitoring to ossec.conf (UAC prompt)."""
+    return _inject_ossec_localfiles([
+        ("Microsoft-Windows-Windows Defender/Operational", _DEFENDER_LOCALFILE_BLOCK),
+    ])
 
 
 def download_package(progress_callback=None):
@@ -571,8 +538,11 @@ def full_install(progress_callback=None):
     _run_privileged(patch_cmd)
 
     # Phase 6: Inject Sysmon and Defender monitoring into ossec.conf
-    _inject_sysmon_config()
-    inject_defender_config()
+    # Single UAC prompt for both blocks.
+    _inject_ossec_localfiles([
+        ("Microsoft-Windows-Sysmon/Operational", _SYSMON_LOCALFILE_BLOCK),
+        ("Microsoft-Windows-Windows Defender/Operational", _DEFENDER_LOCALFILE_BLOCK),
+    ])
 
     # Phase 7: Enrollment — restore existing key or enroll fresh
     backup_dir = os.path.dirname(_KEY_BACKUP)
