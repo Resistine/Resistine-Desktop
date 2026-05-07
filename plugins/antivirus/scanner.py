@@ -62,7 +62,7 @@ def scan(
     if not clamav.is_available():
         result = ScanResult(
             target=target,
-            error="ClamAV not installed — install it via the Store plugin.",
+            error=f"{clamav.engine_name()} is not available.",
         )
         if on_complete:
             on_complete(result)

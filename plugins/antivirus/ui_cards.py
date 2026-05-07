@@ -187,6 +187,7 @@ def build_scan_exclusions(plugin, parent, row):
     plugin._size_entry.insert(0, "0")
     plugin._size_entry.bind("<Return>", lambda e: plugin._save_max_file_size())
     plugin._size_entry.bind("<FocusOut>", lambda e: plugin._save_max_file_size())
+    plugin._size_entry.bind("<KeyRelease>", lambda e: plugin._debounced_save_max_file_size())
 
     customtkinter.CTkLabel(
         right, text="MB", font=font(11), text_color=_muted(),

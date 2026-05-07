@@ -63,7 +63,7 @@ def _write(line: str):
             with open(get_log_path(), "a") as f:
                 f.write(line + "\n")
         except OSError as exc:
-            logger.error(f"ClamAV: failed to write threat log: {exc}")
+            logger.error(f"AV: failed to write threat log: {exc}")
 
 
 def _escape(v: str) -> str:
@@ -234,7 +234,7 @@ def _inject_darwin(conf: str) -> tuple[bool, str]:
             output = result.stdout.strip()
             if "already_configured" in output:
                 return True, "Already configured."
-            logger.info("ClamAV: Wazuh forwarding configured")
+            logger.info("AV: Wazuh forwarding configured")
             return True, "Configured. Wazuh agent restarted."
         err = result.stderr.strip()
         if "User cancelled" in err or "(-128)" in err:
@@ -287,7 +287,7 @@ def _inject_linux(conf: str) -> tuple[bool, str]:
                 output = result.stdout.strip()
                 if "already_configured" in output:
                     return True, "Already configured."
-                logger.info("ClamAV: Wazuh forwarding configured")
+                logger.info("AV: Wazuh forwarding configured")
                 return True, "Configured. Wazuh agent restarted."
         except (FileNotFoundError, subprocess.TimeoutExpired):
             continue

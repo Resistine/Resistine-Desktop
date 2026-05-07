@@ -342,26 +342,39 @@ def _find_mpcmdrun() -> str | None:
     return None
 
 
-def _scan_single_file(filepath: str) -> str:
+def _scan_single_file(
+    filepath: str,
+    cancel: "threading.Event | None" = None,
+) -> str:
     """Scan one file with MpCmdRun and return a ClamAV-style result line.
 
     Returns  "<filepath>: <ThreatName> FOUND"  or  "<filepath>: OK".
     """
+    if cancel and cancel.is_set():
+        return f"{filepath}: OK"
     exe = _find_mpcmdrun()
     if not exe:
         return f"{filepath}: OK"
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             [exe, "-Scan", "-ScanType", "3", "-File", filepath],
-            capture_output=True, text=True, timeout=60,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             creationflags=_NO_WINDOW,
         )
-    except (subprocess.TimeoutExpired, OSError):
+    except OSError:
         return f"{filepath}: OK"
+    # Poll so we can abort quickly on cancel
+    while proc.poll() is None:
+        if cancel and cancel.is_set():
+            proc.kill()
+            return f"{filepath}: OK"
+        try:
+            proc.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            pass
     if proc.returncode == 2:
-        # Only report FOUND if stdout confirms a real threat name.
-        # MpCmdRun can return 2 for permission errors, locked files, etc.
-        for line in proc.stdout.splitlines():
+        stdout = proc.stdout.read() if proc.stdout else ""
+        for line in stdout.splitlines():
             stripped = line.strip()
             if stripped.startswith("Threat"):
                 name = stripped.split(":", 1)[-1].strip() if ":" in stripped else "Unknown"
@@ -403,7 +416,7 @@ def scan_path(
         if on_line:
             on_line(f"Scanning {os.path.basename(target)}...")
         start = time.monotonic()
-        line = _scan_single_file(target)
+        line = _scan_single_file(target, cancel)
         if on_line:
             on_line(line)
         result["scanned"] = 1
@@ -442,7 +455,7 @@ def scan_path(
     pool = ThreadPoolExecutor(max_workers=_PARALLEL_WORKERS)
     try:
         futures = {
-            pool.submit(_scan_single_file, f): f for f in files
+            pool.submit(_scan_single_file, f, cancel): f for f in files
         }
         for future in as_completed(futures):
             if cancel and cancel.is_set():
