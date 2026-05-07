@@ -284,6 +284,14 @@ begin
 
   { taskkill returns non-zero if not running; treat "not running" as success. }
   RunHiddenCmd(Params, ResultCode);
+
+  { Also kill tray process (pythonw.exe running tray.py) }
+  RunHiddenCmd(
+    'powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name=''python.exe'' OR Name=''pythonw.exe''\" | ' +
+    'Where-Object { $_.CommandLine -like ''*tray.py*'' -or $_.CommandLine -like ''*Resistine*'' } | ' +
+    'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>nul',
+    ResultCode);
+
   Sleep(750);
   Result := not IsResistineRunning;
 end;
@@ -1786,6 +1794,18 @@ begin
     Log('Wazuh uninstall exit code: ' + IntToStr(ResultCode));
   end;
 
+  { Remove Sysmon/Defender localfile blocks from ossec.conf }
+  if FileExists('C:\Program Files (x86)\ossec-agent\ossec.conf') then
+  begin
+    Log('Uninstall cleanup: removing Resistine entries from ossec.conf');
+    RunHiddenCmd(
+      'powershell -NoProfile -Command "$c = Get-Content ''C:\Program Files (x86)\ossec-agent\ossec.conf'' -Raw; ' +
+      '$c = $c -replace ''(?s)\s*<localfile>\s*<location>Microsoft-Windows-Sysmon/Operational</location>\s*<log_format>eventchannel</log_format>\s*</localfile>'', ''''; ' +
+      '$c = $c -replace ''(?s)\s*<localfile>\s*<location>Microsoft-Windows-Windows Defender/Operational</location>\s*<log_format>eventchannel</log_format>\s*</localfile>'', ''''; ' +
+      'Set-Content ''C:\Program Files (x86)\ossec-agent\ossec.conf'' $c -Encoding UTF8" >nul 2>nul',
+      ResultCode);
+  end;
+
   { Stop and uninstall Sysmon (try 64-bit then 32-bit service name) }
   if HiddenCmdSucceeded('sc query Sysmon64 >nul 2>nul') then
   begin
@@ -1809,6 +1829,8 @@ begin
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
 begin
   if CurUninstallStep = usUninstall then
   begin
@@ -1818,6 +1840,10 @@ begin
 
   if CurUninstallStep = usPostUninstall then
   begin
+    { Remove keyring credentials (master key + update signing key) }
+    RunHiddenCmd('cmdkey /delete:resistine-master-key >nul 2>nul', ResultCode);
+    RunHiddenCmd('cmdkey /delete:resistine-updates >nul 2>nul', ResultCode);
+
     { Always remove user data and configs on uninstall }
     DeleteResistineUserData;
 

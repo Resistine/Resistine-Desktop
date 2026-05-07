@@ -15,6 +15,7 @@ for %%I in ("%SCRIPT_DIR%\..\..") do set PROJECT_ROOT=%%~fI
 
 :: Try bundled-installer layout first, then fall back to the project-root layout.
 set SERVICE_SCRIPT=%SCRIPT_DIR%\windows_vpn_service.py
+if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%SCRIPT_DIR%\plugins\vpn\wireguard\windows_vpn_service.py
 if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%PROJECT_ROOT%\plugins\vpn\wireguard\windows_vpn_service.py
 set VENV_DIR=%PROJECT_ROOT%\.venv
 set VENV_PYTHON=%VENV_DIR%\Scripts\python.exe
@@ -226,6 +227,16 @@ goto :wazuh_done
 echo       Not found, skipping
 :wazuh_done
 
+:: ---- Remove Sysmon/Defender blocks from ossec.conf ----
+echo Cleaning Resistine entries from ossec.conf...
+set "OSSEC_CONF=C:\Program Files (x86)\ossec-agent\ossec.conf"
+if exist "%OSSEC_CONF%" (
+    powershell -NoProfile -Command "$c = Get-Content '%OSSEC_CONF%' -Raw; $c = $c -replace '(?s)\s*<localfile>\s*<location>Microsoft-Windows-Sysmon/Operational</location>\s*<log_format>eventchannel</log_format>\s*</localfile>', ''; $c = $c -replace '(?s)\s*<localfile>\s*<location>Microsoft-Windows-Windows Defender/Operational</location>\s*<log_format>eventchannel</log_format>\s*</localfile>', ''; Set-Content '%OSSEC_CONF%' $c -Encoding UTF8" >nul 2>&1
+    echo       OK
+) else (
+    echo       ossec.conf not found, skipping
+)
+
 :: ---- Stop and remove Sysmon service ----
 echo Removing Sysmon service...
 sc query Sysmon64 >nul 2>&1
@@ -245,6 +256,16 @@ goto :sysmon_done
 :sysmon_not_present
 echo       Not found, skipping
 :sysmon_done
+
+:: ---- Remove keyring credentials ----
+echo Removing stored credentials...
+if defined SYS_PYTHON (
+    "%SYS_PYTHON%" -c "import keyring; keyring.delete_password('resistine-master-key', 'master-key')" >nul 2>&1
+    "%SYS_PYTHON%" -c "import keyring; keyring.delete_password('resistine-updates', 'resistine-updates')" >nul 2>&1
+)
+cmdkey /delete:resistine-master-key >nul 2>&1
+cmdkey /delete:resistine-updates >nul 2>&1
+echo       OK
 
 :: ---- Remove startup registry entries (HKLM, requires admin) ----
 echo Removing system startup and registry entries...

@@ -226,6 +226,8 @@ if !errorlevel! neq 0 (
     echo ERROR: Failed to install service ^(exit !SERVICE_INSTALL_EXIT!^).
     echo       Check: %SERVICE_SETUP_LOG%
     echo       Common cause: previous service instance is still being removed by Windows.
+    echo       Cleaning up partial registration...
+    sc delete %SERVICE_NAME% >nul 2>&1
     call :pause_if_needed
     exit /b 1
 ) else (
