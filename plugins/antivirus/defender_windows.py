@@ -426,12 +426,20 @@ def scan_path(
         result["duration"] = _format_duration(time.monotonic() - start)
         return result
 
-    # Directory scan — walk, then scan per-file with parallel workers
+    # Directory scan — walk files, then scan per-file with parallel workers
     whitelist = set(get_whitelist())
     excl = get_scan_exclusions()
     excluded_ext = frozenset(excl["extensions"])
     max_bytes = excl["max_size_mb"] * 1048576 if excl["max_size_mb"] else 0
+
+    if on_line:
+        on_line(f"Enumerating files in {os.path.basename(target) or target}...")
+
     files = list(_walk_files(target, whitelist, excluded_ext, max_bytes))
+
+    if cancel and cancel.is_set():
+        result["error"] = "Scan cancelled."
+        return result
 
     if not files:
         if on_line:

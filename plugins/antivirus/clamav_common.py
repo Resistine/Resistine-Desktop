@@ -15,6 +15,7 @@ Licensed under the GNU General Public License v2 or later
 import glob
 import json
 import os
+import platform
 import re
 import shutil
 import socket
@@ -416,6 +417,12 @@ def is_clamd_running() -> bool:
 # ── Direct socket scanning ────────────────────────────────
 
 _SKIP_DIRS = frozenset({".git", ".hg", ".svn", "node_modules", "__pycache__"})
+# Windows system directories that should never be scanned — they contain
+# millions of OS files, are permission-locked, and slow walks to a crawl.
+_SKIP_DIRS_WINDOWS = frozenset({
+    "$Recycle.Bin", "System Volume Information", "$WinREAgent",
+    "Recovery", "PerfLogs", "Windows", "$SysReset",
+}) if platform.system() == "Windows" else frozenset()
 _PARALLEL_WORKERS = 6
 
 
@@ -457,10 +464,11 @@ def _walk_files(
     ):
         return
 
+    skip = _SKIP_DIRS | _SKIP_DIRS_WINDOWS
     for root, dirs, files in os.walk(target):
         dirs[:] = [
             d for d in dirs
-            if d not in _SKIP_DIRS
+            if d not in skip
             and os.path.realpath(os.path.join(root, d)) not in resolved_wl
         ]
         for fname in files:

@@ -740,13 +740,9 @@ class Plugin(BasePlugin):
         if self._scanning:
             return
         if platform.system() == "Windows":
-            # Scan all fixed drives
-            import string
-            roots = [
-                f"{d}:\\" for d in string.ascii_uppercase
-                if os.path.isdir(f"{d}:\\")
-            ]
-            target = roots[0] if roots else "C:\\"
+            # Scan user profile — fastest, most relevant target on Windows.
+            # Full C:\ scans are slow even with system dirs skipped.
+            target = os.path.expanduser("~")
         else:
             target = "/"
         self._run_scan(target)
