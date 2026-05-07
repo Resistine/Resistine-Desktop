@@ -1009,41 +1009,63 @@ def set_max_file_size(size_mb: int):
 def get_realtime_status() -> dict:
     """Return the real-time protection status for UI display.
 
-    Returns dict with keys:
-        installed: bool (ClamAV binaries found)
-        db_present: bool (signature database exists)
-        approved: bool (daemons approved in Login Items)
-        fda_granted: bool (Full Disk Access available)
-        clamd_running: bool
-        clamonacc_running: bool
-        state: one of "not_installed" | "no_database" | "approval_required"
-               | "fda_required" | "protected" | "error"
+    Two-dimensional state model:
+    - setup_state: persisted installer lifecycle (from installer_service)
+    - runtime_state: computed live from daemon health checks
+
+    Also keeps backward-compatible keys for scanning logic.
     """
+    import platform as _platform
+
     plat = _get_platform()
     installed = is_clamav_installed()
     db_present = has_database()
     clamd_ok = is_clamd_running()
-    clamonacc_ok = plat.is_clamonacc_running()
-
     in_bundle = plat.is_app_bundle()
 
-    # When running from an app bundle, check system-level clamd specifically.
-    # The user-level clamd (started by _ensure_clamd_warm) is just a
-    # convenience for on-demand scanning and doesn't count as "protected".
+    clamonacc_ok = False
     system_clamd_ok = False
-    if in_bundle:
-        approved = plat.daemons_approved()
-        fda = plat.has_full_disk_access()
-        system_sock = plat.system_clamd_socket_path()
-        if system_sock:
-            system_clamd_ok = _ping_socket(system_sock)
-    else:
-        approved = True
-        fda = True
+    approved = True
+    fda = True
 
-    # Priority: not installed > no DB > approval > FDA > clamd running
-    # In-bundle: require system clamd for "protected" state.
-    # Dev mode: any clamd (user-level) is sufficient.
+    if _platform.system() == "Darwin":
+        clamonacc_ok = plat.is_clamonacc_running()
+        if in_bundle:
+            approved = plat.daemons_approved()
+            fda = plat.has_full_disk_access()
+            system_sock = plat.system_clamd_socket_path()
+            if system_sock:
+                system_clamd_ok = _ping_socket(system_sock)
+
+    # Compute setup_state and runtime_state from installer service
+    setup_state = "completed"  # Default for non-Darwin or pre-existing installs
+    runtime_state = "offline"
+
+    if _platform.system() == "Darwin":
+        from plugins.antivirus.installer_service import (
+            get_runtime_state,
+            get_setup_state,
+        )
+
+        setup_state = get_setup_state()
+        if setup_state == "completed":
+            runtime_state = get_runtime_state()
+        elif setup_state == "not_started":
+            # Already-set-up users: if system clamd is running, mark completed
+            if in_bundle and system_clamd_ok:
+                from plugins.antivirus.installer_service import mark_completed
+
+                mark_completed()
+                setup_state = "completed"
+                runtime_state = get_runtime_state()
+    else:
+        # Non-Darwin: derive legacy state
+        if clamd_ok:
+            runtime_state = "healthy"
+
+    # Legacy "state" key — preserves the original priority order so existing
+    # scanning logic and tests continue to work unchanged.
+    # Priority: not_installed > no_database > approval > FDA > clamd > error
     if not installed:
         state = "not_installed"
     elif not db_present:
@@ -1067,4 +1089,6 @@ def get_realtime_status() -> dict:
         "system_clamd_running": system_clamd_ok,
         "in_bundle": in_bundle,
         "state": state,
+        "setup_state": setup_state,
+        "runtime_state": runtime_state,
     }

@@ -42,6 +42,7 @@ datas = [
     (_src('utils'), 'utils'),
     (_src('docs'), 'docs'),
     (_src('scripts/wazuh-postinstall-darwin.sh'), 'scripts'),
+    (_src('scripts/clamav-postinstall-darwin.sh'), 'scripts'),
 ]
 
 # Hidden imports (modules not auto-detected)

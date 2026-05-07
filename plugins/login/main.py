@@ -467,6 +467,12 @@ class Plugin(BasePlugin):
             from plugins.wazuh.agent.installer_service import ensure_download_started
             _thr.Thread(target=ensure_download_started, daemon=True).start()
 
+        # Start ClamAV DB pre-seed while internet is available
+        if platform.system() == "Darwin":
+            import threading as _thr2
+            from plugins.antivirus.installer_service import ensure_db_seed_started
+            _thr2.Thread(target=ensure_db_seed_started, daemon=True).start()
+
         # Phase 4: Transition to next screen
         from utils import settings as app_settings
         needs_onboarding = (

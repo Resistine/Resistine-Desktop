@@ -248,7 +248,7 @@ def has_full_disk_access() -> bool:
         return True
 
     # If the launchd job is loaded AND the system config exists (meaning
-    # activate_system_daemons has been run), a crash-looping clamonacc
+    # the postinstall script has been run), a crash-looping clamonacc
     # indicates missing FDA. Without the config, clamonacc crashes because
     # it can't find its config file — not because of FDA.
     #
@@ -515,192 +515,143 @@ def _generate_system_freshclam_conf() -> str:
     return conf
 
 
-def activate_system_daemons() -> tuple[bool, str]:
-    """Set up and start system-level ClamAV daemons (clamd + clamonacc).
+def _get_postinstall_script_path() -> str:
+    """Return the absolute path to the ClamAV postinstall shell script."""
+    if getattr(sys, "frozen", False):
+        # PyInstaller bundle: scripts/ is in the _MEIPASS resource dir
+        return os.path.join(sys._MEIPASS, "scripts", "clamav-postinstall-darwin.sh")
+    # Dev mode: project root is 2 levels up from this file
+    return os.path.join(_PROJECT_ROOT, "scripts", "clamav-postinstall-darwin.sh")
 
-    One admin prompt covers the full setup:
-      1. Create system directories
-      2. Write system-level clamd.conf and freshclam.conf
-      3. Make DB dir writable by the current user (for freshclam updates)
-      4. Download initial signature DB if none exists
-      5. Load/restart daemons via launchctl
 
-    Only works when running from the installed app bundle.
+def _launch_clamav_postinstall(db_source: str) -> tuple[bool, str]:
+    """Launch the ClamAV postinstall script with admin privileges.
+
+    Copies the script to /tmp/ to strip com.apple.provenance xattr
+    (Sequoia). Launches via osascript with start_new_session=True so
+    the script survives app quit.
+
+    Returns (launched_ok, status_file_path).
     """
+    import uuid
+
     contents = _app_bundle_contents()
     if not contents:
-        return False, "Real-time protection requires the installed app."
+        # Dev mode: fall back to the installed app bundle
+        installed = "/Applications/Resistine.app/Contents"
+        if os.path.isdir(installed):
+            contents = installed
+            logger.info("ClamAV: using installed app bundle for postinstall")
+        else:
+            logger.error("ClamAV: no app bundle found (install Resistine.app first)")
+            return False, ""
 
-    launchd_dir = os.path.join(contents, "Library", "LaunchDaemons")
+    unique_id = uuid.uuid4().hex[:12]
+    status_file = f"/tmp/resistine-clamav-install-{unique_id}.status"
+    log_file = f"/tmp/resistine-clamav-install-{unique_id}.log"
+    script_path = _get_postinstall_script_path()
 
-    # Generate config content
-    import base64
+    # Copy script to /tmp/ to strip com.apple.provenance xattr
+    import shutil as _shutil
 
-    clamd_conf_b64 = base64.b64encode(
-        _generate_system_clamd_conf().encode(),
-    ).decode()
-    freshclam_conf_b64 = base64.b64encode(
-        _generate_system_freshclam_conf().encode(),
-    ).decode()
+    tmp_script = f"/tmp/resistine-clamav-postinstall-{unique_id}.sh"
+    _shutil.copy2(script_path, tmp_script)
+    os.chmod(tmp_script, 0o755)
 
-    sys_dirs = [_SYSTEM_LOG_DIR, _SYSTEM_DB_DIR, _SYSTEM_RUN_DIR]
-    db_dir_q = shlex.quote(_SYSTEM_DB_DIR)
-    conf_q = shlex.quote(_SYSTEM_CLAMD_CONF)
-    fconf_q = shlex.quote(_SYSTEM_FRESHCLAM_CONF)
-
-    cmds = [
-        # Resolve console user with fallback
-        "CUSER=$(stat -f '%Su' /dev/console 2>/dev/null || echo root)",
-        # 1. Create directories
-        "mkdir -p " + " ".join(shlex.quote(d) for d in sys_dirs),
-        # 2. Write system-level configs (base64 avoids quoting issues)
-        f"echo {shlex.quote(clamd_conf_b64)} | base64 -D > {conf_q}",
-        f"echo {shlex.quote(freshclam_conf_b64)} | base64 -D > {fconf_q}",
-        # 3. Make DB dir + config files writable by console user so
-        #    freshclam and post-update config refresh work without admin
-        f"chown $CUSER:staff {db_dir_q} {conf_q} {fconf_q}",
-        f"chmod 775 {db_dir_q}",
+    args = [
+        f"--app-contents {shlex.quote(contents)}",
+        f"--db-source {shlex.quote(db_source)}",
+        f"--status-file {shlex.quote(status_file)}",
+        f"--log-file {shlex.quote(log_file)}",
     ]
 
-    # 4. Seed the system DB directory if empty.
-    #    Try freshclam first; if that fails (network/certs), fall back to
-    #    copying the user-level DB files that were already downloaded via
-    #    the "Update Now" button.  Without a DB, clamd won't start.
-    freshclam_bin = find_binary("freshclam")
-    certs_dir = find_certs_dir()
-
-    from plugins.antivirus.clamav_common import _DB_DIR as _user_db_dir
-
-    user_db_q = shlex.quote(_user_db_dir)
-
-    if freshclam_bin:
-        env_prefix = ""
-        if certs_dir:
-            env_prefix = f"CVD_CERTS_DIR={shlex.quote(certs_dir)} "
-        cmds.append(
-            f"if ! ls {db_dir_q}/*.cvd 1>/dev/null 2>&1; then "
-            f"{env_prefix}"
-            f"{shlex.quote(freshclam_bin)} "
-            f"--config-file {fconf_q} --stdout 2>&1 || true; fi",
-        )
-
-    # Fallback: copy user-level DB files if freshclam didn't populate
-    # the system dir (e.g. network down, certs issue).
-    cmds.append(
-        f"if ! ls {db_dir_q}/*.cvd 1>/dev/null 2>&1 "
-        f"&& ls {user_db_q}/*.cvd 1>/dev/null 2>&1; then "
-        f"cp {user_db_q}/*.cvd {db_dir_q}/ 2>/dev/null || true; "
-        f"cp {user_db_q}/*.cld {db_dir_q}/ 2>/dev/null || true; "
-        f"chown $CUSER:staff {db_dir_q}/*.cvd {db_dir_q}/*.cld "
-        f"2>/dev/null || true; fi",
-    )
-
-    # 5. Load / restart daemons
-    for plist_name in _DAEMON_PLISTS:
-        label = plist_name.replace(".plist", "")
-        plist_path = os.path.join(launchd_dir, plist_name)
-        if not os.path.exists(plist_path):
-            logger.warning(f"ClamAV: plist not found: {plist_path}")
-            continue
-        quoted_path = shlex.quote(plist_path)
-        cmds.append(
-            f"launchctl kickstart -k system/{label} 2>/dev/null || "
-            f"launchctl load -w {quoted_path} 2>/dev/null || true",
-        )
-
-    script = "; ".join(cmds)
-    logger.info("ClamAV: activating system daemons via launchctl")
+    shell_cmd = f"{shlex.quote(tmp_script)} {' '.join(args)}"
+    escaped = shell_cmd.replace("\\", "\\\\").replace('"', '\\"')
 
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             [
                 "osascript", "-e",
-                "do shell script " + _applescript_quote(script)
-                + " with administrator privileges",
+                f'do shell script "{escaped}" with administrator privileges',
             ],
-            capture_output=True, text=True, timeout=120,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
         )
-        if result.returncode != 0:
-            msg = (result.stderr or "").strip() or "Admin authentication cancelled."
-            logger.error(f"ClamAV: daemon activation failed: {msg}")
-            return False, msg
-    except subprocess.TimeoutExpired:
-        return False, "Setup timed out — try again or check network for DB download."
-    except Exception as exc:
-        return False, str(exc)
-
-    # Verify daemons actually launched before waiting for the socket.
-    # clamd takes a while to load the ~500 MB signature DB, but we can
-    # confirm the process is alive almost immediately.
-    from plugins.antivirus.clamav_common import _ping_socket
-
-    def _clamd_process_alive() -> bool:
-        """Check if the system clamd process is running."""
+        # Wait briefly to catch immediate failures (user cancelled password)
         try:
-            r = subprocess.run(
-                ["launchctl", "print", "system/com.resistine.desktop.clamd"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if r.returncode != 0:
-                return False
-            # Look for "pid = <number>" in launchctl output
-            for ln in r.stdout.splitlines():
-                if ln.strip().startswith("pid = "):
-                    try:
-                        return int(ln.strip().split("=")[1].strip()) > 0
-                    except ValueError:
-                        pass
-            return False
-        except Exception:
-            return False
-
-    def _clamonacc_process_alive() -> bool:
-        """Check if clamonacc process is running."""
-        try:
-            r = subprocess.run(
-                ["pgrep", "-x", "clamonacc"],
-                capture_output=True, timeout=5,
-            )
-            return r.returncode == 0
-        except Exception:
-            return False
-
-    # Give daemons a moment to launch, then verify they're alive
-    time.sleep(2)
-
-    if not _clamd_process_alive():
-        logger.error("ClamAV: clamd process did not start")
-        return False, "clamd failed to start — check system logs."
-
-    # clamd is alive — wait up to 30s for it to become responsive
-    # (loading signature DB). This is a reasonable balance between
-    # giving feedback quickly and confirming it actually works.
-    for _ in range(60):
-        time.sleep(0.5)
-        if _ping_socket(_SYSTEM_CLAMD_SOCKET):
-            logger.info("ClamAV: system clamd is now running")
-            # Wait for clamonacc to stabilize now that clamd is ready.
-            # clamonacc may have crash-looped while clamd was loading
-            # its 500 MB+ signature DB. The launchd plist has a 10s
-            # ThrottleInterval, so we need to wait long enough for
-            # launchd to schedule the next restart after the throttle.
-            for _w in range(30):  # ~15 seconds (covers 10s throttle)
-                if _clamonacc_process_alive():
-                    logger.info("ClamAV: clamonacc is running")
-                    break
-                time.sleep(0.5)
-            else:
-                logger.warning(
-                    "ClamAV: clamonacc not running after activation "
-                    "— Full Disk Access may be needed",
+            proc.wait(timeout=2)
+            if proc.returncode != 0:
+                stderr = proc.stderr.read().decode() if proc.stderr else ""
+                logger.error(
+                    f"ClamAV postinstall osascript failed: "
+                    f"rc={proc.returncode} {stderr}",
                 )
-            return True, "Protection activated."
+                return False, status_file
+        except subprocess.TimeoutExpired:
+            # Still running = admin prompt accepted, script executing
+            pass
+        logger.info(
+            f"ClamAV postinstall launched (pid={proc.pid}), "
+            f"status_file={status_file}",
+        )
+        return True, status_file
+    except Exception as e:
+        logger.error(f"ClamAV: failed to launch postinstall: {e}")
+        return False, status_file
 
-    # clamd process is alive but not responding after 30s — it's still
-    # loading signatures. Return success; the status poll will detect
-    # when it's ready.
-    logger.info("ClamAV: clamd alive but still loading signatures")
-    return True, "Protection starting — signatures loading in background."
+
+def _poll_setup_status(status_file: str) -> tuple[bool, bool, dict]:
+    """Read the JSON status file written by the postinstall script.
+
+    Returns (finished, success, details_dict).
+
+    Hardening:
+    - If status is "running" but PID is dead, treat as crashed.
+    - If file is >5 min old and still "running", treat as stale.
+    """
+    import json
+
+    try:
+        with open(status_file) as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return False, False, {}
+
+    status = data.get("status", "")
+
+    if status == "success":
+        return True, True, data
+
+    if status == "failed":
+        return True, False, data
+
+    if status == "running":
+        # Check if the process is still alive
+        pid = data.get("pid")
+        if pid:
+            try:
+                os.kill(pid, 0)
+            except (OSError, ProcessLookupError):
+                logger.warning(
+                    f"ClamAV: postinstall PID {pid} is dead — treating as crash",
+                )
+                data["error"] = "Script process died unexpectedly"
+                data["error_code"] = "PROCESS_CRASHED"
+                return True, False, data
+
+        # Check for stale status file (>5 min)
+        ts = data.get("ts", 0)
+        if ts and (time.time() - ts) > 300:
+            logger.warning("ClamAV: postinstall status file is stale (>5 min)")
+            data["error"] = "Script timed out (stale status file)"
+            data["error_code"] = "SCRIPT_STALE"
+            return True, False, data
+
+        return False, False, data
+
+    return False, False, data
 
 
 def deactivate_system_daemons() -> tuple[bool, str]:

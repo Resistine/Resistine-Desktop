@@ -111,13 +111,16 @@ class Plugin(BasePlugin):
         self._init_ready = threading.Event()
         self.status = self.get_status()
 
-        # Register system-level ClamAV daemons via SMAppService and refresh
-        # system configs so post-Sparkle updates pick up any path changes.
+        # Register system-level ClamAV daemons via SMAppService, refresh
+        # system configs, and resume any pending install via the state machine.
         if platform.system() == "Darwin":
             def _darwin_daemon_init():
                 clamav.ensure_daemons_registered()
                 clamav.refresh_system_configs()
                 self._init_ready.set()
+                # Resume any pending ClamAV install
+                from plugins.antivirus.installer_service import check_and_advance
+                check_and_advance()
 
             threading.Thread(target=_darwin_daemon_init, daemon=True).start()
         else:
@@ -333,15 +336,26 @@ class Plugin(BasePlugin):
 
     def _apply_realtime_status(self, status: dict):
         """Handle a fresh poll result: cache state, update UI, schedule next."""
+        prev_setup = (
+            self._last_status.get("setup_state") if self._last_status else None
+        )
         state = status["state"]
         self._last_state = state
         self._last_status = status
         self.status = self.check_status()
         self._apply_realtime_status_ui(status)
         self._schedule_status_poll()
+        # Refresh DB info when setup transitions to completed
+        if status.get("setup_state") == "completed" and prev_setup != "completed":
+            self._refresh_db_info()
 
     def _apply_realtime_status_ui(self, status: dict):
-        """Update the status card widgets. Safe to call even if UI is gone."""
+        """Update the status card widgets using two-dimensional state model.
+
+        setup_state drives the UI during initial setup.
+        runtime_state drives the UI after setup is complete.
+        Safe to call even if UI is gone.
+        """
         if self._banner_frame is None:
             return
 
@@ -353,7 +367,8 @@ class Plugin(BasePlugin):
             self._banner_frame = None
             return
 
-        state = status["state"]
+        setup_state = status.get("setup_state", "completed")
+        runtime_state = status.get("runtime_state", "offline")
 
         t = ThemeManager.theme.get("Theme", {})
         ok_bg = t.get("protection_bg_ok")
@@ -363,83 +378,28 @@ class Plugin(BasePlugin):
         err_bg = t.get("status_badge_bg", {}).get("error")
         err_tx = t.get("status_badge_text", {}).get("error")
 
-        # State-driven card configuration matching the VPN status card style
-        states = {
-            "not_installed": {
-                "bg": err_bg,
-                "title": "Not Installed",
-                "title_color": err_tx,
+        cfg = None
+
+        if not status.get("installed"):
+            cfg = {
+                "bg": err_bg, "title": "Not Installed", "title_color": err_tx,
                 "subtitle": (
                     "ClamAV binaries were not found.\n"
                     "Reinstall Resistine or run the build script "
                     "to set up antivirus protection."
                 ),
                 "action": None,
-            },
-            "no_database": {
-                "bg": warn_bg,
-                "title": "Setup Required",
-                "title_color": warn_tx,
-                "subtitle": (
-                    "No signature database found. "
-                    "Tap Update Now below to download the latest "
-                    "malware definitions before scanning."
-                ),
-                "action": None,
-            },
-            "protected": {
-                "bg": ok_bg,
-                "title": "Protected",
-                "title_color": ok_tx,
-                "subtitle": (
-                    "Real-time malware protection is active"
-                    if status.get("clamonacc_running")
-                    else "On-demand scanning is active"
-                ),
-                "action": None,
-            },
-            "approval_required": {
-                "bg": warn_bg,
-                "title": "Approval Required",
-                "title_color": warn_tx,
-                "subtitle": (
-                    "On-demand scanning is available. "
-                    "Enable ClamAV daemons in System Settings "
-                    "\u203A General \u203A Login Items "
-                    "for faster scans and real-time protection."
-                ),
-                "action": ("Open Login Items", clamav.open_login_items_settings),
-            },
-            "fda_required": {
-                "bg": warn_bg,
-                "title": "Full Disk Access Required",
-                "title_color": warn_tx,
-                "subtitle": (
-                    "Resistine needs Full Disk Access to monitor files "
-                    "in real time. Grant access in System Settings "
-                    "\u203A Privacy & Security \u203A Full Disk Access."
-                ),
-                "action": ("Open Settings", clamav.open_fda_settings),
-            },
-            "error": {
-                "bg": err_bg,
-                "title": "Protection Offline",
-                "title_color": err_tx,
-                "subtitle": (
-                    "ClamAV daemons are not running"
-                    if status.get("in_bundle")
-                    else "On-demand scanning available. "
-                    "Install Resistine.app for real-time protection."
-                ),
-                "action": (
-                    ("Start Protection", self._start_protection)
-                    if status.get("in_bundle")
-                    else None
-                ),
-            },
-        }
-
-        cfg = states.get(state, states["error"])
+            }
+        elif setup_state != "completed":
+            # Setup phase — derive from setup_state
+            cfg = self._get_setup_banner_cfg(
+                setup_state, status, ok_bg, ok_tx, warn_bg, warn_tx, err_bg, err_tx,
+            )
+        else:
+            # Setup complete — derive from runtime_state
+            cfg = self._get_runtime_banner_cfg(
+                runtime_state, status, ok_bg, ok_tx, warn_bg, warn_tx, err_bg, err_tx,
+            )
 
         self._banner_frame.configure(fg_color=cfg["bg"])
         self._banner_label.configure(
@@ -447,20 +407,30 @@ class Plugin(BasePlugin):
         )
         self._banner_subtitle.configure(text=cfg["subtitle"])
 
+        # Show/hide progress bar based on active setup
+        show_progress = setup_state in ("seeding_db", "installing")
+        if self._banner_progress:
+            if show_progress:
+                self._banner_progress.grid()
+                self._banner_progress.start()
+            else:
+                self._banner_progress.stop()
+                self._banner_progress.grid_remove()
+
         if cfg["action"]:
             label, handler = cfg["action"]
-            self._banner_action_btn.configure(text=label, command=handler)
+            self._banner_action_btn.configure(
+                text=label, command=handler, state="normal",
+            )
             self._banner_action_btn.grid()
         else:
             self._banner_action_btn.grid_remove()
 
         # Disable scan buttons when ClamAV can't actually scan
-        can_scan = state not in ("not_installed", "no_database")
+        can_scan = status.get("installed") and status.get("db_present")
         self._set_scan_buttons_state("normal" if can_scan else "disabled")
 
-        # Scan Computer is gated on real-time protection: only users with
-        # clamonacc running get full-disk scans, since on-demand-only mode
-        # doesn't carry the same trust assumptions about FDA + daemons.
+        # Scan Computer is gated on real-time protection
         realtime_on = bool(status.get("clamonacc_running"))
         computer_btn = self._action_buttons.get("scan_computer")
         if computer_btn:
@@ -468,11 +438,145 @@ class Plugin(BasePlugin):
                 state="normal" if (can_scan and realtime_on) else "disabled",
             )
 
+    def _get_setup_banner_cfg(
+        self, setup_state, status, ok_bg, ok_tx, warn_bg, warn_tx, err_bg, err_tx,
+    ) -> dict:
+        """Return banner config for setup phase states."""
+        if setup_state == "seeding_db":
+            return {
+                "bg": warn_bg, "title": "Downloading Definitions...",
+                "title_color": warn_tx,
+                "subtitle": "Downloading malware signature database. This may take a few minutes.",
+                "action": None,
+            }
+        if setup_state == "seed_failed":
+            from plugins.antivirus.installer_service import get_failure_reason
+
+            reason = get_failure_reason()
+            reason_text = {
+                "dns_failed": "Could not reach the update server. Check your internet connection.",
+                "network_timeout": "Download timed out. Check your internet connection.",
+                "certs_missing": "Certificate verification failed. Try reinstalling Resistine.",
+                "binary_missing": "ClamAV binaries not found. Reinstall Resistine.",
+                "partial_download": "Download was incomplete. Tap Retry to try again.",
+            }.get(reason, "Download failed. Tap Retry to try again.")
+            return {
+                "bg": err_bg, "title": "Download Failed",
+                "title_color": err_tx, "subtitle": reason_text,
+                "action": ("Retry", self._retry_setup),
+            }
+        if setup_state == "db_ready":
+            return {
+                "bg": warn_bg, "title": "Set Up Protection",
+                "title_color": warn_tx,
+                "subtitle": (
+                    "Signature database downloaded. "
+                    "Tap below to enable real-time protection "
+                    "(requires administrator password)."
+                ),
+                "action": ("Set Up Protection", self._start_system_setup),
+            }
+        if setup_state == "installing":
+            return {
+                "bg": warn_bg, "title": "Setting Up...",
+                "title_color": warn_tx,
+                "subtitle": "Configuring system-level protection. This may take a moment.",
+                "action": None,
+            }
+        if setup_state == "install_failed":
+            from plugins.antivirus.installer_service import get_failure_reason
+
+            reason = get_failure_reason()
+            if reason == "user_canceled":
+                subtitle = "Setup was cancelled. Tap Retry when ready."
+            else:
+                subtitle = "System setup failed. Tap Retry to try again."
+            return {
+                "bg": err_bg, "title": "Setup Failed",
+                "title_color": err_tx, "subtitle": subtitle,
+                "action": ("Retry", self._retry_setup),
+            }
+        # not_started — seed is about to begin automatically
+        return {
+            "bg": warn_bg, "title": "Starting Setup...",
+            "title_color": warn_tx,
+            "subtitle": "Preparing to download malware definitions...",
+            "action": None,
+        }
+
+    @staticmethod
+    def _get_runtime_banner_cfg(
+        runtime_state, status, ok_bg, ok_tx, warn_bg, warn_tx, err_bg, err_tx,
+    ) -> dict:
+        """Return banner config for post-setup runtime states."""
+        if runtime_state == "healthy":
+            return {
+                "bg": ok_bg, "title": "Protected", "title_color": ok_tx,
+                "subtitle": (
+                    "Real-time malware protection is active"
+                    if status.get("clamonacc_running")
+                    else "On-demand scanning is active"
+                ),
+                "action": None,
+            }
+        if runtime_state == "degraded":
+            return {
+                "bg": warn_bg, "title": "Protection Degraded",
+                "title_color": warn_tx,
+                "subtitle": (
+                    "Scanning is available but real-time file monitoring "
+                    "is not running. Full Disk Access may be needed."
+                ),
+                "action": ("Open Settings", clamav.open_fda_settings),
+            }
+        if runtime_state == "approval_required":
+            return {
+                "bg": warn_bg, "title": "Approval Required",
+                "title_color": warn_tx,
+                "subtitle": (
+                    "Enable ClamAV daemons in System Settings "
+                    "\u203A General \u203A Login Items "
+                    "for real-time protection."
+                ),
+                "action": ("Open Login Items", clamav.open_login_items_settings),
+            }
+        if runtime_state == "fda_required":
+            return {
+                "bg": warn_bg, "title": "Full Disk Access Required",
+                "title_color": warn_tx,
+                "subtitle": (
+                    "Resistine needs Full Disk Access to monitor files "
+                    "in real time. Grant access in System Settings "
+                    "\u203A Privacy & Security \u203A Full Disk Access."
+                ),
+                "action": ("Open Settings", clamav.open_fda_settings),
+            }
+        # offline
+        return {
+            "bg": err_bg, "title": "Protection Offline",
+            "title_color": err_tx,
+            "subtitle": (
+                "ClamAV daemons are not running."
+                if status.get("in_bundle")
+                else "On-demand scanning available. "
+                "Install Resistine.app for real-time protection."
+            ),
+            "action": None,
+        }
+
     def _schedule_status_poll(self):
-        """Schedule the next realtime status poll if the UI is still alive."""
+        """Schedule the next realtime status poll if the UI is still alive.
+
+        Polls faster (2s) during active setup so the UI doesn't look stuck.
+        Normal interval (10s) after setup is complete.
+        """
         try:
             if hasattr(self, "main_frame") and self.main_frame.winfo_exists():
-                self.app.after(10000, self._update_realtime_status)
+                setup_active = self._last_status and self._last_status.get(
+                    "setup_state", "completed",
+                ) != "completed"
+                interval = 2000 if setup_active else 10000
+                self.app.after(interval, self._update_realtime_status)
         except Exception:
             logger.debug("Antivirus: could not schedule next status poll")
 
@@ -597,35 +701,99 @@ class Plugin(BasePlugin):
 
     # ── System Daemon Activation ────────────────────────────────
 
-    def _start_protection(self):
-        """Start system-level ClamAV daemons (clamd + clamonacc)."""
+    def _start_system_setup(self):
+        """Launch the ClamAV postinstall script via the installer service."""
+        from plugins.antivirus.installer_service import trigger_system_setup
+
         if self._banner_action_btn:
             self._banner_action_btn.configure(
                 state="disabled", text="Starting...",
             )
-        if self._banner_progress:
-            self._banner_progress.grid()
-            self._banner_progress.start()
 
         def _run():
-            ok, msg = clamav.activate_system_daemons()
-            self.app.after(0, self._handle_protection_started, ok, msg)
+            ok = trigger_system_setup()
+            if ok:
+                self.app.after(0, self._poll_setup_progress)
+            else:
+                self.app.after(0, self._update_realtime_status)
 
         threading.Thread(target=_run, daemon=True).start()
 
-    def _handle_protection_started(self, ok: bool, msg: str):
-        if self._banner_progress:
-            self._banner_progress.stop()
-            self._banner_progress.grid_remove()
+    def _retry_setup(self):
+        """Manual retry — reset backoff and restart the current phase."""
+        from plugins.antivirus.installer_service import retry
+
         if self._banner_action_btn:
-            self._banner_action_btn.configure(
-                state="normal", text="Start Protection",
-            )
-        if ok:
+            self._banner_action_btn.configure(state="disabled", text="Retrying...")
+
+        def _run():
+            retry()
+            self.app.after(0, self._update_realtime_status)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    _MAX_SETUP_POLLS = 100  # ~5 min at 3s intervals
+
+    def _poll_setup_progress(self):
+        """Poll the postinstall status file every 3 seconds."""
+        from plugins.antivirus.installer_service import poll_setup_progress
+
+        def _check():
+            result = poll_setup_progress()
+            try:
+                self.app.after(0, self._handle_setup_poll, result)
+            except Exception:
+                pass  # App destroyed
+
+        threading.Thread(target=_check, daemon=True).start()
+
+    def _handle_setup_poll(self, result: dict):
+        """Handle a setup progress poll result."""
+        if result["finished"]:
+            self._setup_poll_count = 0
             self._update_realtime_status()
-        else:
-            self._log_append(f"Could not start protection: {msg}")
-            logger.error(f"Antivirus: protection start failed: {msg}")
+            if result["success"]:
+                logger.info("Antivirus: system setup completed")
+                self._refresh_db_info()
+            else:
+                self._log_append(f"Setup error: {result.get('error', 'unknown')}")
+                logger.error(f"Antivirus: setup failed: {result.get('error')}")
+            return
+
+        # Still running — update step label and poll again
+        self._setup_poll_count = getattr(self, "_setup_poll_count", 0) + 1
+        if self._setup_poll_count >= self._MAX_SETUP_POLLS:
+            logger.error("Antivirus: setup poll exceeded max attempts")
+            self._setup_poll_count = 0
+            self._update_realtime_status()
+            return
+
+        step = result.get("step", "")
+        try:
+            if (
+                step
+                and self._banner_subtitle
+                and self._banner_subtitle.winfo_exists()
+            ):
+                step_labels = {
+                    "create_dirs": "Creating system directories...",
+                    "write_configs": "Writing configuration files...",
+                    "set_permissions": "Setting permissions...",
+                    "seed_db": "Copying signature database...",
+                    "cleanup_legacy": "Cleaning up legacy daemons...",
+                    "load_daemons": "Loading daemons...",
+                }
+                label = step_labels.get(step, f"Running: {step}...")
+                self._banner_subtitle.configure(text=label)
+        except Exception:
+            pass  # Widget destroyed
+
+        # Schedule next poll
+        try:
+            if hasattr(self, "main_frame") and self.main_frame.winfo_exists():
+                self.app.after(3000, self._poll_setup_progress)
+        except Exception:
+            pass
 
     # ── Action Router ─────────────────────────────────────────
 

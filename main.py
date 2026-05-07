@@ -84,6 +84,11 @@ class App(AppUI):
                 import threading
                 from plugins.wazuh.agent.installer_service import check_and_advance
                 threading.Thread(target=check_and_advance, daemon=True).start()
+            # Resume any pending ClamAV install
+            if sys.platform == "darwin":
+                import threading as _thr
+                from plugins.antivirus.installer_service import check_and_advance as av_advance
+                _thr.Thread(target=av_advance, daemon=True).start()
         else:
             # Always show login screen since we're using Odoo authentication
             logger.info("🔐 Creating login screen...")
