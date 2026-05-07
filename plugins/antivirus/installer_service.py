@@ -160,12 +160,13 @@ def trigger_system_setup() -> bool:
             return False
         _set_state(STATE_INSTALLING)
 
-    launched, status_file = _launch_clamav_postinstall(_USER_DB_DIR)
+    launched, status_file, osascript_pid = _launch_clamav_postinstall(_USER_DB_DIR)
     if not launched:
         _fail(STATE_INSTALL_FAILED, "user_canceled", "Admin prompt was cancelled")
         return False
 
     settings.set(_NAMESPACE, "install_status_file", status_file)
+    settings.set(_NAMESPACE, "osascript_pid", osascript_pid)
     return True
 
 
@@ -180,6 +181,28 @@ def poll_setup_progress() -> dict:
         return {"finished": True, "success": False, "step": "", "error": "no status file"}
 
     finished, success, details = _poll_setup_status(status_file)
+
+    # Status file doesn't exist yet. This is normal while the user is
+    # still on the admin password prompt (osascript is alive). Only fail
+    # once osascript has exited — meaning the user cancelled or the
+    # script crashed before writing anything.
+    if not finished and not os.path.exists(status_file):
+        osascript_pid = settings.get(_NAMESPACE, "osascript_pid", 0)
+        osascript_alive = False
+        if osascript_pid:
+            try:
+                os.kill(osascript_pid, 0)
+                osascript_alive = True
+            except ProcessLookupError:
+                pass  # osascript exited
+            except PermissionError:
+                osascript_alive = True  # still running
+        if not osascript_alive:
+            _fail(
+                STATE_INSTALL_FAILED, "user_canceled",
+                "Install status file missing — script never ran",
+            )
+            return {"finished": True, "success": False, "step": "", "error": "cancelled"}
 
     if finished:
         if success:
@@ -223,10 +246,7 @@ def check_and_advance():
 
     # If system setup is already done (daemons running), mark completed
     from plugins.antivirus.clamav_common import _ping_socket
-    from plugins.antivirus.clamav_platform_darwin import (
-        _SYSTEM_CLAMD_SOCKET,
-        is_app_bundle,
-    )
+    from plugins.antivirus.clamav_platform_darwin import _SYSTEM_CLAMD_SOCKET
 
     if _ping_socket(_SYSTEM_CLAMD_SOCKET):
         mark_completed()
@@ -260,8 +280,6 @@ def check_and_advance():
             return
         # Try to acquire the flock non-blocking — if we get it, no
         # freshclam is running, so the previous seed died.
-        import fcntl
-
         os.makedirs(_CLAMAV_DATA_DIR, exist_ok=True)
         try:
             probe_fd = open(_LOCK_FILE, "w")
@@ -281,12 +299,10 @@ def check_and_advance():
         ensure_db_seed_started()
         return
 
-    # If install was interrupted, check status file
+    # If install was interrupted, poll once — poll_setup_progress
+    # handles the missing-status-file case (user cancelled osascript).
     if state == STATE_INSTALLING:
-        result = poll_setup_progress()
-        if not result["finished"]:
-            # Script may still be running — leave state alone
-            pass
+        poll_setup_progress()
 
     # DB ready but not yet installed — wait for user action
     # Install failed — wait for manual retry
@@ -410,7 +426,7 @@ def _do_db_seed():
             _fail(STATE_SEED_FAILED, "dns_failed", msg)
         else:
             # code 11 can be certs OR network — classify as generic
-            _fail(STATE_SEED_FAILED, "dns_failed", msg)
+            _fail(STATE_SEED_FAILED, "freshclam_failed", msg)
 
     finally:
         if lock_fd:

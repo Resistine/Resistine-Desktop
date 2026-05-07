@@ -531,7 +531,7 @@ def _launch_clamav_postinstall(db_source: str) -> tuple[bool, str]:
     (Sequoia). Launches via osascript with start_new_session=True so
     the script survives app quit.
 
-    Returns (launched_ok, status_file_path).
+    Returns (launched_ok, status_file_path, osascript_pid).
     """
     import uuid
 
@@ -544,7 +544,7 @@ def _launch_clamav_postinstall(db_source: str) -> tuple[bool, str]:
             logger.info("ClamAV: using installed app bundle for postinstall")
         else:
             logger.error("ClamAV: no app bundle found (install Resistine.app first)")
-            return False, ""
+            return False, "", 0
 
     unique_id = uuid.uuid4().hex[:12]
     status_file = f"/tmp/resistine-clamav-install-{unique_id}.status"
@@ -588,7 +588,7 @@ def _launch_clamav_postinstall(db_source: str) -> tuple[bool, str]:
                     f"ClamAV postinstall osascript failed: "
                     f"rc={proc.returncode} {stderr}",
                 )
-                return False, status_file
+                return False, status_file, 0
         except subprocess.TimeoutExpired:
             # Still running = admin prompt accepted, script executing
             pass
@@ -596,10 +596,10 @@ def _launch_clamav_postinstall(db_source: str) -> tuple[bool, str]:
             f"ClamAV postinstall launched (pid={proc.pid}), "
             f"status_file={status_file}",
         )
-        return True, status_file
+        return True, status_file, proc.pid
     except Exception as e:
         logger.error(f"ClamAV: failed to launch postinstall: {e}")
-        return False, status_file
+        return False, status_file, 0
 
 
 def _poll_setup_status(status_file: str) -> tuple[bool, bool, dict]:
@@ -633,13 +633,15 @@ def _poll_setup_status(status_file: str) -> tuple[bool, bool, dict]:
         if pid:
             try:
                 os.kill(pid, 0)
-            except (OSError, ProcessLookupError):
+            except ProcessLookupError:
                 logger.warning(
                     f"ClamAV: postinstall PID {pid} is dead — treating as crash",
                 )
                 data["error"] = "Script process died unexpectedly"
                 data["error_code"] = "PROCESS_CRASHED"
                 return True, False, data
+            except PermissionError:
+                pass  # Process exists but runs as root — still alive
 
         # Check for stale status file (>5 min)
         ts = data.get("ts", 0)

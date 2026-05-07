@@ -459,6 +459,7 @@ class Plugin(BasePlugin):
                 "certs_missing": "Certificate verification failed. Try reinstalling Resistine.",
                 "binary_missing": "ClamAV binaries not found. Reinstall Resistine.",
                 "partial_download": "Download was incomplete. Tap Retry to try again.",
+                "freshclam_failed": "Signature download failed. Tap Retry to try again.",
             }.get(reason, "Download failed. Tap Retry to try again.")
             return {
                 "bg": err_bg, "title": "Download Failed",
