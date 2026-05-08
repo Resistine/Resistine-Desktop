@@ -213,8 +213,8 @@ echo       Not found, skipping
 
 :vpn_service_done
 
-:: ---- Stop and remove Wazuh agent service ----
-echo Removing Wazuh agent service...
+:: ---- Stop and remove Wazuh agent service + MSI ----
+echo Removing Wazuh agent...
 sc query WazuhSvc >nul 2>&1
 if %errorlevel% neq 0 goto :wazuh_not_present
 echo       Stopping WazuhSvc...
@@ -222,9 +222,24 @@ sc stop WazuhSvc >nul 2>&1
 timeout /t 5 /nobreak >nul
 sc delete WazuhSvc >nul 2>&1
 echo       OK - WazuhSvc removed
+:: Uninstall the Wazuh MSI package
+echo       Uninstalling Wazuh agent MSI...
+wmic product where "Name like '%%Wazuh%%'" call uninstall /nointeractive >nul 2>&1
+if exist "C:\Program Files (x86)\ossec-agent" (
+    rmdir /s /q "C:\Program Files (x86)\ossec-agent" >nul 2>&1
+    echo       Removed ossec-agent directory
+)
+echo       OK
 goto :wazuh_done
 :wazuh_not_present
-echo       Not found, skipping
+echo       Service not found, checking for leftover files...
+if exist "C:\Program Files (x86)\ossec-agent" (
+    wmic product where "Name like '%%Wazuh%%'" call uninstall /nointeractive >nul 2>&1
+    rmdir /s /q "C:\Program Files (x86)\ossec-agent" >nul 2>&1
+    echo       Removed ossec-agent directory
+) else (
+    echo       Not found, skipping
+)
 :wazuh_done
 
 :: ---- Remove Sysmon/Defender blocks from ossec.conf ----
