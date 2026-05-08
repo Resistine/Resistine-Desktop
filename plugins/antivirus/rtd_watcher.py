@@ -46,6 +46,11 @@ class ClamdLogWatcher:
         self._on_summary = on_summary
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        # Lock protecting the rate-limiting and deduplication shared state.
+        self._state_lock = threading.Lock()
+        self._dedup: dict[tuple[str, str], float] = {}
+        self._rate_times: list[float] = []
+        self._suppressed = [0]
 
     # ── Public API ───────────────────────────────────────────
 
@@ -107,15 +112,12 @@ class ClamdLogWatcher:
 
     def _tail(self, fh):
         """Read new lines, detect rotation/truncation, dispatch threats."""
-        dedup: dict[tuple[str, str], float] = {}
-        rate_times: list[float] = []
-        suppressed = [0]
         original_ino = os.fstat(fh.fileno()).st_ino
 
         while not self._stop_event.is_set():
             line = fh.readline()
             if line:
-                self._process_line(line, dedup, rate_times, suppressed)
+                self._process_line(line)
                 continue
 
             # No new data — check for rotation / truncation
@@ -138,18 +140,12 @@ class ClamdLogWatcher:
                 continue
 
             # If the burst is over, fire summary for suppressed detections
-            self._maybe_flush_summary(rate_times, suppressed)
+            self._maybe_flush_summary()
 
-            self._prune_dedup(dedup)
+            self._prune_dedup()
             self._stop_event.wait(timeout=_POLL_INTERVAL)
 
-    def _process_line(
-        self,
-        line: str,
-        dedup: dict[tuple[str, str], float],
-        rate_times: list[float],
-        suppressed: list[int],
-    ):
+    def _process_line(self, line: str):
         if "FOUND" not in line:
             return
 
@@ -163,56 +159,57 @@ class ClamdLogWatcher:
 
         now = time.monotonic()
 
-        # Dedup: suppress identical (filepath, signature) within window
-        key = (filepath, signature)
-        last_seen = dedup.get(key)
-        if last_seen is not None and (now - last_seen) < _DEDUP_WINDOW:
-            return
-        dedup[key] = now
+        with self._state_lock:
+            # Dedup: suppress identical (filepath, signature) within window
+            key = (filepath, signature)
+            last_seen = self._dedup.get(key)
+            if last_seen is not None and (now - last_seen) < _DEDUP_WINDOW:
+                return
+            self._dedup[key] = now
 
-        # Rate limit: prune old timestamps, check capacity
-        cutoff = now - _RATE_WINDOW
-        rate_times[:] = [t for t in rate_times if t > cutoff]
+            # Rate limit: prune old timestamps, check capacity
+            cutoff = now - _RATE_WINDOW
+            self._rate_times[:] = [t for t in self._rate_times if t > cutoff]
 
-        if len(rate_times) >= _RATE_LIMIT:
-            # Log to threats.log silently (no notification)
-            try:
-                log_threat_detected(signature, filepath)
-            except Exception:
-                pass
-            suppressed[0] += 1
-            return
+            if len(self._rate_times) >= _RATE_LIMIT:
+                # Log to threats.log silently (no notification)
+                try:
+                    log_threat_detected(signature, filepath)
+                except Exception:
+                    pass
+                self._suppressed[0] += 1
+                return
 
-        rate_times.append(now)
+            self._rate_times.append(now)
+
         try:
             self._on_threat(filepath, signature)
         except Exception as exc:
             logger.debug(f"RTD watcher: callback error: {exc}")
 
-    def _maybe_flush_summary(
-        self,
-        rate_times: list[float],
-        suppressed: list[int],
-    ):
+    def _maybe_flush_summary(self):
         """When a rate-limit burst is over, fire a summary callback."""
-        if suppressed[0] == 0:
-            return
-        now = time.monotonic()
-        cutoff = now - _RATE_WINDOW
-        rate_times[:] = [t for t in rate_times if t > cutoff]
-        # Burst still active — don't flush yet
-        if len(rate_times) >= _RATE_LIMIT:
-            return
-        count = suppressed[0]
-        suppressed[0] = 0
+        with self._state_lock:
+            if self._suppressed[0] == 0:
+                return
+            now = time.monotonic()
+            cutoff = now - _RATE_WINDOW
+            self._rate_times[:] = [t for t in self._rate_times if t > cutoff]
+            # Burst still active — don't flush yet
+            if len(self._rate_times) >= _RATE_LIMIT:
+                return
+            count = self._suppressed[0]
+            self._suppressed[0] = 0
+
         if self._on_summary is not None:
             try:
                 self._on_summary(count)
             except Exception as exc:
                 logger.debug(f"RTD watcher: summary callback error: {exc}")
 
-    def _prune_dedup(self, dedup: dict[tuple[str, str], float]):
+    def _prune_dedup(self):
         now = time.monotonic()
-        stale = [k for k, ts in dedup.items() if now - ts > _DEDUP_PRUNE_AGE]
-        for k in stale:
-            del dedup[k]
+        with self._state_lock:
+            stale = [k for k, ts in self._dedup.items() if now - ts > _DEDUP_PRUNE_AGE]
+            for k in stale:
+                del self._dedup[k]

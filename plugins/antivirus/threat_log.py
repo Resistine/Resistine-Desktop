@@ -15,6 +15,7 @@ Licensed under the GNU General Public License v2 or later
 import base64
 import os
 import platform
+import shlex
 import subprocess
 import threading
 import time
@@ -181,12 +182,15 @@ def setup_wazuh_forwarding() -> tuple[bool, str]:
 
 def _inject_darwin(conf: str) -> tuple[bool, str]:
     """Inject localfile entry via osascript with admin privileges."""
+    import json
     snippet = get_ossec_snippet()
 
-    # Python script runs as root: validate, backup, read, check, modify, write
+    # Python script runs as root: validate, backup, read, check, modify, write.
+    # Use json.dumps/json.loads for string serialisation to avoid code injection
+    # via repr() with attacker-controlled path or snippet content.
     py_script = (
-        "import os, shutil, sys\n"
-        f"conf = {conf!r}\n"
+        "import json, os, shutil, sys\n"
+        f"conf = json.loads({json.dumps(json.dumps(conf))})\n"
         "if not os.path.isfile(conf):\n"
         "    print('error: ossec.conf not found at ' + conf)\n"
         "    sys.exit(1)\n"
@@ -196,7 +200,7 @@ def _inject_darwin(conf: str) -> tuple[bool, str]:
         "    print('already_configured')\n"
         "    sys.exit(0)\n"
         "shutil.copy2(conf, conf + '.bak')\n"
-        f"snippet = {snippet!r}\n"
+        f"snippet = json.loads({json.dumps(json.dumps(snippet))})\n"
         "new = content.replace("
         "'</ossec_config>', snippet + '\\n\\n</ossec_config>')\n"
         "with open(conf, 'w') as f:\n"
@@ -205,8 +209,9 @@ def _inject_darwin(conf: str) -> tuple[bool, str]:
     )
     encoded = base64.b64encode(py_script.encode()).decode()
 
+    # Use shlex.quote to safely embed the base64 blob in the shell command.
     shell_cmd = (
-        f"printf '%s' '{encoded}' | base64 -d | python3 && "
+        f"printf '%s' {shlex.quote(encoded)} | base64 -d | python3 && "
         f"launchctl kickstart -k system/com.wazuh.agent 2>/dev/null; true"
     )
     escaped = shell_cmd.replace("\\", "\\\\").replace('"', '\\"')
@@ -237,11 +242,14 @@ def _inject_darwin(conf: str) -> tuple[bool, str]:
 
 def _inject_linux(conf: str) -> tuple[bool, str]:
     """Inject localfile entry via pkexec/sudo."""
+    import json
     snippet = get_ossec_snippet()
 
+    # Use json.dumps/json.loads for string serialisation to avoid code injection
+    # via repr() with attacker-controlled path or snippet content.
     py_script = (
-        "import os, shutil, sys\n"
-        f"conf = {conf!r}\n"
+        "import json, os, shutil, sys\n"
+        f"conf = json.loads({json.dumps(json.dumps(conf))})\n"
         "if not os.path.isfile(conf):\n"
         "    print('error: ossec.conf not found at ' + conf)\n"
         "    sys.exit(1)\n"
@@ -251,7 +259,7 @@ def _inject_linux(conf: str) -> tuple[bool, str]:
         "    print('already_configured')\n"
         "    sys.exit(0)\n"
         "shutil.copy2(conf, conf + '.bak')\n"
-        f"snippet = {snippet!r}\n"
+        f"snippet = json.loads({json.dumps(json.dumps(snippet))})\n"
         "new = content.replace("
         "'</ossec_config>', snippet + '\\n\\n</ossec_config>')\n"
         "with open(conf, 'w') as f:\n"
@@ -259,8 +267,9 @@ def _inject_linux(conf: str) -> tuple[bool, str]:
         "print('configured')\n"
     )
     encoded = base64.b64encode(py_script.encode()).decode()
+    # Use shlex.quote to safely embed the base64 blob in the shell command.
     shell_cmd = (
-        f"printf '%s' '{encoded}' | base64 -d | python3 && "
+        f"printf '%s' {shlex.quote(encoded)} | base64 -d | python3 && "
         f"systemctl restart wazuh-agent 2>/dev/null; true"
     )
 

@@ -238,7 +238,8 @@ def mark_completed():
 
 def check_and_advance():
     """State machine tick. Resume pending work. Call on app start."""
-    state = get_setup_state()
+    with _lock:
+        state = get_setup_state()
 
     # Already completed — nothing to do
     if state == STATE_COMPLETED:
@@ -282,14 +283,14 @@ def check_and_advance():
         # freshclam is running, so the previous seed died.
         os.makedirs(_CLAMAV_DATA_DIR, exist_ok=True)
         try:
-            probe_fd = open(_LOCK_FILE, "w")
-            fcntl.flock(probe_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            fcntl.flock(probe_fd, fcntl.LOCK_UN)
-            probe_fd.close()
+            with open(_LOCK_FILE, "w") as probe_fd:
+                fcntl.flock(probe_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(probe_fd, fcntl.LOCK_UN)
             # Lock was available → no freshclam running → stuck state
-            logger.warning("[AV-INSTALLER] Stuck in SEEDING_DB, resetting")
-            _set_state(STATE_NOT_STARTED)
-            state = STATE_NOT_STARTED
+            with _lock:
+                logger.warning("[AV-INSTALLER] Stuck in SEEDING_DB, resetting")
+                _set_state(STATE_NOT_STARTED)
+                state = STATE_NOT_STARTED
         except (OSError, BlockingIOError):
             # Lock held → freshclam still running, leave state alone
             return

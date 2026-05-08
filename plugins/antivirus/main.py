@@ -68,6 +68,7 @@ class Plugin(BasePlugin):
         self._banner_progress = None
         self._scanning = False
         self._scan_handle = None
+        self._scan_lock = threading.Lock()
         self._cancel_requested = False
         self._last_state = None
         self._last_status = None
@@ -81,8 +82,15 @@ class Plugin(BasePlugin):
         # system configs, and resume any pending install via the state machine.
         if platform.system() == "Darwin":
             def _darwin_daemon_init():
-                clamav.ensure_daemons_registered()
-                clamav.refresh_system_configs()
+                try:
+                    clamav.ensure_daemons_registered()
+                except Exception as exc:
+                    logger.error(f"Antivirus: ensure_daemons_registered failed: {exc}")
+                try:
+                    clamav.refresh_system_configs()
+                except Exception as exc:
+                    logger.error(f"Antivirus: refresh_system_configs failed: {exc}")
+                # Always set the event so the plugin doesn't hang
                 self._init_ready.set()
                 # Resume any pending ClamAV install
                 from plugins.antivirus.installer_service import check_and_advance
@@ -1050,14 +1058,17 @@ class Plugin(BasePlugin):
                         agg["infections"].extend(result.infections)
                     done.set()
 
-                self._scan_handle = scan(
+                handle = scan(
                     target,
                     on_progress=on_progress,
                     on_complete=on_complete,
                     on_total=on_total,
                 )
+                with self._scan_lock:
+                    self._scan_handle = handle
                 done.wait()
-                self._scan_handle = None
+                with self._scan_lock:
+                    self._scan_handle = None
 
             final = ScanResult(
                 target="Computer",
@@ -1135,10 +1146,11 @@ class Plugin(BasePlugin):
         def on_complete(result: ScanResult):
             self.app.after(0, self._handle_scan_complete, result)
 
-        self._scan_handle = scan(
-            target, on_progress=on_progress, on_complete=on_complete,
-            on_total=on_total,
-        )
+        with self._scan_lock:
+            self._scan_handle = scan(
+                target, on_progress=on_progress, on_complete=on_complete,
+                on_total=on_total,
+            )
 
     def _cancel_scan(self):
         """Cancel the running scan."""
@@ -1146,8 +1158,10 @@ class Plugin(BasePlugin):
         # start the next directory even if the click lands between targets
         # (when self._scan_handle is briefly None).
         self._cancel_requested = True
-        if self._scan_handle and not self._scan_handle.cancelled:
-            self._scan_handle.cancel()
+        with self._scan_lock:
+            handle = self._scan_handle
+        if handle and not handle.cancelled:
+            handle.cancel()
         self._log_append("Cancelling scan...")
         cancel_btn = self._action_buttons.get("cancel_scan")
         if cancel_btn:
@@ -1171,7 +1185,8 @@ class Plugin(BasePlugin):
 
     def _handle_scan_complete(self, result: ScanResult):
         self._scanning = False
-        self._scan_handle = None
+        with self._scan_lock:
+            self._scan_handle = None
         self._cancel_requested = False
         self._scan_progress.stop()
         self._scan_progress.set(1.0 if not result.error else 0)

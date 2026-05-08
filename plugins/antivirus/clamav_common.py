@@ -28,6 +28,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils.logger import logger
 from utils.settings import get_config_dir
 
+# ── Timeout constants ─────────────────────────────────────
+SOCKET_PING_TIMEOUT = 2          # seconds: zPING handshake timeout
+SOCKET_SCAN_TIMEOUT = 120        # seconds: per-file CONTSCAN timeout
+CLAMD_START_TIMEOUT_POLLS = 60   # iterations × 0.5s = 30s max wait for clamd
+CLAMD_STOP_TIMEOUT_POLLS = 10    # iterations × 0.5s = 5s max wait for clamd stop
+SCAN_CANCEL_WAIT_TIMEOUT = 10    # seconds: wait for cancelled clamscan to exit
+SCAN_PROC_WAIT_TIMEOUT = 30      # seconds: wait for clamscan to finish
+SCAN_KILL_WAIT_TIMEOUT = 5       # seconds: wait after killing clamscan
+GH_API_FETCH_TIMEOUT = 15        # seconds: CVD cert auto-fetch from GitHub
+
 # ── Paths ────────────────────────────────────────────────
 
 _CLAMAV_DATA_DIR = os.path.join(get_config_dir(), "clamav")
@@ -272,7 +282,7 @@ def _try_fetch_cvd_cert() -> str | None:
                     "gh", "api", f"repos/{repo}/contents/{remote_path}",
                     "--jq", ".content",
                 ],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, timeout=GH_API_FETCH_TIMEOUT,
             )
             if result.returncode != 0 or not result.stdout.strip():
                 continue
@@ -378,7 +388,7 @@ def _ping_socket(sock_path: str) -> bool:
         return False
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-            s.settimeout(2)
+            s.settimeout(SOCKET_PING_TIMEOUT)
             s.connect(sock_path)
             s.sendall(b"zPING\0")
             return b"PONG" in s.recv(32)
@@ -414,7 +424,7 @@ _PARALLEL_WORKERS = 6
 def _contscan_socket(sock_path: str, file_path: str) -> str:
     """Send zCONTSCAN for one file to clamd; return the response line."""
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-        s.settimeout(120)
+        s.settimeout(SOCKET_SCAN_TIMEOUT)
         s.connect(sock_path)
         s.sendall(f"zCONTSCAN {file_path}\0".encode())
         buf = b""
@@ -619,7 +629,7 @@ def start_clamd() -> tuple[bool, str]:
     # time to load the ~500 MB signature database before it responds
     # to PING. We check is_clamd_running() which sends a zPING to
     # the socket, so we know it's truly ready for scan requests.
-    for _ in range(60):
+    for _ in range(CLAMD_START_TIMEOUT_POLLS):
         time.sleep(0.5)
         if is_clamd_running():
             return True, "clamd started."
@@ -639,7 +649,7 @@ def stop_clamd() -> tuple[bool, str]:
         with open(_CLAMD_PID) as f:
             pid = int(f.read().strip())
         os.kill(pid, 15)  # SIGTERM
-        for _ in range(10):
+        for _ in range(CLAMD_STOP_TIMEOUT_POLLS):
             time.sleep(0.5)
             if not _clamd_pid_alive():
                 break
@@ -763,7 +773,7 @@ def scan_path(
         for line in proc.stdout:
             if cancel and cancel.is_set():
                 proc.kill()
-                proc.wait(timeout=10)
+                proc.wait(timeout=SCAN_CANCEL_WAIT_TIMEOUT)
                 result["error"] = "Scan cancelled."
                 return result
             stripped = line.rstrip()
@@ -788,7 +798,7 @@ def scan_path(
             elif stripped.startswith("Time:"):
                 result["duration"] = stripped.split(":", 1)[-1].strip()
 
-        proc.wait(timeout=30)
+        proc.wait(timeout=SCAN_PROC_WAIT_TIMEOUT)
 
         rc = proc.returncode
         # clamscan: 0=clean, 1=found virus, 2=error
@@ -808,11 +818,11 @@ def scan_path(
             result["scanned"] = scanned_from_output
     except subprocess.TimeoutExpired:
         proc.kill()
-        proc.wait(timeout=5)
+        proc.wait(timeout=SCAN_KILL_WAIT_TIMEOUT)
         result["error"] = "Scan timed out."
     except Exception as exc:
         proc.kill()
-        proc.wait(timeout=5)
+        proc.wait(timeout=SCAN_KILL_WAIT_TIMEOUT)
         result["error"] = str(exc)
 
     return result

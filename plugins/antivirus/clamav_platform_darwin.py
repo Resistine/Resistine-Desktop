@@ -279,11 +279,12 @@ def has_full_disk_access() -> bool:
                                     # genuine FDA issue OR a transient
                                     # startup race (clamonacc couldn't
                                     # connect while clamd was loading
-                                    # signatures). Poll for up to 12s
-                                    # (covers the 10s ThrottleInterval
-                                    # in the clamonacc launchd plist)
-                                    # for launchd to restart it.
-                                    for _retry in range(24):
+                                    # signatures). Poll for up to ~4s
+                                    # (reduced from 12s to avoid blocking
+                                    # plugin init on every status check;
+                                    # the launchd ThrottleInterval is 10s
+                                    # but 4s covers most transient races).
+                                    for _retry in range(8):
                                         time.sleep(0.5)
                                         if is_clamonacc_running():
                                             logger.debug(
