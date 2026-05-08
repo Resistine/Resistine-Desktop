@@ -39,39 +39,82 @@ from utils.logger import logger
 _PLUGIN_DIR = os.path.dirname(os.path.realpath(__file__))
 
 
+_notification_authorized = False
+
+
+def _request_notification_permission():
+    """Request macOS notification authorization (call once at startup)."""
+    global _notification_authorized  # noqa: PLW0603
+    try:
+        from UserNotifications import UNUserNotificationCenter
+
+        center = UNUserNotificationCenter.currentNotificationCenter()
+        # alert | sound | badge
+        center.requestAuthorizationWithOptions_completionHandler_(
+            0x1 | 0x2 | 0x4,
+            lambda granted, err: _set_notification_auth(granted),
+        )
+    except Exception:
+        pass
+
+
+def _set_notification_auth(granted: bool):
+    global _notification_authorized  # noqa: PLW0603
+    _notification_authorized = granted
+
+
 def _send_notification(title: str, body: str):
     """Send a macOS system notification. No-op on other platforms."""
     import platform as _platform
 
     if _platform.system() != "Darwin":
         return
-    try:
-        from Foundation import NSUserNotification, NSUserNotificationCenter
 
-        notification = NSUserNotification.alloc().init()
-        notification.setTitle_(title)
-        notification.setInformativeText_(body)
-        notification.setSoundName_("default")
-        center = NSUserNotificationCenter.defaultUserNotificationCenter()
-        center.deliverNotification_(notification)
-    except ImportError:
-        # PyObjC not available — fall back to osascript
-        import subprocess
-
-        safe_body = body.replace("\\", "\\\\").replace('"', '\\"')
-        safe_title = title.replace("\\", "\\\\").replace('"', '\\"')
-        script = (
-            f'display notification "{safe_body}" '
-            f'with title "{safe_title}" sound name "default"'
-        )
+    # Modern UserNotifications framework (macOS 10.14+).
+    # NSUserNotification was deprecated in 10.14 and silently dropped
+    # on modern macOS — the import succeeds but notifications never appear.
+    if _notification_authorized:
         try:
-            subprocess.Popen(
-                ["osascript", "-e", script],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+            from UserNotifications import (
+                UNMutableNotificationContent,
+                UNNotificationRequest,
+                UNNotificationSound,
+                UNUserNotificationCenter,
             )
+
+            center = UNUserNotificationCenter.currentNotificationCenter()
+            content = UNMutableNotificationContent.alloc().init()
+            content.setTitle_(title)
+            content.setBody_(body)
+            content.setSound_(UNNotificationSound.defaultSound())
+
+            import uuid
+
+            request = UNNotificationRequest.requestWithIdentifier_content_trigger_(
+                str(uuid.uuid4()), content, None,
+            )
+            center.addNotificationRequest_withCompletionHandler_(request, None)
+            return
         except Exception:
             pass
+
+    # Fallback: osascript (works without authorization)
+    import subprocess
+
+    safe_body = body.replace("\\", "\\\\").replace('"', '\\"')
+    safe_title = title.replace("\\", "\\\\").replace('"', '\\"')
+    script = (
+        f'display notification "{safe_body}" '
+        f'with title "{safe_title}" sound name "default"'
+    )
+    try:
+        subprocess.Popen(
+            ["osascript", "-e", script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
 
 
 class Plugin(BasePlugin):
@@ -108,8 +151,14 @@ class Plugin(BasePlugin):
         self._last_status = None
         self._auto_update_timer = None
         self._auto_update_stop = threading.Event()
+        self._rtd_watcher = None
         self._init_ready = threading.Event()
         self.status = self.get_status()
+
+        # Request notification permission (macOS) so threat alerts
+        # show as system notifications, not just in-app toasts.
+        if platform.system() == "Darwin":
+            _request_notification_permission()
 
         # Register system-level ClamAV daemons via SMAppService, refresh
         # system configs, and resume any pending install via the state machine.
@@ -140,17 +189,40 @@ class Plugin(BasePlugin):
         if self._auto_update_on:
             self._start_auto_update_scheduler()
 
+    _INITIAL_POLL_RETRIES = 8  # up to ~16s of retries (8 × 2s)
+    _INITIAL_POLL_INTERVAL = 2  # seconds between retries
+
     def _poll_initial_status(self):
-        """Poll daemon state once so the sidebar shows the right icon."""
+        """Poll daemon state so the sidebar shows the right icon.
+
+        After a fresh login, launchd may still be starting the ClamAV
+        daemons. Retry a few times when the result is "offline" but
+        setup is already completed — the daemons *should* be running
+        but haven't started yet.
+        """
         self._init_ready.wait(timeout=10)
-        try:
-            status = clamav.get_realtime_status()
-        except Exception:
-            logger.debug("Antivirus: initial status poll failed")
-            return
-        self._last_state = status["state"]
-        self._last_status = status
-        self.status = self.check_status()
+        for attempt in range(1 + self._INITIAL_POLL_RETRIES):
+            try:
+                status = clamav.get_realtime_status()
+            except Exception:
+                logger.debug("Antivirus: initial status poll failed")
+                return
+            self._last_state = status["state"]
+            self._last_status = status
+            self.status = self.check_status()
+
+            # If daemons are up (or setup isn't done yet), stop retrying
+            if status.get("runtime_state") != "offline":
+                return
+            if status.get("setup_state") != "completed":
+                return
+
+            if attempt < self._INITIAL_POLL_RETRIES:
+                logger.debug(
+                    f"Antivirus: daemons offline on attempt {attempt + 1}, "
+                    f"retrying in {self._INITIAL_POLL_INTERVAL}s",
+                )
+                time.sleep(self._INITIAL_POLL_INTERVAL)
 
     @staticmethod
     def _ensure_clamd_warm():
@@ -308,6 +380,7 @@ class Plugin(BasePlugin):
 
     def destroy(self):
         self._stop_auto_update_scheduler()
+        self._stop_rtd_watcher()
         self._banner_frame = None
         self._banner_label = None
         self._banner_subtitle = None
@@ -348,6 +421,13 @@ class Plugin(BasePlugin):
         # Refresh DB info when setup transitions to completed
         if status.get("setup_state") == "completed" and prev_setup != "completed":
             self._refresh_db_info()
+
+        # Start/stop RTD watcher based on clamonacc state
+        clamonacc_on = bool(status.get("clamonacc_running"))
+        if clamonacc_on and self._rtd_watcher is None:
+            self._start_rtd_watcher()
+        elif not clamonacc_on and self._rtd_watcher is not None:
+            self._stop_rtd_watcher()
 
     def _apply_realtime_status_ui(self, status: dict):
         """Update the status card widgets using two-dimensional state model.
@@ -592,6 +672,58 @@ class Plugin(BasePlugin):
             self._start_auto_update_scheduler()
         else:
             self._stop_auto_update_scheduler()
+
+    # ── Real-Time Detection Watcher ─────────────────────────────
+
+    def _get_clamd_log_path(self) -> str:
+        sys_dir = getattr(clamav, "_SYSTEM_LOG_DIR", None)
+        if sys_dir:
+            system_log = os.path.join(sys_dir, "clamd.log")
+            if os.path.isfile(system_log):
+                return system_log
+        return os.path.join(clamav._LOG_DIR, "clamd.log")
+
+    def _start_rtd_watcher(self):
+        from plugins.antivirus.rtd_watcher import ClamdLogWatcher
+
+        log_path = self._get_clamd_log_path()
+        self._rtd_watcher = ClamdLogWatcher(
+            log_path, self._on_rtd_threat, self._on_rtd_summary,
+        )
+        self._rtd_watcher.start()
+        logger.info(f"Antivirus: RTD watcher started on {log_path}")
+
+    def _stop_rtd_watcher(self):
+        if self._rtd_watcher is not None:
+            self._rtd_watcher.stop()
+            self._rtd_watcher = None
+            logger.info("Antivirus: RTD watcher stopped")
+
+    def _on_rtd_threat(self, filepath: str, signature: str):
+        threat_log.log_threat_detected(signature, filepath)
+        try:
+            self.app.after(0, self._handle_rtd_on_main, filepath, signature)
+        except Exception:
+            pass  # app destroyed
+
+    def _on_rtd_summary(self, count: int):
+        try:
+            self.app.after(0, self._handle_rtd_summary_on_main, count)
+        except Exception:
+            pass
+
+    def _handle_rtd_on_main(self, filepath: str, signature: str):
+        basename = os.path.basename(filepath)
+        _send_notification(
+            "Resistine \u2014 Threat Blocked",
+            f"Malware detected: {signature}\n{basename}",
+        )
+
+    def _handle_rtd_summary_on_main(self, count: int):
+        _send_notification(
+            "Resistine \u2014 Threat Blocked",
+            f"{count} additional threat(s) detected",
+        )
 
     # ── Auto-Update Scheduler ─────────────────────────────────
 

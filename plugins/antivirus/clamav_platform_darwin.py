@@ -384,11 +384,29 @@ def is_clamonacc_running() -> bool:
 # ── SMAppService daemon registration (macOS 13+) ────────
 
 
+def _daemon_loaded(label: str) -> bool:
+    """Return True if *label* is loaded in the launchd system domain."""
+    try:
+        result = subprocess.run(
+            ["launchctl", "print", f"system/{label}"],
+            capture_output=True, timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
 def ensure_daemons_registered():
     """Register ClamAV LaunchDaemons via SMAppService.
 
     Called from the plugin init on a background thread. Follows the same
     pattern as the VPN helper registration in vpn_functions_darwin.py.
+
+    After registration, verifies that each daemon is actually loaded in
+    launchd. SMAppService status == 1 ("enabled") only means the user
+    approved the daemon in Login Items — launchd may not have loaded it
+    (e.g. after an update, crash-loop, or first registration). When this
+    is detected, we unregister and re-register to trigger a fresh load.
     """
     if not (
         ".app/Contents/MacOS" in sys.executable
@@ -422,18 +440,36 @@ def ensure_daemons_registered():
             2: "requiresApproval",
             3: "notFound",
         }
+        label = plist_name.replace(".plist", "")
         logger.info(
             f"ClamAV daemon {plist_name}: {status_map.get(status, 'unknown')}",
         )
-
-        if status == 1:
-            continue
 
         if status == 2:
             needs_approval = True
             continue
 
-        # Not registered (0) or not found (3) — register
+        if status == 1:
+            # Enabled in Login Items — verify it's actually loaded in
+            # launchd. If not, unregister and re-register to trigger a
+            # fresh bootstrap.
+            if _daemon_loaded(label):
+                continue
+            logger.warning(
+                f"ClamAV daemon {label} is enabled but not loaded "
+                f"in launchd — re-registering",
+            )
+            try:
+                service.unregisterAndReturnError_(None)
+            except Exception as exc:
+                logger.debug(f"Unregister {label} failed: {exc}")
+            # Small delay so BTM processes the unregister before we
+            # re-register — avoids a "already registered" no-op.
+            time.sleep(0.5)
+            # Fall through to the register path below
+
+        # Not registered (0), not found (3), or re-registering after
+        # an enabled-but-not-loaded state.
         success, err = service.registerAndReturnError_(None)
         if not success:
             logger.error(f"ClamAV daemon registration error ({plist_name}): {err}")
