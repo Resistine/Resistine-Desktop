@@ -116,6 +116,14 @@ class App(AppUI):
         except Exception as e:
             logger.warning(f"Failed to start auto-updater: {e}")
 
+        # Initialize cross-platform system notifications
+        try:
+            from utils import notifications
+
+            notifications.init()
+        except Exception as e:
+            logger.warning(f"Failed to initialize system notifications: {e}")
+
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
 
         # Start system tray icon in a background thread (Windows only).

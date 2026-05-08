@@ -33,88 +33,10 @@ from plugins.antivirus.ui_cards import (
     build_whitelist_and_quarantine,
 )
 from plugins.base_plugin import BasePlugin
-from utils import settings
+from utils import notifications, settings
 from utils.logger import logger
 
 _PLUGIN_DIR = os.path.dirname(os.path.realpath(__file__))
-
-
-_notification_authorized = False
-
-
-def _request_notification_permission():
-    """Request macOS notification authorization (call once at startup)."""
-    global _notification_authorized  # noqa: PLW0603
-    try:
-        from UserNotifications import UNUserNotificationCenter
-
-        center = UNUserNotificationCenter.currentNotificationCenter()
-        # alert | sound | badge
-        center.requestAuthorizationWithOptions_completionHandler_(
-            0x1 | 0x2 | 0x4,
-            lambda granted, err: _set_notification_auth(granted),
-        )
-    except Exception:
-        pass
-
-
-def _set_notification_auth(granted: bool):
-    global _notification_authorized  # noqa: PLW0603
-    _notification_authorized = granted
-
-
-def _send_notification(title: str, body: str):
-    """Send a macOS system notification. No-op on other platforms."""
-    import platform as _platform
-
-    if _platform.system() != "Darwin":
-        return
-
-    # Modern UserNotifications framework (macOS 10.14+).
-    # NSUserNotification was deprecated in 10.14 and silently dropped
-    # on modern macOS — the import succeeds but notifications never appear.
-    if _notification_authorized:
-        try:
-            from UserNotifications import (
-                UNMutableNotificationContent,
-                UNNotificationRequest,
-                UNNotificationSound,
-                UNUserNotificationCenter,
-            )
-
-            center = UNUserNotificationCenter.currentNotificationCenter()
-            content = UNMutableNotificationContent.alloc().init()
-            content.setTitle_(title)
-            content.setBody_(body)
-            content.setSound_(UNNotificationSound.defaultSound())
-
-            import uuid
-
-            request = UNNotificationRequest.requestWithIdentifier_content_trigger_(
-                str(uuid.uuid4()), content, None,
-            )
-            center.addNotificationRequest_withCompletionHandler_(request, None)
-            return
-        except Exception:
-            pass
-
-    # Fallback: osascript (works without authorization)
-    import subprocess
-
-    safe_body = body.replace("\\", "\\\\").replace('"', '\\"')
-    safe_title = title.replace("\\", "\\\\").replace('"', '\\"')
-    script = (
-        f'display notification "{safe_body}" '
-        f'with title "{safe_title}" sound name "default"'
-    )
-    try:
-        subprocess.Popen(
-            ["osascript", "-e", script],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except Exception:
-        pass
 
 
 class Plugin(BasePlugin):
@@ -154,11 +76,6 @@ class Plugin(BasePlugin):
         self._rtd_watcher = None
         self._init_ready = threading.Event()
         self.status = self.get_status()
-
-        # Request notification permission (macOS) so threat alerts
-        # show as system notifications, not just in-app toasts.
-        if platform.system() == "Darwin":
-            _request_notification_permission()
 
         # Register system-level ClamAV daemons via SMAppService, refresh
         # system configs, and resume any pending install via the state machine.
@@ -714,15 +631,17 @@ class Plugin(BasePlugin):
 
     def _handle_rtd_on_main(self, filepath: str, signature: str):
         basename = os.path.basename(filepath)
-        _send_notification(
+        notifications.send(
             "Resistine \u2014 Threat Blocked",
             f"Malware detected: {signature}\n{basename}",
+            urgency="critical",
         )
 
     def _handle_rtd_summary_on_main(self, count: int):
-        _send_notification(
+        notifications.send(
             "Resistine \u2014 Threat Blocked",
             f"{count} additional threat(s) detected",
+            urgency="critical",
         )
 
     # ── Auto-Update Scheduler ─────────────────────────────────
@@ -1289,9 +1208,10 @@ class Plugin(BasePlugin):
             self._scan_status_label.configure(
                 text=f"Threats found: {result.infected}",
             )
-            _send_notification(
+            notifications.send(
                 "Resistine — Threats Detected",
                 f"{result.infected} infected file(s) found during scan.",
+                urgency="critical",
             )
             infections: dict[str, str] = {}
             for infection_line in result.infections:
