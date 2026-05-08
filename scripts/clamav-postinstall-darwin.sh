@@ -158,6 +158,7 @@ CURRENT_STEP="set_permissions"
 write_status '{"status":"running","step":"set_permissions","pid":'"$$"',"ts":'"$(date +%s)"'}'
 chown "$CUSER:staff" "$SYSTEM_DB_DIR" "$CLAMD_CONF" "$FRESHCLAM_CONF"
 chmod 775 "$SYSTEM_DB_DIR"
+chmod 755 "$SYSTEM_LOG_DIR"
 
 # --- Step 4: Seed DB (local copy, no network) ---
 CURRENT_STEP="seed_db"
