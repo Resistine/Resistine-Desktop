@@ -177,6 +177,7 @@ if IS_MACOS:
             'NSHighResolutionCapable': True,
             'NSRequiresAquaSystemAppearance': False,
             'LSMinimumSystemVersion': '13.0',
+            'NSUserNotificationAlertStyle': 'alert',
 
             # Permissions (will be expanded with actual entitlements)
             'NSNetworkClient': True,

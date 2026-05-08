@@ -17,6 +17,7 @@ from utils.logger import logger
 _initialized = False
 _authorized = False
 _delegate = None  # prevent GC of the ObjC delegate
+_THREAT_CATEGORY_ID = "THREAT_DETECTED"
 
 
 def _make_delegate():
@@ -79,6 +80,20 @@ def init():
             0x1 | 0x2 | 0x4,
             lambda granted, err: _set_auth(granted, err),
         )
+
+        # Register a "threat" category so critical alerts persist as alerts
+        from UserNotifications import (
+            UNNotificationAction,
+            UNNotificationCategory,
+        )
+
+        view_action = UNNotificationAction.actionWithIdentifier_title_options_(
+            "VIEW", "View in Resistine", 1 << 2,  # foreground
+        )
+        threat_category = UNNotificationCategory.categoryWithIdentifier_actions_intentIdentifiers_options_(
+            _THREAT_CATEGORY_ID, [view_action], [], 0,
+        )
+        center.setNotificationCategories_({threat_category})
     except ImportError:
         logger.warning("UserNotifications framework not available (pyobjc missing?)")
     except Exception as e:
@@ -108,6 +123,8 @@ def send(title: str, body: str, urgency: str = "normal"):
             content.setTitle_(title)
             content.setBody_(body)
             content.setSound_(UNNotificationSound.defaultSound())
+            if urgency == "critical":
+                content.setCategoryIdentifier_(_THREAT_CATEGORY_ID)
 
             request = UNNotificationRequest.requestWithIdentifier_content_trigger_(
                 str(uuid.uuid4()), content, None,
