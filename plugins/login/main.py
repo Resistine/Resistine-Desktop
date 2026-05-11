@@ -469,9 +469,8 @@ class Plugin(BasePlugin):
 
         # Start ClamAV DB pre-seed while internet is available
         if platform.system() == "Darwin":
-            import threading as _thr2
             from plugins.antivirus.installer_service import ensure_db_seed_started
-            _thr2.Thread(target=ensure_db_seed_started, daemon=True).start()
+            _thr.Thread(target=ensure_db_seed_started, daemon=True).start()
 
         # Phase 4: Transition to next screen
         from utils import settings as app_settings
