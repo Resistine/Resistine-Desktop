@@ -13,6 +13,7 @@ Licensed under the GNU General Public License v2 or later
 import json
 import os
 import platform as _platform
+import threading
 import tkinter as tk
 from datetime import datetime, timedelta, timezone
 
@@ -30,7 +31,7 @@ from utils.logger import logger
 _PLUGIN_DIR = os.path.dirname(os.path.realpath(__file__))
 _WAZUH_DIR = os.path.join(os.path.dirname(_PLUGIN_DIR), "wazuh")
 _DATA_FILE = os.path.join(_PLUGIN_DIR, "data", "agent.013.json")
-_EVENTS_FILE = os.path.join(_PLUGIN_DIR, "data", "events.json")
+_EVENTS_FILE = os.path.join(_PLUGIN_DIR, "data", "log_events.json")
 
 _TAB_NAMES = ("Overview", "Events", "Vulnerabilities")
 _LEGEND_KEYS = ("critical", "error", "warning", "info")
@@ -62,11 +63,61 @@ def _load_agent_data():
 _AGENT_DATA = _load_agent_data()
 
 
+def _wazuh_level_to_severity(level):
+    """Map a Wazuh rule.level (0–15) to one of the page's four severity buckets."""
+    try:
+        n = int(level)
+    except (TypeError, ValueError):
+        return "low"
+    if n >= 14:
+        return "critical"
+    if n >= 12:
+        return "high"
+    if n >= 7:
+        return "medium"
+    return "low"
+
+
+def _normalize_wazuh_hit(hit):
+    """Flatten an OpenSearch hit into the dict shape the events UI expects."""
+    src = hit.get("_source") or {}
+    rule = src.get("rule") or {}
+    agent = src.get("agent") or {}
+    mitre = (rule.get("mitre") or {}).get("id") or []
+    if not isinstance(mitre, list):
+        mitre = [mitre]
+
+    raw_log = src.get("full_log") or src.get("previous_output") or ""
+    if not raw_log:
+        data = src.get("data")
+        if data:
+            try:
+                raw_log = json.dumps(data, indent=2)
+            except (TypeError, ValueError):
+                raw_log = str(data)
+
+    return {
+        "id": hit.get("_id") or src.get("id") or "",
+        "rule_id": rule.get("id", ""),
+        "level": rule.get("level"),
+        "severity": _wazuh_level_to_severity(rule.get("level")),
+        "description": rule.get("description", ""),
+        "timestamp": src.get("timestamp") or "",
+        "agent": agent.get("name", ""),
+        "host": agent.get("name", ""),
+        "ip": agent.get("ip", ""),
+        "mitre": mitre,
+        "hash": src.get("id", ""),
+        "raw_log": raw_log,
+    }
+
+
 def _load_events_data():
     try:
         with open(_EVENTS_FILE, "r", encoding="utf-8") as f:
             payload = json.load(f)
-        events = payload.get("events", []) if isinstance(payload, dict) else []
+        hits = ((payload.get("hits") or {}).get("hits") or []) if isinstance(payload, dict) else []
+        events = [_normalize_wazuh_hit(h) for h in hits]
         # Sort newest first by timestamp; events without a timestamp sort to the end.
         events.sort(
             key=lambda e: e.get("timestamp") or "",
@@ -78,7 +129,27 @@ def _load_events_data():
         return []
 
 
-_EVENTS = _load_events_data()
+# Populated by the background loader below. The Events pane gates on
+# _events_ready and shows a loading placeholder until the thread finishes,
+# so the JSON parse + per-hit normalization stays off the import path and off
+# the UI thread when the Wazuh page is first opened.
+_EVENTS = []
+_events_ready = threading.Event()
+
+
+def _load_events_async():
+    global _EVENTS
+    try:
+        _EVENTS = _load_events_data()
+    finally:
+        _events_ready.set()
+
+
+threading.Thread(
+    target=_load_events_async,
+    name="endpoint2-events-loader",
+    daemon=True,
+).start()
 
 
 def _format_relative(iso_ts):
@@ -168,6 +239,7 @@ class Plugin(BasePlugin):
         self._chart_buckets = []
         self._chart_counts = {}
         self._selected_bucket = None  # datetime of the active 30-min bucket filter, or None
+        self._events_ready_after_id = None  # poll handle for the background events loader
 
     def check_status(self):
         return None
@@ -977,6 +1049,19 @@ class Plugin(BasePlugin):
     # ----- Events pane -------------------------------------------------------
 
     def _build_events_pane(self, parent):
+        # Clear any prior contents (loading placeholder or earlier render) so
+        # this method is safe to call again once background data arrives.
+        for w in parent.winfo_children():
+            try:
+                w.destroy()
+            except Exception:
+                pass
+
+        if not _events_ready.is_set():
+            self._render_events_loading(parent)
+            self._schedule_events_ready_check(parent)
+            return
+
         parent.grid_columnconfigure(0, weight=1)
         parent.grid_rowconfigure(0, weight=0)  # severity pills
         parent.grid_rowconfigure(1, weight=0)  # bar chart
@@ -991,6 +1076,31 @@ class Plugin(BasePlugin):
         # Default selection: most recent event (already sorted newest-first)
         if _EVENTS:
             self._select_event(_EVENTS[0]["id"])
+
+    def _render_events_loading(self, parent):
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(0, weight=1)
+        text_secondary = self._theme(
+            "text_secondary", default=["#6B7280", "#9CA3AF"]
+        )
+        customtkinter.CTkLabel(
+            parent,
+            text="Loading events…",
+            text_color=text_secondary,
+            font=customtkinter.CTkFont(size=14),
+        ).grid(row=0, column=0, sticky="nsew", padx=20, pady=40)
+
+    def _schedule_events_ready_check(self, parent):
+        def check():
+            self._events_ready_after_id = None
+            if not parent.winfo_exists():
+                return
+            if _events_ready.is_set():
+                self._build_events_pane(parent)
+            else:
+                self._events_ready_after_id = self.app.after(100, check)
+
+        self._events_ready_after_id = self.app.after(100, check)
 
     def _severity_palette(self, level):
         """Return (bg, text) tuple for a severity level, theme-resolved."""
@@ -1640,6 +1750,12 @@ class Plugin(BasePlugin):
     # ----- cleanup -----------------------------------------------------------
 
     def destroy(self):
+        if self._events_ready_after_id:
+            try:
+                self.app.after_cancel(self._events_ready_after_id)
+            except Exception:
+                pass
+            self._events_ready_after_id = None
         if self._module_resize_after_id:
             try:
                 self.app.after_cancel(self._module_resize_after_id)

@@ -21,6 +21,7 @@ jeepney
 jiter
 keyring
 Markdown
+matplotlib
 more-itertools
 openai
 packaging
