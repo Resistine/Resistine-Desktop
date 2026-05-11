@@ -32,6 +32,7 @@ _PLUGIN_DIR = os.path.dirname(os.path.realpath(__file__))
 _WAZUH_DIR = os.path.join(os.path.dirname(_PLUGIN_DIR), "wazuh")
 _DATA_FILE = os.path.join(_PLUGIN_DIR, "data", "agent.013.json")
 _EVENTS_FILE = os.path.join(_PLUGIN_DIR, "data", "log_events.json")
+_VULNS_FILE = os.path.join(_PLUGIN_DIR, "data", "vulnerabilities.json")
 
 _TAB_NAMES = ("Overview", "Events", "Vulnerabilities")
 _LEGEND_KEYS = ("critical", "error", "warning", "info")
@@ -50,6 +51,25 @@ _SEVERITY_THEME_KEY = {
     "low": "ok",
 }
 
+# Short label shown inside the severity badge in the vulnerabilities table.
+_SEVERITY_SHORT = {
+    "critical": "CRIT",
+    "high": "HIGH",
+    "medium": "MED",
+    "low": "LOW",
+}
+
+# Maps vuln status strings to a theme key recognized by _badge_colors.
+# "detected" is not a status_badge_* key in the theme JSON; without this
+# mapping the badge falls back to the muted default and the color reads
+# as a missed lookup. Aliasing it to "warning" gives the orange severity
+# treatment from the image.
+_VULN_STATUS_BADGE = {
+    "detected": "warning",
+    "fixed": "ok",
+    "mitigated": "info",
+}
+
 
 def _load_agent_data():
     try:
@@ -61,6 +81,19 @@ def _load_agent_data():
 
 
 _AGENT_DATA = _load_agent_data()
+
+
+def _load_vulns():
+    try:
+        with open(_VULNS_FILE, "r", encoding="utf-8") as f:
+            payload = json.load(f) or {}
+        return list(payload.get("cves") or [])
+    except Exception as e:
+        logger.error(f"Endpoint 2: failed to load vulns sample ({_VULNS_FILE}): {e}")
+        return []
+
+
+_VULNS = _load_vulns()
 
 
 def _wazuh_level_to_severity(level):
@@ -240,6 +273,14 @@ class Plugin(BasePlugin):
         self._chart_counts = {}
         self._selected_bucket = None  # datetime of the active 30-min bucket filter, or None
         self._events_ready_after_id = None  # poll handle for the background events loader
+        # Vulnerabilities pane state
+        self._vuln_search_var = None
+        self._vuln_count_label = None
+        self._vuln_list_frame = None
+        self._vuln_donut_figure = None
+        self._vuln_donut_canvas = None
+        self._vuln_cvss_figure = None
+        self._vuln_cvss_canvas = None
 
     def check_status(self):
         return None
@@ -352,6 +393,7 @@ class Plugin(BasePlugin):
 
         self._build_overview_pane(self._tab_panes["Overview"])
         self._build_events_pane(self._tab_panes["Events"])
+        self._build_vulnerabilities_pane(self._tab_panes["Vulnerabilities"])
 
     def _switch_tab(self, name):
         if name not in self._tab_panes:
@@ -1747,6 +1789,516 @@ class Plugin(BasePlugin):
     def _on_view_in_manager(self, event_id):
         logger.info(f"Endpoint 2: View in manager clicked for {event_id} (placeholder)")
 
+    # ----- Vulnerabilities pane ---------------------------------------------
+
+    def _build_vulnerabilities_pane(self, parent):
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(0, weight=0)  # charts row
+        parent.grid_rowconfigure(1, weight=0)  # table header
+        parent.grid_rowconfigure(2, weight=1)  # table list
+
+        self._build_vuln_charts_row(parent, row=0)
+        self._build_vuln_table_header(parent, row=1)
+        self._build_vuln_table(parent, row=2)
+
+    def _vuln_severity_counts(self):
+        counts = {lvl: 0 for lvl in _SEVERITY_LEVELS}
+        for v in _VULNS:
+            sev = (v.get("severity") or "").lower()
+            if sev in counts:
+                counts[sev] += 1
+        return counts
+
+    # ----- top-row cards -----
+
+    def _build_vuln_charts_row(self, parent, row):
+        wrapper = customtkinter.CTkFrame(parent, fg_color="transparent")
+        wrapper.grid(row=row, column=0, sticky="ew", pady=(0, 12))
+        wrapper.grid_columnconfigure(0, weight=1, uniform="vc")
+        wrapper.grid_columnconfigure(1, weight=1, uniform="vc")
+        wrapper.grid_rowconfigure(0, weight=1)
+
+        donut = customtkinter.CTkFrame(wrapper, corner_radius=12, border_width=1)
+        donut.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        self._build_vuln_donut_card(donut)
+
+        cvss = customtkinter.CTkFrame(wrapper, corner_radius=12, border_width=1)
+        cvss.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        self._build_vuln_cvss_card(cvss)
+
+    def _build_vuln_donut_card(self, card):
+        text_secondary = self._theme(
+            "text_secondary", default=["#6B7280", "#9CA3AF"]
+        )
+        chart_theme = self._chart_theme()
+
+        card.grid_columnconfigure(0, weight=1)
+        card.grid_columnconfigure(1, weight=1)
+        card.grid_rowconfigure(1, weight=1)
+
+        customtkinter.CTkLabel(
+            card,
+            text="SEVERITY BREAKDOWN",
+            text_color=text_secondary,
+            font=customtkinter.CTkFont(size=11, weight="bold"),
+        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=14, pady=(12, 6))
+
+        counts = self._vuln_severity_counts()
+        total = sum(counts.values())
+
+        # matplotlib donut on the left
+        fig = Figure(figsize=(2.6, 2.2), dpi=100, facecolor=chart_theme["bg"])
+        self._vuln_donut_figure = fig
+        ax = fig.add_subplot(111)
+        ax.set_facecolor(chart_theme["bg"])
+
+        sizes = [counts[lvl] for lvl in _SEVERITY_LEVELS]
+        colors = [
+            self._resolve_severity_color(lvl, chart_theme["is_dark"])
+            for lvl in _SEVERITY_LEVELS
+        ]
+        if total > 0:
+            ax.pie(
+                sizes,
+                colors=colors,
+                startangle=90,
+                counterclock=False,
+                wedgeprops={"width": 0.32, "edgecolor": chart_theme["bg"]},
+            )
+            ax.text(
+                0,
+                0.08,
+                str(total),
+                ha="center",
+                va="center",
+                color=chart_theme["text"],
+                fontsize=20,
+                fontweight="bold",
+            )
+            ax.text(
+                0,
+                -0.22,
+                "CVEs",
+                ha="center",
+                va="center",
+                color=text_secondary[1] if chart_theme["is_dark"] else text_secondary[0],
+                fontsize=9,
+            )
+        else:
+            ax.text(
+                0,
+                0,
+                "No CVEs",
+                ha="center",
+                va="center",
+                color=chart_theme["text"],
+                fontsize=11,
+            )
+        ax.set_aspect("equal")
+
+        canvas = FigureCanvasTkAgg(fig, master=card)
+        widget = canvas.get_tk_widget()
+        widget.configure(highlightthickness=0, bd=0, bg=chart_theme["bg"])
+        widget.grid(row=1, column=0, sticky="nsew", padx=(8, 4), pady=(0, 10))
+        self._vuln_donut_canvas = canvas
+        canvas.draw_idle()
+
+        # Legend on the right
+        legend = customtkinter.CTkFrame(card, fg_color="transparent")
+        legend.grid(row=1, column=1, sticky="nsew", padx=(4, 12), pady=(0, 10))
+        legend.grid_columnconfigure(0, weight=1)
+        for i, lvl in enumerate(_SEVERITY_LEVELS):
+            legend.grid_rowconfigure(i, weight=0)
+            row_f = customtkinter.CTkFrame(legend, fg_color="transparent")
+            row_f.grid(row=i, column=0, sticky="ew", pady=2)
+            row_f.grid_columnconfigure(0, weight=0)
+            row_f.grid_columnconfigure(1, weight=1)
+            row_f.grid_columnconfigure(2, weight=0)
+
+            _, dot_color = self._severity_palette(lvl)
+            customtkinter.CTkLabel(
+                row_f,
+                text="●",
+                text_color=dot_color,
+                font=customtkinter.CTkFont(size=14),
+            ).grid(row=0, column=0, sticky="w", padx=(0, 6))
+            customtkinter.CTkLabel(
+                row_f,
+                text=lvl.capitalize(),
+                font=customtkinter.CTkFont(size=12),
+                anchor="w",
+            ).grid(row=0, column=1, sticky="w")
+            customtkinter.CTkLabel(
+                row_f,
+                text=str(counts[lvl]),
+                text_color=dot_color,
+                font=customtkinter.CTkFont(family="Inter", size=14, weight="bold"),
+            ).grid(row=0, column=2, sticky="e")
+
+    def _bucket_vulns_daily(self):
+        """Group CVEs into 30 daily buckets ending today (UTC) by detection_date."""
+        today = datetime.now(timezone.utc).date()
+        buckets = [today - timedelta(days=29 - i) for i in range(30)]
+        counts = {b: {lvl: 0 for lvl in _SEVERITY_LEVELS} for b in buckets}
+        for v in _VULNS:
+            ts = v.get("detection_date") or ""
+            sev = (v.get("severity") or "").lower()
+            if sev not in _SEVERITY_LEVELS or not ts:
+                continue
+            try:
+                d = datetime.fromisoformat(ts.replace("Z", "+00:00")).date()
+            except ValueError:
+                continue
+            if d in counts:
+                counts[d][sev] += 1
+        return buckets, counts
+
+    def _build_vuln_cvss_card(self, card):
+        text_secondary = self._theme(
+            "text_secondary", default=["#6B7280", "#9CA3AF"]
+        )
+        chart_theme = self._chart_theme()
+
+        card.grid_columnconfigure(0, weight=1)
+        card.grid_rowconfigure(1, weight=1)
+
+        customtkinter.CTkLabel(
+            card,
+            text="CVSS DISTRIBUTION — LAST 30 DAYS",
+            text_color=text_secondary,
+            font=customtkinter.CTkFont(size=11, weight="bold"),
+        ).grid(row=0, column=0, sticky="w", padx=14, pady=(12, 6))
+
+        fig = Figure(figsize=(5.5, 2.2), dpi=100, facecolor=chart_theme["bg"])
+        self._vuln_cvss_figure = fig
+        ax = fig.add_subplot(111)
+        ax.set_facecolor(chart_theme["bg"])
+
+        buckets, counts = self._bucket_vulns_daily()
+        x = list(range(len(buckets)))
+        bottoms = [0] * len(buckets)
+        has_data = any(
+            sum(counts[b].values()) for b in buckets
+        )
+        if has_data:
+            for level in _SEVERITY_LEVELS:
+                heights = [counts[b][level] for b in buckets]
+                color = self._resolve_severity_color(level, chart_theme["is_dark"])
+                ax.bar(
+                    x,
+                    heights,
+                    bottom=bottoms,
+                    width=0.85,
+                    color=color,
+                    edgecolor="none",
+                )
+                bottoms = [a + b for a, b in zip(bottoms, heights)]
+
+            tick_step = max(1, len(buckets) // 6)
+            tick_positions = list(range(0, len(buckets), tick_step))
+            tick_labels = [buckets[i].strftime("%b %d") for i in tick_positions]
+            ax.set_xticks(tick_positions)
+            ax.set_xticklabels(tick_labels, fontsize=8, color=chart_theme["text"])
+            max_h = max(bottoms) if bottoms else 1
+            ax.set_ylim(0, max_h + 1)
+            ax.set_yticks(range(0, max_h + 2, max(1, (max_h + 1) // 4)))
+        else:
+            ax.text(
+                0.5,
+                0.5,
+                "No detections in the last 30 days",
+                transform=ax.transAxes,
+                ha="center",
+                va="center",
+                color=chart_theme["text"],
+                fontsize=11,
+            )
+            ax.set_xticks([])
+            ax.set_yticks([])
+
+        ax.tick_params(colors=chart_theme["text"], labelsize=8)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["left"].set_color(chart_theme["text"])
+        ax.spines["bottom"].set_color(chart_theme["text"])
+        ax.yaxis.grid(True, color=chart_theme["grid"], linewidth=0.4, alpha=0.5)
+        ax.set_axisbelow(True)
+        fig.tight_layout()
+
+        canvas = FigureCanvasTkAgg(fig, master=card)
+        widget = canvas.get_tk_widget()
+        widget.configure(highlightthickness=0, bd=0, bg=chart_theme["bg"])
+        widget.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 10))
+        self._vuln_cvss_canvas = canvas
+        canvas.draw_idle()
+
+    # ----- table header -----
+
+    def _build_vuln_table_header(self, parent, row):
+        text_secondary = self._theme(
+            "text_secondary", default=["#6B7280", "#9CA3AF"]
+        )
+
+        header = customtkinter.CTkFrame(parent, fg_color="transparent")
+        header.grid(row=row, column=0, sticky="ew", pady=(0, 8))
+        header.grid_columnconfigure(0, weight=0)
+        header.grid_columnconfigure(1, weight=1)
+        header.grid_columnconfigure(2, weight=0)
+
+        customtkinter.CTkLabel(
+            header,
+            text="AFFECTED PACKAGES & CVES",
+            font=customtkinter.CTkFont(size=11, weight="bold"),
+        ).grid(row=0, column=0, sticky="w", padx=(0, 16))
+
+        self._vuln_search_var = tk.StringVar()
+        self._vuln_search_var.trace_add(
+            "write",
+            lambda *a: self._render_vuln_list(self._vuln_search_var.get()),
+        )
+        customtkinter.CTkEntry(
+            header,
+            placeholder_text="Search CVE, package, severity…",
+            textvariable=self._vuln_search_var,
+            height=30,
+            corner_radius=8,
+        ).grid(row=0, column=1, sticky="ew", padx=8)
+
+        self._vuln_count_label = customtkinter.CTkLabel(
+            header,
+            text=f"{len(_VULNS)} vulnerabilities",
+            text_color=text_secondary,
+            font=customtkinter.CTkFont(size=11),
+        )
+        self._vuln_count_label.grid(row=0, column=2, sticky="e", padx=(8, 0))
+
+    # ----- table -----
+
+    def _build_vuln_table(self, parent, row):
+        wrapper = customtkinter.CTkFrame(parent, corner_radius=12, border_width=1)
+        wrapper.grid(row=row, column=0, sticky="nsew")
+        wrapper.grid_columnconfigure(0, weight=1)
+        wrapper.grid_rowconfigure(1, weight=1)
+
+        self._build_vuln_table_columns(wrapper, row=0)
+
+        self._vuln_list_frame = customtkinter.CTkScrollableFrame(
+            wrapper, fg_color="transparent"
+        )
+        self._vuln_list_frame.grid(row=1, column=0, sticky="nsew", padx=4, pady=(0, 4))
+        self._vuln_list_frame.grid_columnconfigure(0, weight=1)
+
+        self._render_vuln_list("")
+
+    def _build_vuln_table_columns(self, parent, row):
+        text_secondary = self._theme(
+            "text_secondary", default=["#6B7280", "#9CA3AF"]
+        )
+        head = customtkinter.CTkFrame(parent, fg_color="transparent")
+        head.grid(row=row, column=0, sticky="ew", padx=10, pady=(10, 4))
+        self._configure_vuln_row_grid(head)
+
+        small_bold = customtkinter.CTkFont(size=10, weight="bold")
+        labels = ("SEV", "CVE", "AFFECTED PACKAGE", "CVSS", "STATUS", "EPSS")
+        for col, label in enumerate(labels):
+            customtkinter.CTkLabel(
+                head, text=label, text_color=text_secondary, font=small_bold
+            ).grid(row=0, column=col, sticky="w", padx=(0, 12) if col < 5 else (0, 0))
+
+    @staticmethod
+    def _configure_vuln_row_grid(frame):
+        frame.grid_columnconfigure(0, weight=0, minsize=70)   # severity badge
+        frame.grid_columnconfigure(1, weight=0, minsize=180)  # CVE id + modified
+        frame.grid_columnconfigure(2, weight=1, minsize=200)  # package
+        frame.grid_columnconfigure(3, weight=0, minsize=70)   # cvss
+        frame.grid_columnconfigure(4, weight=0, minsize=100)  # status
+        frame.grid_columnconfigure(5, weight=0, minsize=70)   # epss
+
+    def _filter_vulns(self, query):
+        q = (query or "").lower().strip()
+        out = []
+        for v in _VULNS:
+            if q:
+                haystack = " ".join((
+                    str(v.get("id", "")),
+                    str(v.get("package_name", "")),
+                    str(v.get("package_version", "")),
+                    str(v.get("severity", "")),
+                    str(v.get("status", "")),
+                    str(v.get("description", "")),
+                )).lower()
+                if q not in haystack:
+                    continue
+            out.append(v)
+        # Sort by CVSS desc so the worst CVEs surface first.
+        out.sort(key=lambda x: float(x.get("cvss_score") or 0.0), reverse=True)
+        return out
+
+    def _render_vuln_list(self, query=""):
+        if not self._vuln_list_frame or not self._vuln_list_frame.winfo_exists():
+            return
+
+        for w in self._vuln_list_frame.winfo_children():
+            try:
+                w.destroy()
+            except Exception:
+                pass
+
+        vulns = self._filter_vulns(query)
+        if self._vuln_count_label:
+            total = len(_VULNS)
+            shown = len(vulns)
+            text = (
+                f"{shown} vulnerabilities"
+                if shown == total
+                else f"{shown}/{total} vulnerabilities"
+            )
+            self._vuln_count_label.configure(text=text)
+
+        for r, v in enumerate(vulns):
+            self._vuln_row(self._vuln_list_frame, v, r)
+
+    def _epss_color_key(self, epss):
+        try:
+            value = float(epss)
+        except (TypeError, ValueError):
+            return "muted"
+        if value >= 0.7:
+            return "high"
+        if value >= 0.3:
+            return "warning"
+        return "muted"
+
+    def _vuln_row(self, parent, vuln, row):
+        text_secondary = self._theme(
+            "text_secondary", default=["#6B7280", "#9CA3AF"]
+        )
+        hover_bg = self._theme(
+            "sidebar_hover_bg", default=["#F0F0F5", "#1F1F22"]
+        )
+
+        sev = (vuln.get("severity") or "").lower()
+        sev_bg, sev_fg = self._severity_palette(sev)
+        sev_label = _SEVERITY_SHORT.get(sev, sev.upper() or "—")
+
+        row_frame = customtkinter.CTkFrame(parent, fg_color="transparent", corner_radius=8)
+        row_frame.grid(row=row, column=0, sticky="ew", padx=2, pady=1)
+        self._configure_vuln_row_grid(row_frame)
+
+        # SEV badge
+        customtkinter.CTkLabel(
+            row_frame,
+            text=f"  {sev_label}  ",
+            fg_color=sev_bg,
+            text_color=sev_fg,
+            corner_radius=6,
+            font=customtkinter.CTkFont(size=10, weight="bold"),
+        ).grid(row=0, column=0, sticky="w", padx=(0, 12), pady=8)
+
+        # CVE id + modified date
+        cve_cell = customtkinter.CTkFrame(row_frame, fg_color="transparent")
+        cve_cell.grid(row=0, column=1, sticky="w", padx=(0, 12), pady=4)
+        cve_cell.grid_columnconfigure(0, weight=1)
+        customtkinter.CTkLabel(
+            cve_cell,
+            text=vuln.get("id", "—"),
+            font=customtkinter.CTkFont(family="Inter", size=12, weight="bold"),
+            anchor="w",
+        ).grid(row=0, column=0, sticky="w")
+        modified = _format_relative(vuln.get("modified_date"))
+        customtkinter.CTkLabel(
+            cve_cell,
+            text=f"modified {modified}",
+            text_color=text_secondary,
+            font=customtkinter.CTkFont(size=10),
+            anchor="w",
+        ).grid(row=1, column=0, sticky="w")
+
+        # Affected package + version
+        pkg_cell = customtkinter.CTkFrame(row_frame, fg_color="transparent")
+        pkg_cell.grid(row=0, column=2, sticky="w", padx=(0, 12), pady=4)
+        pkg_cell.grid_columnconfigure(0, weight=1)
+        customtkinter.CTkLabel(
+            pkg_cell,
+            text=vuln.get("package_name", "—"),
+            font=customtkinter.CTkFont(family="Inter", size=12, weight="bold"),
+            anchor="w",
+        ).grid(row=0, column=0, sticky="w")
+        customtkinter.CTkLabel(
+            pkg_cell,
+            text=str(vuln.get("package_version", "")),
+            text_color=text_secondary,
+            font=customtkinter.CTkFont(size=10),
+            anchor="w",
+        ).grid(row=1, column=0, sticky="w")
+
+        # CVSS
+        try:
+            cvss_text = f"{float(vuln.get('cvss_score') or 0.0):.1f}"
+        except (TypeError, ValueError):
+            cvss_text = "—"
+        customtkinter.CTkLabel(
+            row_frame,
+            text=cvss_text,
+            text_color=sev_fg,
+            font=customtkinter.CTkFont(family="Inter", size=14, weight="bold"),
+        ).grid(row=0, column=3, sticky="w", padx=(0, 12), pady=8)
+
+        # Status badge — alias unknown values to a sensible theme key so the
+        # color is never the muted fallback.
+        status = (vuln.get("status") or "").lower()
+        status_key = _VULN_STATUS_BADGE.get(status, status or "info")
+        st_bg = self._theme(
+            "status_badge_bg", status_key, default=["#F3F4F6", "#1F2937"]
+        )
+        st_fg = self._theme(
+            "status_badge_text", status_key, default=["#6B7280", "#9CA3AF"]
+        )
+        customtkinter.CTkLabel(
+            row_frame,
+            text=f"  {(status or '—').capitalize()}  ",
+            fg_color=st_bg,
+            text_color=st_fg,
+            corner_radius=6,
+            font=customtkinter.CTkFont(size=10, weight="bold"),
+        ).grid(row=0, column=4, sticky="w", padx=(0, 12), pady=8)
+
+        # EPSS
+        epss = vuln.get("epss")
+        epss_color_key = self._epss_color_key(epss)
+        if epss_color_key == "muted":
+            epss_color = text_secondary
+        else:
+            _, epss_color = self._severity_palette(
+                "high" if epss_color_key == "high" else "medium"
+            )
+        try:
+            epss_text = f"{float(epss) * 100:.0f}%"
+        except (TypeError, ValueError):
+            epss_text = "—"
+        customtkinter.CTkLabel(
+            row_frame,
+            text=epss_text,
+            text_color=epss_color,
+            font=customtkinter.CTkFont(family="Inter", size=13, weight="bold"),
+        ).grid(row=0, column=5, sticky="w", pady=8)
+
+        def on_enter(_e=None, rf=row_frame):
+            try:
+                rf.configure(fg_color=hover_bg)
+            except Exception:
+                pass
+
+        def on_leave(_e=None, rf=row_frame):
+            try:
+                rf.configure(fg_color="transparent")
+            except Exception:
+                pass
+
+        for w in (row_frame, *row_frame.winfo_children()):
+            w.bind("<Enter>", on_enter)
+            w.bind("<Leave>", on_leave)
+
     # ----- cleanup -----------------------------------------------------------
 
     def destroy(self):
@@ -1776,4 +2328,15 @@ class Plugin(BasePlugin):
                 pass
             self._event_chart_figure = None
             self._event_chart_canvas = None
+        for attr in ("_vuln_donut_figure", "_vuln_cvss_figure"):
+            fig = getattr(self, attr, None)
+            if fig is not None:
+                try:
+                    import matplotlib.pyplot as _plt
+                    _plt.close(fig)
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+        self._vuln_donut_canvas = None
+        self._vuln_cvss_canvas = None
         super().destroy()
