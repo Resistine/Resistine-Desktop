@@ -625,7 +625,8 @@ class Plugin(BasePlugin):
             logger.info("Antivirus: RTD watcher stopped")
 
     def _on_rtd_threat(self, filepath: str, signature: str):
-        threat_log.log_threat_detected(signature, filepath)
+        # threat_log.log_threat_detected is already called by the watcher
+        # (for both notified and rate-limited detections); don't double-log.
         try:
             self.app.after(0, self._handle_rtd_on_main, filepath, signature)
         except Exception:

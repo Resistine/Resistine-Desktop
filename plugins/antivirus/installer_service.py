@@ -10,7 +10,6 @@ Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
 
-import fcntl
 import glob
 import os
 import threading
@@ -257,12 +256,12 @@ def check_and_advance():
     # running. This covers upgrade users and dev mode where launchd
     # isn't managing daemons. Requires at least one CVD > 1 MB to
     # reject corrupted/partial files that clamd can't load.
-    _SYSTEM_CLAMAV_DIR = "/Library/Application Support/Resistine/clamav"
-    _SYSTEM_DB = os.path.join(_SYSTEM_CLAMAV_DIR, "db")
-    if os.path.isdir(_SYSTEM_DB):
+    from plugins.antivirus.clamav_platform_darwin import _SYSTEM_DB_DIR
+
+    if os.path.isdir(_SYSTEM_DB_DIR):
         has_valid_cvd = any(
             os.path.getsize(f) > _MIN_CVD_SIZE
-            for f in glob.glob(os.path.join(_SYSTEM_DB, "*.cvd"))
+            for f in glob.glob(os.path.join(_SYSTEM_DB_DIR, "*.cvd"))
             if os.path.isfile(f)
         )
         if has_valid_cvd:
@@ -281,6 +280,8 @@ def check_and_advance():
             return
         # Try to acquire the flock non-blocking — if we get it, no
         # freshclam is running, so the previous seed died.
+        import fcntl
+
         os.makedirs(_CLAMAV_DATA_DIR, exist_ok=True)
         try:
             with open(_LOCK_FILE, "w") as probe_fd:
@@ -316,15 +317,18 @@ def retry():
         settings.set(_NAMESPACE, "last_attempt_ts", 0.0)
         state = get_setup_state()
 
-    if state in (STATE_SEED_FAILED, STATE_NOT_STARTED):
-        _set_state(STATE_NOT_STARTED)
-        ensure_db_seed_started()
-    elif state == STATE_INSTALL_FAILED:
-        if _validate_database():
-            _set_state(STATE_DB_READY)
-        else:
+        if state in (STATE_SEED_FAILED, STATE_NOT_STARTED):
             _set_state(STATE_NOT_STARTED)
-            ensure_db_seed_started()
+        elif state == STATE_INSTALL_FAILED:
+            if _validate_database():
+                _set_state(STATE_DB_READY)
+            else:
+                _set_state(STATE_NOT_STARTED)
+
+    # Kick off seeding outside the lock (long-running I/O)
+    new_state = get_setup_state()
+    if new_state == STATE_NOT_STARTED:
+        ensure_db_seed_started()
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +395,8 @@ def _validate_database() -> bool:
 
 def _do_db_seed():
     """Execute freshclam with filesystem lock to prevent concurrent runs."""
+    import fcntl
+
     os.makedirs(_CLAMAV_DATA_DIR, exist_ok=True)
     os.makedirs(_USER_DB_DIR, exist_ok=True)
 

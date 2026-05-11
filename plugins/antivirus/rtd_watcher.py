@@ -50,7 +50,7 @@ class ClamdLogWatcher:
         self._state_lock = threading.Lock()
         self._dedup: dict[tuple[str, str], float] = {}
         self._rate_times: list[float] = []
-        self._suppressed = [0]
+        self._suppressed_count = 0
 
     # ── Public API ───────────────────────────────────────────
 
@@ -177,10 +177,16 @@ class ClamdLogWatcher:
                     log_threat_detected(signature, filepath)
                 except Exception:
                     pass
-                self._suppressed[0] += 1
+                self._suppressed_count += 1
                 return
 
             self._rate_times.append(now)
+
+        # Log every non-deduplicated detection to threats.log
+        try:
+            log_threat_detected(signature, filepath)
+        except Exception:
+            pass
 
         try:
             self._on_threat(filepath, signature)
@@ -190,7 +196,7 @@ class ClamdLogWatcher:
     def _maybe_flush_summary(self):
         """When a rate-limit burst is over, fire a summary callback."""
         with self._state_lock:
-            if self._suppressed[0] == 0:
+            if self._suppressed_count == 0:
                 return
             now = time.monotonic()
             cutoff = now - _RATE_WINDOW
@@ -198,8 +204,8 @@ class ClamdLogWatcher:
             # Burst still active — don't flush yet
             if len(self._rate_times) >= _RATE_LIMIT:
                 return
-            count = self._suppressed[0]
-            self._suppressed[0] = 0
+            count = self._suppressed_count
+            self._suppressed_count = 0
 
         if self._on_summary is not None:
             try:
