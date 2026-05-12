@@ -1246,6 +1246,21 @@ class Plugin(BasePlugin):
             "is_dark": is_dark,
         }
 
+    def _card_bg(self, card):
+        """Resolve a CTkFrame's current fg_color to a #RRGGBB hex string."""
+        is_dark = customtkinter.get_appearance_mode() == "Dark"
+        fg = card.cget("fg_color")
+        if isinstance(fg, (tuple, list)):
+            color = fg[1] if is_dark else fg[0]
+        else:
+            color = fg
+        if isinstance(color, str) and color.startswith("#"):
+            return color
+        rgb = card.winfo_rgb(color)
+        return "#{:02X}{:02X}{:02X}".format(
+            rgb[0] // 256, rgb[1] // 256, rgb[2] // 256
+        )
+
     def _resolve_severity_color(self, level, is_dark):
         # Pull text color (more saturated than the badge bg) for the bar fill.
         key = _SEVERITY_THEME_KEY.get(level, "info")
@@ -1831,6 +1846,7 @@ class Plugin(BasePlugin):
             "text_secondary", default=["#6B7280", "#9CA3AF"]
         )
         chart_theme = self._chart_theme()
+        card_bg = self._card_bg(card)
 
         card.grid_columnconfigure(0, weight=1)
         card.grid_columnconfigure(1, weight=1)
@@ -1847,10 +1863,10 @@ class Plugin(BasePlugin):
         total = sum(counts.values())
 
         # matplotlib donut on the left
-        fig = Figure(figsize=(2.6, 2.2), dpi=100, facecolor=chart_theme["bg"])
+        fig = Figure(figsize=(2.6, 2.2), dpi=100, facecolor=card_bg)
         self._vuln_donut_figure = fig
         ax = fig.add_subplot(111)
-        ax.set_facecolor(chart_theme["bg"])
+        ax.set_facecolor(card_bg)
 
         sizes = [counts[lvl] for lvl in _SEVERITY_LEVELS]
         colors = [
@@ -1863,7 +1879,7 @@ class Plugin(BasePlugin):
                 colors=colors,
                 startangle=90,
                 counterclock=False,
-                wedgeprops={"width": 0.32, "edgecolor": chart_theme["bg"]},
+                wedgeprops={"width": 0.32, "edgecolor": card_bg},
             )
             ax.text(
                 0,
@@ -1898,19 +1914,22 @@ class Plugin(BasePlugin):
 
         canvas = FigureCanvasTkAgg(fig, master=card)
         widget = canvas.get_tk_widget()
-        widget.configure(highlightthickness=0, bd=0, bg=chart_theme["bg"])
+        widget.configure(highlightthickness=0, bd=0, bg=card_bg)
         widget.grid(row=1, column=0, sticky="nsew", padx=(8, 4), pady=(0, 10))
         self._vuln_donut_canvas = canvas
         canvas.draw_idle()
 
-        # Legend on the right
+        # Legend on the right — spacer rows top/bottom vertically center the items.
         legend = customtkinter.CTkFrame(card, fg_color="transparent")
         legend.grid(row=1, column=1, sticky="nsew", padx=(4, 12), pady=(0, 10))
         legend.grid_columnconfigure(0, weight=1)
+        legend.grid_rowconfigure(0, weight=1)
+        legend.grid_rowconfigure(len(_SEVERITY_LEVELS) + 1, weight=1)
         for i, lvl in enumerate(_SEVERITY_LEVELS):
-            legend.grid_rowconfigure(i, weight=0)
+            row_idx = i + 1
+            legend.grid_rowconfigure(row_idx, weight=0)
             row_f = customtkinter.CTkFrame(legend, fg_color="transparent")
-            row_f.grid(row=i, column=0, sticky="ew", pady=2)
+            row_f.grid(row=row_idx, column=0, sticky="ew", pady=2)
             row_f.grid_columnconfigure(0, weight=0)
             row_f.grid_columnconfigure(1, weight=1)
             row_f.grid_columnconfigure(2, weight=0)
@@ -1958,6 +1977,7 @@ class Plugin(BasePlugin):
             "text_secondary", default=["#6B7280", "#9CA3AF"]
         )
         chart_theme = self._chart_theme()
+        card_bg = self._card_bg(card)
 
         card.grid_columnconfigure(0, weight=1)
         card.grid_rowconfigure(1, weight=1)
@@ -1969,10 +1989,10 @@ class Plugin(BasePlugin):
             font=customtkinter.CTkFont(size=11, weight="bold"),
         ).grid(row=0, column=0, sticky="w", padx=14, pady=(12, 6))
 
-        fig = Figure(figsize=(5.5, 2.2), dpi=100, facecolor=chart_theme["bg"])
+        fig = Figure(figsize=(5.5, 2.2), dpi=100, facecolor=card_bg)
         self._vuln_cvss_figure = fig
         ax = fig.add_subplot(111)
-        ax.set_facecolor(chart_theme["bg"])
+        ax.set_facecolor(card_bg)
 
         buckets, counts = self._bucket_vulns_daily()
         x = list(range(len(buckets)))
@@ -2027,7 +2047,7 @@ class Plugin(BasePlugin):
 
         canvas = FigureCanvasTkAgg(fig, master=card)
         widget = canvas.get_tk_widget()
-        widget.configure(highlightthickness=0, bd=0, bg=chart_theme["bg"])
+        widget.configure(highlightthickness=0, bd=0, bg=card_bg)
         widget.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 10))
         self._vuln_cvss_canvas = canvas
         canvas.draw_idle()
@@ -2095,15 +2115,22 @@ class Plugin(BasePlugin):
             "text_secondary", default=["#6B7280", "#9CA3AF"]
         )
         head = customtkinter.CTkFrame(parent, fg_color="transparent")
-        head.grid(row=row, column=0, sticky="ew", padx=10, pady=(10, 4))
+        # Match the horizontal extent of the scrollable rows: rows sit at
+        # wrapper-padx(4) + row-padx(2) = 6 from the left, and the scrollable
+        # reserves ~16px on the right for the scrollbar + row-padx(2) + wrapper-padx(4).
+        head.grid(row=row, column=0, sticky="ew", padx=(6, 22), pady=(10, 4))
         self._configure_vuln_row_grid(head)
 
         small_bold = customtkinter.CTkFont(size=10, weight="bold")
         labels = ("SEV", "CVE", "AFFECTED PACKAGE", "CVSS", "STATUS", "EPSS")
         for col, label in enumerate(labels):
+            # SEV column rows render a badge with "  HIGH  " interior padding,
+            # so nudge the SEV header right to land on the badge's visible text.
+            left_pad = 8 if col == 0 else 0
+            right_pad = 12 if col < 5 else 0
             customtkinter.CTkLabel(
                 head, text=label, text_color=text_secondary, font=small_bold
-            ).grid(row=0, column=col, sticky="w", padx=(0, 12) if col < 5 else (0, 0))
+            ).grid(row=0, column=col, sticky="w", padx=(left_pad, right_pad))
 
     @staticmethod
     def _configure_vuln_row_grid(frame):
