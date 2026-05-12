@@ -20,13 +20,26 @@ from datetime import datetime, timedelta, timezone
 import customtkinter
 from customtkinter import ThemeManager
 
-import matplotlib
-matplotlib.use("TkAgg")
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from matplotlib.figure import Figure
-
 from plugins.base_plugin import BasePlugin
 from utils.logger import logger
+
+# matplotlib is imported lazily via _ensure_matplotlib() — see below. Pulling it
+# at module load adds ~200–500 ms to plugin discovery on the first run of the
+# app; deferring it means the Vulnerabilities/Events charts only pay that cost
+# the first time they're built.
+_Figure = None
+_FigureCanvasTkAgg = None
+
+
+def _ensure_matplotlib():
+    global _Figure, _FigureCanvasTkAgg
+    if _Figure is None:
+        import matplotlib
+        matplotlib.use("TkAgg")
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg as _FCA
+        from matplotlib.figure import Figure as _F
+        _Figure, _FigureCanvasTkAgg = _F, _FCA
+    return _Figure, _FigureCanvasTkAgg
 
 _PLUGIN_DIR = os.path.dirname(os.path.realpath(__file__))
 _WAZUH_DIR = os.path.join(os.path.dirname(_PLUGIN_DIR), "wazuh")
@@ -80,7 +93,17 @@ def _load_agent_data():
         return {}
 
 
-_AGENT_DATA = _load_agent_data()
+# Agent + vuln data are loaded on first use rather than at module import so
+# plugin discovery doesn't pay the JSON-parse cost when the user never opens
+# the Wazuh plugin (or opens it but never visits Vulnerabilities/Overview).
+_AGENT_DATA_CACHE = None
+
+
+def _get_agent_data():
+    global _AGENT_DATA_CACHE
+    if _AGENT_DATA_CACHE is None:
+        _AGENT_DATA_CACHE = _load_agent_data()
+    return _AGENT_DATA_CACHE
 
 
 def _load_vulns():
@@ -93,7 +116,14 @@ def _load_vulns():
         return []
 
 
-_VULNS = _load_vulns()
+_VULNS_CACHE = None
+
+
+def _get_vulns():
+    global _VULNS_CACHE
+    if _VULNS_CACHE is None:
+        _VULNS_CACHE = _load_vulns()
+    return _VULNS_CACHE
 
 
 def _wazuh_level_to_severity(level):
@@ -236,6 +266,11 @@ def _short_benchmark_name(name):
 class Plugin(BasePlugin):
     """Endpoint 2 plugin — second sidebar entry, redesigned-architecture skeleton."""
 
+    # Tell gui/user_interface.py to grid_forget our screen on navigation rather
+    # than destroy it. Returning to Wazuh then reuses the cached widget tree
+    # via create_main_screen() instead of rebuilding all panes from scratch.
+    preserve_screen = True
+
     def __init__(self, app):
         super().__init__(
             id="013",
@@ -263,6 +298,11 @@ class Plugin(BasePlugin):
         # so each pane pays its construction cost on first activation, not at
         # plugin open.
         self._tab_built = {name: False for name in _TAB_NAMES}
+        # Appearance mode the cached widget tree was built under. create_main_screen
+        # compares this to the current mode and rebuilds if the theme switched
+        # while the plugin was off-screen (preserved widgets don't auto-refresh
+        # matplotlib facecolors and other build-time-resolved hex strings).
+        self._cached_appearance_mode = None
         # Events pane state
         self._selected_event_id = None
         self._event_list_frame = None
@@ -292,6 +332,27 @@ class Plugin(BasePlugin):
     # ----- screen scaffold ---------------------------------------------------
 
     def create_main_screen(self):
+        # Reuse the preserved widget tree from a prior visit when possible.
+        # Skip the cache if the appearance mode changed while we were
+        # off-screen — matplotlib facecolors and a few other hex strings are
+        # resolved at build time and won't auto-refresh.
+        current_mode = customtkinter.get_appearance_mode()
+        cached = getattr(self, "main_container", None)
+        if (
+            cached is not None
+            and cached.winfo_exists()
+            and self._cached_appearance_mode == current_mode
+        ):
+            return cached
+        # Stale cache (theme changed): tear down before rebuilding.
+        if cached is not None:
+            try:
+                if cached.winfo_exists():
+                    cached.destroy()
+            except Exception:
+                pass
+        self._cached_appearance_mode = current_mode
+
         # Outer frame is what select_frame_by_name grids; it forces row 0 weight=1
         # on the returned widget, so we use an inner layout frame for our own
         # multi-row structure (tab strip + content).
@@ -497,7 +558,7 @@ class Plugin(BasePlugin):
         text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
         divider_color = self._theme("divider_color", default=["#E5E7EB", "#2A2A2A"])
 
-        bi = _AGENT_DATA.get("basic_info", {}) or {}
+        bi = _get_agent_data().get("basic_info", {}) or {}
         os_info = bi.get("os") or {}
         name = bi.get("name") or "(unknown device)"
         os_name = os_info.get("name") or ""
@@ -637,7 +698,7 @@ class Plugin(BasePlugin):
         err_bg = self._theme("status_badge_bg", "error", default=["#FEE2E2", "#7F1D1D"])
         err_text = self._theme("status_badge_text", "error", default=["#DC2626", "#F87171"])
 
-        bi = _AGENT_DATA.get("basic_info", {}) or {}
+        bi = _get_agent_data().get("basic_info", {}) or {}
         is_connected = (bi.get("status") or "").lower() == "connected"
         last_keep = _format_relative(bi.get("lastKeepAlive"))
         disc_at = _format_relative(bi.get("disconnection_time"))
@@ -767,7 +828,7 @@ class Plugin(BasePlugin):
     def _module_cards(self):
         """Compute module-card data from the loaded agent JSON."""
         cards = []
-        bi = _AGENT_DATA.get("basic_info", {}) or {}
+        bi = _get_agent_data().get("basic_info", {}) or {}
 
         # Security Alerts — no source in sample JSON
         cards.append({
@@ -779,7 +840,7 @@ class Plugin(BasePlugin):
         })
 
         # Vulnerabilities — vulnerabilities object is empty
-        vulns = _AGENT_DATA.get("vulnerabilities") or {}
+        vulns = _get_agent_data().get("vulnerabilities") or {}
         if vulns:
             cards.append({
                 "title": "Vulnerabilities",
@@ -798,7 +859,7 @@ class Plugin(BasePlugin):
             })
 
         # Compliance · SCA
-        sca_items = (_AGENT_DATA.get("sca", {}) or {}).get("affected_items") or []
+        sca_items = (_get_agent_data().get("sca", {}) or {}).get("affected_items") or []
         if sca_items:
             sca = sca_items[0]
             score = int(sca.get("score") or 0)
@@ -832,7 +893,7 @@ class Plugin(BasePlugin):
             })
 
         # File Integrity — syscheck is empty in the sample
-        syscheck = _AGENT_DATA.get("syscheck") or {}
+        syscheck = _get_agent_data().get("syscheck") or {}
         if syscheck:
             cards.append({
                 "title": "File Integrity",
@@ -849,7 +910,7 @@ class Plugin(BasePlugin):
             })
 
         # Rootcheck
-        rc = _AGENT_DATA.get("rootcheck") or {}
+        rc = _get_agent_data().get("rootcheck") or {}
         rc_items = rc.get("affected_items") or []
         rc_total = int(rc.get("total_affected_items") or len(rc_items))
         if rc_total:
@@ -889,7 +950,7 @@ class Plugin(BasePlugin):
         })
 
         # Inventory · Syscollector
-        sc = _AGENT_DATA.get("syscollector", {}) or {}
+        sc = _get_agent_data().get("syscollector", {}) or {}
         pkgs = int((sc.get("packages") or {}).get("total_affected_items") or 0)
         procs = int((sc.get("processes") or {}).get("total_affected_items") or 0)
         ports = int(((sc.get("network") or {}).get("ports") or {}).get("total_affected_items") or 0)
@@ -1150,6 +1211,11 @@ class Plugin(BasePlugin):
         ).grid(row=0, column=0, sticky="nsew", padx=20, pady=40)
 
     def _schedule_events_ready_check(self, parent):
+        # 20 ms ≈ one frame at 50 Hz. Tight enough that the placeholder→content
+        # handoff feels instant once the background loader finishes; loose
+        # enough that pre-ready polls are negligible.
+        poll_ms = 20
+
         def check():
             self._events_ready_after_id = None
             if not parent.winfo_exists():
@@ -1157,9 +1223,9 @@ class Plugin(BasePlugin):
             if _events_ready.is_set():
                 self._build_events_pane(parent)
             else:
-                self._events_ready_after_id = self.app.after(100, check)
+                self._events_ready_after_id = self.app.after(poll_ms, check)
 
-        self._events_ready_after_id = self.app.after(100, check)
+        self._events_ready_after_id = self.app.after(poll_ms, check)
 
     def _severity_palette(self, level):
         """Return (bg, text) tuple for a severity level, theme-resolved."""
@@ -1285,6 +1351,7 @@ class Plugin(BasePlugin):
         return pair[1] if is_dark else pair[0]
 
     def _build_event_chart(self, parent, row):
+        Figure, FigureCanvasTkAgg = _ensure_matplotlib()
         chart_theme = self._chart_theme()
 
         wrapper = customtkinter.CTkFrame(
@@ -1835,7 +1902,7 @@ class Plugin(BasePlugin):
 
     def _vuln_severity_counts(self):
         counts = {lvl: 0 for lvl in _SEVERITY_LEVELS}
-        for v in _VULNS:
+        for v in _get_vulns():
             sev = (v.get("severity") or "").lower()
             if sev in counts:
                 counts[sev] += 1
@@ -1859,6 +1926,7 @@ class Plugin(BasePlugin):
         self._build_vuln_cvss_card(cvss)
 
     def _build_vuln_donut_card(self, card):
+        Figure, FigureCanvasTkAgg = _ensure_matplotlib()
         text_secondary = self._theme(
             "text_secondary", default=["#6B7280", "#9CA3AF"]
         )
@@ -1976,7 +2044,7 @@ class Plugin(BasePlugin):
         today = datetime.now(timezone.utc).date()
         buckets = [today - timedelta(days=29 - i) for i in range(30)]
         counts = {b: {lvl: 0 for lvl in _SEVERITY_LEVELS} for b in buckets}
-        for v in _VULNS:
+        for v in _get_vulns():
             ts = v.get("detection_date") or ""
             sev = (v.get("severity") or "").lower()
             if sev not in _SEVERITY_LEVELS or not ts:
@@ -1990,6 +2058,7 @@ class Plugin(BasePlugin):
         return buckets, counts
 
     def _build_vuln_cvss_card(self, card):
+        Figure, FigureCanvasTkAgg = _ensure_matplotlib()
         text_secondary = self._theme(
             "text_secondary", default=["#6B7280", "#9CA3AF"]
         )
@@ -2103,7 +2172,7 @@ class Plugin(BasePlugin):
 
         self._vuln_count_label = customtkinter.CTkLabel(
             header,
-            text=f"{len(_VULNS)} vulnerabilities",
+            text=f"{len(_get_vulns())} vulnerabilities",
             text_color=text_secondary,
             font=customtkinter.CTkFont(size=11),
         )
@@ -2161,7 +2230,7 @@ class Plugin(BasePlugin):
     def _filter_vulns(self, query):
         q = (query or "").lower().strip()
         out = []
-        for v in _VULNS:
+        for v in _get_vulns():
             if q:
                 haystack = " ".join((
                     str(v.get("id", "")),
@@ -2190,7 +2259,7 @@ class Plugin(BasePlugin):
 
         vulns = self._filter_vulns(query)
         if self._vuln_count_label:
-            total = len(_VULNS)
+            total = len(_get_vulns())
             shown = len(vulns)
             text = (
                 f"{shown} vulnerabilities"

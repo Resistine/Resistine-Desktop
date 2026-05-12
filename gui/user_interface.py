@@ -750,14 +750,22 @@ class AppUI(customtkinter.CTk):
         except:
             self._content_width_hint = None
 
-        # Clear current screen
+        # Clear current screen. Plugins can opt into widget-tree preservation
+        # by setting `preserve_screen = True` on their class — useful for pages
+        # with heavy build cost (large widget trees, matplotlib figures, etc.).
+        # Preserved screens are only grid_forget'd on hide; the plugin's
+        # create_main_screen returns the cached widget on the next visit.
+        prev_plugin = getattr(self, "_current_plugin", None)
+        prev_preserve = bool(prev_plugin and getattr(prev_plugin, "preserve_screen", False))
         try:
             if hasattr(self, "_current_main_screen") and self._current_main_screen:
                 self._current_main_screen.grid_forget()
-                self._current_main_screen.destroy()
+                if not prev_preserve:
+                    self._current_main_screen.destroy()
         except Exception:
             pass
         self._current_main_screen = None
+        self._current_plugin = None
 
         # Update button active states
         for frame_name, frame in getattr(self, "frames", {}).items():
@@ -777,6 +785,7 @@ class AppUI(customtkinter.CTk):
             main_screen.grid_columnconfigure(0, weight=1)
             main_screen.grid_rowconfigure(0, weight=1)
             self._current_main_screen = main_screen
+            self._current_plugin = frame
             # Attach smooth scrolling + auto-hide scrollbars for any CTkScrollableFrames in this screen
             try:
                 self._install_scroll_behaviors(main_screen)
