@@ -175,7 +175,7 @@ def find_config(tunnel: str, config_path: str = None) -> str | None:
 def find_default_tunnel() -> str | None:
     """
     Discover default tunnel from ProgramData.
-    Prefers 'resistine_default' if present, otherwise first .conf found.
+    Prefers 'resistine' if present, otherwise first .conf found.
     """
     if not os.path.exists(CONFIG_BASE):
         return None
@@ -185,8 +185,8 @@ def find_default_tunnel() -> str | None:
         logger.warning(f"No .conf files in {CONFIG_BASE}")
         return None
 
-    if "resdef.conf" in confs:
-        return "resdef"
+    if "resistine.conf" in confs:
+        return "resistine"
 
     name = confs[0].replace(".conf", "")
     logger.info(f"Auto-detected tunnel: {name}")

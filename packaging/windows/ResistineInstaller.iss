@@ -455,6 +455,7 @@ begin
   StopAndDeleteService('ResistineVPN');
 
   Log('Uninstall cleanup: stopping/removing Resistine WireGuard tunnel services');
+  RemoveNamedWireGuardTunnel('resistine');
   RemoveNamedWireGuardTunnel('resistine_default');
   RemoveNamedWireGuardTunnel('resistine_vpn');
 
@@ -1499,7 +1500,7 @@ begin
         'What will be removed:' + #13#10 +
         '- Application files in: ' + ExistingInstallDir + #13#10 +
         '- Start Menu / desktop shortcuts' + #13#10 +
-        '- VPN services: ResistineVPN, WireGuardTunnel$resistine_default, WireGuardTunnel$resistine_vpn' + #13#10 +
+        '- VPN services: ResistineVPN, WireGuardTunnel$resistine, WireGuardTunnel$resistine_default, WireGuardTunnel$resistine_vpn' + #13#10 +
         '- All user data: settings, email, login, logs, and VPN service data' + #13#10 +
         '  (' + GetResistineUserDataDir + ' and ' + GetResistineCommonDataDir + ')' + #13#10 + #13#10 +
         'Continue?';
@@ -1640,6 +1641,7 @@ begin
     ExpandConstant('{app}') + #13#10#13#10 +
     'The uninstaller will remove:' + #13#10 +
     '- ResistineVPN service' + #13#10 +
+    '- WireGuardTunnel$resistine' + #13#10 +
     '- WireGuardTunnel$resistine_default' + #13#10 +
     '- WireGuardTunnel$resistine_vpn' + #13#10 +
     '- Wazuh agent (WazuhSvc)' + #13#10 +
