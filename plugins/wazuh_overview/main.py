@@ -259,6 +259,10 @@ class Plugin(BasePlugin):
         self._module_resize_after_id = None
         self._module_resize_handler_id = None
         self._padding_offset = 60 if _platform.system() == "Windows" else 40
+        # Tracks which panes have been lazily built. _switch_tab consults this
+        # so each pane pays its construction cost on first activation, not at
+        # plugin open.
+        self._tab_built = {name: False for name in _TAB_NAMES}
         # Events pane state
         self._selected_event_id = None
         self._event_list_frame = None
@@ -391,9 +395,10 @@ class Plugin(BasePlugin):
             pane.grid_rowconfigure(0, weight=1)
             self._tab_panes[name] = pane
 
-        self._build_overview_pane(self._tab_panes["Overview"])
-        self._build_events_pane(self._tab_panes["Events"])
-        self._build_vulnerabilities_pane(self._tab_panes["Vulnerabilities"])
+        # Pane frames above are freshly created on each create_main_screen call,
+        # so reset the lazy-build flags to match. _switch_tab will populate each
+        # pane the first time it's shown.
+        self._tab_built = {name: False for name in _TAB_NAMES}
 
     def _switch_tab(self, name):
         if name not in self._tab_panes:
@@ -411,7 +416,19 @@ class Plugin(BasePlugin):
                 )
 
         self._active_tab = name
-        self._tab_panes[name].grid(row=0, column=0, sticky="nsew")
+        pane = self._tab_panes[name]
+        # Build the pane on first activation so plugin open only pays for the
+        # default (Overview) tab; other panes build when the user clicks them.
+        if not self._tab_built.get(name, False):
+            builder = {
+                "Overview": self._build_overview_pane,
+                "Events": self._build_events_pane,
+                "Vulnerabilities": self._build_vulnerabilities_pane,
+            }.get(name)
+            if builder is not None:
+                builder(pane)
+                self._tab_built[name] = True
+        pane.grid(row=0, column=0, sticky="nsew")
 
         new_btn = self._tab_buttons[name]
         new_btn.configure(
