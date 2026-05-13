@@ -421,6 +421,24 @@ class Plugin(BasePlugin):
         self._overview_events_after_id = None  # poll handle for the Overview's Security Alerts card refresh
         self._inventory_after_id = None  # poll handle for the Inventory agents loader
         self._inventory_pane_parent = None  # reference for swapping loading → list
+        # Active category in the Inventory tab's dropdown. One of:
+        # "Devices" | "Processes" | "Ports" | "Network". Persists across
+        # plugin re-entries via preserve_screen=True, and across the
+        # loading→ready transition so a user who switched views before data
+        # arrived sees their choice when the list paints.
+        self._inventory_view = "Devices"
+        # Active group filter. Default "All groups" shows every device;
+        # otherwise the value matches one of the agent group names parsed
+        # from basic_info.group across the loaded agents, or "(no group)"
+        # for agents whose group field is missing/empty.
+        self._inventory_group = "All groups"
+        # Active page in the inventory list. 1-based. Resets to 1 whenever
+        # the category or group filter changes (otherwise a stale page index
+        # could land out of range when the filtered row count shrinks).
+        self._inventory_page = 1
+        self._inventory_wrapper = None  # outer bordered card; dropdown callback re-renders into it
+        self._inventory_count_label = None  # secondary label under the dropdown
+        self._inventory_pagination_frame = None  # right-aligned pager; rebuilt on each body render
         # Vulnerabilities pane state
         self._vuln_search_var = None
         self._vuln_count_label = None
@@ -2910,20 +2928,119 @@ class Plugin(BasePlugin):
                 "last_keep": bi.get("lastKeepAlive"),
                 "ip": bi.get("ip") or "—",
                 "threat": threat,
+                # groups feeds the group-filter dropdown; the Overview
+                # Inventory card ignores this field.
+                "groups": self._agent_groups(bi),
             })
         # threat desc, then name asc — stable
         rows.sort(key=lambda r: (-_THREAT_RANK.get(r["threat"], 0), r["name"].lower()))
         return rows
 
+    def _inventory_counts_rows(self, field_path):
+        """Per-device row data for the count-based views (Processes/Ports/
+        Network). `field_path` is a tuple of keys into each agent dict
+        leading to a syscollector object that has `affected_items`. Sort:
+        count desc, name asc. Devices with no syscollector data show 0."""
+        rows = []
+        for agent in _AGENTS:
+            bi = agent.get("basic_info") or {}
+            name = bi.get("name") or "(unknown)"
+            node = agent
+            for key in field_path:
+                if not isinstance(node, dict):
+                    node = None
+                    break
+                node = node.get(key)
+            items = (node or {}).get("affected_items") if isinstance(node, dict) else None
+            count = len(items) if isinstance(items, list) else 0
+            rows.append({
+                "name": name,
+                "status": (bi.get("status") or "").lower(),
+                "last_keep": bi.get("lastKeepAlive"),
+                "ip": bi.get("ip") or "—",
+                "count": count,
+                "groups": self._agent_groups(bi),
+            })
+        rows.sort(key=lambda r: (-r["count"], r["name"].lower()))
+        return rows
+
+    # Maps the dropdown's view name → the syscollector path used to count
+    # affected_items for that view. None for "Devices" (no count column —
+    # the lead is the threat badge instead).
+    _INVENTORY_COUNT_FIELDS = {
+        "Devices": None,
+        "Processes": ("syscollector", "processes"),
+        "Ports": ("syscollector", "network", "ports"),
+        "Network": ("syscollector", "network", "interfaces"),
+    }
+    # Lead-column header text per view (col 1 of the row layout).
+    _INVENTORY_LEAD_HEADER = {
+        "Devices": "THREAT",
+        "Processes": "PROCESSES",
+        "Ports": "OPEN PORTS",
+        "Network": "INTERFACES",
+    }
+
+    # Sentinels for the group dropdown. "All groups" is the unfiltered
+    # default; "(no group)" buckets agents whose basic_info.group is
+    # missing/empty (one such agent exists in the bundled sample).
+    _GROUP_ALL = "All groups"
+    _GROUP_NONE = "(no group)"
+
+    # Inventory list pagination. 20 rows/page so the list fits comfortably
+    # in a single viewport without scrolling; the pager shows just three
+    # adjacent page numbers (prev, current, next) per the design.
+    _INVENTORY_PAGE_SIZE = 20
+
+    def _inventory_group_values(self):
+        """Distinct group names present in _AGENTS, with "All groups" pinned
+        first and "(no group)" appended only if any agent actually lacks a
+        group. Result is the dropdown's `values` list."""
+        seen = set()
+        has_empty = False
+        for agent in _AGENTS:
+            bi = agent.get("basic_info") or {}
+            raw = bi.get("group")
+            if isinstance(raw, list):
+                groups = [g for g in raw if g]
+            elif raw:
+                groups = [raw]
+            else:
+                groups = []
+            if not groups:
+                has_empty = True
+            else:
+                seen.update(groups)
+        out = [self._GROUP_ALL] + sorted(seen)
+        if has_empty:
+            out.append(self._GROUP_NONE)
+        return out
+
+    def _agent_groups(self, bi):
+        """Normalize basic_info.group into a list. Empty list means
+        the agent has no group assignment."""
+        raw = bi.get("group")
+        if isinstance(raw, list):
+            return [g for g in raw if g]
+        if raw:
+            return [raw]
+        return []
+
+    def _row_in_group(self, row, group_filter):
+        """Filter predicate: does this row's agent belong to the selected
+        group? Row dicts carry their group list under "groups"."""
+        if group_filter == self._GROUP_ALL:
+            return True
+        groups = row.get("groups") or []
+        if group_filter == self._GROUP_NONE:
+            return not groups
+        return group_filter in groups
+
     def _render_inventory_list(self, parent):
-        text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
         divider_color = self._theme("divider_color", default=["#E5E7EB", "#2A2A2A"])
-        fonts = self._ensure_fonts()
 
         parent.grid_columnconfigure(0, weight=1)
         parent.grid_rowconfigure(0, weight=1)
-
-        rows = self._inventory_rows()
 
         # The whole inventory is a single bordered card so it reads as its own
         # widget against the page background (matches the Events stream's
@@ -2931,39 +3048,138 @@ class Plugin(BasePlugin):
         wrapper = customtkinter.CTkFrame(parent, corner_radius=12, border_width=1)
         wrapper.grid(row=0, column=0, sticky="nsew")
         wrapper.grid_columnconfigure(0, weight=1)
-        wrapper.grid_rowconfigure(0, weight=0)  # title bar
+        wrapper.grid_rowconfigure(0, weight=0)  # title bar (dropdown + count)
         wrapper.grid_rowconfigure(1, weight=0)  # divider
         wrapper.grid_rowconfigure(2, weight=0)  # column header
         wrapper.grid_rowconfigure(3, weight=1)  # scrollable list
+        self._inventory_wrapper = wrapper
 
-        # ----- title bar -----
+        # ----- title bar: two dropdowns on row 0, count label on row 1 -----
         title_bar = customtkinter.CTkFrame(wrapper, fg_color="transparent")
         title_bar.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 10))
-        title_bar.grid_columnconfigure(0, weight=0)
-        title_bar.grid_columnconfigure(1, weight=1)
-        customtkinter.CTkLabel(
+        title_bar.grid_columnconfigure(0, weight=0)  # category dropdown
+        title_bar.grid_columnconfigure(1, weight=0)  # group dropdown
+        title_bar.grid_columnconfigure(2, weight=1)  # absorbs trailing space
+
+        category_dropdown = customtkinter.CTkOptionMenu(
             title_bar,
-            text="DEVICES",
-            font=customtkinter.CTkFont(size=11, weight="bold"),
-        ).grid(row=0, column=0, sticky="w", padx=(0, 10))
-        customtkinter.CTkLabel(
+            values=list(self._INVENTORY_COUNT_FIELDS.keys()),
+            command=self._on_inventory_view_change,
+            height=30,
+            corner_radius=8,
+        )
+        category_dropdown.set(self._inventory_view)
+        category_dropdown.grid(row=0, column=0, sticky="w", padx=(0, 8))
+
+        # Group filter — values list reflects the actual groups present in
+        # the loaded agents. If a previously-selected group is no longer
+        # present (e.g., agents reloaded with a different sample set), fall
+        # back to "All groups" so the dropdown doesn't show a value that
+        # isn't in its menu.
+        group_values = self._inventory_group_values()
+        if self._inventory_group not in group_values:
+            self._inventory_group = self._GROUP_ALL
+        group_dropdown = customtkinter.CTkOptionMenu(
             title_bar,
-            text=f"{len(rows)} linked · sorted by threat level",
+            values=group_values,
+            command=self._on_inventory_group_change,
+            height=30,
+            corner_radius=8,
+        )
+        group_dropdown.set(self._inventory_group)
+        group_dropdown.grid(row=0, column=1, sticky="w")
+
+        # Pagination frame — right-aligned in col 2, which absorbs the
+        # trailing space. _render_inventory_body destroys + rebuilds the
+        # children of this frame on every render so page numbers and
+        # arrow-button enabled states reflect the current page + total.
+        self._inventory_pagination_frame = customtkinter.CTkFrame(
+            title_bar, fg_color="transparent"
+        )
+        self._inventory_pagination_frame.grid(row=0, column=2, sticky="e")
+
+        text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
+        self._inventory_count_label = customtkinter.CTkLabel(
+            title_bar,
+            text="",  # filled by _render_inventory_body
             text_color=text_secondary,
             font=customtkinter.CTkFont(size=11),
-        ).grid(row=0, column=1, sticky="w")
+            anchor="w",
+        )
+        self._inventory_count_label.grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
         # ----- divider -----
         customtkinter.CTkFrame(
             wrapper, height=1, fg_color=divider_color, corner_radius=0
         ).grid(row=1, column=0, sticky="ew")
 
+        # ----- body (column header + list) — separate method so the dropdown
+        # callback can re-render it in place without disturbing the title bar.
+        self._render_inventory_body()
+
+    def _render_inventory_body(self):
+        wrapper = self._inventory_wrapper
+        if wrapper is None or not wrapper.winfo_exists():
+            return
+
+        text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
+        divider_color = self._theme("divider_color", default=["#E5E7EB", "#2A2A2A"])
+        fonts = self._ensure_fonts()
+
+        # Tear down any previously rendered body widgets (rows 2 and 3 of the
+        # wrapper grid). Mirrors the teardown idiom in _render_event_list:
+        # walk children, destroy each, exception-safe.
+        for child in wrapper.winfo_children():
+            try:
+                info = child.grid_info()
+            except Exception:
+                continue
+            if info.get("row") in (2, 3):
+                try:
+                    child.destroy()
+                except Exception:
+                    pass
+
+        view = self._inventory_view
+        is_devices = view == "Devices"
+        field_path = self._INVENTORY_COUNT_FIELDS.get(view)
+        group_filter = self._inventory_group
+
+        if is_devices:
+            rows = self._inventory_rows()
+            rows = [r for r in rows if self._row_in_group(r, group_filter)]
+            count_text = f"{len(rows)} linked · sorted by threat level"
+        else:
+            rows = self._inventory_counts_rows(field_path)
+            rows = [r for r in rows if self._row_in_group(r, group_filter)]
+            total = sum(r["count"] for r in rows)
+            n_with_data = sum(1 for r in rows if r["count"] > 0)
+            label_word = view.lower()
+            if view == "Network":
+                label_word = "interfaces"
+            count_text = f"{n_with_data} devices · {total} {label_word} total"
+
+        if self._inventory_count_label is not None and self._inventory_count_label.winfo_exists():
+            self._inventory_count_label.configure(text=count_text)
+
+        # Pagination: derive total pages from the *filtered* row set, clamp
+        # the current page in case a stale value (e.g., page 5 before a
+        # filter dropped us to 3 pages) is now out of range, then slice.
+        page_size = self._INVENTORY_PAGE_SIZE
+        total_pages = max(1, (len(rows) + page_size - 1) // page_size)
+        current_page = max(1, min(self._inventory_page, total_pages))
+        self._inventory_page = current_page
+        start = (current_page - 1) * page_size
+        page_rows = rows[start : start + page_size]
+        self._render_inventory_pagination(total_pages)
+
         # ----- column header -----
         col_header = customtkinter.CTkFrame(wrapper, fg_color="transparent")
         col_header.grid(row=2, column=0, sticky="ew", padx=16, pady=(10, 6))
         self._configure_inventory_columns(col_header)
         small_bold = customtkinter.CTkFont(size=10, weight="bold")
-        for c, label in enumerate(("THREAT", "DEVICE", "LAST SEEN", "IP")):
+        lead_header = self._INVENTORY_LEAD_HEADER.get(view, "THREAT")
+        for c, label in enumerate((lead_header, "DEVICE", "LAST SEEN", "IP")):
             customtkinter.CTkLabel(
                 col_header,
                 text=label,
@@ -2978,16 +3194,141 @@ class Plugin(BasePlugin):
         # that as padx on its inner canvas (see customtkinter's
         # ctk_scrollable_frame.py line 81). With the theme default of
         # corner_radius=12, every row would be offset 12 px further right than
-        # the column header — exactly the misalignment we just hit. Zeroing
-        # the radius eliminates that pad. The scrollable's fg_color is
-        # transparent so the corner shape is never visible.
+        # the column header. Zeroing the radius eliminates that pad. The
+        # scrollable's fg_color is transparent so the corner shape is never
+        # visible.
         list_frame = customtkinter.CTkScrollableFrame(
             wrapper, fg_color="transparent", corner_radius=0
         )
         list_frame.grid(row=3, column=0, sticky="nsew", padx=16, pady=(0, 8))
         list_frame.grid_columnconfigure(0, weight=1)
-        for i, dev in enumerate(rows):
-            self._inventory_row(list_frame, dev, i, fonts, divider_color)
+
+        if is_devices:
+            for i, dev in enumerate(page_rows):
+                self._inventory_row(list_frame, dev, i, fonts, divider_color)
+        else:
+            for i, dev in enumerate(page_rows):
+                self._inventory_counts_row(list_frame, dev, i, fonts)
+
+    def _on_inventory_view_change(self, view_name):
+        if view_name not in self._INVENTORY_COUNT_FIELDS:
+            return
+        if view_name == self._inventory_view:
+            return
+        self._inventory_view = view_name
+        # Reset to page 1 — the new view's row set may be shorter and a
+        # stale page index would render an empty page.
+        self._inventory_page = 1
+        self._render_inventory_body()
+
+    def _on_inventory_group_change(self, group_name):
+        if group_name == self._inventory_group:
+            return
+        self._inventory_group = group_name
+        # Same reasoning as the view-change callback.
+        self._inventory_page = 1
+        self._render_inventory_body()
+
+    def _set_inventory_page(self, page):
+        """Handler for the pager's arrow + page-number buttons. The actual
+        clamp against total_pages happens in _render_inventory_body, so
+        passing a value beyond the last page just snaps to the last page."""
+        page = max(1, int(page))
+        if page == self._inventory_page:
+            return
+        self._inventory_page = page
+        self._render_inventory_body()
+
+    def _render_inventory_pagination(self, total_pages):
+        """Build the right-aligned page navigator. Format per design:
+        [◀] [prev?] [current] [next?] [▶]  — prev shown only when current ≥ 2,
+        next shown only when current < total_pages, arrows disabled at the
+        boundary pages. Always shows the current page even with only 1 page."""
+        frame = self._inventory_pagination_frame
+        if frame is None or not frame.winfo_exists():
+            return
+        for child in frame.winfo_children():
+            try:
+                child.destroy()
+            except Exception:
+                pass
+
+        current = self._inventory_page
+        text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
+        # sidebar_active_bg is the soft accent the Events pane uses for the
+        # selected event row — same idiom carries over to "selected page".
+        active_bg = self._theme("sidebar_active_bg", default=["#EBF0FF", "#1A2744"])
+        hover_bg = self._hover_bg
+
+        page_font = customtkinter.CTkFont(size=12)
+        page_font_bold = customtkinter.CTkFont(size=12, weight="bold")
+
+        def page_btn(text, command, is_current=False, disabled=False):
+            kwargs = dict(
+                master=frame,
+                text=text,
+                width=30,
+                height=28,
+                corner_radius=6,
+                command=command,
+            )
+            if is_current:
+                kwargs.update(
+                    fg_color=active_bg,
+                    text_color=self._accent_color,
+                    hover_color=active_bg,
+                    font=page_font_bold,
+                )
+            else:
+                kwargs.update(
+                    fg_color="transparent",
+                    text_color=text_secondary,
+                    hover_color=hover_bg,
+                    font=page_font,
+                )
+            btn = customtkinter.CTkButton(**kwargs)
+            if disabled:
+                btn.configure(state="disabled")
+            return btn
+
+        col = 0
+        left = page_btn(
+            "◀",
+            command=lambda: self._set_inventory_page(current - 1),
+            disabled=(current <= 1),
+        )
+        left.grid(row=0, column=col, padx=(0, 4))
+        col += 1
+
+        if current >= 2:
+            prev_page = current - 1
+            page_btn(
+                str(prev_page),
+                command=lambda p=prev_page: self._set_inventory_page(p),
+            ).grid(row=0, column=col, padx=2)
+            col += 1
+
+        page_btn(
+            str(current),
+            command=lambda: None,
+            is_current=True,
+        ).grid(row=0, column=col, padx=2)
+        col += 1
+
+        if current < total_pages:
+            next_page = current + 1
+            page_btn(
+                str(next_page),
+                command=lambda p=next_page: self._set_inventory_page(p),
+            ).grid(row=0, column=col, padx=2)
+            col += 1
+
+        right = page_btn(
+            "▶",
+            command=lambda: self._set_inventory_page(current + 1),
+            disabled=(current >= total_pages),
+        )
+        right.grid(row=0, column=col, padx=(4, 0))
 
     def _configure_inventory_columns(self, frame):
         # Use explicit minsize on the fixed-width columns and weight=1 only on
@@ -3036,6 +3377,77 @@ class Plugin(BasePlugin):
         # Last seen — col 2. Wazuh emits "9999-12-31T23:59:59+00:00" as a
         # sentinel for "still alive right now"; show "Active now" rather than
         # the literal "in the future" _format_relative would produce.
+        is_connected = dev["status"] in ("active", "connected")
+        last_keep = dev["last_keep"] or ""
+        if is_connected and last_keep.startswith("9999"):
+            last_seen_text = "Active now"
+        else:
+            last_seen_text = _format_relative(last_keep)
+        customtkinter.CTkLabel(
+            row_frame,
+            text=last_seen_text,
+            text_color=text_secondary,
+            font=fonts["size_12"],
+            anchor="w",
+        ).grid(row=0, column=2, sticky="w", padx=(0, 12), pady=8)
+
+        # IP — col 3
+        customtkinter.CTkLabel(
+            row_frame,
+            text=dev["ip"],
+            text_color=text_secondary,
+            font=fonts["size_12"],
+            anchor="w",
+        ).grid(row=0, column=3, sticky="w", pady=8)
+
+        def on_enter(_e=None, rf=row_frame):
+            try:
+                rf.configure(fg_color=hover_bg)
+            except Exception:
+                pass
+
+        def on_leave(_e=None, rf=row_frame):
+            try:
+                rf.configure(fg_color="transparent")
+            except Exception:
+                pass
+
+        for w in (row_frame, *row_frame.winfo_children()):
+            w.bind("<Enter>", on_enter)
+            w.bind("<Leave>", on_leave)
+
+    def _inventory_counts_row(self, parent, dev, row, fonts):
+        """Row renderer for Processes/Ports/Network views. Same DEVICE /
+        LAST SEEN / IP columns as _inventory_row, but the lead column is
+        a bold count instead of a severity badge."""
+        hover_bg = self._hover_bg
+        text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
+
+        row_frame = customtkinter.CTkFrame(parent, fg_color="transparent", corner_radius=6)
+        row_frame.grid(row=row, column=0, sticky="ew", pady=1)
+        self._configure_inventory_columns(row_frame)
+
+        # Count — col 0. Muted if zero so devices missing syscollector data
+        # don't visually compete with devices that have real counts.
+        count = dev["count"]
+        count_color = text_secondary if count == 0 else None
+        customtkinter.CTkLabel(
+            row_frame,
+            text=str(count),
+            text_color=count_color,
+            font=fonts["inter_bold_13"],
+            anchor="w",
+        ).grid(row=0, column=0, sticky="w", padx=(0, 12), pady=8)
+
+        # Device name — col 1 (stretches)
+        customtkinter.CTkLabel(
+            row_frame,
+            text=dev["name"],
+            font=fonts["inter_bold_13"],
+            anchor="w",
+        ).grid(row=0, column=1, sticky="w", padx=(0, 12), pady=8)
+
+        # Last seen — col 2 (same Wazuh 9999-sentinel handling as Devices)
         is_connected = dev["status"] in ("active", "connected")
         last_keep = dev["last_keep"] or ""
         if is_connected and last_keep.startswith("9999"):
