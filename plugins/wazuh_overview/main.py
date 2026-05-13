@@ -13,6 +13,7 @@ Licensed under the GNU General Public License v2 or later
 import json
 import os
 import platform as _platform
+import tarfile
 import threading
 import tkinter as tk
 from datetime import datetime, timedelta, timezone
@@ -46,10 +47,23 @@ _WAZUH_DIR = os.path.join(os.path.dirname(_PLUGIN_DIR), "wazuh")
 _DATA_FILE = os.path.join(_PLUGIN_DIR, "data", "agent.013.json")
 _EVENTS_FILE = os.path.join(_PLUGIN_DIR, "data", "log_events.json")
 _VULNS_FILE = os.path.join(_PLUGIN_DIR, "data", "vulnerabilities.json")
+_AGENTS_TAR = os.path.join(_PLUGIN_DIR, "data", "agents_samples.tar.gz")
+_AGENTS_DIR = os.path.join(_PLUGIN_DIR, "data", "agents")
 
-_TAB_NAMES = ("Overview", "Events", "Vulnerabilities")
+_TAB_NAMES = ("Overview", "Events", "Vulnerabilities", "Inventory")
 _LEGEND_KEYS = ("critical", "error", "warning", "info")
 _SEVERITY_LEVELS = ("critical", "high", "medium", "low")
+# Severity bucket → displayed badge label. The label is also the theme key
+# used by _badge_colors (lowercased), so the badge color follows automatically.
+# Shared by the Overview Security Alerts card and the Inventory device rows.
+_SEV_TO_STATUS = {
+    "critical": "CRITICAL",
+    "high": "HIGH",
+    "medium": "WARNING",
+    "low": "OK",
+}
+# Sort priority for composite threat ranking. Higher is more severe.
+_THREAT_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "ok": 0}
 # Severity name → status_badge_* theme key.
 # Color scheme:
 #   critical  → violet
@@ -215,6 +229,82 @@ threading.Thread(
 ).start()
 
 
+# Inventory's multi-device dataset. Kicked off lazily on first Inventory-tab
+# open rather than at import time, so users who never visit Inventory don't
+# pay the tar-extraction + 47-JSON parse cost on plugin discovery.
+_AGENTS = []
+_agents_ready = threading.Event()
+_agents_loader_started = False
+_agents_loader_lock = threading.Lock()
+
+
+def _ensure_agents_extracted():
+    """One-time extract of agents_samples.tar.gz into data/agents/.
+    Idempotent: skips if the directory already has files."""
+    if os.path.isdir(_AGENTS_DIR):
+        try:
+            if any(f.endswith(".json") for f in os.listdir(_AGENTS_DIR)):
+                return
+        except OSError:
+            pass
+    if not os.path.exists(_AGENTS_TAR):
+        logger.error(f"Inventory: agents tar missing ({_AGENTS_TAR})")
+        return
+    try:
+        os.makedirs(_AGENTS_DIR, exist_ok=True)
+        # File ships as .tar.gz but is actually an uncompressed tar; use
+        # auto-detect mode so either layout works.
+        with tarfile.open(_AGENTS_TAR) as tf:
+            tf.extractall(_AGENTS_DIR)
+    except Exception as e:
+        logger.error(f"Inventory: failed to extract agents tar: {e}")
+
+
+def _load_all_agents():
+    _ensure_agents_extracted()
+    if not os.path.isdir(_AGENTS_DIR):
+        return []
+    out = []
+    try:
+        names = sorted(os.listdir(_AGENTS_DIR))
+    except OSError as e:
+        logger.error(f"Inventory: failed to list {_AGENTS_DIR}: {e}")
+        return []
+    for fn in names:
+        if not fn.endswith(".json"):
+            continue
+        path = os.path.join(_AGENTS_DIR, fn)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                out.append(json.load(f))
+        except Exception as e:
+            logger.error(f"Inventory: failed to read {fn}: {e}")
+    return out
+
+
+def _load_agents_async():
+    global _AGENTS
+    try:
+        _AGENTS = _load_all_agents()
+    finally:
+        _agents_ready.set()
+
+
+def _kick_agents_loader():
+    """Start the agents loader thread once. Safe to call from the UI thread
+    on every Inventory open — locked guard makes repeat calls a no-op."""
+    global _agents_loader_started
+    with _agents_loader_lock:
+        if _agents_loader_started:
+            return
+        _agents_loader_started = True
+    threading.Thread(
+        target=_load_agents_async,
+        name="endpoint2-agents-loader",
+        daemon=True,
+    ).start()
+
+
 def _format_relative(iso_ts):
     """Return a compact 'X ago' string from an ISO-8601 timestamp."""
     if not iso_ts:
@@ -329,6 +419,8 @@ class Plugin(BasePlugin):
         self._events_ready_after_id = None  # poll handle for the background events loader
         self._prebuild_after_id = None  # handle for the inactive-tab pre-build chain
         self._overview_events_after_id = None  # poll handle for the Overview's Security Alerts card refresh
+        self._inventory_after_id = None  # poll handle for the Inventory agents loader
+        self._inventory_pane_parent = None  # reference for swapping loading → list
         # Vulnerabilities pane state
         self._vuln_search_var = None
         self._vuln_count_label = None
@@ -554,6 +646,7 @@ class Plugin(BasePlugin):
                 "Overview": self._build_overview_pane,
                 "Events": self._build_events_pane,
                 "Vulnerabilities": self._build_vulnerabilities_pane,
+                "Inventory": self._build_inventory_pane,
             }.get(name)
             if builder is not None:
                 builder(pane)
@@ -646,15 +739,22 @@ class Plugin(BasePlugin):
         self._build_modules_header(parent, row=2)
         self._build_module_grid(parent, row=3)
 
-        # Overview can be built before the background events loader finishes
-        # (sample JSON parse + per-hit normalization). In that case the Security
-        # Alerts card renders a "Loading…" placeholder; poll for readiness and
-        # rebuild the module grid once events arrive so the card picks up the
-        # real severity counts and badge color.
-        if not _events_ready.is_set():
-            self._schedule_overview_events_refresh()
+        # Start the agents loader in the background now so that (a) the
+        # Inventory module card below resolves to its real threat distribution
+        # rather than staying "Loading…" forever, and (b) the user's first
+        # click on the Inventory tab is instant. Idempotent — repeat calls
+        # short-circuit on the loader-started lock.
+        _kick_agents_loader()
 
-    def _schedule_overview_events_refresh(self):
+        # Overview can be built before the background loaders finish (events
+        # JSON parse, agents tar extract + parse). Cards that depend on those
+        # render "Loading…" placeholders; poll for readiness and rebuild the
+        # module grid once each arrives so the real counts replace the
+        # placeholders without the user clicking anything.
+        if not (_events_ready.is_set() and _agents_ready.is_set()):
+            self._schedule_overview_data_refresh()
+
+    def _schedule_overview_data_refresh(self):
         if self._overview_events_after_id is not None:
             return  # already polling
 
@@ -663,7 +763,7 @@ class Plugin(BasePlugin):
             wrapper = self._module_wrapper
             if wrapper is None or not wrapper.winfo_exists():
                 return
-            if _events_ready.is_set():
+            if _events_ready.is_set() and _agents_ready.is_set():
                 self._populate_module_grid()
                 return
             self._overview_events_after_id = self.app.after(50, check)
@@ -975,16 +1075,6 @@ class Plugin(BasePlugin):
                     "target_tab": "Events",
                 })
             else:
-                # Map highest severity → displayed badge label. The label is
-                # also the theme key used by _badge_colors (lowercased), so the
-                # color follows automatically. medium → WARNING (orange),
-                # low → OK (green) — matches the severity pills on Events.
-                _SEV_TO_STATUS = {
-                    "critical": "CRITICAL",
-                    "high": "HIGH",
-                    "medium": "WARNING",
-                    "low": "OK",
-                }
                 highest = next(
                     (s for s in _SEVERITY_LEVELS if sev_counts.get(s, 0) > 0),
                     "low",
@@ -1005,22 +1095,38 @@ class Plugin(BasePlugin):
                     "target_tab": "Events",
                 })
 
-        # Vulnerabilities — vulnerabilities object is empty
-        vulns = _get_agent_data().get("vulnerabilities") or {}
-        if vulns:
+        # Vulnerabilities — derived from the same _get_vulns() list the
+        # Vulnerabilities tab renders. Mirrors the Security Alerts card
+        # pattern above: badge severity tracks the highest non-zero bucket
+        # (critical > high > medium > low), stats line breaks down by bucket.
+        vuln_counts = self._vuln_severity_counts()
+        total_vulns = sum(vuln_counts.values())
+        if total_vulns == 0:
             cards.append({
                 "title": "Vulnerabilities",
-                "status": "WARNING",
+                "status": "OK",
                 "description": "CVEs across installed packages",
-                "stats": ((str(len(vulns)) + " items", "warning"),),
+                "stats": (("No vulnerabilities", "ok"),),
                 "target_tab": "Vulnerabilities",
             })
         else:
+            highest = next(
+                (s for s in _SEVERITY_LEVELS if vuln_counts.get(s, 0) > 0),
+                "low",
+            )
+            stats = []
+            for level in _SEVERITY_LEVELS:
+                cnt = vuln_counts.get(level, 0)
+                if not cnt:
+                    continue
+                if stats:
+                    stats.append(("  ·  ", "muted"))
+                stats.append((f"{cnt} {level}", _SEVERITY_THEME_KEY.get(level, "info")))
             cards.append({
                 "title": "Vulnerabilities",
-                "status": "INFO",
+                "status": _SEV_TO_STATUS[highest],
                 "description": "CVEs across installed packages",
-                "stats": (("No scan results", "muted"),),
+                "stats": tuple(stats),
                 "target_tab": "Vulnerabilities",
             })
 
@@ -1115,31 +1221,63 @@ class Plugin(BasePlugin):
             "stats": (("No data available", "muted"),),
         })
 
-        # Inventory · Syscollector
-        sc = _get_agent_data().get("syscollector", {}) or {}
-        pkgs = int((sc.get("packages") or {}).get("total_affected_items") or 0)
-        procs = int((sc.get("processes") or {}).get("total_affected_items") or 0)
-        ports = int(((sc.get("network") or {}).get("ports") or {}).get("total_affected_items") or 0)
-        ifaces = int(((sc.get("network") or {}).get("interfaces") or {}).get("total_affected_items") or 0)
-        inv_segments = []
-        for label, n in (
-            ("packages", pkgs),
-            ("processes", procs),
-            ("ports", ports),
-            ("interfaces", ifaces),
-        ):
-            if n:
-                if inv_segments:
-                    inv_segments.append(("  ·  ", "muted"))
-                inv_segments.append((f"{n} {label}", "muted"))
-        if not inv_segments:
-            inv_segments = [("No data available", "muted")]
-        cards.append({
-            "title": "Inventory · Syscollector",
-            "status": "INFO",
-            "description": "Hardware, packages, ports, services",
-            "stats": tuple(inv_segments),
-        })
+        # Inventory — derived from the multi-device list the Inventory tab
+        # renders. Mirrors the Security Alerts and Vulnerabilities cards:
+        # badge tracks the highest device threat present; stats line breaks
+        # down by threat tier. _inventory_rows() consults both _EVENTS and
+        # vulnerabilities for each device's composite threat, so we wait for
+        # both loaders before showing real numbers (_build_overview_pane
+        # schedules the refresh poll on both signals).
+        if not (_events_ready.is_set() and _agents_ready.is_set()):
+            cards.append({
+                "title": "Inventory",
+                "status": "INFO",
+                "description": "Devices linked to your account",
+                "stats": (("Loading…", "muted"),),
+                "target_tab": "Inventory",
+            })
+        else:
+            rows = self._inventory_rows()
+            if not rows:
+                cards.append({
+                    "title": "Inventory",
+                    "status": "INFO",
+                    "description": "Devices linked to your account",
+                    "stats": (("No devices", "muted"),),
+                    "target_tab": "Inventory",
+                })
+            else:
+                threat_counts = {lvl: 0 for lvl in _SEVERITY_LEVELS}
+                for r in rows:
+                    t = r.get("threat")
+                    if t in threat_counts:
+                        threat_counts[t] += 1
+                highest = next(
+                    (s for s in _SEVERITY_LEVELS if threat_counts.get(s, 0) > 0),
+                    None,
+                )
+                if highest is None:
+                    status = "OK"
+                    noun = "device" if len(rows) == 1 else "devices"
+                    stats = ((f"{len(rows)} {noun} · all clear", "ok"),)
+                else:
+                    status = _SEV_TO_STATUS[highest]
+                    seg = []
+                    for level in _SEVERITY_LEVELS:
+                        cnt = threat_counts.get(level, 0)
+                        if not cnt:
+                            continue
+                        if seg:
+                            seg.append(("  ·  ", "muted"))
+                        seg.append((f"{cnt} {level}", _SEVERITY_THEME_KEY.get(level, "info")))
+                    stats = tuple(seg)
+                cards.append({
+                    "title": "Inventory",
+                    "status": status,
+                    "description": "Devices linked to your account",
+                    "stats": stats,
+                    "target_tab": "Inventory",
+                })
 
         # Agent Health
         is_connected = (bi.get("status") or "").lower() == "connected"
@@ -1720,7 +1858,7 @@ class Plugin(BasePlugin):
 
         customtkinter.CTkLabel(
             header,
-            text="EVENT STREAM",
+            text="EVENT SEARCH",
             font=customtkinter.CTkFont(size=11, weight="bold"),
         ).grid(row=0, column=0, sticky="w", padx=(0, 16))
 
@@ -2660,6 +2798,283 @@ class Plugin(BasePlugin):
             w.bind("<Enter>", on_enter)
             w.bind("<Leave>", on_leave)
 
+    # ----- Inventory pane ----------------------------------------------------
+
+    def _build_inventory_pane(self, parent):
+        # Clear any previous contents (loading placeholder or earlier render)
+        # so this method is safe to call after the agents loader fires.
+        for w in parent.winfo_children():
+            try:
+                w.destroy()
+            except Exception:
+                pass
+
+        self._inventory_pane_parent = parent
+        _kick_agents_loader()
+
+        if not _agents_ready.is_set():
+            self._render_inventory_loading(parent)
+            self._schedule_inventory_ready_check(parent)
+            return
+
+        self._render_inventory_list(parent)
+
+    def _render_inventory_loading(self, parent):
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(0, weight=1)
+        text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
+        customtkinter.CTkLabel(
+            parent,
+            text="Loading devices…",
+            text_color=text_secondary,
+            font=customtkinter.CTkFont(size=14),
+        ).grid(row=0, column=0, sticky="nsew", padx=20, pady=40)
+
+    def _schedule_inventory_ready_check(self, parent):
+        # 20 ms matches the events-pane poll cadence — tight enough to feel
+        # instant when the loader thread finishes.
+        poll_ms = 20
+
+        def check():
+            self._inventory_after_id = None
+            if not parent.winfo_exists():
+                return
+            if _agents_ready.is_set():
+                self._build_inventory_pane(parent)
+            else:
+                self._inventory_after_id = self.app.after(poll_ms, check)
+
+        self._inventory_after_id = self.app.after(poll_ms, check)
+
+    def _events_threat_by_agent(self):
+        """Map agent name → highest event severity present for that agent.
+        Only includes agents with at least one event."""
+        out = {}
+        for ev in _EVENTS:
+            name = (ev.get("agent") or "").strip()
+            sev = (ev.get("severity") or "").lower()
+            if not name or sev not in _THREAT_RANK:
+                continue
+            prev = out.get(name)
+            if prev is None or _THREAT_RANK[sev] > _THREAT_RANK[prev]:
+                out[name] = sev
+        return out
+
+    def _vulns_threat_for_name(self, target_name):
+        """Highest vuln severity for the device whose basic_info.name matches
+        the loaded single-agent sample (vulnerabilities.json has no agent_id
+        field, so vulns are scoped implicitly to this one device). Returns
+        None if no match or no vulns."""
+        ref = (_get_agent_data().get("basic_info", {}) or {}).get("name")
+        if not ref or ref != target_name:
+            return None
+        best = None
+        for v in _get_vulns():
+            sev = (v.get("severity") or "").lower()
+            if sev not in _THREAT_RANK:
+                continue
+            if best is None or _THREAT_RANK[sev] > _THREAT_RANK[best]:
+                best = sev
+        return best
+
+    def _device_threat_level(self, agent_name, events_by_agent):
+        """Composite threat for one device: max(events, vulns). Returns one of
+        critical|high|medium|low|ok."""
+        ev_sev = events_by_agent.get(agent_name)
+        vuln_sev = self._vulns_threat_for_name(agent_name)
+        best_rank = 0
+        for sev in (ev_sev, vuln_sev):
+            if sev and _THREAT_RANK.get(sev, 0) > best_rank:
+                best_rank = _THREAT_RANK[sev]
+        if best_rank == 0:
+            return "ok"
+        for sev, rank in _THREAT_RANK.items():
+            if rank == best_rank:
+                return sev
+        return "ok"
+
+    def _inventory_rows(self):
+        """Build sorted device row data. Returns list of dicts."""
+        events_by_agent = self._events_threat_by_agent()
+        rows = []
+        for agent in _AGENTS:
+            bi = agent.get("basic_info") or {}
+            name = bi.get("name") or "(unknown)"
+            threat = self._device_threat_level(name, events_by_agent)
+            rows.append({
+                "name": name,
+                # status retained because the row renderer uses it to detect
+                # active agents (so the 9999-sentinel lastKeepAlive becomes
+                # "Active now" instead of "in the future").
+                "status": (bi.get("status") or "").lower(),
+                "last_keep": bi.get("lastKeepAlive"),
+                "ip": bi.get("ip") or "—",
+                "threat": threat,
+            })
+        # threat desc, then name asc — stable
+        rows.sort(key=lambda r: (-_THREAT_RANK.get(r["threat"], 0), r["name"].lower()))
+        return rows
+
+    def _render_inventory_list(self, parent):
+        text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
+        divider_color = self._theme("divider_color", default=["#E5E7EB", "#2A2A2A"])
+        fonts = self._ensure_fonts()
+
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(0, weight=1)
+
+        rows = self._inventory_rows()
+
+        # The whole inventory is a single bordered card so it reads as its own
+        # widget against the page background (matches the Events stream's
+        # bordered list_wrapper at line ~1841).
+        wrapper = customtkinter.CTkFrame(parent, corner_radius=12, border_width=1)
+        wrapper.grid(row=0, column=0, sticky="nsew")
+        wrapper.grid_columnconfigure(0, weight=1)
+        wrapper.grid_rowconfigure(0, weight=0)  # title bar
+        wrapper.grid_rowconfigure(1, weight=0)  # divider
+        wrapper.grid_rowconfigure(2, weight=0)  # column header
+        wrapper.grid_rowconfigure(3, weight=1)  # scrollable list
+
+        # ----- title bar -----
+        title_bar = customtkinter.CTkFrame(wrapper, fg_color="transparent")
+        title_bar.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 10))
+        title_bar.grid_columnconfigure(0, weight=0)
+        title_bar.grid_columnconfigure(1, weight=1)
+        customtkinter.CTkLabel(
+            title_bar,
+            text="DEVICES",
+            font=customtkinter.CTkFont(size=11, weight="bold"),
+        ).grid(row=0, column=0, sticky="w", padx=(0, 10))
+        customtkinter.CTkLabel(
+            title_bar,
+            text=f"{len(rows)} linked · sorted by threat level",
+            text_color=text_secondary,
+            font=customtkinter.CTkFont(size=11),
+        ).grid(row=0, column=1, sticky="w")
+
+        # ----- divider -----
+        customtkinter.CTkFrame(
+            wrapper, height=1, fg_color=divider_color, corner_radius=0
+        ).grid(row=1, column=0, sticky="ew")
+
+        # ----- column header -----
+        col_header = customtkinter.CTkFrame(wrapper, fg_color="transparent")
+        col_header.grid(row=2, column=0, sticky="ew", padx=16, pady=(10, 6))
+        self._configure_inventory_columns(col_header)
+        small_bold = customtkinter.CTkFont(size=10, weight="bold")
+        for c, label in enumerate(("THREAT", "DEVICE", "LAST SEEN", "IP")):
+            customtkinter.CTkLabel(
+                col_header,
+                text=label,
+                text_color=text_secondary,
+                font=small_bold,
+                anchor="w",
+            ).grid(row=0, column=c, sticky="w", padx=(0, 12) if c < 3 else 0)
+
+        # ----- scrollable list -----
+        # corner_radius=0 is intentional: CTkScrollableFrame's source computes
+        # an internal `border_spacing = corner_radius + border_width` and adds
+        # that as padx on its inner canvas (see customtkinter's
+        # ctk_scrollable_frame.py line 81). With the theme default of
+        # corner_radius=12, every row would be offset 12 px further right than
+        # the column header — exactly the misalignment we just hit. Zeroing
+        # the radius eliminates that pad. The scrollable's fg_color is
+        # transparent so the corner shape is never visible.
+        list_frame = customtkinter.CTkScrollableFrame(
+            wrapper, fg_color="transparent", corner_radius=0
+        )
+        list_frame.grid(row=3, column=0, sticky="nsew", padx=16, pady=(0, 8))
+        list_frame.grid_columnconfigure(0, weight=1)
+        for i, dev in enumerate(rows):
+            self._inventory_row(list_frame, dev, i, fonts, divider_color)
+
+    def _configure_inventory_columns(self, frame):
+        # Use explicit minsize on the fixed-width columns and weight=1 only on
+        # the device-name column. Both the column-header frame and every row
+        # frame call this helper, which guarantees column alignment across
+        # parents — unlike `uniform=…`, minsize/weight are intrinsic to each
+        # frame's own grid and don't need to share a uniform-group scope.
+        frame.grid_columnconfigure(0, weight=0, minsize=110)  # threat badge
+        frame.grid_columnconfigure(1, weight=1)               # device name (stretches)
+        frame.grid_columnconfigure(2, weight=0, minsize=140)  # last seen
+        frame.grid_columnconfigure(3, weight=0, minsize=140)  # ip
+
+    def _inventory_row(self, parent, dev, row, fonts, divider_color):
+        hover_bg = self._hover_bg
+        text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
+
+        row_frame = customtkinter.CTkFrame(parent, fg_color="transparent", corner_radius=6)
+        # No padx — the parent list_frame already sits 16 px in from the
+        # wrapper edge (matching the column header). Adding padx here would
+        # re-introduce the misalignment we just fixed.
+        row_frame.grid(row=row, column=0, sticky="ew", pady=1)
+        self._configure_inventory_columns(row_frame)
+
+        # Threat badge — col 0
+        threat = dev["threat"]
+        status_label = _SEV_TO_STATUS.get(threat, "OK")
+        t_bg, t_fg = self._badge_colors(status_label)
+        customtkinter.CTkLabel(
+            row_frame,
+            text=f"  ●  {status_label}  ",
+            fg_color=t_bg,
+            text_color=t_fg,
+            corner_radius=6,
+            height=22,
+            font=customtkinter.CTkFont(size=11, weight="bold"),
+        ).grid(row=0, column=0, sticky="w", padx=(0, 12), pady=8)
+
+        # Device name — col 1 (stretches)
+        customtkinter.CTkLabel(
+            row_frame,
+            text=dev["name"],
+            font=fonts["inter_bold_13"],
+            anchor="w",
+        ).grid(row=0, column=1, sticky="w", padx=(0, 12), pady=8)
+
+        # Last seen — col 2. Wazuh emits "9999-12-31T23:59:59+00:00" as a
+        # sentinel for "still alive right now"; show "Active now" rather than
+        # the literal "in the future" _format_relative would produce.
+        is_connected = dev["status"] in ("active", "connected")
+        last_keep = dev["last_keep"] or ""
+        if is_connected and last_keep.startswith("9999"):
+            last_seen_text = "Active now"
+        else:
+            last_seen_text = _format_relative(last_keep)
+        customtkinter.CTkLabel(
+            row_frame,
+            text=last_seen_text,
+            text_color=text_secondary,
+            font=fonts["size_12"],
+            anchor="w",
+        ).grid(row=0, column=2, sticky="w", padx=(0, 12), pady=8)
+
+        # IP — col 3
+        customtkinter.CTkLabel(
+            row_frame,
+            text=dev["ip"],
+            text_color=text_secondary,
+            font=fonts["size_12"],
+            anchor="w",
+        ).grid(row=0, column=3, sticky="w", pady=8)
+
+        def on_enter(_e=None, rf=row_frame):
+            try:
+                rf.configure(fg_color=hover_bg)
+            except Exception:
+                pass
+
+        def on_leave(_e=None, rf=row_frame):
+            try:
+                rf.configure(fg_color="transparent")
+            except Exception:
+                pass
+
+        for w in (row_frame, *row_frame.winfo_children()):
+            w.bind("<Enter>", on_enter)
+            w.bind("<Leave>", on_leave)
+
     # ----- cleanup -----------------------------------------------------------
 
     def destroy(self):
@@ -2675,6 +3090,12 @@ class Plugin(BasePlugin):
             except Exception:
                 pass
             self._overview_events_after_id = None
+        if self._inventory_after_id:
+            try:
+                self.app.after_cancel(self._inventory_after_id)
+            except Exception:
+                pass
+            self._inventory_after_id = None
         if self._module_resize_after_id:
             try:
                 self.app.after_cancel(self._module_resize_after_id)

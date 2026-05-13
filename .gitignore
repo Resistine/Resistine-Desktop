@@ -150,3 +150,6 @@ resistine.github.io/
 dist/installer/
 *.exe
 VERSION
+
+# Extracted Wazuh sample agents (unpacked at runtime from agents_samples.tar.gz)
+plugins/wazuh_overview/data/agents/
