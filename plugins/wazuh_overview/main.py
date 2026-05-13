@@ -491,30 +491,16 @@ class Plugin(BasePlugin):
 
     def _schedule_prebuild(self):
         """Queue background pre-build of any unbuilt panes. Idempotent — a
-        pending schedule is replaced rather than stacked.
-
-        Uses two chained after_idle passes instead of a fixed time delay.
-        Static delays are wrong in both directions: 100 ms is too short on
-        cold opens (Overview's 9-card module grid, alert bar, and top device
-        card take longer than that to lay out), so prebuild would start
-        mid-paint and steal UI cycles; and it's wasted time on warm opens
-        where Overview is ready in 30 ms. after_idle fires when the Tcl event
-        queue is empty — i.e., every Map/Configure/grid event queued by
-        _build_overview_pane has been processed and Overview is fully
-        rendered. The second pass adds one more cycle so any follow-up
-        layout work the first pass triggered also drains before prebuild
-        touches the UI thread."""
+        pending schedule is replaced rather than stacked."""
         pending = self._prebuild_after_id
         if pending is not None:
             try:
                 self.app.after_cancel(pending)
             except Exception:
                 pass
-
-        def stage_two():
-            self._prebuild_after_id = self.app.after_idle(self._run_prebuild)
-
-        self._prebuild_after_id = self.app.after_idle(stage_two)
+        # Delay slightly so the Overview pane gets a chance to paint before the
+        # heavy prebuild work steals the UI thread.
+        self._prebuild_after_id = self.app.after(100, self._run_prebuild)
 
     def _run_prebuild(self):
         """One chunk of inactive-tab pre-build. Builds Vulnerabilities first
@@ -1144,64 +1130,6 @@ class Plugin(BasePlugin):
                 "target_tab": "Vulnerabilities",
             })
 
-        # Inventory — derived from the multi-device list the Inventory tab
-        # renders. Mirrors the Security Alerts and Vulnerabilities cards:
-        # badge tracks the highest device threat present; stats line breaks
-        # down by threat tier. _inventory_rows() consults both _EVENTS and
-        # vulnerabilities for each device's composite threat, so we wait for
-        # both loaders before showing real numbers (_build_overview_pane
-        # schedules the refresh poll on both signals).
-        if not (_events_ready.is_set() and _agents_ready.is_set()):
-            cards.append({
-                "title": "Inventory",
-                "status": "INFO",
-                "description": "Devices linked to your account",
-                "stats": (("Loading…", "muted"),),
-                "target_tab": "Inventory",
-            })
-        else:
-            rows = self._inventory_rows()
-            if not rows:
-                cards.append({
-                    "title": "Inventory",
-                    "status": "INFO",
-                    "description": "Devices linked to your account",
-                    "stats": (("No devices", "muted"),),
-                    "target_tab": "Inventory",
-                })
-            else:
-                threat_counts = {lvl: 0 for lvl in _SEVERITY_LEVELS}
-                for r in rows:
-                    t = r.get("threat")
-                    if t in threat_counts:
-                        threat_counts[t] += 1
-                highest = next(
-                    (s for s in _SEVERITY_LEVELS if threat_counts.get(s, 0) > 0),
-                    None,
-                )
-                if highest is None:
-                    status = "OK"
-                    noun = "device" if len(rows) == 1 else "devices"
-                    stats = ((f"{len(rows)} {noun} · all clear", "ok"),)
-                else:
-                    status = _SEV_TO_STATUS[highest]
-                    seg = []
-                    for level in _SEVERITY_LEVELS:
-                        cnt = threat_counts.get(level, 0)
-                        if not cnt:
-                            continue
-                        if seg:
-                            seg.append(("  ·  ", "muted"))
-                        seg.append((f"{cnt} {level}", _SEVERITY_THEME_KEY.get(level, "info")))
-                    stats = tuple(seg)
-                cards.append({
-                    "title": "Inventory",
-                    "status": status,
-                    "description": "Devices linked to your account",
-                    "stats": stats,
-                    "target_tab": "Inventory",
-                })
-
         # Compliance · SCA
         sca_items = (_get_agent_data().get("sca", {}) or {}).get("affected_items") or []
         if sca_items:
@@ -1292,6 +1220,64 @@ class Plugin(BasePlugin):
             "description": "Tactics observed in triggered rules",
             "stats": (("No data available", "muted"),),
         })
+
+        # Inventory — derived from the multi-device list the Inventory tab
+        # renders. Mirrors the Security Alerts and Vulnerabilities cards:
+        # badge tracks the highest device threat present; stats line breaks
+        # down by threat tier. _inventory_rows() consults both _EVENTS and
+        # vulnerabilities for each device's composite threat, so we wait for
+        # both loaders before showing real numbers (_build_overview_pane
+        # schedules the refresh poll on both signals).
+        if not (_events_ready.is_set() and _agents_ready.is_set()):
+            cards.append({
+                "title": "Inventory",
+                "status": "INFO",
+                "description": "Devices linked to your account",
+                "stats": (("Loading…", "muted"),),
+                "target_tab": "Inventory",
+            })
+        else:
+            rows = self._inventory_rows()
+            if not rows:
+                cards.append({
+                    "title": "Inventory",
+                    "status": "INFO",
+                    "description": "Devices linked to your account",
+                    "stats": (("No devices", "muted"),),
+                    "target_tab": "Inventory",
+                })
+            else:
+                threat_counts = {lvl: 0 for lvl in _SEVERITY_LEVELS}
+                for r in rows:
+                    t = r.get("threat")
+                    if t in threat_counts:
+                        threat_counts[t] += 1
+                highest = next(
+                    (s for s in _SEVERITY_LEVELS if threat_counts.get(s, 0) > 0),
+                    None,
+                )
+                if highest is None:
+                    status = "OK"
+                    noun = "device" if len(rows) == 1 else "devices"
+                    stats = ((f"{len(rows)} {noun} · all clear", "ok"),)
+                else:
+                    status = _SEV_TO_STATUS[highest]
+                    seg = []
+                    for level in _SEVERITY_LEVELS:
+                        cnt = threat_counts.get(level, 0)
+                        if not cnt:
+                            continue
+                        if seg:
+                            seg.append(("  ·  ", "muted"))
+                        seg.append((f"{cnt} {level}", _SEVERITY_THEME_KEY.get(level, "info")))
+                    stats = tuple(seg)
+                cards.append({
+                    "title": "Inventory",
+                    "status": status,
+                    "description": "Devices linked to your account",
+                    "stats": stats,
+                    "target_tab": "Inventory",
+                })
 
         # Agent Health
         is_connected = (bi.get("status") or "").lower() == "connected"
