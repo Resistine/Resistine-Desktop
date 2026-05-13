@@ -303,6 +303,16 @@ class Plugin(BasePlugin):
         # while the plugin was off-screen (preserved widgets don't auto-refresh
         # matplotlib facecolors and other build-time-resolved hex strings).
         self._cached_appearance_mode = None
+        # Per-instance caches populated lazily on first use. Reset implicitly
+        # when the Plugin instance is recreated (e.g. plugin reload), or
+        # explicitly when the underlying data identity changes (see the
+        # aggregation memoization in _severity_counts etc).
+        self._fonts_cache = None
+        self._theme_cache = {}
+        self._severity_counts_cache = None  # (id(_EVENTS), result) or None
+        self._bucket_events_cache = None    # (id(_EVENTS), result) or None
+        self._vuln_severity_cache = None    # (id(vulns), result) or None
+        self._bucket_vulns_cache = None     # (id(vulns), result) or None
         # Events pane state
         self._selected_event_id = None
         self._event_list_frame = None
@@ -317,6 +327,7 @@ class Plugin(BasePlugin):
         self._chart_counts = {}
         self._selected_bucket = None  # datetime of the active 30-min bucket filter, or None
         self._events_ready_after_id = None  # poll handle for the background events loader
+        self._prebuild_after_id = None  # handle for the inactive-tab pre-build chain
         # Vulnerabilities pane state
         self._vuln_search_var = None
         self._vuln_count_label = None
@@ -379,8 +390,65 @@ class Plugin(BasePlugin):
         self._build_tab_strip()
         self._build_content_area()
         self._switch_tab("Overview")
+        # Kick off background pre-build of the inactive tabs once Overview is
+        # active, so the user's first click on Events/Vulnerabilities is instant.
+        self._schedule_prebuild()
 
         return self.main_container
+
+    def _schedule_prebuild(self):
+        """Queue background pre-build of any unbuilt panes. Idempotent — a
+        pending schedule is replaced rather than stacked."""
+        pending = self._prebuild_after_id
+        if pending is not None:
+            try:
+                self.app.after_cancel(pending)
+            except Exception:
+                pass
+        # Delay slightly so the Overview pane gets a chance to paint before the
+        # heavy prebuild work steals the UI thread.
+        self._prebuild_after_id = self.app.after(100, self._run_prebuild)
+
+    def _run_prebuild(self):
+        """One chunk of inactive-tab pre-build. Builds Vulnerabilities first
+        (no async deps), then Events when its background loader is ready.
+        Yields to the event loop between chunks so user input can interleave."""
+        self._prebuild_after_id = None
+        container = getattr(self, "main_container", None)
+        if container is None or not container.winfo_exists():
+            return
+
+        # Step A — Vulnerabilities. No async dependency; always buildable.
+        if not self._tab_built.get("Vulnerabilities", False):
+            pane = self._tab_panes.get("Vulnerabilities")
+            if pane is not None and pane.winfo_exists():
+                try:
+                    self._build_vulnerabilities_pane(pane)
+                    self._tab_built["Vulnerabilities"] = True
+                except Exception as e:
+                    logger.error(f"Wazuh: vulnerabilities prebuild failed: {e}")
+                    self._tab_built["Vulnerabilities"] = True  # don't retry forever
+            # Yield so any pending user input can fire before the Events chunk.
+            self._prebuild_after_id = self.app.after(0, self._run_prebuild)
+            return
+
+        # Step B — Events. Only build when the loader thread has finished,
+        # otherwise the on-click polling chain in _schedule_events_ready_check
+        # would race with us.
+        if not self._tab_built.get("Events", False):
+            if _events_ready.is_set():
+                pane = self._tab_panes.get("Events")
+                if pane is not None and pane.winfo_exists():
+                    try:
+                        self._build_events_pane(pane)
+                        self._tab_built["Events"] = True
+                    except Exception as e:
+                        logger.error(f"Wazuh: events prebuild failed: {e}")
+                        self._tab_built["Events"] = True
+            else:
+                # Events data not ready yet; recheck periodically until it is or
+                # the user clicks Events themselves (which sets _tab_built).
+                self._prebuild_after_id = self.app.after(200, self._run_prebuild)
 
     def _build_tab_strip(self):
         text_color = ThemeManager.theme.get("CTkLabel", {}).get(
@@ -516,6 +584,12 @@ class Plugin(BasePlugin):
     # ----- theme helpers -----------------------------------------------------
 
     def _theme(self, *keys, default=None):
+        # Memoize hits — the row builders call this dozens of times per render,
+        # multiplied by 250+ rows, and ThemeManager.theme dict walks aren't free.
+        # Don't cache misses so different defaults still work for unknown keys.
+        cached = self._theme_cache.get(keys)
+        if cached is not None:
+            return cached
         node = ThemeManager.theme.get("Theme", {})
         for k in keys:
             if not isinstance(node, dict):
@@ -523,7 +597,26 @@ class Plugin(BasePlugin):
             node = node.get(k)
             if node is None:
                 return default
+        self._theme_cache[keys] = node
         return node
+
+    def _ensure_fonts(self):
+        """Return a registry of CTkFont instances shared across row builders.
+        Constructing CTkFont per row was ~1,250 instantiations for the events
+        list; reusing a handful of fonts drops that to a one-time build."""
+        if self._fonts_cache is not None:
+            return self._fonts_cache
+        self._fonts_cache = {
+            "dot_14": customtkinter.CTkFont(size=14),
+            "inter_bold_12": customtkinter.CTkFont(family="Inter", size=12, weight="bold"),
+            "size_12": customtkinter.CTkFont(size=12),
+            "size_11": customtkinter.CTkFont(size=11),
+            "bold_10": customtkinter.CTkFont(size=10, weight="bold"),
+            "size_10": customtkinter.CTkFont(size=10),
+            "inter_bold_14": customtkinter.CTkFont(family="Inter", size=14, weight="bold"),
+            "inter_bold_13": customtkinter.CTkFont(family="Inter", size=13, weight="bold"),
+        }
+        return self._fonts_cache
 
     def _segment_color(self, key):
         if key == "muted":
@@ -1235,11 +1328,16 @@ class Plugin(BasePlugin):
         return bg, fg
 
     def _severity_counts(self):
+        events_id = id(_EVENTS)
+        cache = self._severity_counts_cache
+        if cache is not None and cache[0] == events_id:
+            return cache[1]
         counts = {lvl: 0 for lvl in _SEVERITY_LEVELS}
         for ev in _EVENTS:
             sev = (ev.get("severity") or "").lower()
             if sev in counts:
                 counts[sev] += 1
+        self._severity_counts_cache = (events_id, counts)
         return counts
 
     def _build_severity_pills(self, parent, row):
@@ -1283,7 +1381,12 @@ class Plugin(BasePlugin):
 
     def _bucket_events_30min(self):
         """Group events into 30-minute bucket dicts keyed by datetime."""
+        events_id = id(_EVENTS)
+        cache = self._bucket_events_cache
+        if cache is not None and cache[0] == events_id:
+            return cache[1]
         if not _EVENTS:
+            self._bucket_events_cache = (events_id, ([], {}))
             return [], {}
 
         timestamps = []
@@ -1304,6 +1407,7 @@ class Plugin(BasePlugin):
             per_event.append((floored, sev))
 
         if not timestamps:
+            self._bucket_events_cache = (events_id, ([], {}))
             return [], {}
 
         start = min(timestamps)
@@ -1317,6 +1421,7 @@ class Plugin(BasePlugin):
         counts = {b: {lvl: 0 for lvl in _SEVERITY_LEVELS} for b in buckets}
         for floored, sev in per_event:
             counts[floored][sev] += 1
+        self._bucket_events_cache = (events_id, (buckets, counts))
         return buckets, counts
 
     def _chart_theme(self):
@@ -1637,6 +1742,7 @@ class Plugin(BasePlugin):
             self._render_event_detail(None)
 
     def _event_row(self, parent, ev, row):
+        fonts = self._ensure_fonts()
         text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
         active_bg = self._theme(
             "sidebar_active_bg", default=["#EBF0FF", "#1A2744"]
@@ -1674,27 +1780,27 @@ class Plugin(BasePlugin):
 
         labeled(
             0, "●", text_color=dot_color,
-            font=customtkinter.CTkFont(size=14),
+            font=fonts["dot_14"],
         )
         labeled(
             1, str(ev.get("rule_id", "—")),
-            font=customtkinter.CTkFont(family="Inter", size=12, weight="bold"),
+            font=fonts["inter_bold_12"],
         )
         labeled(
             2, ev.get("description", "—"),
-            font=customtkinter.CTkFont(size=12),
+            font=fonts["size_12"],
             anchor="w",
         )
         metric = (ev.get("mitre") or [None])[0] or ev.get("ip") or "—"
         labeled(
             3, metric,
             text_color=text_secondary,
-            font=customtkinter.CTkFont(size=11),
+            font=fonts["size_11"],
         )
         labeled(
             4, _format_timestamp(ev.get("timestamp")),
             text_color=text_secondary,
-            font=customtkinter.CTkFont(size=11),
+            font=fonts["size_11"],
         )
 
         # Hover effect for non-selected rows
@@ -1901,11 +2007,17 @@ class Plugin(BasePlugin):
         self._build_vuln_table(parent, row=2)
 
     def _vuln_severity_counts(self):
+        vulns = _get_vulns()
+        vulns_id = id(vulns)
+        cache = self._vuln_severity_cache
+        if cache is not None and cache[0] == vulns_id:
+            return cache[1]
         counts = {lvl: 0 for lvl in _SEVERITY_LEVELS}
-        for v in _get_vulns():
+        for v in vulns:
             sev = (v.get("severity") or "").lower()
             if sev in counts:
                 counts[sev] += 1
+        self._vuln_severity_cache = (vulns_id, counts)
         return counts
 
     # ----- top-row cards -----
@@ -2042,9 +2154,16 @@ class Plugin(BasePlugin):
     def _bucket_vulns_daily(self):
         """Group CVEs into 30 daily buckets ending today (UTC) by detection_date."""
         today = datetime.now(timezone.utc).date()
+        vulns = _get_vulns()
+        # Cache keyed on (vulns identity, today) so a day-boundary crossing
+        # during a long-lived app session naturally invalidates the buckets.
+        cache_key = (id(vulns), today)
+        cache = self._bucket_vulns_cache
+        if cache is not None and cache[0] == cache_key:
+            return cache[1]
         buckets = [today - timedelta(days=29 - i) for i in range(30)]
         counts = {b: {lvl: 0 for lvl in _SEVERITY_LEVELS} for b in buckets}
-        for v in _get_vulns():
+        for v in vulns:
             ts = v.get("detection_date") or ""
             sev = (v.get("severity") or "").lower()
             if sev not in _SEVERITY_LEVELS or not ts:
@@ -2055,6 +2174,7 @@ class Plugin(BasePlugin):
                 continue
             if d in counts:
                 counts[d][sev] += 1
+        self._bucket_vulns_cache = (cache_key, (buckets, counts))
         return buckets, counts
 
     def _build_vuln_cvss_card(self, card):
@@ -2283,6 +2403,7 @@ class Plugin(BasePlugin):
         return "muted"
 
     def _vuln_row(self, parent, vuln, row):
+        fonts = self._ensure_fonts()
         text_secondary = self._theme(
             "text_secondary", default=["#6B7280", "#9CA3AF"]
         )
@@ -2305,7 +2426,7 @@ class Plugin(BasePlugin):
             fg_color=sev_bg,
             text_color=sev_fg,
             corner_radius=6,
-            font=customtkinter.CTkFont(size=10, weight="bold"),
+            font=fonts["bold_10"],
         ).grid(row=0, column=0, sticky="w", padx=(0, 12), pady=8)
 
         # CVE id + modified date
@@ -2315,7 +2436,7 @@ class Plugin(BasePlugin):
         customtkinter.CTkLabel(
             cve_cell,
             text=vuln.get("id", "—"),
-            font=customtkinter.CTkFont(family="Inter", size=12, weight="bold"),
+            font=fonts["inter_bold_12"],
             anchor="w",
         ).grid(row=0, column=0, sticky="w")
         modified = _format_relative(vuln.get("modified_date"))
@@ -2323,7 +2444,7 @@ class Plugin(BasePlugin):
             cve_cell,
             text=f"modified {modified}",
             text_color=text_secondary,
-            font=customtkinter.CTkFont(size=10),
+            font=fonts["size_10"],
             anchor="w",
         ).grid(row=1, column=0, sticky="w")
 
@@ -2334,14 +2455,14 @@ class Plugin(BasePlugin):
         customtkinter.CTkLabel(
             pkg_cell,
             text=vuln.get("package_name", "—"),
-            font=customtkinter.CTkFont(family="Inter", size=12, weight="bold"),
+            font=fonts["inter_bold_12"],
             anchor="w",
         ).grid(row=0, column=0, sticky="w")
         customtkinter.CTkLabel(
             pkg_cell,
             text=str(vuln.get("package_version", "")),
             text_color=text_secondary,
-            font=customtkinter.CTkFont(size=10),
+            font=fonts["size_10"],
             anchor="w",
         ).grid(row=1, column=0, sticky="w")
 
@@ -2354,7 +2475,7 @@ class Plugin(BasePlugin):
             row_frame,
             text=cvss_text,
             text_color=sev_fg,
-            font=customtkinter.CTkFont(family="Inter", size=14, weight="bold"),
+            font=fonts["inter_bold_14"],
         ).grid(row=0, column=3, sticky="w", padx=(0, 12), pady=8)
 
         # Status badge — alias unknown values to a sensible theme key so the
@@ -2373,7 +2494,7 @@ class Plugin(BasePlugin):
             fg_color=st_bg,
             text_color=st_fg,
             corner_radius=6,
-            font=customtkinter.CTkFont(size=10, weight="bold"),
+            font=fonts["bold_10"],
         ).grid(row=0, column=4, sticky="w", padx=(0, 12), pady=8)
 
         # EPSS
@@ -2393,7 +2514,7 @@ class Plugin(BasePlugin):
             row_frame,
             text=epss_text,
             text_color=epss_color,
-            font=customtkinter.CTkFont(family="Inter", size=13, weight="bold"),
+            font=fonts["inter_bold_13"],
         ).grid(row=0, column=5, sticky="w", pady=8)
 
         def on_enter(_e=None, rf=row_frame):
