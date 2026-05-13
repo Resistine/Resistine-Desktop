@@ -177,31 +177,6 @@ def needs_reenrollment():
     return False
 
 
-def create_wazuh_group(group_name):
-    """Create a Wazuh agent group via the Resistine backend API."""
-    import requests
-
-    url = f"{_RESISTINE_API_BASE}/create-groups"
-    try:
-        logger.info(f"[WAZUH] create_wazuh_group -> POST {url} | name={group_name}")
-        response = requests.post(url, params={"name": group_name}, timeout=30)
-        logger.info(f"[WAZUH] create_wazuh_group <- HTTP {response.status_code} | body={response.text!r}")
-
-        if response.status_code == 200:
-            return True
-
-        body = response.text.lower()
-        if "already" in body or "exist" in body or response.status_code == 409:
-            logger.info(f"[WAZUH] Group '{group_name}' already exists, continuing")
-            return True
-
-        logger.warning(f"[WAZUH] Unexpected response creating group: {response.status_code}")
-        return False
-    except Exception as e:
-        logger.error(f"[WAZUH] Failed to create group '{group_name}': {e}")
-        return False
-
-
 def is_agent_installed():
     """Check whether the Wazuh agent is installed on Windows."""
     return os.path.isdir(WINDOWS_WAZUH_DIR) and os.path.exists(
@@ -531,15 +506,9 @@ def full_install(progress_callback=None):
             progress_callback("Download failed")
         return False
 
-    # Phase 3: Create agent group
+    # Phase 3: Resolve agent name/group (group auto-created server-side).
     agent_name = get_agent_name()
     agent_group = get_agent_group()
-
-    if progress_callback:
-        progress_callback(f"Creating agent group '{agent_group}'...")
-    if not create_wazuh_group(agent_group):
-        logger.warning(f"[WAZUH] Could not create group '{agent_group}', falling back to 'default'")
-        agent_group = "default"
 
     # Phase 4: Install Wazuh via MSI (silent install with params)
     if progress_callback:

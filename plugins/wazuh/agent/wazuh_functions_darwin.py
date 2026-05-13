@@ -112,40 +112,6 @@ def needs_reenrollment():
 _RESISTINE_API_BASE = "https://validate.resistine.work"
 
 
-def create_wazuh_group(group_name):
-    """Create a Wazuh agent group via the Resistine backend API.
-
-    Calls POST /create-groups?name=<group_name>.  If the group already
-    exists the backend returns a non-200 response with a descriptive
-    message; we treat that as success so the install can proceed normally.
-
-    Returns True if the group is ready to use, False on unexpected error.
-    """
-    import requests
-
-    url = f"{_RESISTINE_API_BASE}/create-groups"
-    try:
-        logger.info(f"[WAZUH] create_wazuh_group -> POST {url} | name={group_name}")
-        response = requests.post(url, params={"name": group_name}, timeout=30)
-        logger.info(f"[WAZUH] create_wazuh_group <- HTTP {response.status_code} | body={response.text!r}")
-
-        if response.status_code == 200:
-            logger.info(f"[WAZUH] Group '{group_name}' created successfully")
-            return True
-
-        # 422 or similar — group may already exist; treat as success
-        body = response.text.lower()
-        if "already" in body or "exist" in body or response.status_code == 409:
-            logger.info(f"[WAZUH] Group '{group_name}' already exists, continuing")
-            return True
-
-        logger.warning(f"[WAZUH] Unexpected response creating group '{group_name}': {response.status_code} {response.text!r}")
-        return False
-    except Exception as e:
-        logger.error(f"[WAZUH] Failed to create group '{group_name}': {e}")
-        return False
-
-
 def get_package_url():
     """Build the full .pkg download URL from config constants + architecture."""
     arch = platform.machine()
@@ -628,15 +594,9 @@ def full_install(progress_callback=None):
             progress_callback("Download failed")
         return False
 
-    # 2. Ensure the agent group exists on the manager, then write the env file.
+    # 2. Resolve agent name/group (group is auto-created server-side on enroll).
     agent_name = get_agent_name()
     agent_group = get_agent_group()
-
-    if progress_callback:
-        progress_callback(f"Creating agent group '{agent_group}'...")
-    if not create_wazuh_group(agent_group):
-        logger.warning(f"[WAZUH] Could not create group '{agent_group}', falling back to 'default'")
-        agent_group = "default"
 
     if not write_env_file(agent_name, agent_group):
         if progress_callback:

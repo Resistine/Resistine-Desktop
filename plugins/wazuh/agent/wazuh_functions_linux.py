@@ -307,14 +307,7 @@ def full_install(progress_callback=None):
         
     agent_name = get_agent_name()
     agent_group = get_agent_group()
-    
-    import requests
-    url = "https://validate.resistine.work/create-groups"
-    try:
-        requests.post(url, params={"name": agent_group}, timeout=30)
-    except:
-        agent_group = "default"
-        
+
     os_type = _get_os_info()
     install_cmd = ""
     if os_type == "deb":

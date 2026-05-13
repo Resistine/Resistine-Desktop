@@ -115,7 +115,6 @@ def trigger_install(app) -> bool:
     """
     from plugins.wazuh.agent.wazuh_functions_darwin import (
         _launch_postinstall,
-        create_wazuh_group,
         get_agent_group,
         get_agent_name,
         needs_reenrollment,
@@ -134,13 +133,9 @@ def trigger_install(app) -> bool:
         _fail(STATE_INSTALL_FAILED, "pkg_corrupted")
         return False
 
-    # Prepare agent identity
+    # Prepare agent identity (group is auto-created server-side on enroll).
     agent_name = get_agent_name()
     agent_group = get_agent_group()
-
-    if not create_wazuh_group(agent_group):
-        logger.warning(f"[INSTALLER] Could not create group '{agent_group}', using 'default'")
-        agent_group = "default"
 
     if not write_env_file(agent_name, agent_group):
         _fail(STATE_INSTALL_FAILED, "script_failed")
