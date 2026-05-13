@@ -34,6 +34,9 @@ LINUX_PKG_ARCH_MAP_RPM = {
 
 # --- Manager Connection ---
 WAZUH_MANAGER = "dashboard.resisti.net"
+WAZUH_MANAGER_PORT = "1514"
+WAZUH_REGISTRATION_PORT = "1515"
+WAZUH_PROTOCOL = "tcp"
 
 # --- Paths ---
 WAZUH_INSTALL_DIR = "/Library/Ossec"

@@ -113,38 +113,15 @@ KEY_BACKUP="/Library/Application Support/Resistine/wazuh_client.keys"
 KEYCHAIN="/Library/Keychains/System.keychain"
 KC_SERVICE="com.resistine.wazuh.agent"
 KC_ACCOUNT="client_key"
-ENROLLMENT_RESULT="none"
 
-if [ "$RESTORE_KEYS" = "true" ]; then
-    # Try Keychain first (encrypted at rest)
-    KC_VALUE=$(security find-generic-password -k "$KEYCHAIN" -s "$KC_SERVICE" -a "$KC_ACCOUNT" -w 2>/dev/null || true)
-    if [ -n "$KC_VALUE" ]; then
-        printf '%s' "$KC_VALUE" > "$CLIENT_KEYS"
-        ENROLLMENT_RESULT="restored"
-    elif [ -s "$KEY_BACKUP" ]; then
-        cp "$KEY_BACKUP" "$CLIENT_KEYS"
-        ENROLLMENT_RESULT="restored"
-    fi
-
-    if [ "$ENROLLMENT_RESULT" = "restored" ] && [ -s "$CLIENT_KEYS" ]; then
-        chmod 640 "$CLIENT_KEYS"
-        if dscl . -read /Groups/wazuh PrimaryGroupID &>/dev/null; then
-            chown root:wazuh "$CLIENT_KEYS"
-        else
-            chown root:wheel "$CLIENT_KEYS"
-        fi
-    else
-        ENROLLMENT_RESULT="none"
-    fi
-fi
-
-if [ "$ENROLLMENT_RESULT" = "none" ]; then
-    rm -f "$CLIENT_KEYS"
-    if /Library/Ossec/bin/agent-auth -m "$MANAGER" -A "$AGENT_NAME" -G "$AGENT_GROUP"; then
-        ENROLLMENT_RESULT="enrolled"
-    else
-        ENROLLMENT_RESULT="enroll_failed"
-    fi
+# Always run agent-auth so the manager receives the group in the registration
+# request.  Server-side groups are auto-created on enroll; restoring a stale
+# client.keys would skip that and the agent would land in "default".
+rm -f "$CLIENT_KEYS"
+if /Library/Ossec/bin/agent-auth -m "$MANAGER" -A "$AGENT_NAME" -G "$AGENT_GROUP"; then
+    ENROLLMENT_RESULT="enrolled"
+else
+    ENROLLMENT_RESULT="enroll_failed"
 fi
 
 # --- Step 4: Back Up Key ---

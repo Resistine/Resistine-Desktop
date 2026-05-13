@@ -25,7 +25,10 @@ from plugins.wazuh.config import (
     WAZUH_INSTALL_DIR,
     WAZUH_LAUNCHD_PLIST,
     WAZUH_MANAGER,
+    WAZUH_MANAGER_PORT,
     WAZUH_PKG_ARCH_MAP,
+    WAZUH_PROTOCOL,
+    WAZUH_REGISTRATION_PORT,
     WAZUH_VERSION,
 )
 
@@ -235,6 +238,10 @@ def write_env_file(agent_name, agent_group):
     """Write the Wazuh environment file used during package installation."""
     content = (
         f"WAZUH_MANAGER='{WAZUH_MANAGER}'\n"
+        f"WAZUH_MANAGER_PORT='{WAZUH_MANAGER_PORT}'\n"
+        f"WAZUH_PROTOCOL='{WAZUH_PROTOCOL}'\n"
+        f"WAZUH_REGISTRATION_SERVER='{WAZUH_MANAGER}'\n"
+        f"WAZUH_REGISTRATION_PORT='{WAZUH_REGISTRATION_PORT}'\n"
         f"WAZUH_AGENT_NAME='{agent_name}'\n"
         f"WAZUH_AGENT_GROUP='{agent_group}'\n"
     )
@@ -608,14 +615,11 @@ def full_install(progress_callback=None):
     if progress_callback:
         progress_callback("Installing Wazuh agent (admin password required)...")
 
-    can_restore = (not needs_reenrollment()) and os.path.exists(_KEY_BACKUP)
-    if can_restore:
-        logger.info("[WAZUH] Key backup found — will restore existing enrollment on reinstall")
-        if progress_callback:
-            progress_callback("Restoring previous Wazuh enrollment...")
-
+    # Always re-enroll so the manager receives the group in the registration
+    # request.  Server-side groups are auto-created on enroll; restoring a
+    # stale client.keys would skip that.
     launched, status_file = _launch_postinstall(
-        pkg_path, agent_name, agent_group, can_restore
+        pkg_path, agent_name, agent_group, restore_keys=False
     )
     if not launched:
         logger.error("Failed to launch postinstall script (user cancelled or osascript error)")
