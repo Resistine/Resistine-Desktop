@@ -25,7 +25,10 @@ from plugins.wazuh.config import (
     WAZUH_INSTALL_DIR,
     WAZUH_LAUNCHD_PLIST,
     WAZUH_MANAGER,
+    WAZUH_MANAGER_PORT,
     WAZUH_PKG_ARCH_MAP,
+    WAZUH_PROTOCOL,
+    WAZUH_REGISTRATION_PORT,
     WAZUH_VERSION,
 )
 
@@ -82,15 +85,15 @@ def get_agent_name():
 def get_agent_group():
     """Return the user's email (sanitized) as the agent group.
 
-    Replaces '@' with '.' and strips unsafe characters so the group name
-    is a valid Wazuh identifier (alphanumerics, hyphens, underscores, dots).
-    Falls back to 'default' if no email is stored.
+    Replaces '@' with '-' to match the canonical group name created by
+    the /verify-otp backend.  Falls back to 'default' if no email is
+    stored.
     """
     import re
 
     email = settings.get("auth", "email", "default")
     if email and email != "default":
-        raw = email.replace("@", ".")
+        raw = email.replace("@", "-")
         return re.sub(r"[^A-Za-z0-9.\-_]", "", raw) or "default"
     return "default"
 
@@ -110,40 +113,6 @@ def needs_reenrollment():
 
 
 _RESISTINE_API_BASE = "https://validate.resistine.work"
-
-
-def create_wazuh_group(group_name):
-    """Create a Wazuh agent group via the Resistine backend API.
-
-    Calls POST /create-groups?name=<group_name>.  If the group already
-    exists the backend returns a non-200 response with a descriptive
-    message; we treat that as success so the install can proceed normally.
-
-    Returns True if the group is ready to use, False on unexpected error.
-    """
-    import requests
-
-    url = f"{_RESISTINE_API_BASE}/create-groups"
-    try:
-        logger.info(f"[WAZUH] create_wazuh_group -> POST {url} | name={group_name}")
-        response = requests.post(url, params={"name": group_name}, timeout=30)
-        logger.info(f"[WAZUH] create_wazuh_group <- HTTP {response.status_code} | body={response.text!r}")
-
-        if response.status_code == 200:
-            logger.info(f"[WAZUH] Group '{group_name}' created successfully")
-            return True
-
-        # 422 or similar — group may already exist; treat as success
-        body = response.text.lower()
-        if "already" in body or "exist" in body or response.status_code == 409:
-            logger.info(f"[WAZUH] Group '{group_name}' already exists, continuing")
-            return True
-
-        logger.warning(f"[WAZUH] Unexpected response creating group '{group_name}': {response.status_code} {response.text!r}")
-        return False
-    except Exception as e:
-        logger.error(f"[WAZUH] Failed to create group '{group_name}': {e}")
-        return False
 
 
 def get_package_url():
@@ -269,6 +238,10 @@ def write_env_file(agent_name, agent_group):
     """Write the Wazuh environment file used during package installation."""
     content = (
         f"WAZUH_MANAGER='{WAZUH_MANAGER}'\n"
+        f"WAZUH_MANAGER_PORT='{WAZUH_MANAGER_PORT}'\n"
+        f"WAZUH_PROTOCOL='{WAZUH_PROTOCOL}'\n"
+        f"WAZUH_REGISTRATION_SERVER='{WAZUH_MANAGER}'\n"
+        f"WAZUH_REGISTRATION_PORT='{WAZUH_REGISTRATION_PORT}'\n"
         f"WAZUH_AGENT_NAME='{agent_name}'\n"
         f"WAZUH_AGENT_GROUP='{agent_group}'\n"
     )
@@ -628,15 +601,9 @@ def full_install(progress_callback=None):
             progress_callback("Download failed")
         return False
 
-    # 2. Ensure the agent group exists on the manager, then write the env file.
+    # 2. Resolve agent name/group (group is auto-created server-side on enroll).
     agent_name = get_agent_name()
     agent_group = get_agent_group()
-
-    if progress_callback:
-        progress_callback(f"Creating agent group '{agent_group}'...")
-    if not create_wazuh_group(agent_group):
-        logger.warning(f"[WAZUH] Could not create group '{agent_group}', falling back to 'default'")
-        agent_group = "default"
 
     if not write_env_file(agent_name, agent_group):
         if progress_callback:
@@ -648,14 +615,11 @@ def full_install(progress_callback=None):
     if progress_callback:
         progress_callback("Installing Wazuh agent (admin password required)...")
 
-    can_restore = (not needs_reenrollment()) and os.path.exists(_KEY_BACKUP)
-    if can_restore:
-        logger.info("[WAZUH] Key backup found — will restore existing enrollment on reinstall")
-        if progress_callback:
-            progress_callback("Restoring previous Wazuh enrollment...")
-
+    # Always re-enroll so the manager receives the group in the registration
+    # request.  Server-side groups are auto-created on enroll; restoring a
+    # stale client.keys would skip that.
     launched, status_file = _launch_postinstall(
-        pkg_path, agent_name, agent_group, can_restore
+        pkg_path, agent_name, agent_group, restore_keys=False
     )
     if not launched:
         logger.error("Failed to launch postinstall script (user cancelled or osascript error)")

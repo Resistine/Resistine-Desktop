@@ -23,8 +23,25 @@ from plugins.wazuh.config import (
     LINUX_PKG_ARCH_MAP_DEB,
     LINUX_PKG_ARCH_MAP_RPM,
     WAZUH_MANAGER,
+    WAZUH_MANAGER_PORT,
+    WAZUH_PROTOCOL,
+    WAZUH_REGISTRATION_PORT,
     LINUX_WAZUH_DIR,
 )
+
+# Deployment-variable prefix passed to the package installer.  Carries the
+# manager address, ports, protocol, agent name, and group so the package's
+# preinstall hook patches ossec.conf accordingly.
+def _deploy_env(agent_name, agent_group):
+    return (
+        f"WAZUH_MANAGER='{WAZUH_MANAGER}' "
+        f"WAZUH_MANAGER_PORT='{WAZUH_MANAGER_PORT}' "
+        f"WAZUH_PROTOCOL='{WAZUH_PROTOCOL}' "
+        f"WAZUH_REGISTRATION_SERVER='{WAZUH_MANAGER}' "
+        f"WAZUH_REGISTRATION_PORT='{WAZUH_REGISTRATION_PORT}' "
+        f"WAZUH_AGENT_NAME='{agent_name}' "
+        f"WAZUH_AGENT_GROUP='{agent_group}'"
+    )
 
 def run_privileged_command(command, timeout=120):
     """
@@ -104,9 +121,12 @@ def get_agent_name():
     return re.sub(r"[^A-Za-z0-9.\-_]", "", name)
 
 def get_agent_group():
+    """Return the user's email with '@' replaced by '-' to match the
+    canonical group name created by /verify-otp.
+    """
     email = settings.get("auth", "email", "default")
     if email and email != "default":
-        return email.replace("@", ".")
+        return email.replace("@", "-")
     return "default"
 
 def needs_reenrollment():
@@ -307,43 +327,24 @@ def full_install(progress_callback=None):
         
     agent_name = get_agent_name()
     agent_group = get_agent_group()
-    
-    import requests
-    url = "https://validate.resistine.work/create-groups"
-    try:
-        requests.post(url, params={"name": agent_group}, timeout=30)
-    except:
-        agent_group = "default"
-        
+
     os_type = _get_os_info()
     install_cmd = ""
+    deploy_env = _deploy_env(agent_name, agent_group)
     if os_type == "deb":
-        install_cmd = f"WAZUH_MANAGER='{WAZUH_MANAGER}' WAZUH_AGENT_NAME='{agent_name}' WAZUH_AGENT_GROUP='{agent_group}' dpkg -i '{pkg_path}'"
+        install_cmd = f"{deploy_env} dpkg -i '{pkg_path}'"
     elif os_type == "rpm":
-        install_cmd = f"WAZUH_MANAGER='{WAZUH_MANAGER}' WAZUH_AGENT_NAME='{agent_name}' WAZUH_AGENT_GROUP='{agent_group}' rpm -ihv '{pkg_path}'"
+        install_cmd = f"{deploy_env} rpm -ihv '{pkg_path}'"
 
     ossec_conf = f"{LINUX_WAZUH_DIR}/etc/ossec.conf"
     agent_auth = f"{LINUX_WAZUH_DIR}/bin/agent-auth"
     backup_dir = os.path.dirname(_KEY_BACKUP)
-    
-    can_restore = (not needs_reenrollment()) and os.path.exists(_KEY_BACKUP)
-    
-    if can_restore:
-        enrollment_script = f"""
-            if [ -s '{_KEY_BACKUP}' ]; then
-                cp '{_KEY_BACKUP}' '{_CLIENT_KEYS}'
-                chmod 640 '{_CLIENT_KEYS}'
-            else
-                rm -f '{_CLIENT_KEYS}'
-                '{agent_auth}' -m '{WAZUH_MANAGER}' -A '{agent_name}' -G '{agent_group}'
-                mkdir -p '{backup_dir}' && cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}'
-                chown {os.getuid()}:{os.getgid()} '{_KEY_BACKUP}' 2>/dev/null
-            fi
-        """
-    else:
-        enrollment_script = f"""
+
+    # Always re-enroll so the manager receives the group on every install.
+    # The key backup is still written for future repair/recovery flows.
+    enrollment_script = f"""
             rm -f '{_CLIENT_KEYS}'
-            '{agent_auth}' -m '{WAZUH_MANAGER}' -A '{agent_name}' -G '{agent_group}'
+            '{agent_auth}' -m '{WAZUH_MANAGER}' -P '{WAZUH_REGISTRATION_PORT}' -A '{agent_name}' -G '{agent_group}'
             mkdir -p '{backup_dir}' && cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}'
             chown {os.getuid()}:{os.getgid()} '{_KEY_BACKUP}' 2>/dev/null
         """

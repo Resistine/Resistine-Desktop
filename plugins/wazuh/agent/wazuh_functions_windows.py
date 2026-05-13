@@ -22,6 +22,9 @@ from utils.logger import logger
 
 from plugins.wazuh.config import (
     WAZUH_MANAGER,
+    WAZUH_MANAGER_PORT,
+    WAZUH_PROTOCOL,
+    WAZUH_REGISTRATION_PORT,
     WINDOWS_WAZUH_MSI_URL,
     WINDOWS_WAZUH_DIR,
     WINDOWS_SYSMON_ZIP_URL,
@@ -156,12 +159,14 @@ def get_agent_name():
 def get_agent_group():
     """Return the user's email (sanitized) as the agent group.
 
-    Email flows into PowerShell commands (msiexec args) so it must be stripped
-    of shell metacharacters using the same allowlist as get_agent_name.
+    Replaces '@' with '-' to match the canonical group name created by
+    the /verify-otp backend.  Email flows into PowerShell commands
+    (msiexec args) so it must also be stripped of shell metacharacters
+    using the same allowlist as get_agent_name.
     """
     email = settings.get("auth", "email", "default")
     if email and email != "default":
-        sanitized = re.sub(r"[^A-Za-z0-9.\-_]", "", email.replace("@", "."))
+        sanitized = re.sub(r"[^A-Za-z0-9.\-_]", "", email.replace("@", "-"))
         if sanitized:
             return sanitized
     return "default"
@@ -175,31 +180,6 @@ def needs_reenrollment():
         logger.info(f"[WAZUH] Enrollment mismatch: enrolled={enrolled!r} current={current!r}")
         return True
     return False
-
-
-def create_wazuh_group(group_name):
-    """Create a Wazuh agent group via the Resistine backend API."""
-    import requests
-
-    url = f"{_RESISTINE_API_BASE}/create-groups"
-    try:
-        logger.info(f"[WAZUH] create_wazuh_group -> POST {url} | name={group_name}")
-        response = requests.post(url, params={"name": group_name}, timeout=30)
-        logger.info(f"[WAZUH] create_wazuh_group <- HTTP {response.status_code} | body={response.text!r}")
-
-        if response.status_code == 200:
-            return True
-
-        body = response.text.lower()
-        if "already" in body or "exist" in body or response.status_code == 409:
-            logger.info(f"[WAZUH] Group '{group_name}' already exists, continuing")
-            return True
-
-        logger.warning(f"[WAZUH] Unexpected response creating group: {response.status_code}")
-        return False
-    except Exception as e:
-        logger.error(f"[WAZUH] Failed to create group '{group_name}': {e}")
-        return False
 
 
 def is_agent_installed():
@@ -531,15 +511,9 @@ def full_install(progress_callback=None):
             progress_callback("Download failed")
         return False
 
-    # Phase 3: Create agent group
+    # Phase 3: Resolve agent name/group (group auto-created server-side).
     agent_name = get_agent_name()
     agent_group = get_agent_group()
-
-    if progress_callback:
-        progress_callback(f"Creating agent group '{agent_group}'...")
-    if not create_wazuh_group(agent_group):
-        logger.warning(f"[WAZUH] Could not create group '{agent_group}', falling back to 'default'")
-        agent_group = "default"
 
     # Phase 4: Install Wazuh via MSI (silent install with params)
     if progress_callback:
@@ -548,6 +522,10 @@ def full_install(progress_callback=None):
     install_cmd = (
         f"msiexec.exe /i '{msi_path}' /qn "
         f"WAZUH_MANAGER='{WAZUH_MANAGER}' "
+        f"WAZUH_MANAGER_PORT='{WAZUH_MANAGER_PORT}' "
+        f"WAZUH_PROTOCOL='{WAZUH_PROTOCOL}' "
+        f"WAZUH_REGISTRATION_SERVER='{WAZUH_MANAGER}' "
+        f"WAZUH_REGISTRATION_PORT='{WAZUH_REGISTRATION_PORT}' "
         f"WAZUH_AGENT_NAME='{agent_name}' "
         f"WAZUH_AGENT_GROUP='{agent_group}'"
     )
@@ -573,42 +551,31 @@ def full_install(progress_callback=None):
     # Phase 6: Inject Sysmon monitoring into ossec.conf
     _inject_sysmon_config()
 
-    # Phase 7: Enrollment — restore existing key or enroll fresh
+    # Phase 7: Enrollment — always re-enroll so the manager receives the
+    # group in the registration request (server-side groups are auto-created
+    # on enroll).
     backup_dir = os.path.dirname(_KEY_BACKUP)
-    can_restore = (not needs_reenrollment()) and os.path.exists(_KEY_BACKUP)
 
-    if can_restore:
-        if progress_callback:
-            progress_callback("Restoring previous enrollment...")
-        restore_cmd = (
-            f"Copy-Item -Path '{_KEY_BACKUP}' -Destination '{_CLIENT_KEYS}' -Force"
-        )
-        success_restore, _ = _run_privileged(restore_cmd)
-        if success_restore:
-            logger.info("[WAZUH] Restored existing enrollment key")
-        else:
-            logger.warning("[WAZUH] Key restore failed, will enroll fresh")
-            can_restore = False
+    if progress_callback:
+        progress_callback("Enrolling agent with manager...")
+    enroll_cmd = (
+        f"& '{_AGENT_AUTH}' -m '{WAZUH_MANAGER}' "
+        f"-P '{WAZUH_REGISTRATION_PORT}' "
+        f"-A '{agent_name}' -G '{agent_group}'"
+    )
+    enroll_success, enroll_output = _run_privileged(enroll_cmd)
 
-    if not can_restore:
-        if progress_callback:
-            progress_callback("Enrolling agent with manager...")
-        enroll_cmd = (
-            f"& '{_AGENT_AUTH}' -m '{WAZUH_MANAGER}' -A '{agent_name}' -G '{agent_group}'"
-        )
-        enroll_success, enroll_output = _run_privileged(enroll_cmd)
+    if enroll_success:
+        logger.info("[WAZUH] Enrollment succeeded")
+    else:
+        logger.warning(f"[WAZUH] agent-auth enrollment failed: {enroll_output}")
 
-        if enroll_success:
-            logger.info("[WAZUH] Fresh enrollment succeeded")
-        else:
-            logger.warning(f"[WAZUH] agent-auth enrollment failed: {enroll_output}")
-
-        # Backup the new key
-        backup_cmd = (
-            f"New-Item -ItemType Directory -Path '{backup_dir}' -Force | Out-Null; "
-            f"if (Test-Path '{_CLIENT_KEYS}') {{ Copy-Item '{_CLIENT_KEYS}' '{_KEY_BACKUP}' -Force }}"
-        )
-        _run_privileged(backup_cmd)
+    # Backup the new key for future repair/recovery (not used to skip enroll)
+    backup_cmd = (
+        f"New-Item -ItemType Directory -Path '{backup_dir}' -Force | Out-Null; "
+        f"if (Test-Path '{_CLIENT_KEYS}') {{ Copy-Item '{_CLIENT_KEYS}' '{_KEY_BACKUP}' -Force }}"
+    )
+    _run_privileged(backup_cmd)
 
     # Phase 8: Start the service
     if progress_callback:
