@@ -159,12 +159,14 @@ def get_agent_name():
 def get_agent_group():
     """Return the user's email (sanitized) as the agent group.
 
-    Email flows into PowerShell commands (msiexec args) so it must be stripped
-    of shell metacharacters using the same allowlist as get_agent_name.
+    Replaces '@' with '-' to match the canonical group name created by
+    the /verify-otp backend.  Email flows into PowerShell commands
+    (msiexec args) so it must also be stripped of shell metacharacters
+    using the same allowlist as get_agent_name.
     """
     email = settings.get("auth", "email", "default")
     if email and email != "default":
-        sanitized = re.sub(r"[^A-Za-z0-9.\-_]", "", email.replace("@", "."))
+        sanitized = re.sub(r"[^A-Za-z0-9.\-_]", "", email.replace("@", "-"))
         if sanitized:
             return sanitized
     return "default"

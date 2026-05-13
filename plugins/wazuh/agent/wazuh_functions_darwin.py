@@ -85,15 +85,15 @@ def get_agent_name():
 def get_agent_group():
     """Return the user's email (sanitized) as the agent group.
 
-    Replaces '@' with '.' and strips unsafe characters so the group name
-    is a valid Wazuh identifier (alphanumerics, hyphens, underscores, dots).
-    Falls back to 'default' if no email is stored.
+    Replaces '@' with '-' to match the canonical group name created by
+    the /verify-otp backend.  Falls back to 'default' if no email is
+    stored.
     """
     import re
 
     email = settings.get("auth", "email", "default")
     if email and email != "default":
-        raw = email.replace("@", ".")
+        raw = email.replace("@", "-")
         return re.sub(r"[^A-Za-z0-9.\-_]", "", raw) or "default"
     return "default"
 

@@ -121,9 +121,12 @@ def get_agent_name():
     return re.sub(r"[^A-Za-z0-9.\-_]", "", name)
 
 def get_agent_group():
+    """Return the user's email with '@' replaced by '-' to match the
+    canonical group name created by /verify-otp.
+    """
     email = settings.get("auth", "email", "default")
     if email and email != "default":
-        return email.replace("@", ".")
+        return email.replace("@", "-")
     return "default"
 
 def needs_reenrollment():
