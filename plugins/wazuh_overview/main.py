@@ -328,6 +328,7 @@ class Plugin(BasePlugin):
         self._selected_bucket = None  # datetime of the active 30-min bucket filter, or None
         self._events_ready_after_id = None  # poll handle for the background events loader
         self._prebuild_after_id = None  # handle for the inactive-tab pre-build chain
+        self._overview_events_after_id = None  # poll handle for the Overview's Security Alerts card refresh
         # Vulnerabilities pane state
         self._vuln_search_var = None
         self._vuln_count_label = None
@@ -645,6 +646,30 @@ class Plugin(BasePlugin):
         self._build_modules_header(parent, row=2)
         self._build_module_grid(parent, row=3)
 
+        # Overview can be built before the background events loader finishes
+        # (sample JSON parse + per-hit normalization). In that case the Security
+        # Alerts card renders a "Loading…" placeholder; poll for readiness and
+        # rebuild the module grid once events arrive so the card picks up the
+        # real severity counts and badge color.
+        if not _events_ready.is_set():
+            self._schedule_overview_events_refresh()
+
+    def _schedule_overview_events_refresh(self):
+        if self._overview_events_after_id is not None:
+            return  # already polling
+
+        def check():
+            self._overview_events_after_id = None
+            wrapper = self._module_wrapper
+            if wrapper is None or not wrapper.winfo_exists():
+                return
+            if _events_ready.is_set():
+                self._populate_module_grid()
+                return
+            self._overview_events_after_id = self.app.after(50, check)
+
+        self._overview_events_after_id = self.app.after(50, check)
+
     # ----- section 1: top device widget --------------------------------------
 
     def _build_top_device_widget(self, parent, row):
@@ -923,14 +948,62 @@ class Plugin(BasePlugin):
         cards = []
         bi = _get_agent_data().get("basic_info", {}) or {}
 
-        # Security Alerts — no source in sample JSON
-        cards.append({
-            "title": "Security Alerts",
-            "status": "INFO",
-            "description": "Threats and security incidents detected",
-            "stats": (("No data available", "muted"),),
-            "target_tab": "Events",
-        })
+        # Security Alerts — derived from the same _EVENTS list the Events tab
+        # renders. Badge severity tracks the highest-severity bucket with a
+        # non-zero count (critical > high > medium > low); there's no resolved
+        # state in the sample data, so every event is treated as unresolved.
+        # If the background events loader hasn't finished yet, fall back to a
+        # "Loading…" stat line — _build_overview_pane schedules a refresh once
+        # _events_ready fires.
+        if not _events_ready.is_set():
+            cards.append({
+                "title": "Security Alerts",
+                "status": "INFO",
+                "description": "Threats and security incidents detected",
+                "stats": (("Loading…", "muted"),),
+                "target_tab": "Events",
+            })
+        else:
+            sev_counts = self._severity_counts()
+            total_events = sum(sev_counts.values())
+            if total_events == 0:
+                cards.append({
+                    "title": "Security Alerts",
+                    "status": "OK",
+                    "description": "Threats and security incidents detected",
+                    "stats": (("No alerts", "ok"),),
+                    "target_tab": "Events",
+                })
+            else:
+                # Map highest severity → displayed badge label. The label is
+                # also the theme key used by _badge_colors (lowercased), so the
+                # color follows automatically. medium → WARNING (orange),
+                # low → OK (green) — matches the severity pills on Events.
+                _SEV_TO_STATUS = {
+                    "critical": "CRITICAL",
+                    "high": "HIGH",
+                    "medium": "WARNING",
+                    "low": "OK",
+                }
+                highest = next(
+                    (s for s in _SEVERITY_LEVELS if sev_counts.get(s, 0) > 0),
+                    "low",
+                )
+                stats = []
+                for level in _SEVERITY_LEVELS:
+                    cnt = sev_counts.get(level, 0)
+                    if not cnt:
+                        continue
+                    if stats:
+                        stats.append(("  ·  ", "muted"))
+                    stats.append((f"{cnt} {level}", _SEVERITY_THEME_KEY.get(level, "info")))
+                cards.append({
+                    "title": "Security Alerts",
+                    "status": _SEV_TO_STATUS[highest],
+                    "description": "Threats and security incidents detected",
+                    "stats": tuple(stats),
+                    "target_tab": "Events",
+                })
 
         # Vulnerabilities — vulnerabilities object is empty
         vulns = _get_agent_data().get("vulnerabilities") or {}
@@ -1145,12 +1218,65 @@ class Plugin(BasePlugin):
             c = index % cols
             self._make_module_card(grid, r, c, card_data)
 
+        # Match the dashboard's square card proportions: drive row minsize off
+        # the per-column width so cards scale with window size. Without this the
+        # rows would collapse to the natural content height (~100px) and the
+        # cards would read as small compared to the dashboard's plugin cards.
+        self._bind_module_aspect_ratio(grid, cols, rows)
+
+    def _bind_module_aspect_ratio(self, grid, cols, rows):
+        last_w = [-1]
+        job = [None]
+
+        def apply(force_width=None):
+            job[0] = None
+            try:
+                if not grid.winfo_exists():
+                    return
+                total = force_width if force_width else grid.winfo_width()
+                if total <= 1:
+                    return
+                if last_w[0] != -1 and abs(total - last_w[0]) < 4:
+                    return
+                last_w[0] = total
+                col_w = total / cols if cols else total
+                card_w = max(1, col_w - 16)  # 8px padx per side
+                # Same clamp + formula as create_grid(aspect_ratio=1.0):
+                # square-ish, with a 160px floor and 300px ceiling.
+                target_h = max(160, min(300, int(card_w) + 20))
+                for r in range(rows):
+                    grid.grid_rowconfigure(r, minsize=target_h)
+            except (tk.TclError, AttributeError, RuntimeError):
+                pass
+
+        def on_configure(_e=None):
+            if job[0] is not None:
+                try:
+                    grid.after_cancel(job[0])
+                except Exception:
+                    pass
+            # 200ms debounce matches create_grid so both fire in the same pass.
+            job[0] = grid.after(200, apply)
+
+        grid.bind("<Configure>", on_configure)
+        # Synchronous first pass using the wrapper's actual width if known, so
+        # the initial paint already has the correct row heights instead of
+        # flashing the small natural height.
+        try:
+            hint = self._module_wrapper.winfo_width()
+        except Exception:
+            hint = 0
+        if hint > 1:
+            apply(force_width=hint)
+        else:
+            grid.after(10, apply)
+
     def _make_module_card(self, parent, row, column, card_data):
         text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
         target_tab = card_data.get("target_tab")
 
         card = customtkinter.CTkFrame(parent, corner_radius=12, border_width=1)
-        card.grid(row=row, column=column, sticky="nsew", padx=6, pady=6)
+        card.grid(row=row, column=column, sticky="nsew", padx=8, pady=8)
         card.grid_columnconfigure(0, weight=1)
         card.grid_columnconfigure(1, weight=0)
         card.grid_rowconfigure(2, weight=1)
@@ -1158,10 +1284,10 @@ class Plugin(BasePlugin):
         title = customtkinter.CTkLabel(
             card,
             text=card_data["title"],
-            font=customtkinter.CTkFont(family="Inter", size=14, weight="bold"),
+            font=customtkinter.CTkFont(family="Inter", size=16, weight="bold"),
             anchor="w",
         )
-        title.grid(row=0, column=0, sticky="w", padx=14, pady=(12, 0))
+        title.grid(row=0, column=0, sticky="w", padx=16, pady=(16, 0))
 
         bg, fg = self._badge_colors(card_data["status"])
         badge = customtkinter.CTkLabel(
@@ -1170,21 +1296,22 @@ class Plugin(BasePlugin):
             fg_color=bg,
             text_color=fg,
             corner_radius=6,
-            font=customtkinter.CTkFont(size=10, weight="bold"),
+            height=22,
+            font=customtkinter.CTkFont(size=11, weight="bold"),
         )
-        badge.grid(row=0, column=1, sticky="ne", padx=(0, 14), pady=(12, 0))
+        badge.grid(row=0, column=1, sticky="ne", padx=(0, 16), pady=(16, 0))
 
         desc = customtkinter.CTkLabel(
             card,
             text=card_data["description"],
             text_color=text_secondary,
-            font=customtkinter.CTkFont(size=11),
+            font=customtkinter.CTkFont(size=12),
             anchor="w",
         )
-        desc.grid(row=1, column=0, columnspan=2, sticky="w", padx=14, pady=(2, 8))
+        desc.grid(row=1, column=0, columnspan=2, sticky="w", padx=16, pady=(4, 8))
 
         stats = customtkinter.CTkFrame(card, fg_color="transparent")
-        stats.grid(row=2, column=0, sticky="sw", padx=14, pady=(0, 12))
+        stats.grid(row=2, column=0, sticky="sw", padx=16, pady=(0, 16))
         stat_labels = []
         for i, (text, color_key) in enumerate(card_data["stats"]):
             color = self._segment_color(color_key)
@@ -1193,7 +1320,7 @@ class Plugin(BasePlugin):
                 stats,
                 text=text,
                 text_color=color,
-                font=customtkinter.CTkFont(size=12, weight=weight),
+                font=customtkinter.CTkFont(size=13, weight=weight),
             )
             lbl.grid(row=0, column=i, sticky="w")
             stat_labels.append(lbl)
@@ -1202,9 +1329,9 @@ class Plugin(BasePlugin):
             card,
             text="›",
             text_color=text_secondary,
-            font=customtkinter.CTkFont(size=18),
+            font=customtkinter.CTkFont(size=20),
         )
-        arrow.grid(row=2, column=1, sticky="se", padx=(0, 14), pady=(0, 12))
+        arrow.grid(row=2, column=1, sticky="se", padx=(0, 16), pady=(0, 16))
 
         # Make clickable cards navigate to a sibling tab on the same plugin.
         if target_tab and target_tab in _TAB_NAMES:
@@ -2542,6 +2669,12 @@ class Plugin(BasePlugin):
             except Exception:
                 pass
             self._events_ready_after_id = None
+        if self._overview_events_after_id:
+            try:
+                self.app.after_cancel(self._overview_events_after_id)
+            except Exception:
+                pass
+            self._overview_events_after_id = None
         if self._module_resize_after_id:
             try:
                 self.app.after_cancel(self._module_resize_after_id)
