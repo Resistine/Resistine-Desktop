@@ -137,9 +137,14 @@ def run_installer_as_admin(file_path):
     """
     try:
         logger.info(f"Running installer as admin: {file_path}...")
-        # Note: apt might be interactive, but for now we try basic install
-        # Ideally we'd use a proper packagekit client, but this is a quick fix
-        result = run_privileged_command(["apt", "install", "-y", "wireguard"])
+        from utils.distro import LinuxDistro
+        command = LinuxDistro.get_install_command(["wireguard"])
+        
+        if not command:
+            logger.error("Could not determine package manager to install WireGuard.")
+            return False
+            
+        result = run_privileged_command(command)
         if result and result.returncode == 0:
             logger.info("WireGuard installation command executed.")
             return True

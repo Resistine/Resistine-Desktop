@@ -137,22 +137,14 @@ def needs_reenrollment():
     return False
 
 def _get_os_info():
-    """Determine if OS is DEB or RPM based."""
-    try:
-        with open("/etc/os-release") as f:
-            content = f.read().lower()
-            if "debian" in content or "ubuntu" in content:
-                return "deb"
-            if "fedora" in content or "centos" in content or "rhel" in content or "red hat" in content:
-                return "rpm"
-    except Exception:
-        pass
-    
-    # Fallback checking commands
-    if subprocess.run(["which", "dpkg"], capture_output=True).returncode == 0:
+    """Determine if OS is DEB or RPM based using LinuxDistro utility."""
+    from utils.distro import LinuxDistro
+    if LinuxDistro.is_debian_like():
         return "deb"
-    if subprocess.run(["which", "rpm"], capture_output=True).returncode == 0:
+    if LinuxDistro.is_fedora_like():
         return "rpm"
+    if LinuxDistro.is_arch_like():
+        return "arch"
     return None
 
 def get_package_url():
@@ -164,6 +156,10 @@ def get_package_url():
     elif os_type == "rpm":
         arch_suffix = LINUX_PKG_ARCH_MAP_RPM.get(arch, "x86_64")
         return LINUX_WAZUH_RPM_URL.format(arch=arch_suffix)
+    elif os_type == "arch":
+        # Wazuh doesn't have an official Arch package, usually installed via AUR
+        # or we might need a specific handling. For now, mark as unsupported.
+        return None
     return None
 
 def is_agent_installed():
