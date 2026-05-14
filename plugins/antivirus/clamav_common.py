@@ -1046,6 +1046,11 @@ def get_realtime_status() -> dict:
             system_sock = plat.system_clamd_socket_path()
             if system_sock:
                 system_clamd_ok = _ping_socket(system_sock)
+    else:
+        # On Linux/Windows there is one system-wide clamd, so the
+        # "system" vs "user" distinction that exists on macOS does
+        # not apply — the running-clamd check is the same one.
+        system_clamd_ok = clamd_ok
 
     # Compute setup_state and runtime_state from installer service
     setup_state = "completed"  # Default for non-Darwin or pre-existing installs

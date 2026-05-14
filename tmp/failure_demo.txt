@@ -1,0 +1,1232 @@
+============================= test session starts ==============================
+collecting ... collected 265 items
+
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info0] PASSED [  0%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info1] PASSED [  0%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info2] PASSED [  1%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info3] PASSED [  1%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info4] FAILED [  1%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info5] FAILED [  2%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info6] FAILED [  2%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info7] FAILED [  3%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info8] FAILED [  3%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info9] FAILED [  3%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info10] FAILED [  4%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info11] FAILED [  4%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info12] FAILED [  4%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info13] FAILED [  5%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info14] FAILED [  5%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info15] FAILED [  6%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info16] PASSED [  6%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info17] PASSED [  6%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info18] PASSED [  7%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info19] PASSED [  7%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info20] FAILED [  7%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info21] FAILED [  8%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info22] FAILED [  8%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info23] FAILED [  9%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info24] FAILED [  9%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info0] PASSED [  9%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info1] PASSED [ 10%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info2] PASSED [ 10%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info3] PASSED [ 10%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info4] FAILED [ 11%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info5] FAILED [ 11%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info6] FAILED [ 12%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info7] FAILED [ 12%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info8] FAILED [ 12%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info9] FAILED [ 13%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info10] FAILED [ 13%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info11] FAILED [ 13%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info12] FAILED [ 14%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info13] FAILED [ 14%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info14] FAILED [ 15%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info15] FAILED [ 15%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info16] PASSED [ 15%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info17] PASSED [ 16%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info18] PASSED [ 16%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info19] PASSED [ 16%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info20] FAILED [ 17%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info21] FAILED [ 17%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info22] FAILED [ 18%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info23] FAILED [ 18%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info24] FAILED [ 18%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info0] PASSED [ 19%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info1] PASSED [ 19%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info2] PASSED [ 20%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info3] PASSED [ 20%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info4] FAILED [ 20%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info5] FAILED [ 21%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info6] FAILED [ 21%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info7] FAILED [ 21%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info8] FAILED [ 22%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info9] FAILED [ 22%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info10] FAILED [ 23%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info11] FAILED [ 23%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info12] FAILED [ 23%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info13] FAILED [ 24%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info14] FAILED [ 24%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info15] FAILED [ 24%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info16] PASSED [ 25%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info17] PASSED [ 25%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info18] PASSED [ 26%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info19] PASSED [ 26%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info20] FAILED [ 26%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info21] FAILED [ 27%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info22] FAILED [ 27%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info23] FAILED [ 27%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info24] FAILED [ 28%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info0] PASSED [ 28%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info1] PASSED [ 29%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info2] PASSED [ 29%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info3] PASSED [ 29%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info4] FAILED [ 30%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info5] FAILED [ 30%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info6] FAILED [ 30%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info7] FAILED [ 31%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info8] FAILED [ 31%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info9] FAILED [ 32%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info10] FAILED [ 32%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info11] FAILED [ 32%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info12] FAILED [ 33%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info13] FAILED [ 33%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info14] FAILED [ 33%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info15] FAILED [ 34%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info16] PASSED [ 34%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info17] PASSED [ 35%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info18] PASSED [ 35%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info19] PASSED [ 35%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info20] FAILED [ 36%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info21] FAILED [ 36%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info22] FAILED [ 36%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info23] FAILED [ 37%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info24] FAILED [ 37%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info0] PASSED [ 38%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info1] PASSED [ 38%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info2] PASSED [ 38%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info3] PASSED [ 39%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info4] FAILED [ 39%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info5] FAILED [ 40%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info6] FAILED [ 40%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info7] FAILED [ 40%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info8] FAILED [ 41%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info9] FAILED [ 41%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info10] FAILED [ 41%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info11] FAILED [ 42%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info12] FAILED [ 42%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info13] FAILED [ 43%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info14] FAILED [ 43%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info15] FAILED [ 43%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info16] PASSED [ 44%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info17] PASSED [ 44%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info18] PASSED [ 44%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info19] PASSED [ 45%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info20] FAILED [ 45%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info21] FAILED [ 46%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info22] FAILED [ 46%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info23] FAILED [ 46%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info24] FAILED [ 47%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info0] PASSED [ 47%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info1] PASSED [ 47%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info2] PASSED [ 48%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info3] PASSED [ 48%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info4] FAILED [ 49%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info5] FAILED [ 49%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info6] FAILED [ 49%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info7] FAILED [ 50%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info8] FAILED [ 50%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info9] FAILED [ 50%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info10] FAILED [ 51%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info11] FAILED [ 51%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info12] FAILED [ 52%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info13] FAILED [ 52%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info14] FAILED [ 52%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info15] FAILED [ 53%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info16] PASSED [ 53%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info17] PASSED [ 53%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info18] PASSED [ 54%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info19] PASSED [ 54%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info20] FAILED [ 55%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info21] FAILED [ 55%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info22] FAILED [ 55%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info23] FAILED [ 56%]
+tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info24] FAILED [ 56%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info0] PASSED [ 56%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info1] PASSED [ 57%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info2] PASSED [ 57%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info3] PASSED [ 58%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info4] PASSED [ 58%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info5] PASSED [ 58%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info6] PASSED [ 59%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info7] PASSED [ 59%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info8] PASSED [ 60%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info9] PASSED [ 60%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info10] PASSED [ 60%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info11] PASSED [ 61%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info12] PASSED [ 61%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info13] PASSED [ 61%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info14] PASSED [ 62%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info15] PASSED [ 62%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info16] PASSED [ 63%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info17] PASSED [ 63%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info18] PASSED [ 63%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info19] PASSED [ 64%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info20] PASSED [ 64%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info21] PASSED [ 64%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info22] PASSED [ 65%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info23] PASSED [ 65%]
+tests/platform/test_linux_distros.py::test_wazuh_detection_matrix[distro_info24] PASSED [ 66%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info0] PASSED [ 66%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info1] PASSED [ 66%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info2] PASSED [ 67%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info3] PASSED [ 67%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info4] PASSED [ 67%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info5] PASSED [ 68%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info6] PASSED [ 68%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info7] PASSED [ 69%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info8] PASSED [ 69%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info9] PASSED [ 69%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info10] PASSED [ 70%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info11] PASSED [ 70%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info12] PASSED [ 70%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info13] PASSED [ 71%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info14] PASSED [ 71%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info15] PASSED [ 72%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info16] PASSED [ 72%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info17] PASSED [ 72%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info18] PASSED [ 73%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info19] PASSED [ 73%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info20] PASSED [ 73%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info21] PASSED [ 74%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info22] PASSED [ 74%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info23] PASSED [ 75%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[active-distro_info24] PASSED [ 75%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info0] PASSED [ 75%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info1] PASSED [ 76%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info2] PASSED [ 76%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info3] PASSED [ 76%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info4] PASSED [ 77%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info5] PASSED [ 77%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info6] PASSED [ 78%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info7] PASSED [ 78%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info8] PASSED [ 78%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info9] PASSED [ 79%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info10] PASSED [ 79%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info11] PASSED [ 80%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info12] PASSED [ 80%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info13] PASSED [ 80%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info14] PASSED [ 81%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info15] PASSED [ 81%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info16] PASSED [ 81%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info17] PASSED [ 82%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info18] PASSED [ 82%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info19] PASSED [ 83%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info20] PASSED [ 83%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info21] PASSED [ 83%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info22] PASSED [ 84%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info23] PASSED [ 84%]
+tests/platform/test_linux_distros.py::test_agent_status_matrix[inactive-distro_info24] PASSED [ 84%]
+tests/platform/test_linux_distros.py::test_path_resolution_matrix[distro_info0-~/.config/resistine] PASSED [ 85%]
+tests/platform/test_linux_distros.py::test_path_resolution_matrix[distro_info0-/etc/wireguard] PASSED [ 85%]
+tests/platform/test_linux_distros.py::test_path_resolution_matrix[distro_info0-/etc/resolv.conf] PASSED [ 86%]
+tests/platform/test_linux_distros.py::test_path_resolution_matrix[distro_info1-~/.config/resistine] PASSED [ 86%]
+tests/platform/test_linux_distros.py::test_path_resolution_matrix[distro_info1-/etc/wireguard] PASSED [ 86%]
+tests/platform/test_linux_distros.py::test_path_resolution_matrix[distro_info1-/etc/resolv.conf] PASSED [ 87%]
+tests/platform/test_linux_distros.py::test_path_resolution_matrix[distro_info2-~/.config/resistine] PASSED [ 87%]
+tests/platform/test_linux_distros.py::test_path_resolution_matrix[distro_info2-/etc/wireguard] PASSED [ 87%]
+tests/platform/test_linux_distros.py::test_path_resolution_matrix[distro_info2-/etc/resolv.conf] PASSED [ 88%]
+tests/platform/test_linux_distros.py::test_path_resolution_matrix[distro_info3-~/.config/resistine] PASSED [ 88%]
+tests/platform/test_linux_distros.py::test_path_resolution_matrix[distro_info3-/etc/wireguard] PASSED [ 89%]
+tests/platform/test_linux_distros.py::test_path_resolution_matrix[distro_info3-/etc/resolv.conf] PASSED [ 89%]
+tests/platform/test_linux_distros.py::test_path_resolution_matrix[distro_info4-~/.config/resistine] PASSED [ 89%]
+tests/platform/test_linux_distros.py::test_path_resolution_matrix[distro_info4-/etc/wireguard] PASSED [ 90%]
+tests/platform/test_linux_distros.py::test_path_resolution_matrix[distro_info4-/etc/resolv.conf] PASSED [ 90%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info0] PASSED [ 90%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info1] PASSED [ 91%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info2] PASSED [ 91%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info3] PASSED [ 92%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info4] PASSED [ 92%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info5] PASSED [ 92%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info6] PASSED [ 93%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info7] PASSED [ 93%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info8] PASSED [ 93%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info9] PASSED [ 94%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info10] PASSED [ 94%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info11] PASSED [ 95%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info12] PASSED [ 95%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info13] PASSED [ 95%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info14] PASSED [ 96%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info15] PASSED [ 96%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info16] PASSED [ 96%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info17] PASSED [ 97%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info18] PASSED [ 97%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info19] PASSED [ 98%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info20] PASSED [ 98%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info21] PASSED [ 98%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info22] PASSED [ 99%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info23] PASSED [ 99%]
+tests/platform/test_linux_distros.py::test_distro_util_edge_cases[info24] PASSED [100%]
+
+=================================== FAILURES ===================================
+____________ test_vpn_installer_matrix[installed-root-distro_info4] ____________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'pacman' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'pacman' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5f17360>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.261 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.261 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+____________ test_vpn_installer_matrix[installed-root-distro_info5] ____________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'pacman' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'pacman' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5cd84d0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.280 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.281 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+____________ test_vpn_installer_matrix[installed-root-distro_info6] ____________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5dc0050>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.288 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.288 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+____________ test_vpn_installer_matrix[installed-root-distro_info7] ____________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'yum' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'yum' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5ee3bd0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.297 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.297 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+____________ test_vpn_installer_matrix[installed-root-distro_info8] ____________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5c50350>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.304 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.304 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+____________ test_vpn_installer_matrix[installed-root-distro_info9] ____________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'zypper' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'zypper' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5c50b50>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.310 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.310 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+___________ test_vpn_installer_matrix[installed-root-distro_info10] ____________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'zypper' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'zypper' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5cca5d0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.316 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.317 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+___________ test_vpn_installer_matrix[installed-root-distro_info11] ____________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'apk' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'apk' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5ccb3e0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.323 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.323 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+___________ test_vpn_installer_matrix[installed-root-distro_info12] ____________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'emerge' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'emerge' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5c5e5f0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.329 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.329 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+___________ test_vpn_installer_matrix[installed-root-distro_info13] ____________
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.335 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.336 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+___________ test_vpn_installer_matrix[installed-root-distro_info14] ____________
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.342 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.342 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+___________ test_vpn_installer_matrix[installed-root-distro_info15] ____________
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.348 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.348 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+___________ test_vpn_installer_matrix[installed-root-distro_info20] ____________
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.371 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.371 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+___________ test_vpn_installer_matrix[installed-root-distro_info21] ____________
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.377 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.377 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+___________ test_vpn_installer_matrix[installed-root-distro_info22] ____________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf1e20>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.383 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.383 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+___________ test_vpn_installer_matrix[installed-root-distro_info23] ____________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf2690>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.389 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.389 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+___________ test_vpn_installer_matrix[installed-root-distro_info24] ____________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf27b0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.395 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.395 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[installed-user_sudo-distro_info4] __________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'pacman' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'pacman' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf2960>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.410 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.411 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[installed-user_sudo-distro_info5] __________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'pacman' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'pacman' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf29f0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.416 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.417 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[installed-user_sudo-distro_info6] __________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf2a80>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.422 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.422 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[installed-user_sudo-distro_info7] __________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'yum' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'yum' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf2b10>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.428 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.428 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[installed-user_sudo-distro_info8] __________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf2c30>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.434 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.434 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[installed-user_sudo-distro_info9] __________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'zypper' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'zypper' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf2cc0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.440 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.440 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[installed-user_sudo-distro_info10] _________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'zypper' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'zypper' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf2d50>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.446 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.446 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[installed-user_sudo-distro_info11] _________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'apk' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'apk' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf2e70>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.451 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.452 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[installed-user_sudo-distro_info12] _________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'emerge' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'emerge' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf31d0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.457 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.457 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[installed-user_sudo-distro_info13] _________
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.463 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.463 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[installed-user_sudo-distro_info14] _________
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.469 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.469 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[installed-user_sudo-distro_info15] _________
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.475 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.475 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[installed-user_sudo-distro_info20] _________
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.491 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.491 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[installed-user_sudo-distro_info21] _________
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.497 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.497 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[installed-user_sudo-distro_info22] _________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3800>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.503 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.503 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[installed-user_sudo-distro_info23] _________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3890>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.508 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.509 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[installed-user_sudo-distro_info24] _________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3920>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.514 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.514 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+________ test_vpn_installer_matrix[installed-user_pkexec-distro_info4] _________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'pacman' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'pacman' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3da0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.530 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.530 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+________ test_vpn_installer_matrix[installed-user_pkexec-distro_info5] _________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'pacman' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'pacman' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3e30>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.536 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.536 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+________ test_vpn_installer_matrix[installed-user_pkexec-distro_info6] _________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3140>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.542 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.542 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+________ test_vpn_installer_matrix[installed-user_pkexec-distro_info7] _________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'yum' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'yum' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db53800e0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.548 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.548 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+________ test_vpn_installer_matrix[installed-user_pkexec-distro_info8] _________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3f50>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.563 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.564 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+________ test_vpn_installer_matrix[installed-user_pkexec-distro_info9] _________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'zypper' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'zypper' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3140>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.569 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.569 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+________ test_vpn_installer_matrix[installed-user_pkexec-distro_info10] ________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'zypper' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'zypper' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3ec0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.575 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.575 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+________ test_vpn_installer_matrix[installed-user_pkexec-distro_info11] ________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'apk' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'apk' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3e30>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.581 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.581 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+________ test_vpn_installer_matrix[installed-user_pkexec-distro_info12] ________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'emerge' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'emerge' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3ad0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.587 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.587 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+________ test_vpn_installer_matrix[installed-user_pkexec-distro_info13] ________
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.593 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.593 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+________ test_vpn_installer_matrix[installed-user_pkexec-distro_info14] ________
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.598 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.599 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+________ test_vpn_installer_matrix[installed-user_pkexec-distro_info15] ________
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.604 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.605 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+________ test_vpn_installer_matrix[installed-user_pkexec-distro_info20] ________
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.621 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.621 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+________ test_vpn_installer_matrix[installed-user_pkexec-distro_info21] ________
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.627 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.627 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+________ test_vpn_installer_matrix[installed-user_pkexec-distro_info22] ________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3410>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.636 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.636 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+________ test_vpn_installer_matrix[installed-user_pkexec-distro_info23] ________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3380>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.642 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.642 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+________ test_vpn_installer_matrix[installed-user_pkexec-distro_info24] ________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf32f0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.647 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.648 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+__________ test_vpn_installer_matrix[not_installed-root-distro_info4] __________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'pacman' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'pacman' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3770>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.665 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.665 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+__________ test_vpn_installer_matrix[not_installed-root-distro_info5] __________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'pacman' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'pacman' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf32f0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.671 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.671 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+__________ test_vpn_installer_matrix[not_installed-root-distro_info6] __________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3380>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.677 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.677 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+__________ test_vpn_installer_matrix[not_installed-root-distro_info7] __________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'yum' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'yum' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3410>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.683 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.683 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+__________ test_vpn_installer_matrix[not_installed-root-distro_info8] __________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3770>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.689 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.690 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+__________ test_vpn_installer_matrix[not_installed-root-distro_info9] __________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'zypper' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'zypper' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3920>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.696 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.696 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[not_installed-root-distro_info10] __________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'zypper' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'zypper' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf31d0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.703 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.703 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[not_installed-root-distro_info11] __________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'apk' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'apk' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf36e0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.709 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.709 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[not_installed-root-distro_info12] __________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'emerge' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'emerge' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf34a0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.716 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.716 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[not_installed-root-distro_info13] __________
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.723 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.723 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[not_installed-root-distro_info14] __________
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.730 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.730 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[not_installed-root-distro_info15] __________
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.736 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.737 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[not_installed-root-distro_info20] __________
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.755 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.755 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[not_installed-root-distro_info21] __________
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.761 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.762 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[not_installed-root-distro_info22] __________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf2a80>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.769 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.769 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[not_installed-root-distro_info23] __________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf2960>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.775 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.776 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_________ test_vpn_installer_matrix[not_installed-root-distro_info24] __________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf29f0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.788 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.788 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_______ test_vpn_installer_matrix[not_installed-user_sudo-distro_info4] ________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'pacman' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'pacman' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf2690>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.804 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.804 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_______ test_vpn_installer_matrix[not_installed-user_sudo-distro_info5] ________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'pacman' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'pacman' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf2c30>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.810 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.810 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_______ test_vpn_installer_matrix[not_installed-user_sudo-distro_info6] ________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5380050>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.816 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.816 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_______ test_vpn_installer_matrix[not_installed-user_sudo-distro_info7] ________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'yum' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'yum' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5380290>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.822 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.822 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_______ test_vpn_installer_matrix[not_installed-user_sudo-distro_info8] ________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db53803b0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.828 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.829 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_______ test_vpn_installer_matrix[not_installed-user_sudo-distro_info9] ________
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'zypper' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'zypper' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db53804d0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.835 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.835 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_______ test_vpn_installer_matrix[not_installed-user_sudo-distro_info10] _______
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'zypper' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'zypper' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db53805f0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.841 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.841 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_______ test_vpn_installer_matrix[not_installed-user_sudo-distro_info11] _______
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'apk' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'apk' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5380710>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.847 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.847 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_______ test_vpn_installer_matrix[not_installed-user_sudo-distro_info12] _______
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'emerge' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'emerge' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db53807a0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.853 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.853 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_______ test_vpn_installer_matrix[not_installed-user_sudo-distro_info13] _______
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.860 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.860 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_______ test_vpn_installer_matrix[not_installed-user_sudo-distro_info14] _______
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.866 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.866 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_______ test_vpn_installer_matrix[not_installed-user_sudo-distro_info15] _______
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.872 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.872 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_______ test_vpn_installer_matrix[not_installed-user_sudo-distro_info20] _______
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.889 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.889 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_______ test_vpn_installer_matrix[not_installed-user_sudo-distro_info21] _______
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.895 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.896 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_______ test_vpn_installer_matrix[not_installed-user_sudo-distro_info22] _______
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5380d40>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.902 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.902 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_______ test_vpn_installer_matrix[not_installed-user_sudo-distro_info23] _______
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5380dd0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.908 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.908 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+_______ test_vpn_installer_matrix[not_installed-user_sudo-distro_info24] _______
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5380ef0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.914 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.914 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+______ test_vpn_installer_matrix[not_installed-user_pkexec-distro_info4] _______
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'pacman' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'pacman' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db53811c0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.930 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.930 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+______ test_vpn_installer_matrix[not_installed-user_pkexec-distro_info5] _______
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'pacman' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'pacman' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5381250>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.936 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.936 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+______ test_vpn_installer_matrix[not_installed-user_pkexec-distro_info6] _______
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db53812e0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.942 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.942 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+______ test_vpn_installer_matrix[not_installed-user_pkexec-distro_info7] _______
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'yum' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'yum' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5381400>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.948 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.949 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+______ test_vpn_installer_matrix[not_installed-user_pkexec-distro_info8] _______
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5381490>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.954 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.955 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+______ test_vpn_installer_matrix[not_installed-user_pkexec-distro_info9] _______
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'zypper' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'zypper' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5381520>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.960 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.960 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+______ test_vpn_installer_matrix[not_installed-user_pkexec-distro_info10] ______
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'zypper' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'zypper' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5381760>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.966 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.966 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+______ test_vpn_installer_matrix[not_installed-user_pkexec-distro_info11] ______
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'apk' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'apk' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5381880>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.972 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.972 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+______ test_vpn_installer_matrix[not_installed-user_pkexec-distro_info12] ______
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'emerge' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'emerge' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5381910>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.978 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.978 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+______ test_vpn_installer_matrix[not_installed-user_pkexec-distro_info13] ______
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.993 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.993 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+______ test_vpn_installer_matrix[not_installed-user_pkexec-distro_info14] ______
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:54.999 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:54.999 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+______ test_vpn_installer_matrix[not_installed-user_pkexec-distro_info15] ______
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:55.005 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:55.005 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+______ test_vpn_installer_matrix[not_installed-user_pkexec-distro_info20] ______
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:55.021 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:55.021 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+______ test_vpn_installer_matrix[not_installed-user_pkexec-distro_info21] ______
+tests/platform/test_linux_distros.py:114: in test_vpn_installer_matrix
+    assert result is False
+E   assert True is False
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:55.027 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:55.027 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+______ test_vpn_installer_matrix[not_installed-user_pkexec-distro_info22] ______
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db53819a0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:55.033 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:55.033 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+______ test_vpn_installer_matrix[not_installed-user_pkexec-distro_info23] ______
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5381a30>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:55.039 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:55.039 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+______ test_vpn_installer_matrix[not_installed-user_pkexec-distro_info24] ______
+tests/platform/test_linux_distros.py:112: in test_vpn_installer_matrix
+    assert env.pm_cmd in args
+E   AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+E    +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5381be0>.pm_cmd
+----------------------------- Captured stderr call -----------------------------
+2026-04-21 10:59:55.044 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:139 - Running installer as admin: /tmp/script...
+2026-04-21 10:59:55.045 | INFO     | plugins.vpn.wireguard.vpn_functions_linux:run_installer_as_admin:149 - WireGuard installation command executed.
+=========================== short test summary info ============================
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info4] - AssertionError: assert 'pacman' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'pacman' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5f17360>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info5] - AssertionError: assert 'pacman' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'pacman' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5cd84d0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info6] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5dc0050>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info7] - AssertionError: assert 'yum' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'yum' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5ee3bd0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info8] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5c50350>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info9] - AssertionError: assert 'zypper' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'zypper' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5c50b50>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info10] - AssertionError: assert 'zypper' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'zypper' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5cca5d0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info11] - AssertionError: assert 'apk' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'apk' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5ccb3e0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info12] - AssertionError: assert 'emerge' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'emerge' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5c5e5f0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info13] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info14] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info15] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info20] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info21] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info22] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf1e20>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info23] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf2690>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-root-distro_info24] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf27b0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info4] - AssertionError: assert 'pacman' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'pacman' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf2960>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info5] - AssertionError: assert 'pacman' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'pacman' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf29f0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info6] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf2a80>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info7] - AssertionError: assert 'yum' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'yum' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf2b10>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info8] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf2c30>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info9] - AssertionError: assert 'zypper' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'zypper' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf2cc0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info10] - AssertionError: assert 'zypper' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'zypper' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf2d50>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info11] - AssertionError: assert 'apk' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'apk' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf2e70>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info12] - AssertionError: assert 'emerge' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'emerge' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf31d0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info13] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info14] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info15] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info20] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info21] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info22] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3800>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info23] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3890>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_sudo-distro_info24] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3920>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info4] - AssertionError: assert 'pacman' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'pacman' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3da0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info5] - AssertionError: assert 'pacman' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'pacman' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3e30>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info6] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3140>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info7] - AssertionError: assert 'yum' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'yum' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db53800e0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info8] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3f50>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info9] - AssertionError: assert 'zypper' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'zypper' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3140>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info10] - AssertionError: assert 'zypper' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'zypper' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3ec0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info11] - AssertionError: assert 'apk' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'apk' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3e30>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info12] - AssertionError: assert 'emerge' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'emerge' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3ad0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info13] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info14] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info15] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info20] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info21] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info22] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3410>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info23] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3380>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[installed-user_pkexec-distro_info24] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf32f0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info4] - AssertionError: assert 'pacman' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'pacman' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3770>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info5] - AssertionError: assert 'pacman' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'pacman' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf32f0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info6] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3380>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info7] - AssertionError: assert 'yum' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'yum' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3410>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info8] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3770>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info9] - AssertionError: assert 'zypper' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'zypper' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf3920>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info10] - AssertionError: assert 'zypper' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'zypper' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf31d0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info11] - AssertionError: assert 'apk' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'apk' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf36e0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info12] - AssertionError: assert 'emerge' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'emerge' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf34a0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info13] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info14] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info15] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info20] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info21] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info22] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf2a80>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info23] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf2960>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-root-distro_info24] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf29f0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info4] - AssertionError: assert 'pacman' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'pacman' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf2690>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info5] - AssertionError: assert 'pacman' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'pacman' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5bf2c30>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info6] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5380050>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info7] - AssertionError: assert 'yum' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'yum' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5380290>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info8] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db53803b0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info9] - AssertionError: assert 'zypper' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'zypper' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db53804d0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info10] - AssertionError: assert 'zypper' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'zypper' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db53805f0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info11] - AssertionError: assert 'apk' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'apk' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5380710>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info12] - AssertionError: assert 'emerge' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'emerge' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db53807a0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info13] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info14] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info15] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info20] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info21] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info22] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5380d40>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info23] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5380dd0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_sudo-distro_info24] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5380ef0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info4] - AssertionError: assert 'pacman' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'pacman' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db53811c0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info5] - AssertionError: assert 'pacman' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'pacman' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5381250>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info6] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db53812e0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info7] - AssertionError: assert 'yum' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'yum' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5381400>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info8] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5381490>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info9] - AssertionError: assert 'zypper' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'zypper' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5381520>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info10] - AssertionError: assert 'zypper' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'zypper' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5381760>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info11] - AssertionError: assert 'apk' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'apk' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5381880>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info12] - AssertionError: assert 'emerge' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'emerge' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5381910>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info13] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info14] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info15] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info20] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info21] - assert True is False
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info22] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db53819a0>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info23] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5381a30>.pm_cmd
+FAILED tests/platform/test_linux_distros.py::test_vpn_installer_matrix[not_installed-user_pkexec-distro_info24] - AssertionError: assert 'dnf' in ['apt', 'install', '-y', 'wireguard']
+ +  where 'dnf' = <tests.platform.test_linux_distros.MockLinuxEnv object at 0x7f1db5381be0>.pm_cmd
+======================= 102 failed, 163 passed in 1.19s ========================

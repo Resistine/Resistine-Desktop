@@ -194,29 +194,6 @@ class Plugin(BasePlugin):
         row = build_updates_card(self, self.main_frame, row)
         row = build_siem_card(self, self.main_frame, row)
 
-        # Show a development banner on Linux/Windows
-        if platform.system() in ("Linux", "Windows"):
-            banner = customtkinter.CTkFrame(
-                self.main_frame,
-                fg_color=("#FEF3C7", "#2D1F05"),
-                corner_radius=10,
-            )
-            banner.grid(
-                row=row, column=0, sticky="ew", padx=20, pady=(10, 0),
-            )
-            banner.grid_columnconfigure(0, weight=1)
-            customtkinter.CTkLabel(
-                banner,
-                text=(
-                    "Antivirus is not hooked up on Windows and Linux yet. "
-                    "This UI is for development purposes only."
-                ),
-                font=customtkinter.CTkFont(family="Inter", size=12),
-                text_color=("#92400E", "#FBBF24"),
-                wraplength=600,
-            ).grid(row=0, column=0, padx=16, pady=12)
-            row += 1
-
         customtkinter.CTkLabel(
             self.main_frame, text="", height=12,
         ).grid(row=row, column=0)
@@ -383,17 +360,24 @@ class Plugin(BasePlugin):
         err_bg = t.get("status_badge_bg", {}).get("error")
         err_tx = t.get("status_badge_text", {}).get("error")
 
+        is_linux = platform.system() == "Linux"
         cfg = None
 
         if not status.get("installed"):
             cfg = {
                 "bg": err_bg, "title": "Not Installed", "title_color": err_tx,
                 "subtitle": (
+                    "ClamAV is not installed. Tap Install ClamAV to fetch "
+                    "it from your distribution's package manager."
+                    if is_linux else
                     "ClamAV binaries were not found.\n"
                     "Reinstall Resistine or run the build script "
                     "to set up antivirus protection."
                 ),
-                "action": None,
+                "action": (
+                    ("Install ClamAV", self._start_system_setup)
+                    if is_linux else None
+                ),
             }
         elif setup_state != "completed":
             # Setup phase — derive from setup_state
@@ -558,14 +542,20 @@ class Plugin(BasePlugin):
                 "action": ("Open Settings", clamav.open_fda_settings),
             }
         # offline
+        is_linux = platform.system() == "Linux"
         return {
             "bg": err_bg, "title": "Protection Offline",
             "title_color": err_tx,
             "subtitle": (
                 "ClamAV daemons are not running."
                 if status.get("in_bundle")
-                else "On-demand scanning available. "
-                "Install Resistine.app for real-time protection."
+                else (
+                    "On-demand scanning available. "
+                    "Enable systemd to start real-time protection."
+                    if is_linux else
+                    "On-demand scanning available. "
+                    "Install Resistine.app for real-time protection."
+                )
             ),
             "action": None,
         }

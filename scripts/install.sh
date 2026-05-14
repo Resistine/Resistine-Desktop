@@ -100,6 +100,34 @@ Linux*)
 			echo "All required packages are already installed."
 		fi
 		;;
+	*arch* | *manjaro* | *endeavouros*)
+		# openresolv conflicts with systemd-resolvconf (both provide /usr/bin/resolvconf).
+		# `pacman -Qi` resolves the Provides field, and systemd-resolvconf provides openresolv,
+		# so we use `pacman -Qq | grep -Fxq` to match the literal installed package name only.
+		if pacman -Qq | grep -Fxq openresolv; then
+			echo "Removing openresolv (conflicts with systemd-resolvconf)..."
+			sudo pacman -Rns --noconfirm openresolv
+		fi
+
+		# python on Arch is Python 3 and ships with venv; libarchive provides bsdtar for RPM extraction
+		PACKAGES_TO_INSTALL=""
+		for pkg in python python-pip tk wireguard-tools systemd-resolvconf libarchive; do
+			if ! pacman -Qi "$pkg" &>/dev/null; then
+				PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL $pkg"
+			fi
+		done
+
+		if [ -n "$PACKAGES_TO_INSTALL" ]; then
+			echo "Installing missing packages:$PACKAGES_TO_INSTALL"
+			sudo pacman -Sy --noconfirm --needed $PACKAGES_TO_INSTALL
+		else
+			echo "All required packages are already installed."
+		fi
+
+		# Mirror Fedora: enable systemd-resolved and point /etc/resolv.conf at its stub
+		sudo systemctl enable --now systemd-resolved
+		sudo ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+		;;
 	*)
 		# TODO: This should be improved to support more distros
 		echo "Unsupported Linux distribution: ${ID:-unknown}"
