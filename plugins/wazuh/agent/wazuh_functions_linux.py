@@ -137,7 +137,7 @@ def needs_reenrollment():
     return False
 
 def _get_os_info():
-    """Determine if OS is DEB or RPM based using LinuxDistro utility."""
+    """Determine package family (deb, rpm, arch) using LinuxDistro utility."""
     from utils.distro import LinuxDistro
     if LinuxDistro.is_debian_like():
         return "deb"
@@ -153,7 +153,8 @@ def get_package_url():
     if os_type == "deb":
         arch_suffix = LINUX_PKG_ARCH_MAP_DEB.get(arch, "amd64")
         return LINUX_WAZUH_DEB_URL.format(arch=arch_suffix)
-    elif os_type == "rpm":
+    elif os_type == "rpm" or os_type == "arch":
+        # Arch uses the RPM artifact and extracts it with bsdtar (libarchive); upstream Wazuh ships no pacman package
         arch_suffix = LINUX_PKG_ARCH_MAP_RPM.get(arch, "x86_64")
         return LINUX_WAZUH_RPM_URL.format(arch=arch_suffix)
     elif os_type == "arch":
@@ -303,6 +304,13 @@ def remove_agent():
         uninstall_cmd = "apt-get remove -y wazuh-agent"
     elif os_type == "rpm":
         uninstall_cmd = "yum remove -y wazuh-agent || dnf remove -y wazuh-agent"
+    elif os_type == "arch":
+        # bsdtar-extracted install isn't tracked by pacman, so tear down by path
+        uninstall_cmd = (
+            "systemctl disable wazuh-agent 2>/dev/null; "
+            "rm -f /usr/lib/systemd/system/wazuh-agent.service /etc/systemd/system/wazuh-agent.service; "
+            "systemctl daemon-reload"
+        )
         
     script = f"""
         systemctl stop wazuh-agent 2>/dev/null
@@ -325,14 +333,26 @@ def full_install(progress_callback=None):
     agent_group = get_agent_group()
 
     os_type = _get_os_info()
+    ossec_conf = f"{LINUX_WAZUH_DIR}/etc/ossec.conf"
     install_cmd = ""
     deploy_env = _deploy_env(agent_name, agent_group)
     if os_type == "deb":
         install_cmd = f"{deploy_env} dpkg -i '{pkg_path}'"
     elif os_type == "rpm":
         install_cmd = f"{deploy_env} rpm -ihv '{pkg_path}'"
+    elif os_type == "arch":
+        # No postinst runs when extracting with bsdtar — create the wazuh user/group, extract,
+        # fix ownership, then stamp manager + group into ossec.conf manually
+        install_cmd = (
+            "(getent group wazuh >/dev/null || groupadd --system wazuh) && "
+            "(getent passwd wazuh >/dev/null || useradd --system --no-create-home "
+            "--home /var/ossec --shell /sbin/nologin -g wazuh wazuh) && "
+            f"bsdtar -xpf '{pkg_path}' -C / && "
+            "chown -R wazuh:wazuh /var/ossec && "
+            f"sed -i \"s|<address>.*</address>|<address>{WAZUH_MANAGER}</address>|\" '{ossec_conf}' && "
+            f"sed -i \"s|<groups>.*</groups>|<groups>{agent_group}</groups>|\" '{ossec_conf}'"
+        )
 
-    ossec_conf = f"{LINUX_WAZUH_DIR}/etc/ossec.conf"
     agent_auth = f"{LINUX_WAZUH_DIR}/bin/agent-auth"
     backup_dir = os.path.dirname(_KEY_BACKUP)
 
