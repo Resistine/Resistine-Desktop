@@ -383,17 +383,24 @@ class Plugin(BasePlugin):
         err_bg = t.get("status_badge_bg", {}).get("error")
         err_tx = t.get("status_badge_text", {}).get("error")
 
+        is_linux = platform.system() == "Linux"
         cfg = None
 
         if not status.get("installed"):
             cfg = {
                 "bg": err_bg, "title": "Not Installed", "title_color": err_tx,
                 "subtitle": (
+                    "ClamAV is not installed. Tap Install ClamAV to fetch "
+                    "it from your distribution's package manager."
+                    if is_linux else
                     "ClamAV binaries were not found.\n"
                     "Reinstall Resistine or run the build script "
                     "to set up antivirus protection."
                 ),
-                "action": None,
+                "action": (
+                    ("Install ClamAV", self._start_system_setup)
+                    if is_linux else None
+                ),
             }
         elif setup_state != "completed":
             # Setup phase — derive from setup_state
@@ -558,14 +565,20 @@ class Plugin(BasePlugin):
                 "action": ("Open Settings", clamav.open_fda_settings),
             }
         # offline
+        is_linux = platform.system() == "Linux"
         return {
             "bg": err_bg, "title": "Protection Offline",
             "title_color": err_tx,
             "subtitle": (
                 "ClamAV daemons are not running."
                 if status.get("in_bundle")
-                else "On-demand scanning available. "
-                "Install Resistine.app for real-time protection."
+                else (
+                    "On-demand scanning available. "
+                    "Enable systemd to start real-time protection."
+                    if is_linux else
+                    "On-demand scanning available. "
+                    "Install Resistine.app for real-time protection."
+                )
             ),
             "action": None,
         }

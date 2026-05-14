@@ -908,23 +908,12 @@ class AppUI(customtkinter.CTk):
             scrollable.bind_all("<Button-5>", _bind_all_button5, add="+")
 
         # ---- Auto-hide scrollbar when not needed ----
-        # IMPORTANT: never change layout width (that causes visible shifting).
-        # Instead, keep the scrollbar in place and make it fully transparent when "hidden".
-        sb_theme = ThemeManager.theme.get("CTkScrollbar", {}) if "ThemeManager" in globals() else {}
-        if scrollbar is not None and not hasattr(scrollable, "_resistine_scrollbar_colors"):
-            try:
-                scrollable._resistine_scrollbar_colors = {
-                    "fg_color": scrollbar.cget("fg_color"),
-                    "button_color": scrollbar.cget("button_color"),
-                    "button_hover_color": scrollbar.cget("button_hover_color"),
-                }
-            except Exception:
-                # fall back to theme defaults if cget isn't available
-                scrollable._resistine_scrollbar_colors = {
-                    "fg_color": sb_theme.get("fg_color", ("#F0F0F0", "#2B2B2B")),
-                    "button_color": sb_theme.get("button_color", ("#C7C7C7", "#5A5A5A")),
-                    "button_hover_color": sb_theme.get("button_hover_color", ("#B0B0B0", "#6A6A6A")),
-                }
+        # Actually remove the widget from the grid when content fits, and
+        # grid() it back when it overflows. The previous "paint it
+        # transparent" approach left the scrollbar visible on plugin
+        # pages whose background didn't match the CTkScrollbar fg colour.
+        # grid_remove() preserves the widget's grid options so a bare
+        # grid() call restores its former placement exactly.
 
         hide_state = {"job": None, "hidden": False}
 
@@ -947,22 +936,13 @@ class AppUI(customtkinter.CTk):
                 if should_hide and not hide_state["hidden"]:
                     hide_state["hidden"] = True
                     try:
-                        scrollbar.configure(
-                            fg_color="transparent",
-                            button_color="transparent",
-                            button_hover_color="transparent",
-                        )
+                        scrollbar.grid_remove()
                     except Exception:
                         pass
                 elif (not should_hide) and hide_state["hidden"]:
                     hide_state["hidden"] = False
                     try:
-                        colors = getattr(scrollable, "_resistine_scrollbar_colors", None) or {}
-                        scrollbar.configure(
-                            fg_color=colors.get("fg_color", ("#F0F0F0", "#2B2B2B")),
-                            button_color=colors.get("button_color", ("#C7C7C7", "#5A5A5A")),
-                            button_hover_color=colors.get("button_hover_color", ("#B0B0B0", "#6A6A6A")),
-                        )
+                        scrollbar.grid()
                     except Exception:
                         pass
             except Exception:
