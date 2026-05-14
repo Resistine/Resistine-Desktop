@@ -153,3 +153,6 @@ VERSION
 
 # Extracted Wazuh sample agents (unpacked at runtime from agents_samples.tar.gz)
 plugins/wazuh_overview/data/agents/
+
+# Agent(s) Date Recieved from Wazuh
+plugins/wazuh_overview/data
