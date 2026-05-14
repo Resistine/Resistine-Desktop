@@ -393,10 +393,30 @@ def download_package(progress_callback=None):
     return None
 
 
+def _ensure_ossec_address():
+    """Patch ossec.conf if the manager address is wrong (e.g. left as 0.0.0.0 by MSI)."""
+    try:
+        with open(_OSSEC_CONF, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+        if f"<address>{WAZUH_MANAGER}</address>" in content:
+            return
+    except Exception:
+        return
+    logger.warning(f"ossec.conf has wrong manager address — patching to {WAZUH_MANAGER}")
+    patch_cmd = (
+        f"(Get-Content '{_OSSEC_CONF}') "
+        f"-replace '<address>.*</address>', '<address>{WAZUH_MANAGER}</address>' | "
+        f"Set-Content '{_OSSEC_CONF}'"
+    )
+    _run_privileged(patch_cmd)
+
+
 def start_agent():
     """Start the Wazuh agent Windows service."""
     if get_agent_status() == "Running":
         return True
+
+    _ensure_ossec_address()
 
     # Restore key if missing
     if os.path.exists(_KEY_BACKUP) and not os.path.exists(_CLIENT_KEYS):
@@ -543,6 +563,7 @@ def full_install(progress_callback=None):
 
     patch_cmd = (
         f"(Get-Content '{_OSSEC_CONF}') "
+        f"-replace '<address>.*</address>', '<address>{WAZUH_MANAGER}</address>' "
         f"-replace '<agent_name>.*</agent_name>', '<agent_name>{agent_name}</agent_name>' | "
         f"Set-Content '{_OSSEC_CONF}'"
     )
