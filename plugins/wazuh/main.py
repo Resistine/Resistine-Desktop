@@ -21,6 +21,12 @@ from utils.logger import logger
 _PLATFORM = platform.system()
 _PLUGIN_DIR = os.path.dirname(os.path.realpath(__file__))
 
+try:
+    from plugins.vpn.main import is_vpn_connected
+except ImportError:
+    def is_vpn_connected():
+        return True
+
 # Platform-conditional imports
 _platform_supported = False
 if _PLATFORM == "Darwin":
@@ -272,9 +278,72 @@ class Plugin(BasePlugin):
 
         return row
 
-    # --- Card: Not Installed (state-driven) ---
+    # --- Card: Not Installed ---
 
     def _build_install_section(self, card, row):
+        if _PLATFORM == "Darwin":
+            return self._build_install_section_darwin(card, row)
+        return self._build_install_section_direct(card, row)
+
+    def _build_install_section_direct(self, card, row):
+        """Simple install card for Windows/Linux — requires VPN, one-click install."""
+        customtkinter.CTkLabel(
+            card, text="Security Agent",
+            font=customtkinter.CTkFont(**_FONT_TITLE),
+        ).grid(row=row, column=0, columnspan=2, padx=20, pady=(20, 4), sticky="w")
+        row += 1
+
+        customtkinter.CTkLabel(
+            card,
+            text=(
+                "The SIEM agent collects security telemetry from this machine "
+                "and reports to the Resistine SIEM dashboard."
+            ),
+            font=customtkinter.CTkFont(size=13),
+            text_color=_COLOR_MUTED, wraplength=460, justify="left",
+        ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 12), sticky="w")
+        row += 1
+
+        row = self._add_separator(card, row)
+        row = self._add_detail_rows(card, row, {
+            "Agent Name": get_agent_name(),
+            "Agent Group": get_agent_group(),
+            "Manager": WAZUH_MANAGER,
+        })
+
+        vpn_ok = is_vpn_connected()
+        if not vpn_ok:
+            customtkinter.CTkLabel(
+                card,
+                text="Connect VPN to install the SIEM agent",
+                font=customtkinter.CTkFont(size=13, weight="bold"),
+                text_color=_COLOR_ERROR,
+            ).grid(row=row, column=0, columnspan=2, padx=20, pady=(12, 0), sticky="w")
+            row += 1
+
+        self._progress_label = customtkinter.CTkLabel(
+            card, text="",
+            font=customtkinter.CTkFont(size=13), text_color=_COLOR_ACCENT,
+        )
+        self._progress_label.grid(
+            row=row, column=0, columnspan=2, padx=20, pady=(12, 0), sticky="w"
+        )
+        row += 1
+
+        self._install_btn = customtkinter.CTkButton(
+            card, text="Install Agent", height=40, corner_radius=8,
+            font=customtkinter.CTkFont(size=14, weight="bold"),
+            command=self._start_installation,
+            state="normal" if vpn_ok else "disabled",
+        )
+        self._install_btn.grid(
+            row=row, column=0, columnspan=2, sticky="ew", padx=20, pady=(8, 20)
+        )
+        row += 1
+        return row
+
+    def _build_install_section_darwin(self, card, row):
+        """State-machine install card for macOS — download + install phases."""
         from plugins.wazuh.agent.installer_service import (
             STATE_DOWNLOADED,
             STATE_DOWNLOAD_FAILED,
@@ -289,32 +358,25 @@ class Plugin(BasePlugin):
         state = get_install_state()
         logged_in = settings.get("auth", "logged_in", False)
 
-        # Title
         customtkinter.CTkLabel(
-            card,
-            text="Security Agent",
+            card, text="Security Agent",
             font=customtkinter.CTkFont(**_FONT_TITLE),
         ).grid(row=row, column=0, columnspan=2, padx=20, pady=(20, 4), sticky="w")
         row += 1
 
-        # State-specific content
         if state == STATE_NOT_STARTED and not logged_in:
             customtkinter.CTkLabel(
-                card,
-                text="Log in to enable endpoint protection.",
+                card, text="Log in to enable endpoint protection.",
                 font=customtkinter.CTkFont(size=13),
-                text_color=_COLOR_MUTED,
-                wraplength=460, justify="left",
+                text_color=_COLOR_MUTED, wraplength=460, justify="left",
             ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="w")
             row += 1
 
         elif state in (STATE_NOT_STARTED, STATE_DOWNLOADING):
             customtkinter.CTkLabel(
-                card,
-                text="Downloading security agent...",
+                card, text="Downloading security agent...",
                 font=customtkinter.CTkFont(size=13),
-                text_color=_COLOR_ACCENT,
-                wraplength=460, justify="left",
+                text_color=_COLOR_ACCENT, wraplength=460, justify="left",
             ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 8), sticky="w")
             row += 1
             bar = customtkinter.CTkProgressBar(card, mode="indeterminate", width=300)
@@ -344,7 +406,6 @@ class Plugin(BasePlugin):
             row += 1
 
         elif state == STATE_DOWNLOADED:
-            # Pre-consent card
             customtkinter.CTkLabel(
                 card,
                 text=(
@@ -356,8 +417,7 @@ class Plugin(BasePlugin):
             ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 4), sticky="w")
             row += 1
             customtkinter.CTkLabel(
-                card,
-                text="This requires your password to allow the installation.",
+                card, text="This requires your password to allow the installation.",
                 font=customtkinter.CTkFont(size=13),
                 text_color=_COLOR_MUTED, wraplength=460, justify="left",
             ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 12), sticky="w")
@@ -402,7 +462,6 @@ class Plugin(BasePlugin):
             bar.grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="ew")
             bar.start()
             row += 1
-            # Start polling progress
             self._poll_install()
 
         elif state == STATE_INSTALL_FAILED:
@@ -421,7 +480,6 @@ class Plugin(BasePlugin):
             ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 8), sticky="w")
             row += 1
 
-            # Don't show retry for user_canceled — they chose to cancel
             if reason != "user_canceled":
                 customtkinter.CTkButton(
                     card, text="Retry", height=36, corner_radius=8,
@@ -430,7 +488,6 @@ class Plugin(BasePlugin):
                 ).grid(row=row, column=0, columnspan=2, sticky="ew", padx=20, pady=(4, 20))
                 row += 1
             else:
-                # Show "Install Security" again for user-canceled
                 self._install_btn = customtkinter.CTkButton(
                     card, text="Install Security", height=40, corner_radius=8,
                     font=customtkinter.CTkFont(size=14, weight="bold"),
@@ -519,7 +576,47 @@ class Plugin(BasePlugin):
     # --- Installation (background thread) ---
 
     def _start_installation(self):
-        """User clicked 'Install Security' — trigger via installer service."""
+        """User clicked Install — route to platform-specific install flow."""
+        if _PLATFORM == "Darwin":
+            return self._start_installation_darwin()
+        return self._start_installation_direct()
+
+    def _start_installation_direct(self):
+        """Windows/Linux: run full_install() directly in a background thread."""
+        if self._installing:
+            return
+        self._installing = True
+        if hasattr(self, "_install_btn") and self._install_btn.winfo_exists():
+            self._install_btn.configure(state="disabled", text="Installing...")
+
+        def _progress(msg):
+            if hasattr(self, "_progress_label") and self._progress_label.winfo_exists():
+                self.app.after(0, lambda: (
+                    self._progress_label.configure(text=msg)
+                    if self._progress_label.winfo_exists() else None
+                ))
+
+        def _done(success):
+            self._installing = False
+            if success:
+                self.app.show_notification("SIEM agent installed!", type="success")
+            else:
+                self.app.show_notification("Installation failed", type="error")
+            if hasattr(self, "main_container") and self.main_container.winfo_exists():
+                self.app.after(0, self._refresh_screen)
+
+        def _run():
+            try:
+                ok = full_install(progress_callback=_progress)
+            except Exception as e:
+                logger.error(f"Installation error: {e}")
+                ok = False
+            self.app.after(100, lambda s=ok: _done(s))
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _start_installation_darwin(self):
+        """macOS: trigger via installer service state machine."""
         from plugins.wazuh.agent.installer_service import (
             get_install_state,
             retry,
@@ -529,7 +626,6 @@ class Plugin(BasePlugin):
 
         if self._installing:
             return
-        # If state is install_failed (e.g. user canceled), reset to downloaded first
         if get_install_state() == STATE_INSTALL_FAILED:
             retry()
         self._installing = True
@@ -613,13 +709,23 @@ class Plugin(BasePlugin):
         if self._installing:
             return
         self._installing = True
-        self._install_btn.configure(state="disabled", text="Reinstalling...")
+        if hasattr(self, "_install_btn") and self._install_btn.winfo_exists():
+            self._install_btn.configure(state="disabled", text="Reinstalling...")
 
         def _progress(msg):
-            self.app.after(0, lambda: self._progress_label.configure(text=msg))
+            if hasattr(self, "_progress_label") and self._progress_label.winfo_exists():
+                self.app.after(0, lambda: (
+                    self._progress_label.configure(text=msg)
+                    if self._progress_label.winfo_exists() else None
+                ))
 
         def _run():
-            from plugins.wazuh.agent.wazuh_functions_darwin import remove_agent
+            if _PLATFORM == "Darwin":
+                from plugins.wazuh.agent.wazuh_functions_darwin import remove_agent
+            elif _PLATFORM == "Linux":
+                from plugins.wazuh.agent.wazuh_functions_linux import remove_agent
+            elif _PLATFORM == "Windows":
+                from plugins.wazuh.agent.wazuh_functions_windows import remove_agent
             _progress("Removing old agent...")
             remove_agent()
             try:
@@ -645,6 +751,11 @@ class Plugin(BasePlugin):
         want_start = switch_value == 1
 
         if want_start == is_running:
+            return
+
+        if _PLATFORM != "Darwin" and want_start and not is_vpn_connected():
+            self.app.show_notification("Connect VPN first", type="error")
+            self._agent_toggle.deselect()
             return
 
         self._agent_toggle.configure(state="disabled")
