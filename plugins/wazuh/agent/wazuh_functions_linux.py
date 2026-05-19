@@ -12,6 +12,8 @@ import socket
 import subprocess
 import tempfile
 import re
+import urllib.error
+import urllib.request
 
 from utils import settings
 from utils.logger import logger
@@ -211,17 +213,15 @@ def download_package(progress_callback=None):
 
     logger.info(f"Downloading Wazuh package from {url}")
     try:
-        result = subprocess.run(
-            ["curl", "-fSL", "-o", pkg_path, url],
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-        if result.returncode != 0:
-            logger.error(f"curl failed: {result.stderr}")
-            return None
+        urllib.request.urlretrieve(url, pkg_path)
         logger.info(f"Downloaded to {pkg_path}")
         return pkg_path
+    except urllib.error.HTTPError as e:
+        logger.error(f"Download failed: HTTP {e.code} {e.reason}")
+        return None
+    except urllib.error.URLError as e:
+        logger.error(f"Download failed: {e.reason}")
+        return None
     except Exception as e:
         logger.error(f"Download error: {e}")
         return None

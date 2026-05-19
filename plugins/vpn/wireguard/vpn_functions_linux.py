@@ -380,11 +380,13 @@ def stop_vpn(config_path):
     :return: True if the service is stopped successfully, False otherwise.
     """
     try:
-        command = ["wg-quick", "down", config_path]
-        result = run_privileged_command(command)
-        if result and result.returncode == 0:
-            return True
-        return False
+        iface = os.path.splitext(os.path.basename(config_path))[0]
+        etc_conf = f"/etc/wireguard/{iface}.conf"
+        # Use interface name so AppArmor-confined wg-quick (Ubuntu) can access
+        # the config; clean up the /etc/wireguard copy afterwards.
+        script = f"wg-quick down '{iface}'; rm -f '{etc_conf}'"
+        result = run_privileged_command(["sh", "-c", script])
+        return result is not None and result.returncode == 0
     except Exception as e:
         logger.error(f"Failed to stop VPN service: {e}")
         return False
@@ -398,11 +400,17 @@ def start_vpn(config_path):
     :return: True if the service is started successfully, False otherwise.
     """
     try:
-        command = ["wg-quick", "up", config_path]
-        result = run_privileged_command(command)
-        if result and result.returncode == 0:
-            return True
-        return False
+        iface = os.path.splitext(os.path.basename(config_path))[0]
+        etc_conf = f"/etc/wireguard/{iface}.conf"
+        # Copy into /etc/wireguard/ first — Ubuntu's AppArmor profile for
+        # wg-quick only permits reading configs from that directory.
+        script = (
+            f"cp '{config_path}' '{etc_conf}' && "
+            f"chmod 600 '{etc_conf}' && "
+            f"wg-quick up '{iface}'"
+        )
+        result = run_privileged_command(["sh", "-c", script])
+        return result is not None and result.returncode == 0
     except Exception as e:
         logger.error(f"Failed to start VPN service: {e}")
         return False
