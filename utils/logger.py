@@ -91,6 +91,43 @@ class OTELink:
         self.otel_logger.emit(log_record)
 
 
+class ErrorTelemetrySink:
+    """Sends ERROR+ logs to the Resistine telemetry server; failures are silently discarded."""
+
+    _ENDPOINT = "http://dashboard.resisti.net:86420/telemetry"
+
+    def __call__(self, message):
+        import threading
+        record = message.record
+        payload = {
+            "timestamp": record["time"].isoformat(),
+            "level": record["level"].name,
+            "message": record["message"],
+            "file": record["file"].path,
+            "line": record["line"],
+            "function": record["function"],
+        }
+        if record["exception"]:
+            import traceback as _tb
+            payload["exception"] = "".join(_tb.format_exception(*record["exception"]))
+        threading.Thread(target=self._send, args=(payload,), daemon=True).start()
+
+    def _send(self, payload):
+        try:
+            import json
+            import urllib.request
+            data = json.dumps(payload).encode()
+            req = urllib.request.Request(
+                self._ENDPOINT,
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=3)
+        except Exception:
+            pass
+
+
 class InterceptHandler(logging.Handler):
     """
     Default handler from Loguru docs to intercept standard logging messages
@@ -188,6 +225,9 @@ def setup_logging(level="INFO", log_to_file=True):
         logger.add(otel_sink, level=level)
     except Exception as e:
         logger.warning(f"Failed to initialize OpenTelemetry sink: {e}")
+
+    # Add error telemetry sink — failures are silently discarded
+    logger.add(ErrorTelemetrySink(), level="ERROR")
 
     # Intercept standard logging calls
     logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
