@@ -29,8 +29,18 @@ OutputDir={#OutputDir}
 OutputBaseFilename={#AppName}-Setup-{#AppVersion}
 Compression=lzma2
 SolidCompression=yes
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+#ifdef TargetArch
+  #if TargetArch == "arm64"
+    ArchitecturesAllowed=arm64
+    ArchitecturesInstallIn64BitMode=arm64
+  #else
+    ArchitecturesAllowed=x64compatible
+    ArchitecturesInstallIn64BitMode=x64compatible
+  #endif
+#else
+  ArchitecturesAllowed=x64compatible
+  ArchitecturesInstallIn64BitMode=x64compatible
+#endif
 PrivilegesRequired=admin
 WizardStyle=modern
 DisableDirPage=auto

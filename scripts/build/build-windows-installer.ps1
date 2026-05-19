@@ -9,6 +9,10 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path (Split-Path (Split-Path -Parent $PSCommandPath) -Parent) -Parent
 Set-Location $ProjectRoot
 
+# Detect whether this machine is ARM64
+$_rawArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+$IsARM64  = $_rawArch -eq "ARM64"
+
 function Get-AppVersion {
     $specPath = Join-Path $ProjectRoot "packaging\Resistine.spec"
     $match = Select-String -Path $specPath -Pattern "VERSION\s*=\s*'([^']+)'" | Select-Object -First 1
@@ -118,8 +122,11 @@ if (-not (Test-Path $issScript)) {
     throw "Inno Setup script not found at $issScript"
 }
 
-Write-Host "Building Windows installer (.exe) with Inno Setup..."
-& $iscc "/DAppName=Resistine" "/DAppVersion=$version" "/DSourceDir=$sourceDir" "/DOutputDir=$outputDir" $issScript
+# Pass the detected architecture to Inno Setup so the .iss can configure
+# ArchitecturesInstallIn64BitMode and ArchitecturesAllowed correctly.
+$targetArch = if ($IsARM64) { "arm64" } else { "x64" }
+Write-Host "Building Windows installer (.exe) with Inno Setup ($targetArch)..."
+& $iscc "/DAppName=Resistine" "/DAppVersion=$version" "/DSourceDir=$sourceDir" "/DOutputDir=$outputDir" "/DTargetArch=$targetArch" $issScript
 if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup compilation failed with exit code $LASTEXITCODE."
 }
