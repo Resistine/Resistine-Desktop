@@ -15,7 +15,7 @@ def is_running_from_dmg() -> bool:
     return app_path.startswith("/Volumes/")
 
 
-def _get_bundle_path() -> str | None:
+def _get_bundle_path() -> str or None:
     """Return the .app bundle path, or None if not running as a bundle."""
     if not getattr(sys, "frozen", False):
         return None
