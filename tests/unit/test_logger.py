@@ -4,6 +4,7 @@ Covers: setup_logging configuration, InterceptHandler, OTELink level mapping,
 and edge cases (no stdout, non-TTY, OTEL exception).
 """
 
+import io
 import logging
 from unittest.mock import MagicMock
 
@@ -39,18 +40,18 @@ class TestSetupLogging:
 
     def test_non_tty_stdout(self, monkeypatch):
         """Non-TTY stdout should set colorize=False."""
-        mock_stdout = MagicMock()
-        mock_stdout.isatty.return_value = False
-        mock_stdout.write = MagicMock()
-        monkeypatch.setattr("sys.stdout", mock_stdout)
+        fake_stdout = io.StringIO()
+        monkeypatch.setattr("sys.stdout", fake_stdout)
         setup_logging(level="INFO", log_to_file=False)
 
     def test_isatty_raises(self, monkeypatch):
         """If isatty() raises, colorize should default to False."""
-        mock_stdout = MagicMock()
-        mock_stdout.isatty.side_effect = RuntimeError("no tty")
-        mock_stdout.write = MagicMock()
-        monkeypatch.setattr("sys.stdout", mock_stdout)
+
+        class BrokenTTYStream(io.StringIO):
+            def isatty(self):
+                raise RuntimeError("no tty")
+
+        monkeypatch.setattr("sys.stdout", BrokenTTYStream())
         setup_logging(level="INFO", log_to_file=False)
 
     def test_creates_log_directory(self, tmp_path, monkeypatch):
