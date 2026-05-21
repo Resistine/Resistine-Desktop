@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import socket
+import struct
 import subprocess
 import tempfile
 import threading
@@ -421,8 +422,47 @@ _SKIP_DIRS = frozenset({".git", ".hg", ".svn", "node_modules", "__pycache__"})
 _PARALLEL_WORKERS = 6
 
 
+def _instream_socket(sock_path: str, file_path: str) -> str:
+    """Stream file bytes to clamd via INSTREAM; return a CONTSCAN-style response.
+
+    Used as a fallback when clamd can't open the file directly (e.g. Ubuntu
+    home dirs with 750 permissions blocking the clamav system user).
+    Resistine opens the file as the current user and pipes bytes over the
+    socket, so clamd never needs filesystem access to the path.
+    """
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.settimeout(SOCKET_SCAN_TIMEOUT)
+        s.connect(sock_path)
+        s.sendall(b"nINSTREAM\n")
+        try:
+            with open(file_path, "rb") as f:
+                while True:
+                    chunk = f.read(4096)
+                    if not chunk:
+                        break
+                    s.sendall(struct.pack("!I", len(chunk)) + chunk)
+        except OSError as exc:
+            return f"{file_path}: {exc}. ERROR"
+        s.sendall(b"\x00\x00\x00\x00")
+        buf = b""
+        while True:
+            data = s.recv(4096)
+            if not data:
+                break
+            buf += data
+            if b"\n" in buf:
+                break
+    response = buf.decode(errors="replace").strip()
+    # Normalize "stream: ..." → "{file_path}: ..." to match CONTSCAN format
+    return response.replace("stream:", f"{file_path}:", 1)
+
+
 def _contscan_socket(sock_path: str, file_path: str) -> str:
-    """Send zCONTSCAN for one file to clamd; return the response line."""
+    """Send zCONTSCAN for one file to clamd; return the response line.
+
+    Falls back to INSTREAM if clamd can't access the path directly
+    (e.g. Ubuntu home dirs with 750 permissions).
+    """
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
         s.settimeout(SOCKET_SCAN_TIMEOUT)
         s.connect(sock_path)
@@ -435,7 +475,11 @@ def _contscan_socket(sock_path: str, file_path: str) -> str:
             buf += chunk
             if b"\0" in buf:
                 break
-        return buf.decode(errors="replace").strip("\0").strip()
+        response = buf.decode(errors="replace").strip("\0").strip()
+
+    if "Permission denied" in response or "File path check failure" in response:
+        return _instream_socket(sock_path, file_path)
+    return response
 
 
 def _walk_files(
