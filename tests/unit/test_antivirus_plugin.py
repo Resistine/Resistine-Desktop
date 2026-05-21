@@ -39,8 +39,8 @@ def plugin():
         p._scan_progress = MagicMock()
         p._scan_status_label = MagicMock()
         p._action_buttons = {
-            "scan_file": MagicMock(),
-            "scan_directory": MagicMock(),
+            "scan_files": MagicMock(),
+            "scan_folders": MagicMock(),
             "cancel_scan": MagicMock(),
             "update_sigs": MagicMock(),
         }
@@ -77,10 +77,10 @@ class TestCheckStatus:
 @pytest.mark.unit
 class TestOnAction:
     def test_routes_known_actions(self, plugin):
-        for action_key in ("scan_file", "scan_directory",
+        for action_key in ("scan_files", "scan_folders",
                            "update_sigs", "whitelist_add"):
-            with patch.object(plugin, "_start_file_scan" if action_key == "scan_file"
-                              else "_start_directory_scan" if action_key == "scan_directory"
+            with patch.object(plugin, "_start_files_scan" if action_key == "scan_files"
+                              else "_start_folders_scan" if action_key == "scan_folders"
                               else "_start_sig_update" if action_key == "update_sigs"
                               else "_add_whitelist_entry") as mock_handler:
                 plugin._on_action(action_key)
@@ -150,14 +150,14 @@ class TestHandleScanComplete:
         plugin._last_state = "protected"
         result = ScanResult(target="/tmp/test", scanned=1)
         plugin._handle_scan_complete(result)
-        for key in ("scan_file", "scan_directory"):
+        for key in ("scan_files", "scan_folders"):
             plugin._action_buttons[key].configure.assert_called()
 
     def test_buttons_disabled_when_no_database(self, plugin):
         plugin._last_state = "no_database"
         result = ScanResult(target="/tmp/test", scanned=0)
         plugin._handle_scan_complete(result)
-        for key in ("scan_file", "scan_directory"):
+        for key in ("scan_files", "scan_folders"):
             btn = plugin._action_buttons[key]
             last_call = btn.configure.call_args
             assert last_call.kwargs.get("state") == "disabled"
@@ -253,21 +253,21 @@ class TestScanGuards:
     def test_file_scan_blocked_while_scanning(self, plugin):
         plugin._scanning = True
         with patch("plugins.antivirus.main.filedialog") as mock_fd:
-            plugin._start_file_scan()
-            mock_fd.askopenfilename.assert_not_called()
+            plugin._start_files_scan()
+            mock_fd.askopenfilenames.assert_not_called()
 
     def test_directory_scan_blocked_while_scanning(self, plugin):
         plugin._scanning = True
         with patch("plugins.antivirus.main.filedialog") as mock_fd:
-            plugin._start_directory_scan()
+            plugin._start_folders_scan()
             mock_fd.askdirectory.assert_not_called()
 
     def test_file_scan_cancelled_dialog(self, plugin):
         plugin._scanning = False
         with patch("plugins.antivirus.main.filedialog") as mock_fd, \
-             patch.object(plugin, "_run_scan") as mock_run:
-            mock_fd.askopenfilename.return_value = ""
-            plugin._start_file_scan()
+             patch.object(plugin, "_run_multi_scan") as mock_run:
+            mock_fd.askopenfilenames.return_value = ()
+            plugin._start_files_scan()
             mock_run.assert_not_called()
 
 
@@ -411,12 +411,12 @@ class TestAutoUpdateScheduler:
 class TestSetScanButtonsState:
     def test_enables_all(self, plugin):
         plugin._set_scan_buttons_state("normal")
-        for key in ("scan_file", "scan_directory"):
+        for key in ("scan_files", "scan_folders"):
             plugin._action_buttons[key].configure.assert_called_with(state="normal")
 
     def test_disables_all(self, plugin):
         plugin._set_scan_buttons_state("disabled")
-        for key in ("scan_file", "scan_directory"):
+        for key in ("scan_files", "scan_folders"):
             plugin._action_buttons[key].configure.assert_called_with(state="disabled")
 
     def test_missing_button_no_crash(self, plugin):

@@ -821,7 +821,7 @@ class Plugin(BasePlugin):
         self._scan_log.configure(state="disabled")
 
     def _set_scan_buttons_state(self, state: str):
-        for key in ("scan_file", "scan_directory", "scan_computer"):
+        for key in ("scan_files", "scan_folders"):
             btn = self._action_buttons.get(key)
             if btn:
                 btn.configure(state=state)
@@ -1003,8 +1003,8 @@ class Plugin(BasePlugin):
         logger.info(f"Antivirus: action triggered — {action_key}")
 
         actions = {
-            "scan_file": self._start_file_scan,
-            "scan_directory": self._start_directory_scan,
+            "scan_files": self._start_files_scan,
+            "scan_folders": self._start_folders_scan,
             "scan_computer": self._start_computer_scan,
             "update_sigs": self._start_sig_update,
             "whitelist_add": self._add_whitelist_entry,
@@ -1015,43 +1015,71 @@ class Plugin(BasePlugin):
 
     # ── File / Directory Scan ─────────────────────────────────
 
-    def _start_file_scan(self):
+    def _start_files_scan(self):
         if self._scanning:
             return
-        path = filedialog.askopenfilename(
-            title="Select File to Scan", parent=self.app,
+        paths = filedialog.askopenfilenames(
+            title="Select Files to Scan", parent=self.app,
         )
-        if not path:
+        if not paths:
             return
-        if clamav.is_path_whitelisted(path):
+        targets = []
+        skipped = []
+        for path in dict.fromkeys(paths):
+            if clamav.is_path_whitelisted(path):
+                skipped.append(os.path.basename(path))
+            else:
+                targets.append(path)
+        if skipped:
             messagebox.showinfo(
                 "Whitelisted",
-                f"'{os.path.basename(path)}' is inside a whitelisted "
-                "location and will not be scanned.\n\n"
-                "Remove it from the whitelist first to scan.",
+                f"{len(skipped)} file(s) skipped (whitelisted):\n"
+                + "\n".join(skipped[:10]),
                 parent=self.app,
             )
+        if not targets:
             return
-        self._run_scan(path)
+        self._run_multi_scan(targets, label="Files")
 
-    def _start_directory_scan(self):
+    def _start_folders_scan(self):
         if self._scanning:
             return
-        path = filedialog.askdirectory(
-            title="Select Directory to Scan", parent=self.app,
-        )
-        if not path:
+        folders: list[str] = []
+        while True:
+            path = filedialog.askdirectory(
+                title="Select Folder to Scan", parent=self.app,
+            )
+            if not path:
+                break
+            if path not in folders:
+                folders.append(path)
+            if not messagebox.askyesno(
+                "Add More Folders?",
+                f"Added: {os.path.basename(path)}\n\n"
+                f"{len(folders)} folder(s) selected so far.\n"
+                "Add another folder?",
+                parent=self.app,
+            ):
+                break
+        if not folders:
             return
-        if clamav.is_path_whitelisted(path):
+        targets = []
+        skipped = []
+        for path in folders:
+            if clamav.is_path_whitelisted(path):
+                skipped.append(os.path.basename(path))
+            else:
+                targets.append(path)
+        if skipped:
             messagebox.showinfo(
                 "Whitelisted",
-                f"'{os.path.basename(path)}' is whitelisted and will "
-                "not be scanned.\n\n"
-                "Remove it from the whitelist first to scan.",
+                f"{len(skipped)} folder(s) skipped (whitelisted):\n"
+                + "\n".join(skipped[:10]),
                 parent=self.app,
             )
+        if not targets:
             return
-        self._run_scan(path)
+        self._run_multi_scan(targets, label="Folders")
 
     def _computer_scan_targets(self) -> list[str]:
         """Return the fixed list of directories scanned by 'Scan Computer'.
@@ -1111,7 +1139,7 @@ class Plugin(BasePlugin):
             return
         self._run_multi_scan(targets)
 
-    def _run_multi_scan(self, targets: list[str]):
+    def _run_multi_scan(self, targets: list[str], label: str = "Computer"):
         """Run scans on multiple targets sequentially, aggregating results."""
         self._scanning = True
         self._cancel_requested = False
@@ -1129,7 +1157,7 @@ class Plugin(BasePlugin):
             cancel_btn.grid()
 
         self._log_append(
-            f"Scanning computer ({len(targets)} location"
+            f"Scanning {label.lower()} ({len(targets)} location"
             f"{'s' if len(targets) != 1 else ''})...",
         )
         for t in targets:
@@ -1215,7 +1243,7 @@ class Plugin(BasePlugin):
                     self._scan_handle = None
 
             final = ScanResult(
-                target="Computer",
+                target=label,
                 scanned=agg["scanned"],
                 infected=agg["infected"],
                 infections=agg["infections"],

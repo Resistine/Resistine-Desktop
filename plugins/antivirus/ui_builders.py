@@ -104,8 +104,8 @@ def _build_scan_card(plugin, container):
     add_separator(card, 1)
 
     actions = [
-        ("Scan File", "scan_file"),
-        ("Scan Directory", "scan_directory"),
+        ("Scan Files", "scan_files"),
+        ("Scan Folders", "scan_folders"),
         ("Scan Computer", "scan_computer"),
     ]
     btn_frame = customtkinter.CTkFrame(card, fg_color="transparent")
