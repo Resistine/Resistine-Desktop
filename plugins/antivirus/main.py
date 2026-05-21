@@ -753,19 +753,26 @@ class Plugin(BasePlugin):
     # ── System Daemon Activation ────────────────────────────────
 
     def _start_system_setup(self):
-        """Launch the ClamAV postinstall script via the installer service."""
-        from plugins.antivirus.installer_service import trigger_system_setup
-
+        """Launch ClamAV system setup (platform-aware)."""
         if self._banner_action_btn:
             self._banner_action_btn.configure(
                 state="disabled", text="Starting...",
             )
 
-        def _run():
-            ok = trigger_system_setup()
-            if ok:
-                self.app.after(0, self._poll_setup_progress)
-            else:
+        if platform.system() == "Darwin":
+            from plugins.antivirus.installer_service import trigger_system_setup
+
+            def _run():
+                ok = trigger_system_setup()
+                if ok:
+                    self.app.after(0, self._poll_setup_progress)
+                else:
+                    self.app.after(0, self._update_realtime_status)
+        else:
+            from plugins.antivirus.clamav_platform_linux import activate_system_daemons
+
+            def _run():
+                ok, _msg = activate_system_daemons()
                 self.app.after(0, self._update_realtime_status)
 
         threading.Thread(target=_run, daemon=True).start()

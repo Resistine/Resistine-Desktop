@@ -78,7 +78,7 @@ def _has_systemd() -> bool:
 def _install_command(packages: list[str]) -> list[str] | None:
     """Return the install command for the first package manager found on PATH."""
     for pm, prefix in (
-        ("apt", ["apt", "install", "-y"]),
+        ("apt", ["env", "DEBIAN_FRONTEND=noninteractive", "apt", "install", "-y"]),
         ("dnf", ["dnf", "install", "-y"]),
         ("yum", ["yum", "install", "-y"]),
         ("pacman", ["pacman", "-S", "--noconfirm"]),
@@ -402,8 +402,11 @@ def _install_packages_if_missing() -> tuple[bool, str]:
 
     parts: list[str] = []
     # Refresh the package index on Debian-likes so the install doesn't
-    # fail on a stale apt cache.
+    # fail on a stale apt cache.  Repair any interrupted dpkg transactions
+    # first — apt will refuse to run if triggers are left in a broken state.
     if _is_debian_like():
+        parts.append("dpkg --configure -a || true")
+        parts.append("dpkg --triggers-only -a || true")
         parts.append("apt-get update")
     parts.append(" ".join(_shell_quote(c) for c in required_cmd))
 
