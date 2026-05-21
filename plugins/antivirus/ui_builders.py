@@ -64,11 +64,23 @@ def build_status_banner(plugin, parent, row):
     plugin._banner_action_btn.grid(row=0, column=1, padx=22, pady=20)
     plugin._banner_action_btn.grid_remove()
 
+    plugin._settings_gear_btn = customtkinter.CTkButton(
+        card, text="\u2699", width=32, height=32,
+        corner_radius=8, font=font(16),
+        fg_color="transparent",
+        hover_color=("#E5E7EB", "#2A2A2C"),
+        text_color=("#555555", "#AAAAAA"),
+        command=plugin._show_settings_view,
+    )
+    plugin._settings_gear_btn.grid(
+        row=0, column=2, padx=(0, 16), pady=20, sticky="e",
+    )
+
     plugin._banner_progress = customtkinter.CTkProgressBar(
         card, height=4, mode="indeterminate",
     )
     plugin._banner_progress.grid(
-        row=1, column=0, columnspan=2, padx=22, pady=(0, 12), sticky="ew",
+        row=1, column=0, columnspan=3, padx=22, pady=(0, 12), sticky="ew",
     )
     plugin._banner_progress.grid_remove()
 

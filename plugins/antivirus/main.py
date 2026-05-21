@@ -28,11 +28,10 @@ from plugins.antivirus.ui_builders import (
     build_status_banner,
 )
 from plugins.antivirus.ui_cards import (
-    build_scan_exclusions,
-    build_siem_card,
-    build_updates_card,
-    build_whitelist_and_quarantine,
+    build_db_info_card,
+    build_quarantine_card,
 )
+from plugins.antivirus.ui_settings import build_settings_view
 from plugins.base_plugin import BasePlugin
 from utils import notifications, settings
 from utils.logger import logger
@@ -79,6 +78,9 @@ class Plugin(BasePlugin):
         self._auto_update_timer = None
         self._auto_update_stop = threading.Event()
         self._rtd_watcher = None
+        self._settings_gear_btn = None
+        self._settings_frame = None
+        self._current_view = "main"
         self._init_ready = threading.Event()
         self.status = self.get_status()
 
@@ -209,14 +211,23 @@ class Plugin(BasePlugin):
         row = build_status_banner(self, self.main_frame, row)
         row = build_scan_and_protection(self, self.main_frame, row)
         row = build_scan_activity(self, self.main_frame, row)
-        row = build_whitelist_and_quarantine(self, self.main_frame, row)
-        row = build_scan_exclusions(self, self.main_frame, row)
-        row = build_updates_card(self, self.main_frame, row)
-        row = build_siem_card(self, self.main_frame, row)
+        row = build_quarantine_card(self, self.main_frame, row)
+        row = build_db_info_card(self, self.main_frame, row)
 
         customtkinter.CTkLabel(
             self.main_frame, text="", height=12,
         ).grid(row=row, column=0)
+
+        # Build settings view (hidden initially)
+        self._settings_frame = customtkinter.CTkScrollableFrame(
+            self.main_container, corner_radius=0, fg_color="transparent",
+        )
+        self._settings_frame.grid(row=0, column=1, sticky="nsew", pady=10)
+        self._settings_frame.grid_columnconfigure(0, weight=1)
+        self._settings_frame.grid_remove()
+
+        build_settings_view(self, self._settings_frame)
+        self._current_view = "main"
 
         # Populate live data on screen creation
         self.app.after(100, self._refresh_db_info)
@@ -249,20 +260,25 @@ class Plugin(BasePlugin):
                 return
 
             # --- Auto-hide Scrollbar Logic ---
+            active = (
+                self._settings_frame
+                if self._current_view == "settings"
+                else self.main_frame
+            )
             try:
-                if hasattr(self.main_frame, "_parent_canvas") and hasattr(self.main_frame, "_scrollbar"):
-                    yview = self.main_frame._parent_canvas.yview()
-                    is_mapped = bool(self.main_frame._scrollbar.grid_info())
+                if hasattr(active, "_parent_canvas") and hasattr(active, "_scrollbar"):
+                    yview = active._parent_canvas.yview()
+                    is_mapped = bool(active._scrollbar.grid_info())
                     if yview and (yview[0] <= 0.01 and yview[1] >= 0.99):
                         if is_mapped:
-                            self.main_frame._saved_sb_grid = self.main_frame._scrollbar.grid_info()
-                            self.main_frame._scrollbar.grid_remove()
+                            active._saved_sb_grid = active._scrollbar.grid_info()
+                            active._scrollbar.grid_remove()
                     else:
                         if not is_mapped:
-                            if hasattr(self.main_frame, "_saved_sb_grid") and self.main_frame._saved_sb_grid:
-                                self.main_frame._scrollbar.grid(**self.main_frame._saved_sb_grid)
+                            if hasattr(active, "_saved_sb_grid") and active._saved_sb_grid:
+                                active._scrollbar.grid(**active._saved_sb_grid)
                             else:
-                                self.main_frame._scrollbar.grid(row=0, column=1, sticky="ns", pady=0)
+                                active._scrollbar.grid(row=0, column=1, sticky="ns", pady=0)
             except Exception:
                 pass
             # --- End Auto-hide ---
@@ -313,9 +329,30 @@ class Plugin(BasePlugin):
         self._banner_subtitle = None
         self._banner_action_btn = None
         self._banner_progress = None
+        self._settings_gear_btn = None
+        self._settings_frame = None
+        self._current_view = "main"
         if hasattr(self, "main_container") and self.main_container:
             self.main_container.destroy()
             self.main_container = None
+
+    # ── View Switching ─────────────────────────────────────
+
+    def _show_settings_view(self):
+        """Switch from main view to settings view."""
+        if self._current_view == "settings":
+            return
+        self.main_frame.grid_remove()
+        self._settings_frame.grid()
+        self._current_view = "settings"
+
+    def _show_main_view(self):
+        """Switch from settings view back to main view."""
+        if self._current_view == "main":
+            return
+        self._settings_frame.grid_remove()
+        self.main_frame.grid()
+        self._current_view = "main"
 
     # ── UI Event Handlers ────────────────────────────────────
 
@@ -604,7 +641,14 @@ class Plugin(BasePlugin):
         Normal interval (10s) after setup is complete.
         """
         try:
-            if hasattr(self, "main_frame") and self.main_frame.winfo_exists():
+            alive = (
+                (hasattr(self, "main_frame") and self.main_frame.winfo_exists())
+                or (
+                    self._settings_frame
+                    and self._settings_frame.winfo_exists()
+                )
+            )
+            if alive:
                 setup_active = self._last_status and self._last_status.get(
                     "setup_state", "completed",
                 ) != "completed"

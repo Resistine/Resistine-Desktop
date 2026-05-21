@@ -1,6 +1,7 @@
 """Secondary UI card builders for the Antivirus plugin.
 
-Builds the Whitelist/Quarantine and Signature Updates sections.
+Builds Quarantine, Whitelist, Scan Exclusions, SIEM Forwarding,
+and Signature Database / Updates cards.
 
 Author: Resistine Team
 Copyright (c) Resistine 2025
@@ -11,8 +12,6 @@ import customtkinter
 from customtkinter import ThemeManager
 
 from plugins.antivirus.theme import (
-    CORNER_R,
-    PAD_X,
     add_separator,
     font,
     make_card,
@@ -36,14 +35,40 @@ def _ok_text():
     return ThemeManager.theme.get("Theme", {}).get("success_color", "#2ecc71")
 
 
-# ── 4. Whitelist + Quarantine ────────────────────────────
+# ── 4a. Quarantine (standalone, main view) ──────────────
 
 
-def _build_whitelist_card(plugin, container):
-    card = customtkinter.CTkFrame(
-        container, corner_radius=CORNER_R, border_width=1,
+def build_quarantine_card(plugin, parent, row):
+    """Standalone quarantine card (full-width, main view)."""
+    card = make_card(parent, row)
+    card.grid_columnconfigure(0, weight=1)
+
+    section_title(card, "Quarantine").grid(
+        row=0, column=0, padx=16, pady=(14, 3), sticky="w",
     )
-    card.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+    add_separator(card, 1)
+
+    plugin._quarantine_frame = customtkinter.CTkFrame(
+        card, fg_color="transparent",
+    )
+    plugin._quarantine_frame.grid(
+        row=2, column=0, padx=16, pady=(8, 14), sticky="ew",
+    )
+    plugin._quarantine_frame.grid_columnconfigure(0, weight=1)
+
+    customtkinter.CTkLabel(
+        plugin._quarantine_frame, text="No threats quarantined",
+        font=font(12), text_color=_muted(),
+    ).grid(row=0, column=0, sticky="w")
+    return row + 1
+
+
+# ── 4b. Whitelist (standalone, settings view) ───────────
+
+
+def build_whitelist_card(plugin, parent, row):
+    """Standalone whitelist card (full-width, settings view)."""
+    card = make_card(parent, row)
     card.grid_columnconfigure(0, weight=1)
 
     hdr = customtkinter.CTkFrame(card, fg_color="transparent")
@@ -74,44 +99,6 @@ def _build_whitelist_card(plugin, container):
         plugin._whitelist_frame, text="No whitelisted paths",
         font=font(12), text_color=_muted(),
     ).grid(row=0, column=0, sticky="w")
-
-
-def _build_quarantine_card(plugin, container):
-    card = customtkinter.CTkFrame(
-        container, corner_radius=CORNER_R, border_width=1,
-    )
-    card.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
-    card.grid_columnconfigure(0, weight=1)
-
-    section_title(card, "Quarantine").grid(
-        row=0, column=0, padx=16, pady=(14, 3), sticky="w",
-    )
-    add_separator(card, 1)
-
-    plugin._quarantine_frame = customtkinter.CTkFrame(
-        card, fg_color="transparent",
-    )
-    plugin._quarantine_frame.grid(
-        row=2, column=0, padx=16, pady=(8, 14), sticky="ew",
-    )
-    plugin._quarantine_frame.grid_columnconfigure(0, weight=1)
-
-    customtkinter.CTkLabel(
-        plugin._quarantine_frame, text="No threats quarantined",
-        font=font(12), text_color=_muted(),
-    ).grid(row=0, column=0, sticky="w")
-
-
-def build_whitelist_and_quarantine(plugin, parent, row):
-    container = customtkinter.CTkFrame(
-        parent, fg_color="transparent", corner_radius=0,
-    )
-    container.grid(row=row, column=0, sticky="ew", padx=PAD_X, pady=(0, 6))
-    container.grid_columnconfigure(0, weight=1)
-    container.grid_columnconfigure(1, weight=1)
-
-    _build_whitelist_card(plugin, container)
-    _build_quarantine_card(plugin, container)
     return row + 1
 
 
@@ -201,13 +188,7 @@ def build_scan_exclusions(plugin, parent, row):
     return row + 1
 
 
-# ── 6. Signature Updates ────────────────────────────────
-
-
-# (build_updates_card defined below)
-
-
-# ── 7. SIEM Forwarding ─────────────────────────────────
+# ── 6. SIEM Forwarding ─────────────────────────────────
 
 
 def build_siem_card(plugin, parent, row):
@@ -323,7 +304,26 @@ def _build_auto_update_toggle(plugin, card, row):
     return row + 1
 
 
-def build_updates_card(plugin, parent, row):
+def build_db_info_card(plugin, parent, row):
+    """Read-only signature database info card (main view)."""
+    card = make_card(parent, row)
+    card.grid_columnconfigure(1, weight=1)
+
+    section_title(card, "Signature Database").grid(
+        row=0, column=0, columnspan=2, padx=16, pady=(14, 3), sticky="w",
+    )
+
+    add_separator(card, 1)
+    _build_db_info_rows(plugin, card, start_row=2)
+
+    customtkinter.CTkFrame(card, height=8, fg_color="transparent").grid(
+        row=5, column=0, columnspan=2,
+    )
+    return row + 1
+
+
+def build_sig_updates_settings_card(plugin, parent, row):
+    """Auto-update toggle + Update Now button (settings view)."""
     card = make_card(parent, row)
     card.grid_columnconfigure(1, weight=1)
 
@@ -333,9 +333,7 @@ def build_updates_card(plugin, parent, row):
 
     add_separator(card, 1)
 
-    r = _build_db_info_rows(plugin, card, start_row=2)
-    add_separator(card, r)
-    r = _build_auto_update_toggle(plugin, card, r + 1)
+    r = _build_auto_update_toggle(plugin, card, 2)
 
     update_btn = customtkinter.CTkButton(
         card, text="Update Now", height=30, corner_radius=8,
