@@ -798,7 +798,7 @@ begin
 
   Log('Installing bundled WireGuard...');
   if Exec('msiexec.exe',
-    '/i "' + InstallerPath + '" /quiet /norestart',
+    '/i "' + InstallerPath + '" /qn /norestart',
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
   begin
     if ResultCode = 0 then
