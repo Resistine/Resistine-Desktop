@@ -111,6 +111,15 @@ if (Test-Path $vpnServiceSrc) {
     Write-Warning "windows_vpn_service.py not found at $vpnServiceSrc"
 }
 
+# Download bundled dependency installers (Python, WireGuard)
+Write-Host "Downloading bundled dependency installers..."
+$depsScript = Join-Path $ProjectRoot "scripts\build\download-windows-deps.ps1"
+if (Test-Path $depsScript) {
+    & $depsScript
+} else {
+    Write-Warning "download-windows-deps.ps1 not found at $depsScript - skipping dependency download"
+}
+
 $outputDir = Join-Path $ProjectRoot "dist\installers"
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 
@@ -133,4 +142,4 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host ""
 Write-Host "Done. Installer output:"
-Write-Host "  $outputDir\Resistine-Setup-$version.exe"
+Write-Host "  $outputDir\Resistine-Setup-${version}.exe"

@@ -59,6 +59,9 @@ Name: "startup"; Description: "Start Resistine when I sign in"; Flags: unchecked
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+; Bundled dependency installers — only extracted when the dep is missing
+Source: "deps\python-3.13.13-amd64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall nocompression; Check: NeedPythonInstall
+Source: "deps\wireguard-amd64.msi"; DestDir: "{tmp}"; Flags: deleteafterinstall nocompression; Check: NeedWireGuardInstall
 
 [Icons]
 Name: "{autoprograms}\{#AppName}\{#AppName}"; Filename: "{app}\Resistine.exe"
@@ -226,6 +229,18 @@ begin
   Result := FileExists('C:\Program Files\WireGuard\wireguard.exe');
 end;
 
+function IsPythonInstalled: Boolean;
+begin
+  { Accept Python 3.13 or newer only.  Older 3.x versions (3.10/3.11/3.12)
+    trigger the bundled installer to upgrade the user.  We check both
+    user-local and system-wide install locations for 3.13 and 3.14. }
+  Result :=
+    FileExists(ExpandConstant('{localappdata}\Programs\Python\Python313\python.exe')) or
+    FileExists(ExpandConstant('{localappdata}\Programs\Python\Python314\python.exe')) or
+    FileExists(ExpandConstant('{pf}\Python313\python.exe')) or
+    FileExists(ExpandConstant('{pf}\Python314\python.exe'));
+end;
+
 function IsGtkRuntimeInstalled: Boolean;
 begin
   Result := FileExists('C:\Program Files\GTK3-Runtime Win64\bin\libcairo-2.dll');
@@ -269,6 +284,14 @@ begin
 
   { taskkill returns non-zero if not running; treat "not running" as success. }
   RunHiddenCmd(Params, ResultCode);
+
+  { Also kill tray process (pythonw.exe running tray.py) }
+  RunHiddenCmd(
+    'powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name=''python.exe'' OR Name=''pythonw.exe''\" | ' +
+    'Where-Object { $_.CommandLine -like ''*tray.py*'' -or $_.CommandLine -like ''*Resistine*'' } | ' +
+    'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>nul',
+    ResultCode);
+
   Sleep(750);
   Result := not IsResistineRunning;
 end;
@@ -528,6 +551,16 @@ end;
 function ExtractExePathFromCommand(const CommandLine: string): string; forward;
 function ShouldPerformInstallAction: Boolean; forward;
 
+function NeedPythonInstall: Boolean;
+begin
+  Result := ShouldPerformInstallAction and (not IsPythonInstalled);
+end;
+
+function NeedWireGuardInstall: Boolean;
+begin
+  Result := ShouldPerformInstallAction and (not IsWireGuardInstalled);
+end;
+
 function ExistingUninstallerLooksLikeInno: Boolean;
 var
   ExePath: string;
@@ -713,6 +746,76 @@ begin
   end;
 end;
 
+procedure InstallBundledPython;
+var
+  InstallerPath: string;
+  ResultCode: Integer;
+begin
+  if IsPythonInstalled then exit;
+
+  InstallerPath := ExpandConstant('{tmp}\python-3.13.13-amd64.exe');
+  if not FileExists(InstallerPath) then
+  begin
+    Log('Bundled Python installer not found at: ' + InstallerPath);
+    AppendDependencyWarning('Python: bundled installer not found.');
+    exit;
+  end;
+
+  Log('Installing bundled Python 3.13...');
+  if Exec(InstallerPath,
+    '/quiet InstallAllUsers=1 PrependPath=1 Include_pip=1 Include_launcher=1',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    if ResultCode = 0 then
+      Log('Python 3.13 installed successfully')
+    else
+    begin
+      Log('Python installer exited with code: ' + IntToStr(ResultCode));
+      AppendDependencyWarning('Python: installer exited with code ' + IntToStr(ResultCode) + '.');
+    end;
+  end
+  else
+  begin
+    Log('Failed to launch Python installer');
+    AppendDependencyWarning('Python: could not launch installer.');
+  end;
+end;
+
+procedure InstallBundledWireGuard;
+var
+  InstallerPath: string;
+  ResultCode: Integer;
+begin
+  if IsWireGuardInstalled then exit;
+
+  InstallerPath := ExpandConstant('{tmp}\wireguard-amd64.msi');
+  if not FileExists(InstallerPath) then
+  begin
+    Log('Bundled WireGuard installer not found at: ' + InstallerPath);
+    AppendDependencyWarning('WireGuard: bundled installer not found.');
+    exit;
+  end;
+
+  Log('Installing bundled WireGuard...');
+  if Exec('msiexec.exe',
+    '/i "' + InstallerPath + '" /qn /norestart DO_NOT_LAUNCH=1',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    if ResultCode = 0 then
+      Log('WireGuard installed successfully')
+    else
+    begin
+      Log('WireGuard MSI exited with code: ' + IntToStr(ResultCode));
+      AppendDependencyWarning('WireGuard: MSI exited with code ' + IntToStr(ResultCode) + '.');
+    end;
+  end
+  else
+  begin
+    Log('Failed to launch WireGuard MSI');
+    AppendDependencyWarning('WireGuard: could not launch MSI installer.');
+  end;
+end;
+
 procedure InstallMissingDependenciesWithFeedback;
 begin
   if DependencyInstallAttempted then
@@ -723,12 +826,19 @@ begin
 
   if ShouldPerformInstallAction then
   begin
-    RunWingetDependencyInstall(
-      'WireGuard Desktop',
-      'WireGuard.WireGuard',
-      'C:\Program Files\WireGuard\wireguard.exe',
-      'https://www.wireguard.com/install/'
-    );
+    { Install Python and WireGuard from bundled installers first }
+    InstallBundledPython;
+    InstallBundledWireGuard;
+
+    { Fall back to winget for anything the bundled installers missed,
+      and use winget for GTK (not bundled due to size) }
+    if not IsWireGuardInstalled then
+      RunWingetDependencyInstall(
+        'WireGuard Desktop',
+        'WireGuard.WireGuard',
+        'C:\Program Files\WireGuard\wireguard.exe',
+        'https://www.wireguard.com/install/'
+      );
 
     RunWingetDependencyInstall(
       'GTK Runtime (for Cairo graphics)',
@@ -960,6 +1070,7 @@ end;
 
 procedure BuildPreflightSummaryParts(var ActionText, ChecksText, TasksText: string);
 var
+  PythonState: string;
   WireGuardState: string;
   GtkState: string;
   WingetState: string;
@@ -967,10 +1078,15 @@ var
   RunningState: string;
   VpnServiceState: string;
 begin
+  if IsPythonInstalled then
+    PythonState := 'Installed'
+  else
+    PythonState := 'Missing (bundled installer will run)';
+
   if IsWireGuardInstalled then
     WireGuardState := 'Installed'
   else
-    WireGuardState := 'Missing (installer will try winget)';
+    WireGuardState := 'Missing (bundled installer will run)';
 
   if IsGtkRuntimeInstalled then
     GtkState := 'Installed'
@@ -998,6 +1114,7 @@ begin
     ActionText := ActionText + 'Existing install: No' + #13#10;
 
   ChecksText :=
+    '- Python: ' + PythonState + #13#10 +
     '- WireGuard Desktop: ' + WireGuardState + #13#10 +
     '- GTK Runtime: ' + GtkState + #13#10 +
     '- winget: ' + WingetState + #13#10 +
@@ -1577,21 +1694,10 @@ begin
   Result := SelectedAction <> maUninstall;
 end;
 
-function NeedWireGuardInstall: Boolean;
-begin
-  Result := ShouldPerformInstallAction and
-    (not FileExists('C:\Program Files\WireGuard\wireguard.exe'));
-end;
-
 function NeedGtkRuntimeInstall: Boolean;
 begin
   Result := ShouldPerformInstallAction and
     (not FileExists('C:\Program Files\GTK3-Runtime Win64\bin\libcairo-2.dll'));
-end;
-
-function ShouldInstallWireGuard: Boolean;
-begin
-  Result := NeedWireGuardInstall;
 end;
 
 function ShouldInstallGtkRuntime: Boolean;
@@ -1688,6 +1794,18 @@ begin
     Log('Wazuh uninstall exit code: ' + IntToStr(ResultCode));
   end;
 
+  { Remove Sysmon/Defender localfile blocks from ossec.conf }
+  if FileExists('C:\Program Files (x86)\ossec-agent\ossec.conf') then
+  begin
+    Log('Uninstall cleanup: removing Resistine entries from ossec.conf');
+    RunHiddenCmd(
+      'powershell -NoProfile -Command "$c = Get-Content ''C:\Program Files (x86)\ossec-agent\ossec.conf'' -Raw; ' +
+      '$c = $c -replace ''(?s)\s*<localfile>\s*<location>Microsoft-Windows-Sysmon/Operational</location>\s*<log_format>eventchannel</log_format>\s*</localfile>'', ''''; ' +
+      '$c = $c -replace ''(?s)\s*<localfile>\s*<location>Microsoft-Windows-Windows Defender/Operational</location>\s*<log_format>eventchannel</log_format>\s*</localfile>'', ''''; ' +
+      'Set-Content ''C:\Program Files (x86)\ossec-agent\ossec.conf'' $c -Encoding UTF8" >nul 2>nul',
+      ResultCode);
+  end;
+
   { Stop and uninstall Sysmon (try 64-bit then 32-bit service name) }
   if HiddenCmdSucceeded('sc query Sysmon64 >nul 2>nul') then
   begin
@@ -1711,6 +1829,8 @@ begin
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
 begin
   if CurUninstallStep = usUninstall then
   begin
@@ -1720,7 +1840,16 @@ begin
 
   if CurUninstallStep = usPostUninstall then
   begin
-    if StandaloneUninstallRemoveUserData then
-      DeleteResistineUserData;
+    { Remove keyring credentials (master key + update signing key) }
+    RunHiddenCmd('cmdkey /delete:resistine-master-key >nul 2>nul', ResultCode);
+    RunHiddenCmd('cmdkey /delete:resistine-updates >nul 2>nul', ResultCode);
+
+    { Always remove user data and configs on uninstall }
+    DeleteResistineUserData;
+
+    { Remove all Resistine registry keys }
+    RegDeleteKeyIncludingSubkeys(HKLM64, 'Software\Resistine');
+    RegDeleteKeyIncludingSubkeys(HKLM, 'Software\Resistine');
+    RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Resistine');
   end;
 end;

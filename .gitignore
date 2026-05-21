@@ -109,6 +109,9 @@ Resistine AI-*.pkg
 scripts/build/clamav-artifacts/
 scripts/build/vpn-artifacts/
 
+# Bundled Windows dependency installers (downloaded at build time)
+packaging/windows/deps/
+
 # Build artifacts
 *.dmg
 *.pkg
