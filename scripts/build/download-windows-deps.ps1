@@ -23,8 +23,8 @@ $Downloads = @(
         File = "python-3.13.13-amd64.exe"
     },
     @{
-        Name = "WireGuard"
-        Url  = "https://download.wireguard.com/windows-client/wireguard-amd64-0.5.3.msi"
+        Name = "WireGuard 1.1"
+        Url  = "https://download.wireguard.com/windows-client/wireguard-amd64-1.1.msi"
         File = "wireguard-amd64.msi"
     }
 )
