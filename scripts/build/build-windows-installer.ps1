@@ -117,7 +117,7 @@ $depsScript = Join-Path $ProjectRoot "scripts\build\download-windows-deps.ps1"
 if (Test-Path $depsScript) {
     & $depsScript
 } else {
-    Write-Warning "download-windows-deps.ps1 not found at $depsScript — skipping dependency download"
+    Write-Warning "download-windows-deps.ps1 not found at $depsScript - skipping dependency download"
 }
 
 $outputDir = Join-Path $ProjectRoot "dist\installers"
@@ -142,4 +142,4 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host ""
 Write-Host "Done. Installer output:"
-Write-Host "  $outputDir\Resistine-Setup-$version.exe"
+Write-Host "  $outputDir\Resistine-Setup-${version}.exe"
