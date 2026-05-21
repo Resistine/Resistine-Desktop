@@ -419,12 +419,10 @@ class Plugin(BasePlugin):
         can_scan = status.get("installed") and status.get("db_present")
         self._set_scan_buttons_state("normal" if can_scan else "disabled")
 
-        # Scan Computer is gated on real-time protection
-        realtime_on = bool(status.get("clamonacc_running"))
         computer_btn = self._action_buttons.get("scan_computer")
         if computer_btn:
             computer_btn.configure(
-                state="normal" if (can_scan and realtime_on) else "disabled",
+                state="normal" if can_scan else "disabled",
             )
 
     def _get_setup_banner_cfg(
@@ -736,19 +734,9 @@ class Plugin(BasePlugin):
             btn = self._action_buttons.get(key)
             if btn:
                 btn.configure(state=state)
-        # scan_computer is gated separately on real-time protection — only
-        # re-enable it if the last poll said clamonacc is running.
         computer_btn = self._action_buttons.get("scan_computer")
         if computer_btn:
-            realtime_on = bool(
-                self._last_status and self._last_status.get("clamonacc_running"),
-            )
-            if state == "disabled":
-                computer_btn.configure(state="disabled")
-            else:
-                computer_btn.configure(
-                    state="normal" if realtime_on else "disabled",
-                )
+            computer_btn.configure(state=state)
 
     # ── System Daemon Activation ────────────────────────────────
 
