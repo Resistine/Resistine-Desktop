@@ -229,11 +229,14 @@ class TestHandleLogout:
 
     def test_clears_auth_on_confirm(self, settings_plugin, isolated_settings):
         isolated_settings.set("auth", "logged_in", True)
+        isolated_settings.set("auth", "email", "alice@example.com")
         self._set_messagebox(True)
         with patch("plugins.vpn.wireguard.vpn_functions_darwin.stop_vpn"), \
              patch("plugins.login.main.Plugin"):
             settings_plugin._handle_logout()
-        assert isolated_settings.get("auth", "logged_in") is False
+        # auth namespace is fully cleared on logout
+        assert isolated_settings.get("auth", "logged_in") is None
+        assert isolated_settings.get("auth", "email") is None
 
 
 # ---------------------------------------------------------------------------
@@ -297,3 +300,231 @@ class TestCheckForUpdates:
             settings_plugin._check_for_updates()
         last_call = settings_plugin.update_status_label.configure.call_args
         assert "error" in last_call.kwargs["text"].lower()
+
+
+# ---------------------------------------------------------------------------
+# _disconnect_vpn
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestDisconnectVpn:
+    def test_darwin(self, settings_plugin):
+        with patch("platform.system", return_value="Darwin"), \
+             patch(
+                 "plugins.vpn.wireguard.vpn_functions_darwin.stop_vpn",
+                 create=True,
+             ) as mock_stop:
+            settings_plugin._disconnect_vpn()
+            mock_stop.assert_called_once()
+
+    def test_windows(self, settings_plugin):
+        with patch("platform.system", return_value="Windows"), \
+             patch(
+                 "plugins.vpn.wireguard.vpn_windows_client.disconnect",
+                 create=True,
+             ) as mock_disc:
+            settings_plugin._disconnect_vpn()
+            mock_disc.assert_called_once_with("resistine")
+
+    def test_linux(self, settings_plugin):
+        mock_mgr = MagicMock()
+        mock_mgr.get_active_config_path.return_value = "/tmp/resistine.conf"
+        with patch("platform.system", return_value="Linux"), \
+             patch(
+                 "plugins.vpn.wireguard.vpn_functions_linux.stop_vpn",
+                 create=True,
+             ) as mock_stop, \
+             patch(
+                 "plugins.vpn.wireguard.vpn_functions_linux.get_writable_wireguard_dir",
+                 return_value="/tmp/wg",
+                 create=True,
+             ), \
+             patch(
+                 "plugins.vpn.config_manager.VPNConfigManager",
+                 return_value=mock_mgr,
+             ):
+            settings_plugin._disconnect_vpn()
+            mock_stop.assert_called_once_with("/tmp/resistine.conf")
+
+    def test_failure_logs_warning(self, settings_plugin):
+        with patch("platform.system", side_effect=RuntimeError("boom")):
+            settings_plugin._disconnect_vpn()  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# _clear_user_data
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestClearUserData:
+    def test_clears_auth_namespace(self, settings_plugin, isolated_settings):
+        isolated_settings.set("auth", "email", "alice@example.com")
+        isolated_settings.set("auth", "logged_in", True)
+
+        with patch("platform.system", return_value="Darwin"), \
+             patch(
+                 "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
+                 return_value="/tmp/wg",
+                 create=True,
+             ):
+            settings_plugin._clear_user_data()
+
+        assert isolated_settings.get("auth", "email") is None
+        assert isolated_settings.get("auth", "logged_in") is None
+
+    def test_clears_wireguard_keys_darwin(self, settings_plugin, isolated_settings):
+        isolated_settings.set_secret("wireguard", "private_key", "wg-priv")
+        isolated_settings.set("wireguard", "public_key", "wg-pub")
+
+        with patch("platform.system", return_value="Darwin"), \
+             patch(
+                 "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
+                 return_value="/tmp/wg",
+                 create=True,
+             ):
+            settings_plugin._clear_user_data()
+
+        assert isolated_settings.get("wireguard", "private_key") is None
+        assert isolated_settings.get("wireguard", "public_key") is None
+
+    def test_clears_vpn_keys_windows(self, settings_plugin, isolated_settings):
+        """Windows stores WG keys in the 'vpn' namespace — cleared via clear_namespace."""
+        isolated_settings.set_secret("vpn", "private_key", "vpn-priv")
+        isolated_settings.set("vpn", "public_key", "vpn-pub")
+
+        with patch("platform.system", return_value="Darwin"), \
+             patch(
+                 "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
+                 return_value="/tmp/wg",
+                 create=True,
+             ):
+            settings_plugin._clear_user_data()
+
+        assert isolated_settings.get("vpn", "private_key") is None
+        assert isolated_settings.get("vpn", "public_key") is None
+
+    def test_clears_vpn_namespace(self, settings_plugin, isolated_settings):
+        isolated_settings.set("vpn", "active_config", "resistine")
+        isolated_settings.set("vpn", "onboarding_complete", True)
+
+        with patch("platform.system", return_value="Darwin"), \
+             patch(
+                 "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
+                 return_value="/tmp/wg",
+                 create=True,
+             ):
+            settings_plugin._clear_user_data()
+
+        assert isolated_settings.get("vpn", "active_config") is None
+        assert isolated_settings.get("vpn", "onboarding_complete") is None
+
+    def test_removes_conf_files(self, settings_plugin, isolated_settings, tmp_path):
+        wg_dir = tmp_path / "wireguard"
+        wg_dir.mkdir()
+        (wg_dir / "resistine.conf").write_text("[Interface]")
+        (wg_dir / "custom.conf").write_text("[Interface]")
+        (wg_dir / "keepme.txt").write_text("not a conf")
+
+        with patch("platform.system", return_value="Darwin"), \
+             patch(
+                 "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
+                 return_value=str(wg_dir),
+                 create=True,
+             ):
+            settings_plugin._clear_user_data()
+
+        assert not (wg_dir / "resistine.conf").exists()
+        assert not (wg_dir / "custom.conf").exists()
+        assert (wg_dir / "keepme.txt").exists()
+
+    def test_clears_chat_history(self, settings_plugin, isolated_settings):
+        isolated_settings.set("chat_history", "index", [{"id": "s1"}])
+        isolated_settings.set("chat_history", "msg_s1", [{"role": "user"}])
+
+        with patch("platform.system", return_value="Darwin"), \
+             patch(
+                 "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
+                 return_value="/tmp/wg",
+                 create=True,
+             ):
+            settings_plugin._clear_user_data()
+
+        assert isolated_settings.get("chat_history", "index") is None
+
+    def test_clears_chat_api_key(self, settings_plugin, isolated_settings):
+        isolated_settings.set_secret("chat", "openai_api_key", "sk-secret")
+        isolated_settings.set("chat", "openai_base_url", "http://localhost")
+
+        with patch("platform.system", return_value="Darwin"), \
+             patch(
+                 "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
+                 return_value="/tmp/wg",
+                 create=True,
+             ):
+            settings_plugin._clear_user_data()
+
+        assert isolated_settings.get_secret("chat", "openai_api_key") is None
+        assert isolated_settings.get("chat", "openai_base_url") is None
+
+    def test_clears_wazuh_namespace(self, settings_plugin, isolated_settings):
+        isolated_settings.set("wazuh", "enrolled_email", "alice@example.com")
+        isolated_settings.set("wazuh", "install_state", "installed")
+        isolated_settings.set("wazuh", "retry_count", 2)
+
+        with patch("platform.system", return_value="Darwin"), \
+             patch(
+                 "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
+                 return_value="/tmp/wg",
+                 create=True,
+             ):
+            settings_plugin._clear_user_data()
+
+        assert isolated_settings.get("wazuh", "enrolled_email") is None
+        assert isolated_settings.get("wazuh", "install_state") is None
+        assert isolated_settings.get("wazuh", "retry_count") is None
+
+    def test_preserves_device_scoped_settings(
+        self, settings_plugin, isolated_settings,
+    ):
+        isolated_settings.set("chat", "disable_animation", True)
+        isolated_settings.set("antivirus", "auto_update_enabled", True)
+
+        with patch("platform.system", return_value="Darwin"), \
+             patch(
+                 "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
+                 return_value="/tmp/wg",
+                 create=True,
+             ):
+            settings_plugin._clear_user_data()
+
+        assert isolated_settings.get("chat", "disable_animation") is True
+        assert isolated_settings.get("antivirus", "auto_update_enabled") is True
+
+    def test_removes_legacy_email_file(
+        self, settings_plugin, isolated_settings, tmp_path,
+    ):
+        # _clear_user_data builds the path as:
+        #   dirname(dirname(dirname(realpath(__file__)))) / "utils" / "email-settings.txt"
+        # So we need realpath to point 3 levels deep under a root that
+        # contains utils/email-settings.txt.
+        fake_root = tmp_path / "root"
+        utils_dir = fake_root / "utils"
+        utils_dir.mkdir(parents=True)
+        email_file = utils_dir / "email-settings.txt"
+        email_file.write_text("alice@example.com")
+
+        fake_module = fake_root / "plugins" / "settings" / "main.py"
+
+        with patch("platform.system", return_value="Darwin"), \
+             patch(
+                 "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
+                 return_value="/tmp/wg",
+                 create=True,
+             ), \
+             patch(
+                 "plugins.settings.main.os.path.realpath",
+                 return_value=str(fake_module),
+             ):
+            settings_plugin._clear_user_data()
+
+        assert not email_file.exists()
