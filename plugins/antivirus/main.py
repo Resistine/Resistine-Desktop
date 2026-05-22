@@ -20,6 +20,7 @@ import customtkinter
 from customtkinter import ThemeManager
 
 from plugins.antivirus import clamav, threat_log
+from plugins.antivirus.scan_picker import ScanPickerDialog
 from plugins.antivirus.scanner import ScanHandle, ScanResult, scan
 from plugins.antivirus.theme import font
 from plugins.antivirus.ui_builders import (
@@ -821,10 +822,18 @@ class Plugin(BasePlugin):
         self._scan_log.configure(state="disabled")
 
     def _set_scan_buttons_state(self, state: str):
+<<<<<<< HEAD
         for key in ("scan_files", "scan_folders"):
             btn = self._action_buttons.get(key)
             if btn:
                 btn.configure(state=state)
+=======
+        btn = self._action_buttons.get("scan")
+        if btn:
+            btn.configure(state=state)
+        # scan_computer is gated separately on real-time protection — only
+        # re-enable it if the last poll said clamonacc is running.
+>>>>>>> 8d29c9e (Unify Scan Files / Scan Folders into single Scan… picker dialog)
         computer_btn = self._action_buttons.get("scan_computer")
         if computer_btn:
             computer_btn.configure(state=state)
@@ -1003,8 +1012,7 @@ class Plugin(BasePlugin):
         logger.info(f"Antivirus: action triggered — {action_key}")
 
         actions = {
-            "scan_files": self._start_files_scan,
-            "scan_folders": self._start_folders_scan,
+            "scan": self._start_scan,
             "scan_computer": self._start_computer_scan,
             "update_sigs": self._start_sig_update,
             "whitelist_add": self._add_whitelist_entry,
@@ -1015,12 +1023,12 @@ class Plugin(BasePlugin):
 
     # ── File / Directory Scan ─────────────────────────────────
 
-    def _start_files_scan(self):
+    def _start_scan(self):
         if self._scanning:
             return
-        paths = filedialog.askopenfilenames(
-            title="Select Files to Scan", parent=self.app,
-        )
+        dialog = ScanPickerDialog(self.app)
+        self.app.wait_window(dialog)
+        paths = dialog.result
         if not paths:
             return
         targets = []
@@ -1033,53 +1041,13 @@ class Plugin(BasePlugin):
         if skipped:
             messagebox.showinfo(
                 "Whitelisted",
-                f"{len(skipped)} file(s) skipped (whitelisted):\n"
+                f"{len(skipped)} item(s) skipped (whitelisted):\n"
                 + "\n".join(skipped[:10]),
                 parent=self.app,
             )
         if not targets:
             return
-        self._run_multi_scan(targets, label="Files")
-
-    def _start_folders_scan(self):
-        if self._scanning:
-            return
-        folders: list[str] = []
-        while True:
-            path = filedialog.askdirectory(
-                title="Select Folder to Scan", parent=self.app,
-            )
-            if not path:
-                break
-            if path not in folders:
-                folders.append(path)
-            if not messagebox.askyesno(
-                "Add More Folders?",
-                f"Added: {os.path.basename(path)}\n\n"
-                f"{len(folders)} folder(s) selected so far.\n"
-                "Add another folder?",
-                parent=self.app,
-            ):
-                break
-        if not folders:
-            return
-        targets = []
-        skipped = []
-        for path in folders:
-            if clamav.is_path_whitelisted(path):
-                skipped.append(os.path.basename(path))
-            else:
-                targets.append(path)
-        if skipped:
-            messagebox.showinfo(
-                "Whitelisted",
-                f"{len(skipped)} folder(s) skipped (whitelisted):\n"
-                + "\n".join(skipped[:10]),
-                parent=self.app,
-            )
-        if not targets:
-            return
-        self._run_multi_scan(targets, label="Folders")
+        self._run_multi_scan(targets, label="Scan")
 
     def _computer_scan_targets(self) -> list[str]:
         """Return the fixed list of directories scanned by 'Scan Computer'.
