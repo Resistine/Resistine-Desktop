@@ -249,15 +249,14 @@ class TestOfferQuarantineBatch:
 class TestScanGuards:
     def test_scan_blocked_while_scanning(self, plugin):
         plugin._scanning = True
-        with patch("plugins.antivirus.main.ScanPickerDialog") as mock_dlg:
+        with patch("plugins.antivirus.main.pick_scan_targets") as mock_pick:
             plugin._start_scan()
-            mock_dlg.assert_not_called()
+            mock_pick.assert_not_called()
 
     def test_scan_cancelled_dialog(self, plugin):
         plugin._scanning = False
-        with patch("plugins.antivirus.main.ScanPickerDialog") as mock_dlg, \
+        with patch("plugins.antivirus.main.pick_scan_targets", return_value=None), \
              patch.object(plugin, "_run_multi_scan") as mock_run:
-            mock_dlg.return_value.result = None
             plugin._start_scan()
             mock_run.assert_not_called()
 

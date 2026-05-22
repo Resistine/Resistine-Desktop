@@ -1,7 +1,8 @@
 """Unified scan-target picker dialog.
 
-Presents a single window where users can add files, folders, or both
-before launching a scan. Works cross-platform via standard tkinter dialogs.
+On macOS, uses the native NSOpenPanel which supports selecting files and
+folders simultaneously. On Windows/Linux, presents a custom CTkToplevel
+where users can add files, folders, or both before launching a scan.
 
 Author: Resistine Team
 Copyright (c) Resistine 2025
@@ -9,6 +10,7 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import os
+import platform
 from tkinter import filedialog
 
 import customtkinter
@@ -16,7 +18,53 @@ import customtkinter
 from plugins.antivirus.theme import CORNER_R, font
 
 
-class ScanPickerDialog(customtkinter.CTkToplevel):
+def pick_scan_targets(parent) -> list[str] | None:
+    """Open a platform-appropriate picker and return selected paths.
+
+    Returns a list of paths on success, or None if the user cancelled.
+    """
+    if platform.system() == "Darwin":
+        return _pick_native_macos(parent)
+    return _pick_custom_dialog(parent)
+
+
+# ── macOS native picker via NSOpenPanel ──────────────────────────
+
+
+def _pick_native_macos(parent) -> list[str] | None:
+    """Use NSOpenPanel to select files and/or folders in one dialog."""
+    try:
+        from AppKit import NSModalResponseOK, NSOpenPanel
+    except ImportError:
+        # pyobjc not available — fall back to custom dialog
+        return _pick_custom_dialog(parent)
+
+    panel = NSOpenPanel.openPanel()
+    panel.setCanChooseFiles_(True)
+    panel.setCanChooseDirectories_(True)
+    panel.setAllowsMultipleSelection_(True)
+    panel.setTitle_("Select Files or Folders to Scan")
+    panel.setPrompt_("Scan")
+
+    if panel.runModal() != NSModalResponseOK:
+        return None
+
+    urls = panel.URLs()
+    paths = [str(url.path()) for url in urls]
+    return paths if paths else None
+
+
+# ── Custom dialog for Windows / Linux ────────────────────────────
+
+
+def _pick_custom_dialog(parent) -> list[str] | None:
+    """Show the CTkToplevel picker dialog and return results."""
+    dialog = _ScanPickerDialog(parent)
+    parent.wait_window(dialog)
+    return dialog.result
+
+
+class _ScanPickerDialog(customtkinter.CTkToplevel):
     """Modal dialog for selecting files and/or folders to scan."""
 
     def __init__(self, parent):

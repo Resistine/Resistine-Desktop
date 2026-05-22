@@ -20,7 +20,7 @@ import customtkinter
 from customtkinter import ThemeManager
 
 from plugins.antivirus import clamav, threat_log
-from plugins.antivirus.scan_picker import ScanPickerDialog
+from plugins.antivirus.scan_picker import pick_scan_targets
 from plugins.antivirus.scanner import ScanHandle, ScanResult, scan
 from plugins.antivirus.theme import font
 from plugins.antivirus.ui_builders import (
@@ -822,18 +822,11 @@ class Plugin(BasePlugin):
         self._scan_log.configure(state="disabled")
 
     def _set_scan_buttons_state(self, state: str):
-<<<<<<< HEAD
-        for key in ("scan_files", "scan_folders"):
-            btn = self._action_buttons.get(key)
-            if btn:
-                btn.configure(state=state)
-=======
         btn = self._action_buttons.get("scan")
         if btn:
             btn.configure(state=state)
         # scan_computer is gated separately on real-time protection — only
         # re-enable it if the last poll said clamonacc is running.
->>>>>>> 8d29c9e (Unify Scan Files / Scan Folders into single Scan… picker dialog)
         computer_btn = self._action_buttons.get("scan_computer")
         if computer_btn:
             computer_btn.configure(state=state)
@@ -1026,9 +1019,7 @@ class Plugin(BasePlugin):
     def _start_scan(self):
         if self._scanning:
             return
-        dialog = ScanPickerDialog(self.app)
-        self.app.wait_window(dialog)
-        paths = dialog.result
+        paths = pick_scan_targets(self.app)
         if not paths:
             return
         targets = []
