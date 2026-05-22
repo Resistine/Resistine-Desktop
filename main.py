@@ -41,6 +41,19 @@ class App(AppUI):
     Main application class for Resistine.
     """
 
+    def _apply_hidpi_scaling(self):
+        """Scale all CTk widgets proportionally on HiDPI displays.
+
+        Uses screen pixel height relative to 1080p as the scale factor.
+        Only applies on screens taller than 1440p to avoid over-scaling
+        normal high-res displays.
+        """
+        factor = self.winfo_screenheight() / 1080
+        if factor >= 1.5:
+            self._hidpi_factor = factor
+            customtkinter.set_widget_scaling(factor)
+            customtkinter.set_window_scaling(factor)
+
     def __init__(self):
         """
         @brief Initialize the main application window.
@@ -48,6 +61,9 @@ class App(AppUI):
         Check if the email is registered and create the appropriate screen.
         """
         super().__init__()
+
+        if sys.platform.startswith("linux"):
+            self._apply_hidpi_scaling()
 
         # Fix Ctrl+A select-all on Linux (Tk default is cursor-to-start)
         patch_linux_keybindings(self)
@@ -64,12 +80,13 @@ class App(AppUI):
         self._set_app_icon()
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
-        window_width = int(screen_width * 0.7)
-        window_height = int(screen_height * 0.7)
-        min_width = 750
-        min_height = 350
-        position_right = int(screen_width / 2 - window_width / 2)
-        position_down = int(screen_height / 2 - window_height / 2)
+        scale = getattr(self, "_hidpi_factor", 1.0)
+        window_width = int(screen_width * 0.7 / scale)
+        window_height = int(screen_height * 0.7 / scale)
+        min_width = int(750 / scale)
+        min_height = int(350 / scale)
+        position_right = int(screen_width / 2 - window_width * scale / 2)
+        position_down = int(screen_height / 2 - window_height * scale / 2)
         self.geometry(
             f"{window_width}x{window_height}+{position_right}+{position_down}"
         )

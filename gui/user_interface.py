@@ -440,7 +440,13 @@ class AppUI(customtkinter.CTk):
             try:
                 if not container.winfo_exists():
                     return
-                total_width = force_width if force_width else container.winfo_width()
+                _scale = getattr(container.winfo_toplevel(), "_hidpi_factor", 1.0)
+                # force_width (from hint) is already in logical units;
+                # winfo_width() is physical pixels — normalise to logical.
+                if force_width:
+                    total_width = force_width
+                else:
+                    total_width = container.winfo_width() / _scale
                 if total_width <= 1:
                     return
                 if container._resistine_last_w != -1 and abs(total_width - container._resistine_last_w) < 4:
@@ -451,14 +457,13 @@ class AppUI(customtkinter.CTk):
                     return
                 col_width = total_width / num_cols
                 card_width = max(1, col_width - 20)
-                # Raised upper-bound from 220→300 so description text has room and isn't
-                # clipped by the grid row's minsize when text wraps to multiple lines.
+                # Bounds are in logical units; convert to physical for grid_rowconfigure.
                 target_height = max(160, min(300, int(card_width / aspect_ratio) + 20))
                 container._resistine_target_height = target_height
                 if target_height != container._resistine_last_height:
                     container._resistine_last_height = target_height
                     for r in rows_tuple:
-                        container.grid_rowconfigure(r, minsize=target_height)
+                        container.grid_rowconfigure(r, minsize=int(target_height * _scale))
             except (tk.TclError, AttributeError, RuntimeError):
                 pass
 
