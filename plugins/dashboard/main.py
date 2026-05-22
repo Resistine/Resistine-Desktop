@@ -157,10 +157,12 @@ class Plugin(BasePlugin):
         import platform as _plat
         _sidebar = 250
         _padding = 60 if _plat.system() == "Windows" else 40
+        _scale = getattr(self.app, "_hidpi_factor", 1.0)
         window_width = self.app.winfo_width()
         if window_width <= 1:
             screen_width = self.app.winfo_screenwidth()
             window_width = int(screen_width * 0.7)
+        window_width = int(window_width / _scale)
 
         content_width = max(1, window_width - _sidebar - _padding)
         # Set hint for AppUI to use in create_grid synchronously
@@ -245,7 +247,8 @@ class Plugin(BasePlugin):
             except Exception:
                 return
 
-            window_width = self.app.winfo_width()
+            _scale = getattr(self.app, "_hidpi_factor", 1.0)
+            window_width = int(self.app.winfo_width() / _scale)
             content_width = max(1, window_width - 250 - self._padding_offset)
 
             if content_width < 480:
