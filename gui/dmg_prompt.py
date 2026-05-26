@@ -3,6 +3,7 @@
 Uses native macOS dialogs (osascript) so it works before any Tk/CTk
 initialization — no window manager state to clean up on exit.
 """
+from __future__ import annotations
 
 import subprocess
 import sys

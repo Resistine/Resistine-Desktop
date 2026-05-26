@@ -11,10 +11,12 @@ Author: Resistine Team
 Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
+from __future__ import annotations
 
 import glob
 import json
 import os
+import platform
 import re
 import shutil
 import socket
@@ -106,10 +108,18 @@ def _get_platform():
     elif system == "Linux":
         from plugins.antivirus import clamav_platform_linux as mod
     elif system == "Windows":
-        from plugins.antivirus import clamav_platform_windows as mod
+        from plugins.antivirus import defender_windows as mod
     else:
         raise RuntimeError(f"Unsupported platform: {system}")
     return mod
+
+
+# ── Engine identity ──────────────────────────────────────
+
+
+def engine_name() -> str:
+    """Return the human-readable name of the antivirus engine."""
+    return "ClamAV"
 
 
 # ── Binary discovery (delegates to platform) ──────────────
@@ -419,6 +429,12 @@ def is_clamd_running() -> bool:
 # ── Direct socket scanning ────────────────────────────────
 
 _SKIP_DIRS = frozenset({".git", ".hg", ".svn", "node_modules", "__pycache__"})
+# Windows system directories that should never be scanned — they contain
+# millions of OS files, are permission-locked, and slow walks to a crawl.
+_SKIP_DIRS_WINDOWS = frozenset({
+    "$Recycle.Bin", "System Volume Information", "$WinREAgent",
+    "Recovery", "PerfLogs", "Windows", "$SysReset",
+}) if platform.system() == "Windows" else frozenset()
 _PARALLEL_WORKERS = 6
 
 
@@ -487,6 +503,7 @@ def _walk_files(
     whitelist: set[str],
     excluded_ext: frozenset[str] = frozenset(),
     max_size_bytes: int = 0,
+    cancel: "threading.Event | None" = None,
 ):
     """Yield scannable file paths under *target*.
 
@@ -503,10 +520,13 @@ def _walk_files(
     ):
         return
 
+    skip = _SKIP_DIRS | _SKIP_DIRS_WINDOWS
     for root, dirs, files in os.walk(target):
+        if cancel and cancel.is_set():
+            return
         dirs[:] = [
             d for d in dirs
-            if d not in _SKIP_DIRS
+            if d not in skip
             and os.path.realpath(os.path.join(root, d)) not in resolved_wl
         ]
         for fname in files:
@@ -576,14 +596,11 @@ def _scan_dir_socket(
     excl = get_scan_exclusions()
     excluded_ext = frozenset(excl["extensions"])
     max_bytes = excl["max_size_mb"] * 1048576 if excl["max_size_mb"] else 0
-    # Walk incrementally so cancel takes effect within ~a second on huge
-    # trees (e.g. $HOME). Materializing the full walk first can take 30+s.
-    files = []
-    for fpath in _walk_files(target, whitelist, excluded_ext, max_bytes):
-        if cancel and cancel.is_set():
-            result["error"] = "Scan cancelled."
-            return result
-        files.append(fpath)
+    files = list(_walk_files(target, whitelist, excluded_ext, max_bytes, cancel))
+
+    if cancel and cancel.is_set():
+        result["error"] = "Scan cancelled."
+        return result
 
     if not files:
         result["duration"] = "0.000 sec (0 s)"
@@ -791,7 +808,7 @@ def scan_path(
             ext_set = frozenset(excl["extensions"])
             max_bytes = excl["max_size_mb"] * 1048576 if excl["max_size_mb"] else 0
             total = sum(
-                1 for _ in _walk_files(target, wl, ext_set, max_bytes)
+                1 for _ in _walk_files(target, wl, ext_set, max_bytes, cancel)
             )
             on_total(total)
         else:

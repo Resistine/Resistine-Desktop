@@ -14,7 +14,7 @@ def get_status(tunnel: str) -> dict:
     """Get current VPN status from the service."""
     try:
         result = send_command("status", tunnel)
-        logger.info(f"VPN status for '{tunnel}': {result.get('state', 'Unknown')}")
+        logger.debug(f"VPN status for '{tunnel}': {result.get('state', 'Unknown')}")
         return result
     except Exception as e:
         logger.exception(f"Failed to get VPN status for tunnel '{tunnel}'")

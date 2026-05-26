@@ -7,19 +7,20 @@ Author: Resistine Team
 Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
+from __future__ import annotations
 
 import os
 import platform
 import random
 import threading
 import time
-from tkinter import filedialog, messagebox
+from tkinter import TclError, filedialog, messagebox
 
 import customtkinter
 from customtkinter import ThemeManager
 
 from plugins.antivirus import clamav, threat_log
-from plugins.antivirus.scanner import ScanResult, scan
+from plugins.antivirus.scanner import ScanHandle, ScanResult, scan
 from plugins.antivirus.theme import font
 from plugins.antivirus.ui_builders import (
     build_scan_activity,
@@ -49,7 +50,7 @@ class Plugin(BasePlugin):
             order=6,
             name="Antivirus",
             status=None,
-            description="Scan, quarantine, and protect against malware with ClamAV.",
+            description="Scan, quarantine and protect against malware.",
             supported_systems=["Darwin", "Linux", "Windows"],
             translations={"US": "Antivirus", "ES": "Antivirus", "FR": "Antivirus"},
             icon_light_path=os.path.join(_PLUGIN_DIR, "antivirus_light.png"),
@@ -70,6 +71,9 @@ class Plugin(BasePlugin):
         self._scan_handle = None
         self._scan_lock = threading.Lock()
         self._cancel_requested = False
+        self._scan_log_buffer: list[str] = []
+        self._scan_file_count = 0
+        self._scan_total_files = 0
         self._last_state = None
         self._last_status = None
         self._auto_update_timer = None
@@ -174,8 +178,24 @@ class Plugin(BasePlugin):
         self.main_container = customtkinter.CTkFrame(
             self.app, corner_radius=0, fg_color="transparent",
         )
+        # Compute a reasonable initial content width so the first frame
+        # isn't squeezed to 100px while _do_layout hasn't fired yet.
+        _init_w = 750
+        try:
+            _app_w = self.app.winfo_width()
+            _nav = getattr(self.app, "navigation_frame", None)
+            _nav_w = _nav.winfo_width() if (_nav and _nav.winfo_exists()) else 250
+            _nav_w = max(_nav_w, 250)
+            _avail = _app_w - _nav_w
+            _breathing = 60 if platform.system() == "Windows" else 40
+            if _avail > 750 + 40:
+                _init_w = 750
+            elif _avail > 10:
+                _init_w = max(100, _avail - _breathing)
+        except Exception:
+            pass
         self.main_container.grid_columnconfigure(0, weight=1)
-        self.main_container.grid_columnconfigure(1, weight=0, minsize=100)
+        self.main_container.grid_columnconfigure(1, weight=0, minsize=_init_w)
         self.main_container.grid_columnconfigure(2, weight=1)
         self.main_container.grid_rowconfigure(0, weight=1)
 
@@ -210,6 +230,10 @@ class Plugin(BasePlugin):
         if self._last_status is not None:
             self._apply_realtime_status_ui(self._last_status)
         self.app.after(500, self._update_realtime_status)
+
+        # Restore scan UI if a scan is still running from before navigation
+        if self._scanning:
+            self._restore_scan_ui()
 
         MAX_CONTENT_WIDTH = 750
         _is_windows = platform.system() == "Windows"
@@ -283,6 +307,7 @@ class Plugin(BasePlugin):
     def destroy(self):
         self._stop_auto_update_scheduler()
         self._stop_rtd_watcher()
+        self._action_buttons = {}
         self._banner_frame = None
         self._banner_label = None
         self._banner_subtitle = None
@@ -318,8 +343,11 @@ class Plugin(BasePlugin):
         self._last_state = state
         self._last_status = status
         self.status = self.check_status()
-        self._apply_realtime_status_ui(status)
-        self._schedule_status_poll()
+        try:
+            self._apply_realtime_status_ui(status)
+            self._schedule_status_poll()
+        except (TclError, AttributeError):
+            pass
         # Refresh DB info when setup transitions to completed
         if status.get("setup_state") == "completed" and prev_setup != "completed":
             self._refresh_db_info()
@@ -360,14 +388,18 @@ class Plugin(BasePlugin):
         err_bg = t.get("status_badge_bg", {}).get("error")
         err_tx = t.get("status_badge_text", {}).get("error")
 
+        _is_win = platform.system() == "Windows"
         is_linux = platform.system() == "Linux"
+        _engine = clamav.engine_name()
         cfg = None
 
         if not status.get("installed"):
             cfg = {
                 "bg": err_bg, "title": "Not Installed", "title_color": err_tx,
                 "subtitle": (
-                    "ClamAV is not installed. Tap Install ClamAV to fetch "
+                    f"{_engine} is not available."
+                    if _is_win
+                    else "ClamAV is not installed. Tap Install ClamAV to fetch "
                     "it from your distribution's package manager."
                     if is_linux else
                     "ClamAV binaries were not found.\n"
@@ -492,9 +524,8 @@ class Plugin(BasePlugin):
             "action": None,
         }
 
-    @staticmethod
     def _get_runtime_banner_cfg(
-        runtime_state, status, ok_bg, ok_tx, warn_bg, warn_tx, err_bg, err_tx,
+        self, runtime_state, status, ok_bg, ok_tx, warn_bg, warn_tx, err_bg, err_tx,
     ) -> dict:
         """Return banner config for post-setup runtime states."""
         if runtime_state == "healthy":
@@ -540,12 +571,16 @@ class Plugin(BasePlugin):
                 "action": ("Open Settings", clamav.open_fda_settings),
             }
         # offline
+        _is_win = platform.system() == "Windows"
         is_linux = platform.system() == "Linux"
+        _engine = clamav.engine_name()
         return {
             "bg": err_bg, "title": "Protection Offline",
             "title_color": err_tx,
             "subtitle": (
-                "ClamAV daemons are not running."
+                f"{_engine} protection is offline"
+                if _is_win
+                else "ClamAV daemons are not running."
                 if status.get("in_bundle")
                 else (
                     "On-demand scanning available. "
@@ -555,7 +590,11 @@ class Plugin(BasePlugin):
                     "Install Resistine.app for real-time protection."
                 )
             ),
-            "action": None,
+            "action": (
+                ("Start Protection", self._start_protection)
+                if (_is_win or status.get("in_bundle"))
+                else None
+            ),
         }
 
     def _schedule_status_poll(self):
@@ -597,6 +636,8 @@ class Plugin(BasePlugin):
         return os.path.join(clamav._LOG_DIR, "clamd.log")
 
     def _start_rtd_watcher(self):
+        if platform.system() == "Windows":
+            return
         from plugins.antivirus.rtd_watcher import ClamdLogWatcher
 
         log_path = self._get_clamd_log_path()
@@ -718,25 +759,62 @@ class Plugin(BasePlugin):
         """Append a line to the scan activity textbox.
 
         Must be called on the main thread — use app.after() from workers.
+        Buffers lines while the UI is destroyed so they can be replayed.
         """
-        self._scan_log.configure(state="normal")
-        self._scan_log.insert("end", text + "\n")
-        self._scan_log.see("end")
-        self._scan_log.configure(state="disabled")
+        self._scan_log_buffer.append(text)
+        try:
+            self._scan_log.configure(state="normal")
+            self._scan_log.insert("end", text + "\n")
+            self._scan_log.see("end")
+            self._scan_log.configure(state="disabled")
+        except (TclError, AttributeError):
+            pass
 
     def _log_clear(self):
+        self._scan_log_buffer.clear()
         self._scan_log.configure(state="normal")
         self._scan_log.delete("1.0", "end")
         self._scan_log.configure(state="disabled")
 
     def _set_scan_buttons_state(self, state: str):
-        for key in ("scan_file", "scan_directory"):
+        for key in ("scan_file", "scan_directory", "scan_computer"):
             btn = self._action_buttons.get(key)
             if btn:
                 btn.configure(state=state)
         computer_btn = self._action_buttons.get("scan_computer")
         if computer_btn:
             computer_btn.configure(state=state)
+
+    def _restore_scan_ui(self):
+        """Rebuild scan UI state after navigating back during an active scan."""
+        self._set_scan_buttons_state("disabled")
+
+        # Replay buffered log lines
+        if self._scan_log_buffer:
+            self._scan_log.configure(state="normal")
+            self._scan_log.insert("end", "\n".join(self._scan_log_buffer) + "\n")
+            self._scan_log.see("end")
+            self._scan_log.configure(state="disabled")
+
+        # Restore progress bar
+        total = self._scan_total_files
+        count = self._scan_file_count
+        if total > 0 and count < total:
+            self._scan_progress.grid()
+            self._scan_progress.configure(mode="determinate")
+            self._scan_progress.set(count / total)
+            self._scan_status_label.configure(
+                text=f"Scanned {count} / {total} files",
+            )
+        else:
+            self._scan_progress.grid()
+            self._scan_progress.configure(mode="indeterminate")
+            self._scan_progress.start()
+
+        # Show cancel button
+        cancel_btn = self._action_buttons.get("cancel_scan")
+        if cancel_btn:
+            cancel_btn.grid()
 
     # ── System Daemon Activation ────────────────────────────────
 
@@ -764,6 +842,40 @@ class Plugin(BasePlugin):
                 self.app.after(0, self._update_realtime_status)
 
         threading.Thread(target=_run, daemon=True).start()
+
+    def _start_protection(self):
+        """Start protection (Windows Defender toggle or macOS daemon start)."""
+        if self._banner_action_btn:
+            self._banner_action_btn.configure(
+                state="disabled", text="Starting...",
+            )
+        if self._banner_progress:
+            self._banner_progress.grid()
+            self._banner_progress.configure(mode="indeterminate")
+            self._banner_progress.start()
+
+        def _run():
+            try:
+                ok, msg = clamav.activate_system_daemons()
+            except Exception as e:
+                ok, msg = False, str(e)
+            self.app.after(0, self._handle_protection_started, ok, msg)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _handle_protection_started(self, ok: bool, msg: str):
+        try:
+            self._handle_protection_started_ui(ok, msg)
+        except (TclError, AttributeError):
+            pass
+
+    def _handle_protection_started_ui(self, ok: bool, msg: str):
+        if self._banner_progress:
+            self._banner_progress.stop()
+            self._banner_progress.grid_remove()
+        if not ok:
+            self.app.show_notification(msg or "Failed to start protection", type="error")
+        self._update_realtime_status()
 
     def _retry_setup(self):
         """Manual retry — reset backoff and restart the current phase."""
@@ -959,6 +1071,8 @@ class Plugin(BasePlugin):
         """Run scans on multiple targets sequentially, aggregating results."""
         self._scanning = True
         self._cancel_requested = False
+        self._scan_file_count = 0
+        self._scan_total_files = 0
         self._set_scan_buttons_state("disabled")
         self._log_clear()
 
@@ -1091,6 +1205,8 @@ class Plugin(BasePlugin):
 
     def _run_scan(self, target: str):
         self._scanning = True
+        self._scan_file_count = 0
+        self._scan_total_files = 0
         self._set_scan_buttons_state("disabled")
         self._log_clear()
 
@@ -1107,23 +1223,20 @@ class Plugin(BasePlugin):
         self._scan_status_label.configure(text=f"Scanning: {short}")
         self._log_append(f"Scanning: {target}")
 
-        file_count = [0]
-        total_files = [0]
-
         def on_total(total: int):
-            total_files[0] = total
+            self._scan_total_files = total
             self.app.after(0, self._on_scan_total_known, total)
 
         def on_progress(line: str):
             self.app.after(0, self._log_append, line)
             if ":" in line and ("OK" in line or "FOUND" in line):
-                file_count[0] += 1
-                total = total_files[0]
+                self._scan_file_count += 1
+                total = self._scan_total_files
                 if total > 0:
-                    status = f"Scanned {file_count[0]} / {total} files"
-                    pct = file_count[0] / total
+                    status = f"Scanned {self._scan_file_count} / {total} files"
+                    pct = self._scan_file_count / total
                 else:
-                    status = f"Scanned {file_count[0]} files"
+                    status = f"Scanned {self._scan_file_count} files"
                     pct = None
                 self.app.after(
                     0, self._on_scan_file_done, status, pct,
@@ -1155,19 +1268,25 @@ class Plugin(BasePlugin):
 
     def _on_scan_total_known(self, total: int):
         """Switch progress bar to determinate mode when file count is known."""
-        self._scan_progress.stop()
-        if total == 0:
-            self._scan_progress.grid_remove()
-            self._scan_status_label.configure(text="No files matched filters")
-            return
-        self._scan_progress.configure(mode="determinate")
-        self._scan_progress.set(0)
+        try:
+            self._scan_progress.stop()
+            if total == 0:
+                self._scan_progress.grid_remove()
+                self._scan_status_label.configure(text="No files matched filters")
+                return
+            self._scan_progress.configure(mode="determinate")
+            self._scan_progress.set(0)
+        except (TclError, AttributeError):
+            pass
 
     def _on_scan_file_done(self, status: str, pct: float | None):
         """Update scan progress label and bar after each file."""
-        self._scan_status_label.configure(text=status)
-        if pct is not None:
-            self._scan_progress.set(min(pct, 1.0))
+        try:
+            self._scan_status_label.configure(text=status)
+            if pct is not None:
+                self._scan_progress.set(min(pct, 1.0))
+        except (TclError, AttributeError):
+            pass
 
     def _handle_scan_complete(self, result: ScanResult):
         self._scanning = False
@@ -1284,15 +1403,17 @@ class Plugin(BasePlugin):
         threading.Thread(target=_run, daemon=True).start()
 
     def _handle_update_complete(self, ok: bool, msg: str):
-        btn = self._action_buttons.get("update_sigs")
-        if btn:
-            btn.configure(state="normal", text="Update Now")
-
         self._log_append(msg)
-        if ok:
-            self._scan_status_label.configure(text="Signatures updated")
-        else:
-            self._scan_status_label.configure(text="Update failed")
+        try:
+            btn = self._action_buttons.get("update_sigs")
+            if btn:
+                btn.configure(state="normal", text="Update Now")
+            if ok:
+                self._scan_status_label.configure(text="Signatures updated")
+            else:
+                self._scan_status_label.configure(text="Update failed")
+        except (TclError, AttributeError):
+            pass
 
         self._refresh_db_info()
 
@@ -1382,8 +1503,16 @@ class Plugin(BasePlugin):
         except ValueError:
             size = 0
         clamav.set_max_file_size(size)
-        self._size_entry.delete(0, "end")
-        self._size_entry.insert(0, str(size))
+
+    def _debounced_save_max_file_size(self):
+        """Save max file size after a short delay to avoid saving on every keystroke."""
+        job = getattr(self, "_size_save_job", None)
+        if job is not None:
+            try:
+                self.app.after_cancel(job)
+            except Exception:
+                pass
+        self._size_save_job = self.app.after(500, self._save_max_file_size)
 
     def _refresh_exclusions(self):
         """Rebuild the scan exclusions card contents."""

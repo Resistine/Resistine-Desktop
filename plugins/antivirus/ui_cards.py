@@ -187,6 +187,7 @@ def build_scan_exclusions(plugin, parent, row):
     plugin._size_entry.insert(0, "0")
     plugin._size_entry.bind("<Return>", lambda e: plugin._save_max_file_size())
     plugin._size_entry.bind("<FocusOut>", lambda e: plugin._save_max_file_size())
+    plugin._size_entry.bind("<KeyRelease>", lambda e: plugin._debounced_save_max_file_size())
 
     customtkinter.CTkLabel(
         right, text="MB", font=font(11), text_color=_muted(),
@@ -211,7 +212,7 @@ def build_scan_exclusions(plugin, parent, row):
 
 def build_siem_card(plugin, parent, row):
     """Build the SIEM Forwarding card (threat log + Wazuh setup)."""
-    from plugins.antivirus.threat_log import get_log_path, is_wazuh_installed
+    from plugins.antivirus.threat_log import get_log_display, is_wazuh_installed
 
     card = make_card(parent, row)
     card.grid_columnconfigure(0, weight=1)
@@ -222,13 +223,13 @@ def build_siem_card(plugin, parent, row):
 
     add_separator(card, 1)
 
-    # Threat log path
+    # Threat log source
     customtkinter.CTkLabel(
         card, text="Threat Log", text_color=_muted(), font=font(12),
     ).grid(row=2, column=0, padx=16, pady=(8, 0), sticky="w")
 
     customtkinter.CTkLabel(
-        card, text=get_log_path(), font=font(10),
+        card, text=get_log_display(), font=font(10),
         text_color=_muted(), wraplength=340, justify="left",
     ).grid(row=3, column=0, columnspan=2, padx=16, pady=(2, 8), sticky="w")
 
@@ -271,8 +272,10 @@ def build_siem_card(plugin, parent, row):
 
 
 def _build_db_info_rows(plugin, card, start_row):
+    from plugins.antivirus import clamav
+
     db_rows = [
-        ("Engine", "ClamAV"),
+        ("Engine", clamav.engine_name()),
         ("Signatures", "\u2014"),
         ("Last Updated", "\u2014"),
     ]

@@ -6,6 +6,7 @@ Author: Resistine Team
 Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
+from __future__ import annotations
 
 import threading
 from collections.abc import Callable
@@ -62,7 +63,7 @@ def scan(
     if not clamav.is_available():
         result = ScanResult(
             target=target,
-            error="ClamAV not installed — install it via the Store plugin.",
+            error=f"{clamav.engine_name()} is not available.",
         )
         if on_complete:
             on_complete(result)
