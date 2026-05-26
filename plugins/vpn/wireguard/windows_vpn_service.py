@@ -150,6 +150,19 @@ def wg_service_name(tunnel: str) -> str:
     return f"WireGuardTunnel${tunnel}"
 
 
+def _flush_dns_cache() -> None:
+    """Flush the Windows DNS resolver cache after tunnel state changes."""
+    try:
+        subprocess.run(
+            ["ipconfig", "/flushdns"],
+            capture_output=True, timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        logger.debug("DNS cache flushed")
+    except Exception:
+        logger.debug("DNS cache flush failed (non-critical)")
+
+
 # ---------------- Config discovery ----------------
 
 def find_config(tunnel: str, config_path: str = None) -> str | None:
@@ -363,6 +376,7 @@ def handle_request(request: dict) -> dict:
             ok, msg = start_tunnel(tunnel)
             actual_state = status_tunnel(tunnel)
             if actual_state in ("Running", "Starting"):
+                _flush_dns_cache()
                 return {"status": "ok", "state": actual_state, "message": msg}
             return {"status": "error", "state": actual_state, "message": msg}
 
@@ -372,6 +386,8 @@ def handle_request(request: dict) -> dict:
                 return {"status": "ok", "state": "Stopped", "message": "Already stopped"}
             ok, msg = stop_tunnel(tunnel)
             actual_state = status_tunnel(tunnel)
+            if ok:
+                _flush_dns_cache()
             return {"status": "ok" if ok else "error", "state": actual_state, "message": msg}
 
         if cmd == "start":
