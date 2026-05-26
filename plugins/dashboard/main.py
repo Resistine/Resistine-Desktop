@@ -180,7 +180,7 @@ class Plugin(BasePlugin):
             max_cols = 4
         min_cols = None
         rows, cols = self.app.calculate_rows_cols(len(plugins), max_cols=max_cols, min_cols=min_cols)
-        
+
         # Store current column count to detect changes
         self._current_cols = len(cols)
         self._current_max_cols = max_cols
