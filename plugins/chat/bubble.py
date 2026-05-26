@@ -120,6 +120,11 @@ class UserBubble(customtkinter.CTkFrame):
             max_width=max_width,
         )
         self._label.pack(padx=self._PAD_X, pady=self._PAD_Y)
+        # Force layout/font resolution before the bubble is measured by the
+        # parent; without this the tk.Text renders at unscaled font size on
+        # HiDPI displays.
+        self._label.update_idletasks()
+        self.update_idletasks()
 
     def _build_emoji(self, text: str, max_width: int) -> None:
         """Linux emoji path: tk.Text with inline emoji images."""
