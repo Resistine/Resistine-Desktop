@@ -6,6 +6,7 @@ Author: Resistine Team
 Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
+from __future__ import annotations
 
 import threading
 from collections.abc import Callable

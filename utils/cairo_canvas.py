@@ -13,6 +13,7 @@ Usage:
     dot = CairoCanvas(parent, width=8, height=8, bg="#1a1a1a", highlightthickness=0)
     dot.create_oval(1, 1, 7, 7, fill="#ccc", outline="", tags="dot")
 """
+from __future__ import annotations
 
 import io
 import sys
