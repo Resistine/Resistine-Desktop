@@ -194,8 +194,9 @@ class Plugin(BasePlugin):
             self.api_key_entry.insert(0, existing_key)
 
         existing_base = settings.get("chat", "openai_base_url")
-        if existing_base:
-            self.api_base_entry.insert(0, existing_base)
+        self.api_base_entry.insert(
+            0, existing_base or "http://dashboard.resisti.net:8001/v1",
+        )
 
         # Disable Typing Animation Checkbox
         self.disable_animation_var = customtkinter.BooleanVar(
@@ -336,10 +337,13 @@ class Plugin(BasePlugin):
         api_key = self.api_key_entry.get().strip()
         api_base = self.api_base_entry.get().strip()
 
-        if not api_key:
+        if not api_key and not api_base:
             return
 
-        success_key = settings.set_secret("chat", "openai_api_key", api_key)
+        success_key = (
+            settings.set_secret("chat", "openai_api_key", api_key)
+            if api_key else True
+        )
         # Always set/update base_url, even if empty (to allow clearing it)
         success_base = settings.set(
             "chat", "openai_base_url", api_base if api_base else None

@@ -11,6 +11,7 @@ Author: Resistine Team
 Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
+from __future__ import annotations
 
 import base64
 import os
@@ -38,6 +39,17 @@ def get_log_path() -> str:
     return os.path.join(_log_dir(), "threats.log")
 
 
+def get_log_display() -> str:
+    """Return a UI-friendly description of where threat events come from.
+
+    Defender writes to the Windows event log, not a syslog file, so the
+    file path on Mac/Linux maps to an event-channel name on Windows.
+    """
+    if platform.system() == "Windows":
+        return "Microsoft-Windows-Windows Defender/Operational"
+    return get_log_path()
+
+
 def _hostname() -> str:
     return platform.node() or "localhost"
 
@@ -53,7 +65,7 @@ def _write(line: str):
             with open(get_log_path(), "a") as f:
                 f.write(line + "\n")
         except OSError as exc:
-            logger.error(f"ClamAV: failed to write threat log: {exc}")
+            logger.error(f"AV: failed to write threat log: {exc}")
 
 
 def _escape(v: str) -> str:
@@ -176,7 +188,7 @@ def setup_wazuh_forwarding() -> tuple[bool, str]:
     if system == "Linux":
         return _inject_linux(conf)
     if system == "Windows":
-        return False, "Wazuh integration not yet supported on Windows."
+        return _inject_windows()
     return False, f"Unknown platform: {system}"
 
 
@@ -228,7 +240,7 @@ def _inject_darwin(conf: str) -> tuple[bool, str]:
             output = result.stdout.strip()
             if "already_configured" in output:
                 return True, "Already configured."
-            logger.info("ClamAV: Wazuh forwarding configured")
+            logger.info("AV: Wazuh forwarding configured")
             return True, "Configured. Wazuh agent restarted."
         err = result.stderr.strip()
         if "User cancelled" in err or "(-128)" in err:
@@ -285,10 +297,28 @@ def _inject_linux(conf: str) -> tuple[bool, str]:
                 output = result.stdout.strip()
                 if "already_configured" in output:
                     return True, "Already configured."
-                logger.info("ClamAV: Wazuh forwarding configured")
+                logger.info("AV: Wazuh forwarding configured")
                 return True, "Configured. Wazuh agent restarted."
         except (FileNotFoundError, subprocess.TimeoutExpired):
             continue
         except Exception as exc:
             return False, str(exc)
     return False, "Could not obtain admin privileges."
+
+
+def _inject_windows() -> tuple[bool, str]:
+    """Register the Windows Defender event channel with the Wazuh agent.
+
+    Defender writes to Microsoft-Windows-Windows Defender/Operational, which
+    the Wazuh agent reads directly via an <eventchannel> localfile entry — no
+    syslog file needed (unlike the ClamAV path used on Mac/Linux).
+    """
+    from plugins.wazuh.agent.wazuh_functions_windows import inject_defender_config
+
+    try:
+        ok = inject_defender_config()
+    except Exception as exc:
+        return False, str(exc)
+    if ok:
+        return True, "Configured. Defender events will forward to Wazuh."
+    return False, "Failed to update ossec.conf. See logs for details."
