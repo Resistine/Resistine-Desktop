@@ -449,6 +449,7 @@ def _walk_files(
     whitelist: set[str],
     excluded_ext: frozenset[str] = frozenset(),
     max_size_bytes: int = 0,
+    cancel: "threading.Event | None" = None,
 ):
     """Yield scannable file paths under *target*.
 
@@ -467,6 +468,8 @@ def _walk_files(
 
     skip = _SKIP_DIRS | _SKIP_DIRS_WINDOWS
     for root, dirs, files in os.walk(target):
+        if cancel and cancel.is_set():
+            return
         dirs[:] = [
             d for d in dirs
             if d not in skip
@@ -539,7 +542,11 @@ def _scan_dir_socket(
     excl = get_scan_exclusions()
     excluded_ext = frozenset(excl["extensions"])
     max_bytes = excl["max_size_mb"] * 1048576 if excl["max_size_mb"] else 0
-    files = list(_walk_files(target, whitelist, excluded_ext, max_bytes))
+    files = list(_walk_files(target, whitelist, excluded_ext, max_bytes, cancel))
+
+    if cancel and cancel.is_set():
+        result["error"] = "Scan cancelled."
+        return result
 
     if not files:
         result["duration"] = "0.000 sec (0 s)"
@@ -747,7 +754,7 @@ def scan_path(
             ext_set = frozenset(excl["extensions"])
             max_bytes = excl["max_size_mb"] * 1048576 if excl["max_size_mb"] else 0
             total = sum(
-                1 for _ in _walk_files(target, wl, ext_set, max_bytes)
+                1 for _ in _walk_files(target, wl, ext_set, max_bytes, cancel)
             )
             on_total(total)
         else:

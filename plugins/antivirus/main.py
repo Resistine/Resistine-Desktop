@@ -20,7 +20,7 @@ import customtkinter
 from customtkinter import ThemeManager
 
 from plugins.antivirus import clamav, threat_log
-from plugins.antivirus.scanner import ScanResult, scan
+from plugins.antivirus.scanner import ScanHandle, ScanResult, scan
 from plugins.antivirus.theme import font
 from plugins.antivirus.ui_builders import (
     build_scan_activity,
@@ -607,7 +607,7 @@ class Plugin(BasePlugin):
         self._scan_log.configure(state="disabled")
 
     def _set_scan_buttons_state(self, state: str):
-        for key in ("scan_file", "scan_directory"):
+        for key in ("scan_file", "scan_directory", "scan_computer"):
             btn = self._action_buttons.get(key)
             if btn:
                 btn.configure(state=state)
@@ -741,12 +741,101 @@ class Plugin(BasePlugin):
         if self._scanning:
             return
         if platform.system() == "Windows":
-            # Scan user profile — fastest, most relevant target on Windows.
-            # Full C:\ scans are slow even with system dirs skipped.
-            target = os.path.expanduser("~")
+            self._run_multi_location_scan()
         else:
-            target = "/"
-        self._run_scan(target)
+            self._run_scan("/")
+
+    def _run_multi_location_scan(self):
+        """Scan multiple targeted Windows locations sequentially."""
+        locations = []
+        home = os.path.expanduser("~")
+        candidates = [
+            ("User Profile", home),
+            ("Program Files", os.environ.get("PROGRAMFILES", r"C:\Program Files")),
+            ("ProgramData", os.environ.get("PROGRAMDATA", r"C:\ProgramData")),
+            ("Windows Temp", os.path.join(
+                os.environ.get("SYSTEMROOT", r"C:\Windows"), "Temp")),
+        ]
+        for name, path in candidates:
+            if os.path.isdir(path):
+                locations.append((name, path))
+
+        if not locations:
+            return
+
+        self._scanning = True
+        self._scan_file_count = 0
+        self._scan_total_files = 0
+        self._set_scan_buttons_state("disabled")
+        self._log_clear()
+
+        self._scan_progress.grid()
+        self._scan_progress.configure(mode="indeterminate")
+        self._scan_progress.start()
+
+        cancel_btn = self._action_buttons.get("cancel_scan")
+        if cancel_btn:
+            cancel_btn.grid()
+
+        loc_names = "\n".join(f"  \u2022 {n}" for n, _ in locations)
+        header = f"Scanning computer ({len(locations)} locations)...\n{loc_names}"
+        self._scan_status_label.configure(
+            text=f"Scanning computer ({len(locations)} locations)...")
+        self._log_append(header)
+
+        def on_complete(result: ScanResult):
+            self.app.after(0, self._handle_scan_complete, result)
+
+        def _run():
+            combined = ScanResult(target="Computer")
+            total_count = len(locations)
+            for idx, (name, path) in enumerate(locations, 1):
+                if self._scan_handle and self._scan_handle.cancelled:
+                    combined.error = "Scan cancelled."
+                    break
+
+                prefix = f"[{idx}/{total_count}]"
+                self.app.after(0, self._scan_status_label.configure,
+                               {"text": f"{prefix} Indexing {name}..."})
+                self.app.after(0, self._log_append, f"{prefix} Scanning {path}...")
+
+                def on_line(line, _pfx=prefix):
+                    self.app.after(0, self._log_append, line)
+                    if ":" in line and ("OK" in line or "FOUND" in line):
+                        self._scan_file_count += 1
+                        total = self._scan_total_files
+                        if total > 0:
+                            status = f"{_pfx} Scanned {self._scan_file_count} / {total} files"
+                            pct = self._scan_file_count / total
+                        else:
+                            status = f"{_pfx} Scanned {self._scan_file_count} files"
+                            pct = None
+                        self.app.after(0, self._on_scan_file_done, status, pct)
+
+                def on_total(total):
+                    self._scan_total_files += total
+                    self.app.after(0, self._on_scan_total_known,
+                                   self._scan_total_files)
+
+                raw = clamav.scan_path(
+                    path, on_line=on_line,
+                    cancel=self._scan_handle._cancelled if self._scan_handle else None,
+                    on_total=on_total,
+                )
+                combined.scanned += raw.get("scanned", 0)
+                combined.infected += raw.get("infected", 0)
+                combined.infections.extend(raw.get("infections", []))
+                if raw.get("error"):
+                    combined.error = raw["error"]
+                    if "cancelled" in raw["error"].lower():
+                        break
+
+            if not combined.duration:
+                combined.duration = ""
+            on_complete(combined)
+
+        self._scan_handle = ScanHandle()
+        threading.Thread(target=_run, daemon=True).start()
 
     def _run_scan(self, target: str):
         self._scanning = True
@@ -836,10 +925,19 @@ class Plugin(BasePlugin):
 
     def _handle_scan_complete_ui(self, result: ScanResult):
         """UI portion of scan complete — may raise TclError if widgets gone."""
-        self._scan_progress.stop()
-        self._scan_progress.set(1.0 if not result.error else 0)
-        self._scan_progress.configure(mode="determinate")
-        self._scan_progress.grid_remove()
+        try:
+            self._scan_progress.stop()
+        except (TclError, AttributeError):
+            pass
+        try:
+            self._scan_progress.configure(mode="determinate")
+            self._scan_progress.set(1.0 if not result.error else 0)
+        except (TclError, AttributeError):
+            pass
+        try:
+            self._scan_progress.grid_remove()
+        except (TclError, AttributeError):
+            pass
 
         # Re-enable scan buttons only if ClamAV is in a scannable state
         can_scan = self._last_state not in ("not_installed", "no_database")

@@ -343,6 +343,18 @@ def _find_mpcmdrun() -> str | None:
     return None
 
 
+def _amsi_scan_file(
+    filepath: str,
+    cancel: "threading.Event | None" = None,
+) -> str:
+    """Scan one file via AMSI. Returns ClamAV-compatible result line."""
+    if cancel and cancel.is_set():
+        return f"{filepath}: OK"
+    from plugins.antivirus import amsi_scanner
+    _, line = amsi_scanner.scan_file(filepath)
+    return line
+
+
 def _scan_single_file(
     filepath: str,
     cancel: "threading.Event | None" = None,
@@ -392,11 +404,9 @@ def scan_path(
 ) -> dict:
     """Scan a file or directory with Windows Defender.
 
-    Uses MpCmdRun.exe per-file for fast scanning with real-time progress,
-    matching the ClamAV backend's per-file callback behaviour.
+    Single files use per-file MpCmdRun. Directories use a single MpCmdRun
+    process for the whole tree — one engine init, Defender handles parallelism.
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
     result = {
         "target": target,
         "scanned": 0,
@@ -427,34 +437,23 @@ def scan_path(
         result["duration"] = _format_duration(time.monotonic() - start)
         return result
 
-    # Directory scan — walk files, then scan per-file with parallel workers
+    # Directory scan — stream files to scan pool as they're discovered (no pre-index).
+    # Uses AMSI if available (~1-10ms/file), falls back to MpCmdRun per-file.
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from plugins.antivirus import amsi_scanner
+
     whitelist = set(get_whitelist())
     excl = get_scan_exclusions()
     excluded_ext = frozenset(excl["extensions"])
     max_bytes = excl["max_size_mb"] * 1048576 if excl["max_size_mb"] else 0
 
+    short_name = os.path.basename(target) or target
+    use_amsi = amsi_scanner.is_available()
+    engine = "AMSI" if use_amsi else "MpCmdRun"
+    scan_fn = _amsi_scan_file if use_amsi else _scan_single_file
+
     if on_line:
-        on_line(f"Enumerating files in {os.path.basename(target) or target}...")
-
-    files = list(_walk_files(target, whitelist, excluded_ext, max_bytes))
-
-    if cancel and cancel.is_set():
-        result["error"] = "Scan cancelled."
-        return result
-
-    if not files:
-        if on_line:
-            on_line("No files matched scan filters.")
-        result["duration"] = "0.000 sec (0 s)"
-        return result
-
-    if on_total:
-        on_total(len(files))
-    if on_line:
-        on_line(
-            f"Scanning {len(files)} files in "
-            f"{os.path.basename(target) or target}...",
-        )
+        on_line(f"Scanning {short_name} ({engine})...")
 
     start = time.monotonic()
     scanned = 0
@@ -462,17 +461,34 @@ def scan_path(
     infections: list[str] = []
 
     pool = ThreadPoolExecutor(max_workers=_PARALLEL_WORKERS)
+    pending = set()
     try:
-        futures = {
-            pool.submit(_scan_single_file, f, cancel): f for f in files
-        }
-        for future in as_completed(futures):
+        for filepath in _walk_files(target, whitelist, excluded_ext, max_bytes, cancel):
             if cancel and cancel.is_set():
-                pool.shutdown(wait=False, cancel_futures=True)
-                result["error"] = "Scan cancelled."
-                return result
+                break
+            pending.add(pool.submit(scan_fn, filepath, cancel))
+
+            # Harvest completed futures without blocking
+            done = {f for f in pending if f.done()}
+            for future in done:
+                pending.discard(future)
+                try:
+                    line = future.result()
+                except Exception:
+                    continue
+                scanned += 1
+                if on_line:
+                    on_line(line)
+                if "FOUND" in line:
+                    infected += 1
+                    infections.append(line)
+
+        # Drain remaining futures
+        for future in as_completed(pending):
+            if cancel and cancel.is_set():
+                break
             try:
-                line = future.result()
+                line = future.result(timeout=5)
             except Exception:
                 continue
             scanned += 1
@@ -483,6 +499,10 @@ def scan_path(
                 infections.append(line)
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
+
+    if cancel and cancel.is_set():
+        result["error"] = "Scan cancelled."
+        return result
 
     result["scanned"] = scanned
     result["infected"] = infected
