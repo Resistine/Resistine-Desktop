@@ -67,6 +67,7 @@ _status_cache: dict = {}
 _status_cache_time: float = 0.0
 _status_cache_lock = threading.Lock()
 _STATUS_TTL: float = 8.0  # seconds; fits within the 10 s UI poll cycle
+_last_good_status: dict = {}  # last successful Get-MpComputerStatus result
 
 
 # ── PowerShell helpers ─────────────────────────────────────
@@ -213,7 +214,12 @@ def get_db_info() -> dict[str, str]:
 
 def get_realtime_status() -> dict:
     """Match the schema of clamav_common.get_realtime_status."""
+    global _last_good_status
     s = _mp_status()
+    if not s and _last_good_status:
+        s = _last_good_status
+    elif s:
+        _last_good_status = s
     installed = bool(s)
     db_present = bool(s.get("AntivirusSignatureVersion"))
     rt_enabled = bool(s.get("RealTimeProtectionEnabled"))
