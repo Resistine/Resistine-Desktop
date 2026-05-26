@@ -419,12 +419,10 @@ class Plugin(BasePlugin):
         can_scan = status.get("installed") and status.get("db_present")
         self._set_scan_buttons_state("normal" if can_scan else "disabled")
 
-        # Scan Computer is gated on real-time protection
-        realtime_on = bool(status.get("clamonacc_running"))
         computer_btn = self._action_buttons.get("scan_computer")
         if computer_btn:
             computer_btn.configure(
-                state="normal" if (can_scan and realtime_on) else "disabled",
+                state="normal" if can_scan else "disabled",
             )
 
     def _get_setup_banner_cfg(
@@ -736,36 +734,33 @@ class Plugin(BasePlugin):
             btn = self._action_buttons.get(key)
             if btn:
                 btn.configure(state=state)
-        # scan_computer is gated separately on real-time protection — only
-        # re-enable it if the last poll said clamonacc is running.
         computer_btn = self._action_buttons.get("scan_computer")
         if computer_btn:
-            realtime_on = bool(
-                self._last_status and self._last_status.get("clamonacc_running"),
-            )
-            if state == "disabled":
-                computer_btn.configure(state="disabled")
-            else:
-                computer_btn.configure(
-                    state="normal" if realtime_on else "disabled",
-                )
+            computer_btn.configure(state=state)
 
     # ── System Daemon Activation ────────────────────────────────
 
     def _start_system_setup(self):
-        """Launch the ClamAV postinstall script via the installer service."""
-        from plugins.antivirus.installer_service import trigger_system_setup
-
+        """Launch ClamAV system setup (platform-aware)."""
         if self._banner_action_btn:
             self._banner_action_btn.configure(
                 state="disabled", text="Starting...",
             )
 
-        def _run():
-            ok = trigger_system_setup()
-            if ok:
-                self.app.after(0, self._poll_setup_progress)
-            else:
+        if platform.system() == "Darwin":
+            from plugins.antivirus.installer_service import trigger_system_setup
+
+            def _run():
+                ok = trigger_system_setup()
+                if ok:
+                    self.app.after(0, self._poll_setup_progress)
+                else:
+                    self.app.after(0, self._update_realtime_status)
+        else:
+            from plugins.antivirus.clamav_platform_linux import activate_system_daemons
+
+            def _run():
+                ok, _msg = activate_system_daemons()
                 self.app.after(0, self._update_realtime_status)
 
         threading.Thread(target=_run, daemon=True).start()
