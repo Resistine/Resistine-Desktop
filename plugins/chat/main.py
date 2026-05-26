@@ -15,6 +15,7 @@ from utils.logger import logger
 _SYSTEM_PROMPT = "You are SOC Copilot specialized in cybersecurity."
 _ICON_DIR = os.path.dirname(os.path.realpath(__file__))
 _SYS_MSG = {"role": "system", "content": _SYSTEM_PROMPT}
+_DEFAULT_BASE_URL = "http://dashboard.resisti.net:8001/v1"
 
 
 class Plugin(ChatUIMixin, BasePlugin):
@@ -54,18 +55,20 @@ class Plugin(ChatUIMixin, BasePlugin):
     def reinitialize_client(self, notify: bool = False):
         """Rebuild the OpenAI client from the current settings."""
         api_key = settings.get_secret("chat", "openai_api_key")
-        self.base_url = settings.get("chat", "openai_base_url")
+        self.base_url = (
+            settings.get("chat", "openai_base_url") or _DEFAULT_BASE_URL
+        )
         self.session_id = None
         if self.base_url:
             self.model, self.conversation_history = "ministral-3:14b", []
         else:
             self.model = "gpt-4o"
             self.conversation_history = [dict(_SYS_MSG)]
-        if not api_key:
+        if not api_key and not self.base_url:
             self.client = None
             return
         try:
-            kwargs: dict = {"api_key": api_key}
+            kwargs: dict = {"api_key": api_key or "unused"}
             if self.base_url:
                 kwargs["base_url"] = self.base_url
             from openai import OpenAI
