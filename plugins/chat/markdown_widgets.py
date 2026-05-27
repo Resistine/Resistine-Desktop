@@ -106,7 +106,14 @@ class SelectableLabel(tk.Text):
             pass
 
     def set_width(self, max_width: int) -> None:
+        if max_width == self._max_width:
+            return
         self._max_width = max_width
+        # Re-fit the widget so it actually grows/shrinks when the parent
+        # chat area resizes (e.g. when chat_scroll lays out to full size
+        # after the bubble has already been created).
+        text = self.get("1.0", "end-1c")
+        self._fit_width(self.cget("font"), text, max_width)
 
 
 # ---------------------------------------------------------------------------
