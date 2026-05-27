@@ -237,7 +237,11 @@ class AppUI(customtkinter.CTk):
         def _apply_wraplength(_f=frame, _tl=_tl, _dl=_dl, _s=_wrap_state, _j=_wrap_job):
             _j[0] = None
             try:
-                card_w = _f.winfo_width()
+                # winfo_width() is physical px; CTkLabel.configure(wraplength=)
+                # re-applies widget scaling internally, so feed it logical units
+                # to match the value the constructor was given.
+                _scale = getattr(_f.winfo_toplevel(), "_hidpi_factor", 1.0)
+                card_w = _f.winfo_width() / _scale
                 if card_w <= 4:
                     return
                 new_tw = max(80, card_w - 80)
