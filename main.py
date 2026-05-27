@@ -29,6 +29,11 @@ from utils.logger import logger, setup_logging
 DEBUG_WINDOW = False
 DEBUG = False
 
+# 1080p reference. All logical dimensions are anchored to this so HiDPI
+# scaling produces an identical logical layout at any resolution.
+_REF_WIDTH = 1920
+_REF_HEIGHT = 1080
+
 
 def resource_path(relative_path: str) -> str:
     """Delegates to central utils.functions.get_resource_path."""
@@ -42,13 +47,16 @@ class App(AppUI):
     """
 
     def _apply_hidpi_scaling(self):
-        """Scale all CTk widgets proportionally on HiDPI displays.
+        """Scale CTk widgets proportionally based on the 1080p reference.
 
-        Uses screen pixel height relative to 1080p as the scale factor.
-        Only applies on screens taller than 1440p to avoid over-scaling
-        normal high-res displays.
+        Factor is computed as ``min(screen_width / 1920, screen_height / 1080)``
+        so the window stays 16:9-shaped and inside the screen regardless of
+        the monitor's actual aspect ratio (handles ultrawide / DCI 4K, etc.).
         """
-        factor = self.winfo_screenheight() / 1080
+        factor = min(
+            self.winfo_screenwidth() / _REF_WIDTH,
+            self.winfo_screenheight() / _REF_HEIGHT,
+        )
         if factor >= 1.5:
             self._hidpi_factor = factor
             customtkinter.set_widget_scaling(factor)
@@ -81,10 +89,15 @@ class App(AppUI):
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         scale = getattr(self, "_hidpi_factor", 1.0)
-        window_width = int(screen_width * 0.7 / scale)
-        window_height = int(screen_height * 0.7 / scale)
-        min_width = int(750 / scale)
-        min_height = int(350 / scale)
+        # Window dimensions are LOGICAL, anchored to the 1080p reference
+        # (70% of 1920x1080). set_window_scaling() multiplies these by `scale`
+        # to produce the actual physical pixel size, so the logical layout is
+        # identical at every resolution and aspect ratio.
+        window_width = int(_REF_WIDTH * 0.7)
+        window_height = int(_REF_HEIGHT * 0.7)
+        min_width = 750
+        min_height = 350
+        # Centre the window on the physical screen.
         position_right = int(screen_width / 2 - window_width * scale / 2)
         position_down = int(screen_height / 2 - window_height * scale / 2)
         self.geometry(

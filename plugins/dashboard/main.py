@@ -158,10 +158,14 @@ class Plugin(BasePlugin):
         _sidebar = 250
         _padding = 60 if _plat.system() == "Windows" else 40
         _scale = getattr(self.app, "_hidpi_factor", 1.0)
+        # Force pending geometry to be applied so winfo_width() returns the
+        # actual window size rather than a stale pre-layout value.
+        self.app.update_idletasks()
         window_width = self.app.winfo_width()
         if window_width <= 1:
-            screen_width = self.app.winfo_screenwidth()
-            window_width = int(screen_width * 0.7)
+            # Window not yet mapped — fall back to the geometry-targeted size
+            # (1920 * 0.7 logical = 1344, then scaled to physical).
+            window_width = int(1344 * _scale)
         window_width = int(window_width / _scale)
 
         content_width = max(1, window_width - _sidebar - _padding)
@@ -339,7 +343,16 @@ class Plugin(BasePlugin):
         rows, cols = self.app.calculate_rows_cols(len(plugins), max_cols=max_cols, min_cols=min_cols)
         self._current_cols = len(cols)
         self._current_max_cols = max_cols
-        
+
+        # Refresh the content_width hint with the current window size.
+        # Without this, create_grid would walk up to find the stale hint that
+        # was set during the initial dashboard load (when winfo_width hadn't
+        # been applied yet), giving wrong target_height on the rebuilt grid.
+        _scale = getattr(self.app, "_hidpi_factor", 1.0)
+        window_width = int(self.app.winfo_width() / _scale)
+        content_width = max(1, window_width - 250 - self._padding_offset)
+        self.app._content_width_hint = content_width
+
         self.grid_frame = self.app.create_grid(
             frame=self._content_frame,
             row=0,

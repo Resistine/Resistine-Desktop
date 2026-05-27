@@ -114,15 +114,22 @@ class UserBubble(customtkinter.CTkFrame):
             return False
 
     def _build_label(self, text: str, max_width: int) -> None:
+        # SelectableLabel is a raw tk.Text — CTk's auto-scaling doesn't apply
+        # to its font or to pack(). Scale these manually so the bubble's
+        # visible size matches what the rest of the UI does at HiDPI.
+        self._scale = getattr(self.winfo_toplevel(), "_hidpi_factor", 1.0)
         self._label = SelectableLabel(
             self, text=text, bg=self._bg, fg=self._fg,
-            font=customtkinter.CTkFont(family="Inter", size=15),
-            max_width=max_width,
+            font=customtkinter.CTkFont(family="Inter", size=int(15 * self._scale)),
+            max_width=int(max_width * self._scale),
         )
-        self._label.pack(padx=self._PAD_X, pady=self._PAD_Y)
+        self._label.pack(
+            padx=int(self._PAD_X * self._scale),
+            pady=int(self._PAD_Y * self._scale),
+        )
         # Force layout/font resolution before the bubble is measured by the
-        # parent; without this the tk.Text renders at unscaled font size on
-        # HiDPI displays.
+        # parent so autoheight can compute displaylines against the actual
+        # widget size.
         self._label.update_idletasks()
         self.update_idletasks()
 
@@ -206,6 +213,9 @@ class UserBubble(customtkinter.CTkFrame):
         """Update wraplength on resize."""
         self._max_width = max_width
         if self._label is not None:
-            self._label.set_width(max_width)
+            # SelectableLabel was created with a scaled font and expects a
+            # scaled max_width — apply the same factor here.
+            scale = getattr(self, "_scale", 1.0)
+            self._label.set_width(int(max_width * scale))
         elif self._emoji_widget is not None:
             self._layout_emoji(self._emoji_widget, max_width)
