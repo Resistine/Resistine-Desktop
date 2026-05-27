@@ -1,0 +1,20 @@
+"""
+Wazuh Overview Plugin — Centralized Configuration
+Module-level constants for the IP-identified /api/v1/me/* API the Overview tab
+consumes. Base URL is hardcoded here (not in settings.json) to keep the surface
+small; flip to settings.get(...) when per-environment overrides are needed.
+Author: Resistine Team
+Copyright (c) Resistine 2025
+Licensed under the GNU General Public License v2 or later
+"""
+
+# --- API Endpoint ---
+API_BASE_URL = "http://dashboard.resisti.net:8899"
+
+# --- Network ---
+REQUEST_TIMEOUT = 10.0
+
+# --- Endpoint-specific tuning ---
+# Matches the API's documented default; explicit so callers don't depend on the
+# server-side default not changing.
+VULN_FETCH_LIMIT = 500

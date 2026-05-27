@@ -13,7 +13,6 @@ Licensed under the GNU General Public License v2 or later
 import json
 import os
 import platform as _platform
-import tarfile
 import threading
 import tkinter as tk
 from datetime import datetime, timedelta, timezone
@@ -22,6 +21,7 @@ import customtkinter
 from customtkinter import ThemeManager
 
 from plugins.base_plugin import BasePlugin
+from plugins.wazuh_overview import api_client
 from utils.logger import logger
 
 # matplotlib is imported lazily via _ensure_matplotlib() — see below. Pulling it
@@ -47,8 +47,6 @@ _WAZUH_DIR = os.path.join(os.path.dirname(_PLUGIN_DIR), "wazuh")
 _DATA_FILE = os.path.join(_PLUGIN_DIR, "data", "agent.013.json")
 _EVENTS_FILE = os.path.join(_PLUGIN_DIR, "data", "log_events.json")
 _VULNS_FILE = os.path.join(_PLUGIN_DIR, "data", "vulnerabilities.json")
-_AGENTS_TAR = os.path.join(_PLUGIN_DIR, "data", "agents_samples.tar.gz")
-_AGENTS_DIR = os.path.join(_PLUGIN_DIR, "data", "agents")
 
 _TAB_NAMES = ("Overview", "Events", "Vulnerabilities", "Inventory")
 _LEGEND_KEYS = ("critical", "error", "warning", "info")
@@ -238,47 +236,77 @@ _agents_loader_started = False
 _agents_loader_lock = threading.Lock()
 
 
-def _ensure_agents_extracted():
-    """One-time extract of agents_samples.tar.gz into data/agents/.
-    Idempotent: skips if the directory already has files."""
-    if os.path.isdir(_AGENTS_DIR):
-        try:
-            if any(f.endswith(".json") for f in os.listdir(_AGENTS_DIR)):
-                return
-        except OSError:
-            pass
-    if not os.path.exists(_AGENTS_TAR):
-        logger.error(f"Inventory: agents tar missing ({_AGENTS_TAR})")
-        return
-    try:
-        os.makedirs(_AGENTS_DIR, exist_ok=True)
-        # File ships as .tar.gz but is actually an uncompressed tar; use
-        # auto-detect mode so either layout works.
-        with tarfile.open(_AGENTS_TAR) as tf:
-            tf.extractall(_AGENTS_DIR)
-    except Exception as e:
-        logger.error(f"Inventory: failed to extract agents tar: {e}")
+def _shape_inventory_agent(summary, detail):
+    """Map a /me/inventory summary device (and its optional /me/inventory/{id}
+    detail) into the legacy {basic_info, syscollector, hardware} shape the
+    Inventory tab's row builders read.
+
+    Caller groups are stamped onto each device's basic_info because the API
+    only returns devices in the caller's group, so the group-filter dropdown
+    can still show the right value. Devices whose detail fetch failed get an
+    empty syscollector — the Processes/Ports/Network views correctly render 0
+    counts in that case."""
+    caller_groups = []
+    if _remote_agent_ready.is_set() and isinstance(_REMOTE_AGENT, dict):
+        g = _REMOTE_AGENT.get("group") or []
+        if isinstance(g, list):
+            caller_groups = list(g)
+
+    basic_info = {
+        "id": summary.get("agent_id"),
+        "name": summary.get("agent_name"),
+        "ip": summary.get("agent_ip") or "—",
+        "status": summary.get("status"),
+        "os": summary.get("os") or {},
+        "group": caller_groups,
+    }
+
+    syscollector = {}
+    if isinstance(detail, dict):
+        processes = detail.get("processes")
+        ports = detail.get("ports")
+        network = detail.get("network") or {}
+        interfaces = network.get("interfaces") if isinstance(network, dict) else None
+        packages = detail.get("packages")
+        syscollector = {
+            "processes": {"affected_items": list(processes or [])},
+            "network": {
+                "ports": {"affected_items": list(ports or [])},
+                "interfaces": {"affected_items": list(interfaces or [])},
+            },
+            "packages": {"affected_items": list(packages or [])},
+        }
+
+    return {
+        "basic_info": basic_info,
+        "syscollector": syscollector,
+        "hardware": summary.get("hardware") or {},
+    }
 
 
 def _load_all_agents():
-    _ensure_agents_extracted()
-    if not os.path.isdir(_AGENTS_DIR):
+    """Fetch the device list from /api/v1/me/inventory and per-device detail
+    from /api/v1/me/inventory/{id}, returning agent dicts in the legacy shape
+    the Inventory tab consumes. Sequential per-device fetches — fine for the
+    small group sizes this API serves (typical: 1–10 devices)."""
+    devices, err = api_client.fetch_inventory_full()
+    if err:
+        logger.error(f"Inventory: fetch_inventory_full failed: {err}")
         return []
+    if not devices:
+        return []
+
     out = []
-    try:
-        names = sorted(os.listdir(_AGENTS_DIR))
-    except OSError as e:
-        logger.error(f"Inventory: failed to list {_AGENTS_DIR}: {e}")
-        return []
-    for fn in names:
-        if not fn.endswith(".json"):
-            continue
-        path = os.path.join(_AGENTS_DIR, fn)
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                out.append(json.load(f))
-        except Exception as e:
-            logger.error(f"Inventory: failed to read {fn}: {e}")
+    for d in devices:
+        agent_id = d.get("agent_id")
+        detail = None
+        if agent_id:
+            detail, derr = api_client.fetch_device_inventory(agent_id)
+            if derr:
+                logger.warning(
+                    f"Inventory: fetch_device_inventory({agent_id}) failed: {derr}"
+                )
+        out.append(_shape_inventory_agent(d, detail))
     return out
 
 
@@ -303,6 +331,105 @@ def _kick_agents_loader():
         name="endpoint2-agents-loader",
         daemon=True,
     ).start()
+
+
+# Live data fetched from the /api/v1/me/* endpoints. Each slot gets its own
+# threading.Event so the Overview tab's polling refresh can rebuild cards
+# incrementally as each endpoint arrives, rather than waiting on the slowest.
+# A per-slot error string captures failures so cards render "Couldn't load"
+# instead of looping on "Loading…".
+_REMOTE_AGENT = None
+_REMOTE_AGENT_ERROR = None
+_remote_agent_ready = threading.Event()
+
+_REMOTE_VULNS = []
+_REMOTE_VULNS_ERROR = None
+_remote_vulns_ready = threading.Event()
+
+_REMOTE_SCA = []
+_REMOTE_SCA_ERROR = None
+_remote_sca_ready = threading.Event()
+
+_REMOTE_INVENTORY = {"total": 0, "items": []}
+_REMOTE_INVENTORY_ERROR = None
+_remote_inventory_ready = threading.Event()
+
+_REMOTE_HOTFIXES = []
+_REMOTE_HOTFIXES_ERROR = None
+_remote_hotfixes_ready = threading.Event()
+
+_overview_api_loader_started = False
+_overview_api_loader_lock = threading.Lock()
+
+
+def _load_overview_api_async():
+    """Sequentially fetch the 5 /me/* endpoints, setting each event as it
+    completes. Sequential (not parallel) because requests is sync and the
+    volume (5 GETs) doesn't justify a thread pool."""
+    global _REMOTE_AGENT, _REMOTE_AGENT_ERROR
+    _REMOTE_AGENT, _REMOTE_AGENT_ERROR = api_client.fetch_agent()
+    _remote_agent_ready.set()
+
+    global _REMOTE_VULNS, _REMOTE_VULNS_ERROR
+    data, err = api_client.fetch_vulnerabilities()
+    if data is not None:
+        _REMOTE_VULNS = data
+    _REMOTE_VULNS_ERROR = err
+    _remote_vulns_ready.set()
+
+    global _REMOTE_SCA, _REMOTE_SCA_ERROR
+    data, err = api_client.fetch_sca()
+    if data is not None:
+        _REMOTE_SCA = data
+    _REMOTE_SCA_ERROR = err
+    _remote_sca_ready.set()
+
+    global _REMOTE_INVENTORY, _REMOTE_INVENTORY_ERROR
+    data, err = api_client.fetch_inventory_summary()
+    if data is not None:
+        _REMOTE_INVENTORY = data
+    _REMOTE_INVENTORY_ERROR = err
+    _remote_inventory_ready.set()
+
+    global _REMOTE_HOTFIXES, _REMOTE_HOTFIXES_ERROR
+    data, err = api_client.fetch_hotfixes()
+    if data is not None:
+        _REMOTE_HOTFIXES = data
+    _REMOTE_HOTFIXES_ERROR = err
+    _remote_hotfixes_ready.set()
+
+
+def _kick_overview_api_loader():
+    """Start the Overview API loader thread once. Same idempotent pattern as
+    _kick_agents_loader: repeat calls short-circuit on the locked guard, so
+    re-opening the plugin doesn't refire the requests. A future "Refresh"
+    button can reset the events + flag to force a fresh fetch."""
+    global _overview_api_loader_started
+    with _overview_api_loader_lock:
+        if _overview_api_loader_started:
+            return
+        _overview_api_loader_started = True
+    threading.Thread(
+        target=_load_overview_api_async,
+        name="endpoint2-overview-api-loader",
+        daemon=True,
+    ).start()
+
+
+def _ready_mask():
+    """Bitmask of which remote slots have completed (any state: data or error).
+    Used by the refresh poll to detect transitions without re-rendering on
+    every 100 ms tick."""
+    return (
+        (1 if _remote_agent_ready.is_set() else 0)
+        | (2 if _remote_vulns_ready.is_set() else 0)
+        | (4 if _remote_sca_ready.is_set() else 0)
+        | (8 if _remote_inventory_ready.is_set() else 0)
+        | (16 if _remote_hotfixes_ready.is_set() else 0)
+    )
+
+
+_READY_ALL = 31  # all 5 slots set
 
 
 def _format_relative(iso_ts):
@@ -351,6 +478,86 @@ def _short_benchmark_name(name):
         return ""
     cleaned = name.replace("_", " ").replace("Apple ", "")
     return cleaned
+
+
+# ----- module-card state helpers -----------------------------------------
+# Module cards on the Overview pane reach one of four states: loading, error,
+# unavailable (no backing endpoint), or loaded. The first three share enough
+# chrome to factor into small builders so each card's branch in _module_cards
+# only writes the loaded-state shape.
+
+
+def _unavailable_card(title, description, target_tab=None):
+    """Card stub for modules that have no /me/* endpoint yet."""
+    card = {
+        "title": title,
+        "status": "INFO",
+        "description": description,
+        "stats": (("Data unavailable", "muted"),),
+    }
+    if target_tab:
+        card["target_tab"] = target_tab
+    return card
+
+
+def _loading_card(title, description, target_tab=None):
+    card = {
+        "title": title,
+        "status": "INFO",
+        "description": description,
+        "stats": (("Loading…", "muted"),),
+    }
+    if target_tab:
+        card["target_tab"] = target_tab
+    return card
+
+
+def _error_card(title, description, target_tab=None):
+    card = {
+        "title": title,
+        "status": "INFO",
+        "description": description,
+        "stats": (("Couldn't load", "muted"),),
+    }
+    if target_tab:
+        card["target_tab"] = target_tab
+    return card
+
+
+def _bucket_by_severity(items):
+    """Count items by their `severity` field across the four canonical buckets."""
+    counts = {lvl: 0 for lvl in _SEVERITY_LEVELS}
+    for it in items:
+        sev = (it.get("severity") or "").lower() if isinstance(it, dict) else ""
+        if sev in counts:
+            counts[sev] += 1
+    return counts
+
+
+def _severity_stats(counts):
+    """Render a counts dict into the (text, theme_key) tuples the card stats line uses."""
+    stats = []
+    for level in _SEVERITY_LEVELS:
+        cnt = counts.get(level, 0)
+        if not cnt:
+            continue
+        if stats:
+            stats.append(("  ·  ", "muted"))
+        stats.append((f"{cnt} {level}", _SEVERITY_THEME_KEY.get(level, "info")))
+    return tuple(stats)
+
+
+def _is_windows_agent():
+    """Best-effort check: prefer the agent's OS info from /me/agent so the
+    "Not applicable" text matches what the Wazuh server actually reports for
+    this machine; fall back to local platform.system() if the agent endpoint
+    is still loading or errored."""
+    if _remote_agent_ready.is_set() and isinstance(_REMOTE_AGENT, dict):
+        os_info = _REMOTE_AGENT.get("os") or {}
+        platform_name = (os_info.get("platform") or os_info.get("name") or "").lower()
+        if platform_name:
+            return "windows" in platform_name
+    return _platform.system() == "Windows"
 
 
 class Plugin(BasePlugin):
@@ -418,7 +625,11 @@ class Plugin(BasePlugin):
         self._selected_bucket = None  # datetime of the active 30-min bucket filter, or None
         self._events_ready_after_id = None  # poll handle for the background events loader
         self._prebuild_after_id = None  # handle for the inactive-tab pre-build chain
-        self._overview_events_after_id = None  # poll handle for the Overview's Security Alerts card refresh
+        self._overview_events_after_id = None  # poll handle for the Overview's API-data refresh
+        self._overview_ready_mask = -1  # last-seen _ready_mask(); -1 == no render yet
+        self._overview_parent = None  # parent of the Overview pane (for re-grid on refresh)
+        self._device_card_frame = None  # top device widget; destroyed + rebuilt on data arrival
+        self._alert_bar_frame = None  # alert bar; destroyed + rebuilt on data arrival
         self._inventory_after_id = None  # poll handle for the Inventory agents loader
         self._inventory_pane_parent = None  # reference for swapping loading → list
         # Active category in the Inventory tab's dropdown. One of:
@@ -752,24 +963,21 @@ class Plugin(BasePlugin):
         for r in range(4):
             parent.grid_rowconfigure(r, weight=0)
 
+        self._overview_parent = parent
+        self._overview_ready_mask = _ready_mask()
+
         self._build_top_device_widget(parent, row=0)
         self._build_alert_bar(parent, row=1)
         self._build_modules_header(parent, row=2)
         self._build_module_grid(parent, row=3)
 
-        # Start the agents loader in the background now so that (a) the
-        # Inventory module card below resolves to its real threat distribution
-        # rather than staying "Loading…" forever, and (b) the user's first
-        # click on the Inventory tab is instant. Idempotent — repeat calls
-        # short-circuit on the loader-started lock.
-        _kick_agents_loader()
-
-        # Overview can be built before the background loaders finish (events
-        # JSON parse, agents tar extract + parse). Cards that depend on those
-        # render "Loading…" placeholders; poll for readiness and rebuild the
-        # module grid once each arrives so the real counts replace the
-        # placeholders without the user clicking anything.
-        if not (_events_ready.is_set() and _agents_ready.is_set()):
+        # Live data comes from /api/v1/me/*. Kick the loader (idempotent —
+        # repeat calls short-circuit on the locked guard) and poll for
+        # readiness; the device card, alert bar, and module grid all read
+        # from the per-endpoint module globals via accessor helpers and
+        # render "Loading…" until each event fires.
+        _kick_overview_api_loader()
+        if _ready_mask() != _READY_ALL:
             self._schedule_overview_data_refresh()
 
     def _schedule_overview_data_refresh(self):
@@ -781,12 +989,39 @@ class Plugin(BasePlugin):
             wrapper = self._module_wrapper
             if wrapper is None or not wrapper.winfo_exists():
                 return
-            if _events_ready.is_set() and _agents_ready.is_set():
-                self._populate_module_grid()
-                return
-            self._overview_events_after_id = self.app.after(50, check)
 
-        self._overview_events_after_id = self.app.after(50, check)
+            mask = _ready_mask()
+            if mask != self._overview_ready_mask:
+                self._overview_ready_mask = mask
+                self._refresh_overview_section()
+
+            if mask == _READY_ALL:
+                return
+            self._overview_events_after_id = self.app.after(100, check)
+
+        self._overview_events_after_id = self.app.after(100, check)
+
+    def _refresh_overview_section(self):
+        """Rebuild the device card, alert bar, and module grid against the
+        current snapshot of the remote-data globals. Called from the polling
+        callback each time a new endpoint completes; safe to call repeatedly."""
+        parent = self._overview_parent
+        if parent is None or not parent.winfo_exists():
+            return
+
+        for attr in ("_device_card_frame", "_alert_bar_frame"):
+            frame = getattr(self, attr, None)
+            if frame is not None:
+                try:
+                    if frame.winfo_exists():
+                        frame.destroy()
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+
+        self._build_top_device_widget(parent, row=0)
+        self._build_alert_bar(parent, row=1)
+        self._populate_module_grid()
 
     # ----- section 1: top device widget --------------------------------------
 
@@ -794,7 +1029,26 @@ class Plugin(BasePlugin):
         text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
         divider_color = self._theme("divider_color", default=["#E5E7EB", "#2A2A2A"])
 
-        bi = _get_agent_data().get("basic_info", {}) or {}
+        # Card frame is created regardless of data state so the grid row stays
+        # occupied; inner content diverges per state below.
+        card = customtkinter.CTkFrame(parent, corner_radius=12, border_width=1)
+        card.grid(row=row, column=0, sticky="ew", pady=(0, 12))
+        card.grid_columnconfigure(0, weight=1)
+        self._device_card_frame = card
+
+        # Loading / error states: render a compact placeholder and return.
+        # Once _remote_agent_ready fires, _refresh_overview_section destroys
+        # this frame and rebuilds with the loaded path below.
+        if not _remote_agent_ready.is_set():
+            self._device_placeholder(card, "Loading device info…", text_secondary)
+            return
+        if _REMOTE_AGENT_ERROR or not _REMOTE_AGENT:
+            self._device_placeholder(
+                card, "Couldn't load device info", text_secondary
+            )
+            return
+
+        bi = _REMOTE_AGENT
         os_info = bi.get("os") or {}
         name = bi.get("name") or "(unknown device)"
         os_name = os_info.get("name") or ""
@@ -817,7 +1071,7 @@ class Plugin(BasePlugin):
             meta_parts.append(wazuh_version)
         meta_text = "  ·  ".join(meta_parts)
 
-        is_connected = (bi.get("status") or "").lower() == "connected"
+        is_connected = (bi.get("status") or "").lower() in ("active", "connected")
         connectivity_label = "Connected" if is_connected else "Disconnected"
 
         last_seen = _format_relative(bi.get("lastKeepAlive"))
@@ -838,10 +1092,6 @@ class Plugin(BasePlugin):
         if node:
             facts.append(f"Node {node}")
         facts_text = "  ·  ".join(facts)
-
-        card = customtkinter.CTkFrame(parent, corner_radius=12, border_width=1)
-        card.grid(row=row, column=0, sticky="ew", pady=(0, 12))
-        card.grid_columnconfigure(0, weight=1)
 
         # Top: name + meta + status badge
         top = customtkinter.CTkFrame(card, fg_color="transparent")
@@ -921,6 +1171,22 @@ class Plugin(BasePlugin):
     def _on_config_click(self):
         logger.info("Endpoint 2: Config opened (placeholder)")
 
+    def _device_placeholder(self, card, message, text_secondary):
+        """Render the THIS DEVICE label + a single muted line inside the card.
+        Used for Loading / Couldn't-load states so the row keeps its shape."""
+        customtkinter.CTkLabel(
+            card,
+            text="THIS DEVICE",
+            text_color=text_secondary,
+            font=customtkinter.CTkFont(size=10, weight="bold"),
+        ).grid(row=0, column=0, sticky="w", padx=20, pady=(16, 4))
+        customtkinter.CTkLabel(
+            card,
+            text=message,
+            text_color=text_secondary,
+            font=customtkinter.CTkFont(size=14),
+        ).grid(row=1, column=0, sticky="w", padx=20, pady=(0, 16))
+
     # ----- section 2: alert bar ----------------------------------------------
 
     def _build_alert_bar(self, parent, row):
@@ -928,14 +1194,37 @@ class Plugin(BasePlugin):
         warn_text = self._theme("protection_text_warn", default=["#B45309", "#FBBF24"])
         ok_bg = self._theme("protection_bg_ok", default=["#DCFCE7", "#0A2F1A"])
         ok_text = self._theme("protection_text_ok", default=["#15803D", "#4ADE80"])
+        muted_bg = self._theme("protection_bg_warn", default=["#F3F4F6", "#1F2937"])
+        muted_text = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
         # Reconnect-button colors come from the "error" theme key (red), not the
         # severity scheme. Buttons should never inherit severity colors —
         # Reconnect is an error-fix action, not a "critical-severity" indicator.
         err_bg = self._theme("status_badge_bg", "error", default=["#FEE2E2", "#7F1D1D"])
         err_text = self._theme("status_badge_text", "error", default=["#DC2626", "#F87171"])
 
-        bi = _get_agent_data().get("basic_info", {}) or {}
-        is_connected = (bi.get("status") or "").lower() == "connected"
+        # Loading / error: render a single muted bar so the row keeps its
+        # shape; the polling refresh will swap in the real bar once the
+        # agent endpoint completes.
+        if not _remote_agent_ready.is_set() or _REMOTE_AGENT_ERROR or not _REMOTE_AGENT:
+            bar = customtkinter.CTkFrame(parent, fg_color=muted_bg, corner_radius=8)
+            bar.grid(row=row, column=0, sticky="ew", pady=(0, 16))
+            bar.grid_columnconfigure(0, weight=1)
+            msg = (
+                "Loading agent status…"
+                if not _remote_agent_ready.is_set()
+                else "Couldn't load agent status."
+            )
+            customtkinter.CTkLabel(
+                bar,
+                text=msg,
+                text_color=muted_text,
+                font=customtkinter.CTkFont(size=13),
+            ).grid(row=0, column=0, sticky="w", padx=16, pady=12)
+            self._alert_bar_frame = bar
+            return
+
+        bi = _REMOTE_AGENT
+        is_connected = (bi.get("status") or "").lower() in ("active", "connected")
         last_keep = _format_relative(bi.get("lastKeepAlive"))
         disc_at = _format_relative(bi.get("disconnection_time"))
 
@@ -956,6 +1245,7 @@ class Plugin(BasePlugin):
         bar.grid_columnconfigure(0, weight=1)
         bar.grid_columnconfigure(1, weight=0)
         bar.grid_columnconfigure(2, weight=0)
+        self._alert_bar_frame = bar
 
         customtkinter.CTkLabel(
             bar,
@@ -1062,287 +1352,228 @@ class Plugin(BasePlugin):
         return 3
 
     def _module_cards(self):
-        """Compute module-card data from the loaded agent JSON."""
+        """Compute module-card data from the live /api/v1/me/* responses.
+
+        Cards backed by an endpoint cycle through four states: loading (slot's
+        Event not yet set), loaded (data arrived), error (slot's Event set but
+        client returned an error), and — for hotfixes — a "not applicable"
+        variant when the platform legitimately has no data. Cards with no
+        endpoint backing (Security Alerts, File Integrity, Rootcheck) render
+        a permanent "Data unavailable" pending future API support."""
         cards = []
-        bi = _get_agent_data().get("basic_info", {}) or {}
 
-        # Security Alerts — derived from the same _EVENTS list the Events tab
-        # renders. Badge severity tracks the highest-severity bucket with a
-        # non-zero count (critical > high > medium > low); there's no resolved
-        # state in the sample data, so every event is treated as unresolved.
-        # If the background events loader hasn't finished yet, fall back to a
-        # "Loading…" stat line — _build_overview_pane schedules a refresh once
-        # _events_ready fires.
-        if not _events_ready.is_set():
-            cards.append({
-                "title": "Security Alerts",
-                "status": "INFO",
-                "description": "Threats and security incidents detected",
-                "stats": (("Loading…", "muted"),),
-                "target_tab": "Events",
-            })
-        else:
-            sev_counts = self._severity_counts()
-            total_events = sum(sev_counts.values())
-            if total_events == 0:
-                cards.append({
-                    "title": "Security Alerts",
-                    "status": "OK",
-                    "description": "Threats and security incidents detected",
-                    "stats": (("No alerts", "ok"),),
-                    "target_tab": "Events",
-                })
-            else:
-                highest = next(
-                    (s for s in _SEVERITY_LEVELS if sev_counts.get(s, 0) > 0),
-                    "low",
-                )
-                stats = []
-                for level in _SEVERITY_LEVELS:
-                    cnt = sev_counts.get(level, 0)
-                    if not cnt:
-                        continue
-                    if stats:
-                        stats.append(("  ·  ", "muted"))
-                    stats.append((f"{cnt} {level}", _SEVERITY_THEME_KEY.get(level, "info")))
-                cards.append({
-                    "title": "Security Alerts",
-                    "status": _SEV_TO_STATUS[highest],
-                    "description": "Threats and security incidents detected",
-                    "stats": tuple(stats),
-                    "target_tab": "Events",
-                })
+        cards.append(_unavailable_card(
+            "Security Alerts",
+            "Threats and security incidents detected",
+            target_tab="Events",
+        ))
 
-        # Vulnerabilities — derived from the same _get_vulns() list the
-        # Vulnerabilities tab renders. Mirrors the Security Alerts card
-        # pattern above: badge severity tracks the highest non-zero bucket
-        # (critical > high > medium > low), stats line breaks down by bucket.
-        vuln_counts = self._vuln_severity_counts()
-        total_vulns = sum(vuln_counts.values())
-        if total_vulns == 0:
-            cards.append({
-                "title": "Vulnerabilities",
+        cards.append(self._vuln_card())
+        cards.append(self._sca_card())
+
+        cards.append(_unavailable_card(
+            "File Integrity",
+            "Created · added/modified · deleted",
+        ))
+        cards.append(_unavailable_card(
+            "Rootcheck",
+            "Recent rootkit / process detection",
+        ))
+
+        cards.append(self._hotfix_card())
+        cards.append(self._inventory_card())
+        cards.append(self._agent_health_card())
+        cards.append(self._manager_card())
+
+        return cards
+
+    def _vuln_card(self):
+        title = "Vulnerabilities"
+        desc = "CVEs across installed packages"
+        target = "Vulnerabilities"
+        if not _remote_vulns_ready.is_set():
+            return _loading_card(title, desc, target_tab=target)
+        if _REMOTE_VULNS_ERROR:
+            return _error_card(title, desc, target_tab=target)
+        counts = _bucket_by_severity(_REMOTE_VULNS)
+        total = sum(counts.values())
+        if total == 0:
+            return {
+                "title": title,
                 "status": "OK",
-                "description": "CVEs across installed packages",
-                "stats": (("No vulnerabilities", "ok"),),
-                "target_tab": "Vulnerabilities",
-            })
-        else:
-            highest = next(
-                (s for s in _SEVERITY_LEVELS if vuln_counts.get(s, 0) > 0),
-                "low",
-            )
-            stats = []
-            for level in _SEVERITY_LEVELS:
-                cnt = vuln_counts.get(level, 0)
-                if not cnt:
-                    continue
-                if stats:
-                    stats.append(("  ·  ", "muted"))
-                stats.append((f"{cnt} {level}", _SEVERITY_THEME_KEY.get(level, "info")))
-            cards.append({
-                "title": "Vulnerabilities",
-                "status": _SEV_TO_STATUS[highest],
-                "description": "CVEs across installed packages",
-                "stats": tuple(stats),
-                "target_tab": "Vulnerabilities",
-            })
-
-        # Compliance · SCA
-        sca_items = (_get_agent_data().get("sca", {}) or {}).get("affected_items") or []
-        if sca_items:
-            sca = sca_items[0]
-            score = int(sca.get("score") or 0)
-            passed = int(sca.get("pass") or 0)
-            failed = int(sca.get("fail") or 0)
-            invalid = int(sca.get("invalid") or 0)
-            sca_status = "OK" if score >= 80 else ("WARNING" if score >= 50 else "CRITICAL")
-            score_color = "ok" if score >= 80 else ("warning" if score >= 50 else "critical")
-            desc = _short_benchmark_name(sca.get("name", "")) or "OS configuration benchmark"
-            stats = [
-                (f"{score}% score", score_color),
-                ("  ·  ", "muted"),
-                (f"{passed} pass", "ok"),
-                ("  ·  ", "muted"),
-                (f"{failed} fail", "error"),
-            ]
-            if invalid:
-                stats.extend([("  ·  ", "muted"), (f"{invalid} invalid", "muted")])
-            cards.append({
-                "title": "Compliance · SCA",
-                "status": sca_status,
                 "description": desc,
-                "stats": tuple(stats),
-            })
-        else:
-            cards.append({
-                "title": "Compliance · SCA",
+                "stats": (("No vulnerabilities", "ok"),),
+                "target_tab": target,
+            }
+        highest = next(
+            (s for s in _SEVERITY_LEVELS if counts.get(s, 0) > 0),
+            "low",
+        )
+        stats = _severity_stats(counts)
+        return {
+            "title": title,
+            "status": _SEV_TO_STATUS[highest],
+            "description": desc,
+            "stats": stats,
+            "target_tab": target,
+        }
+
+    def _sca_card(self):
+        title = "Compliance · SCA"
+        if not _remote_sca_ready.is_set():
+            return _loading_card(title, "OS signature checks and benchmarks")
+        if _REMOTE_SCA_ERROR:
+            return _error_card(title, "OS signature checks and benchmarks")
+        if not _REMOTE_SCA:
+            return {
+                "title": title,
                 "status": "INFO",
                 "description": "OS signature checks and benchmarks",
                 "stats": (("No scan results", "muted"),),
-            })
+            }
+        sca = _REMOTE_SCA[0]
+        score = int(sca.get("score") or 0)
+        passed = int(sca.get("pass") or 0)
+        failed = int(sca.get("fail") or 0)
+        invalid = int(sca.get("invalid") or 0)
+        sca_status = "OK" if score >= 80 else ("WARNING" if score >= 50 else "CRITICAL")
+        score_color = "ok" if score >= 80 else ("warning" if score >= 50 else "critical")
+        desc = _short_benchmark_name(sca.get("name", "")) or "OS configuration benchmark"
+        stats = [
+            (f"{score}% score", score_color),
+            ("  ·  ", "muted"),
+            (f"{passed} pass", "ok"),
+            ("  ·  ", "muted"),
+            (f"{failed} fail", "error"),
+        ]
+        if invalid:
+            stats.extend([("  ·  ", "muted"), (f"{invalid} invalid", "muted")])
+        return {
+            "title": title,
+            "status": sca_status,
+            "description": desc,
+            "stats": tuple(stats),
+        }
 
-        # File Integrity — syscheck is empty in the sample
-        syscheck = _get_agent_data().get("syscheck") or {}
-        if syscheck:
-            cards.append({
-                "title": "File Integrity",
-                "status": "INFO",
-                "description": "Created · added/modified · deleted",
-                "stats": ((f"{len(syscheck)} entries", "muted"),),
-            })
-        else:
-            cards.append({
-                "title": "File Integrity",
-                "status": "INFO",
-                "description": "Created · added/modified · deleted",
-                "stats": (("No data available", "muted"),),
-            })
-
-        # Rootcheck
-        rc = _get_agent_data().get("rootcheck") or {}
-        rc_items = rc.get("affected_items") or []
-        rc_total = int(rc.get("total_affected_items") or len(rc_items))
-        if rc_total:
-            solved = sum(1 for r in rc_items if (r.get("status") or "").lower() == "solved")
-            unsolved = rc_total - solved
-            if unsolved == 0:
-                rc_status = "OK"
-                noun = "finding" if rc_total == 1 else "findings"
-                rc_stats = ((f"{rc_total} {noun} · all solved", "ok"),)
-            else:
-                rc_status = "WARNING" if unsolved <= 3 else "CRITICAL"
-                rc_stats = (
-                    (f"{unsolved} open", "warning"),
-                    ("  ·  ", "muted"),
-                    (f"{solved} solved", "muted"),
-                )
-            cards.append({
-                "title": "Rootcheck",
-                "status": rc_status,
-                "description": "Recent rootkit / process detection",
-                "stats": rc_stats,
-            })
-        else:
-            cards.append({
-                "title": "Rootcheck",
-                "status": "INFO",
-                "description": "Recent rootkit / process detection",
-                "stats": (("No findings", "muted"),),
-            })
-
-        # MITRE ATT&CK — no source in sample JSON
-        cards.append({
-            "title": "MITRE ATT&CK",
-            "status": "INFO",
-            "description": "Tactics observed in triggered rules",
-            "stats": (("No data available", "muted"),),
-        })
-
-        # Inventory — derived from the multi-device list the Inventory tab
-        # renders. Mirrors the Security Alerts and Vulnerabilities cards:
-        # badge tracks the highest device threat present; stats line breaks
-        # down by threat tier. _inventory_rows() consults both _EVENTS and
-        # vulnerabilities for each device's composite threat, so we wait for
-        # both loaders before showing real numbers (_build_overview_pane
-        # schedules the refresh poll on both signals).
-        if not (_events_ready.is_set() and _agents_ready.is_set()):
-            cards.append({
-                "title": "Inventory",
-                "status": "INFO",
-                "description": "Devices linked to your account",
-                "stats": (("Loading…", "muted"),),
-                "target_tab": "Inventory",
-            })
-        else:
-            rows = self._inventory_rows()
-            if not rows:
-                cards.append({
-                    "title": "Inventory",
+    def _hotfix_card(self):
+        title = "Hotfixes"
+        desc = "Windows KB updates applied"
+        if not _remote_hotfixes_ready.is_set():
+            return _loading_card(title, desc)
+        if _REMOTE_HOTFIXES_ERROR:
+            return _error_card(title, desc)
+        if not _REMOTE_HOTFIXES:
+            # Empty list is a successful response. Distinguish "non-Windows
+            # OS — N/A" from "Windows but nothing reported" via the agent's
+            # OS info; fall back to the local platform if the agent endpoint
+            # is still pending or errored.
+            if _is_windows_agent():
+                return {
+                    "title": title,
                     "status": "INFO",
-                    "description": "Devices linked to your account",
-                    "stats": (("No devices", "muted"),),
-                    "target_tab": "Inventory",
-                })
-            else:
-                threat_counts = {lvl: 0 for lvl in _SEVERITY_LEVELS}
-                for r in rows:
-                    t = r.get("threat")
-                    if t in threat_counts:
-                        threat_counts[t] += 1
-                highest = next(
-                    (s for s in _SEVERITY_LEVELS if threat_counts.get(s, 0) > 0),
-                    None,
-                )
-                if highest is None:
-                    status = "OK"
-                    noun = "device" if len(rows) == 1 else "devices"
-                    stats = ((f"{len(rows)} {noun} · all clear", "ok"),)
-                else:
-                    status = _SEV_TO_STATUS[highest]
-                    seg = []
-                    for level in _SEVERITY_LEVELS:
-                        cnt = threat_counts.get(level, 0)
-                        if not cnt:
-                            continue
-                        if seg:
-                            seg.append(("  ·  ", "muted"))
-                        seg.append((f"{cnt} {level}", _SEVERITY_THEME_KEY.get(level, "info")))
-                    stats = tuple(seg)
-                cards.append({
-                    "title": "Inventory",
-                    "status": status,
-                    "description": "Devices linked to your account",
-                    "stats": stats,
-                    "target_tab": "Inventory",
-                })
+                    "description": desc,
+                    "stats": (("No hotfixes reported", "muted"),),
+                }
+            return {
+                "title": title,
+                "status": "INFO",
+                "description": desc,
+                "stats": (("Not applicable on this OS", "muted"),),
+            }
+        n = len(_REMOTE_HOTFIXES)
+        noun = "hotfix" if n == 1 else "hotfixes"
+        return {
+            "title": title,
+            "status": "OK",
+            "description": desc,
+            "stats": ((f"{n} {noun} installed", "ok"),),
+        }
 
-        # Agent Health
-        is_connected = (bi.get("status") or "").lower() == "connected"
+    def _inventory_card(self):
+        title = "Inventory"
+        desc = "Devices linked to your account"
+        target = "Inventory"
+        if not _remote_inventory_ready.is_set():
+            return _loading_card(title, desc, target_tab=target)
+        if _REMOTE_INVENTORY_ERROR:
+            return _error_card(title, desc, target_tab=target)
+        total = int(_REMOTE_INVENTORY.get("total") or 0)
+        if total == 0:
+            return {
+                "title": title,
+                "status": "INFO",
+                "description": desc,
+                "stats": (("No devices", "muted"),),
+                "target_tab": target,
+            }
+        noun = "device" if total == 1 else "devices"
+        return {
+            "title": title,
+            "status": "OK",
+            "description": desc,
+            "stats": ((f"{total} {noun}", "muted"),),
+            "target_tab": target,
+        }
+
+    def _agent_health_card(self):
+        title = "Agent Health"
+        desc = "Connectivity & configuration"
+        if not _remote_agent_ready.is_set():
+            return _loading_card(title, desc)
+        if _REMOTE_AGENT_ERROR or not _REMOTE_AGENT:
+            return _error_card(title, desc)
+        bi = _REMOTE_AGENT
+        is_connected = (bi.get("status") or "").lower() in ("active", "connected")
         if is_connected:
-            cards.append({
-                "title": "Agent Health",
+            return {
+                "title": title,
                 "status": "OK",
-                "description": "Connectivity & configuration",
+                "description": desc,
                 "stats": (
                     (f"Connected · keep-alive {_format_relative(bi.get('lastKeepAlive'))}", "ok"),
                 ),
-            })
-        else:
-            cards.append({
-                "title": "Agent Health",
-                "status": "ERROR",
-                "description": "Connectivity & configuration",
-                "stats": (
-                    (f"Disconnected · {_format_relative(bi.get('disconnection_time'))}", "error"),
-                ),
-            })
+            }
+        return {
+            "title": title,
+            "status": "ERROR",
+            "description": desc,
+            "stats": (
+                (f"Disconnected · {_format_relative(bi.get('disconnection_time'))}", "error"),
+            ),
+        }
 
-        # Manager
+    def _manager_card(self):
+        title = "Manager"
+        desc = "Wazuh cluster reachable by node"
+        if not _remote_agent_ready.is_set():
+            return _loading_card(title, desc)
+        if _REMOTE_AGENT_ERROR or not _REMOTE_AGENT:
+            return _error_card(title, desc)
+        bi = _REMOTE_AGENT
         manager = bi.get("manager") or ""
         node = bi.get("node_name") or ""
+        # group_config_status isn't part of the /me/agent contract; render
+        # the "synced" pill only when the field shows up in the response.
         config_synced = (bi.get("group_config_status") or "").lower() == "synced"
-        mgr_segments = []
+        segments = []
         if manager:
-            mgr_segments.append((manager, "muted"))
+            segments.append((manager, "muted"))
         if node:
-            if mgr_segments:
-                mgr_segments.append(("  ·  ", "muted"))
-            mgr_segments.append((node, "muted"))
+            if segments:
+                segments.append(("  ·  ", "muted"))
+            segments.append((node, "muted"))
         if config_synced:
-            if mgr_segments:
-                mgr_segments.append(("  ·  ", "muted"))
-            mgr_segments.append(("synced", "ok"))
-        if not mgr_segments:
-            mgr_segments = [("No data available", "muted")]
-        cards.append({
-            "title": "Manager",
+            if segments:
+                segments.append(("  ·  ", "muted"))
+            segments.append(("synced", "ok"))
+        if not segments:
+            segments = [("No data available", "muted")]
+        return {
+            "title": title,
             "status": "OK" if config_synced else "INFO",
-            "description": "Wazuh cluster reachable by node",
-            "stats": tuple(mgr_segments),
-        })
-
-        return cards
+            "description": desc,
+            "stats": tuple(segments),
+        }
 
     def _populate_module_grid(self):
         if not self._module_wrapper or not self._module_wrapper.winfo_exists():
