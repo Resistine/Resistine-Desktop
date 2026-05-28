@@ -1257,16 +1257,8 @@ class Plugin(BasePlugin):
             wraplength=720,
         ).grid(row=0, column=0, sticky="w", padx=(14, 12), pady=10)
 
-        legend = customtkinter.CTkFrame(bar, fg_color="transparent")
-        legend.grid(row=0, column=1, sticky="e", padx=(0, 12))
-        for i, key in enumerate(_LEGEND_KEYS):
-            color = self._segment_color(key)
-            customtkinter.CTkLabel(
-                legend,
-                text=f"●  {key.capitalize()}",
-                text_color=color,
-                font=customtkinter.CTkFont(size=11, weight="bold"),
-            ).grid(row=0, column=i, sticky="w", padx=(0, 10))
+        # The severity color legend lives in the modules header (directly above
+        # the colored cards), so it's intentionally not repeated here.
 
         if not is_connected:
             customtkinter.CTkButton(
