@@ -252,12 +252,21 @@ def _shape_inventory_agent(summary, detail):
         if isinstance(g, list):
             caller_groups = list(g)
 
+    os_info = summary.get("os") or {}
+    hw_info = summary.get("hardware") or {}
+    # The /me/inventory summary carries no keep-alive field; the most recent
+    # syscollector scan time is the best "last seen" signal available, so map
+    # it onto lastKeepAlive (what the row renderers read). Fall back to the
+    # hardware scan time if the OS scan is missing.
+    last_seen = os_info.get("last_scan") or hw_info.get("last_scan")
+
     basic_info = {
         "id": summary.get("agent_id"),
         "name": summary.get("agent_name"),
         "ip": summary.get("agent_ip") or "—",
         "status": summary.get("status"),
-        "os": summary.get("os") or {},
+        "os": os_info,
+        "lastKeepAlive": last_seen,
         "group": caller_groups,
     }
 
@@ -280,7 +289,7 @@ def _shape_inventory_agent(summary, detail):
     return {
         "basic_info": basic_info,
         "syscollector": syscollector,
-        "hardware": summary.get("hardware") or {},
+        "hardware": hw_info,
     }
 
 
@@ -2544,7 +2553,6 @@ class Plugin(BasePlugin):
         self._build_vuln_cvss_card(cvss)
 
     def _build_vuln_donut_card(self, card):
-        Figure, FigureCanvasTkAgg = _ensure_matplotlib()
         text_secondary = self._theme(
             "text_secondary", default=["#6B7280", "#9CA3AF"]
         )
@@ -2565,62 +2573,18 @@ class Plugin(BasePlugin):
         counts = self._vuln_severity_counts()
         total = sum(counts.values())
 
-        # matplotlib donut on the left
-        fig = Figure(figsize=(2.6, 2.2), dpi=100, facecolor=card_bg)
-        self._vuln_donut_figure = fig
-        ax = fig.add_subplot(111)
-        ax.set_facecolor(card_bg)
-
-        sizes = [counts[lvl] for lvl in _SEVERITY_LEVELS]
-        colors = [
-            self._resolve_severity_color(lvl, chart_theme["is_dark"])
-            for lvl in _SEVERITY_LEVELS
-        ]
         if total > 0:
-            ax.pie(
-                sizes,
-                colors=colors,
-                startangle=90,
-                counterclock=False,
-                wedgeprops={"width": 0.32, "edgecolor": card_bg},
-            )
-            ax.text(
-                0,
-                0.08,
-                str(total),
-                ha="center",
-                va="center",
-                color=chart_theme["text"],
-                fontsize=20,
-                fontweight="bold",
-            )
-            ax.text(
-                0,
-                -0.22,
-                "CVEs",
-                ha="center",
-                va="center",
-                color=text_secondary[1] if chart_theme["is_dark"] else text_secondary[0],
-                fontsize=9,
+            self._draw_vuln_donut_chart(
+                card, card_bg, chart_theme, text_secondary, counts, total
             )
         else:
-            ax.text(
-                0,
-                0,
-                "No CVEs",
-                ha="center",
-                va="center",
-                color=chart_theme["text"],
-                fontsize=11,
-            )
-        ax.set_aspect("equal")
-
-        canvas = FigureCanvasTkAgg(fig, master=card)
-        widget = canvas.get_tk_widget()
-        widget.configure(highlightthickness=0, bd=0, bg=card_bg)
-        widget.grid(row=1, column=0, sticky="nsew", padx=(8, 4), pady=(0, 10))
-        self._vuln_donut_canvas = canvas
-        canvas.draw_idle()
+            # Zero-data state: draw a flat ring on a plain tkinter canvas. The
+            # matplotlib data path can't render a meaningful donut from all-zero
+            # sizes, so reuse a hand-drawn placeholder that reads as intentional
+            # rather than a degenerate chart. No figure is created here.
+            self._vuln_donut_figure = None
+            self._vuln_donut_canvas = None
+            self._draw_empty_vuln_donut(card, card_bg, chart_theme)
 
         # Legend on the right — spacer rows top/bottom vertically center the items.
         legend = customtkinter.CTkFrame(card, fg_color="transparent")
@@ -2656,6 +2620,90 @@ class Plugin(BasePlugin):
                 text_color=dot_color,
                 font=customtkinter.CTkFont(family="Inter", size=14, weight="bold"),
             ).grid(row=0, column=2, sticky="e")
+
+    def _draw_vuln_donut_chart(self, card, card_bg, chart_theme, text_secondary, counts, total):
+        """Data-state donut: a matplotlib pie with a hollow center showing the
+        total CVE count. Only built when total > 0 (see _draw_empty_vuln_donut
+        for the zero-data placeholder)."""
+        Figure, FigureCanvasTkAgg = _ensure_matplotlib()
+        fig = Figure(figsize=(2.6, 2.2), dpi=100, facecolor=card_bg)
+        self._vuln_donut_figure = fig
+        ax = fig.add_subplot(111)
+        ax.set_facecolor(card_bg)
+
+        sizes = [counts[lvl] for lvl in _SEVERITY_LEVELS]
+        colors = [
+            self._resolve_severity_color(lvl, chart_theme["is_dark"])
+            for lvl in _SEVERITY_LEVELS
+        ]
+        ax.pie(
+            sizes,
+            colors=colors,
+            startangle=90,
+            counterclock=False,
+            wedgeprops={"width": 0.32, "edgecolor": card_bg},
+        )
+        ax.text(
+            0,
+            0.08,
+            str(total),
+            ha="center",
+            va="center",
+            color=chart_theme["text"],
+            fontsize=20,
+            fontweight="bold",
+        )
+        ax.text(
+            0,
+            -0.22,
+            "CVEs",
+            ha="center",
+            va="center",
+            color=text_secondary[1] if chart_theme["is_dark"] else text_secondary[0],
+            fontsize=9,
+        )
+        ax.set_aspect("equal")
+
+        canvas = FigureCanvasTkAgg(fig, master=card)
+        widget = canvas.get_tk_widget()
+        widget.configure(highlightthickness=0, bd=0, bg=card_bg)
+        widget.grid(row=1, column=0, sticky="nsew", padx=(8, 4), pady=(0, 10))
+        self._vuln_donut_canvas = canvas
+        canvas.draw_idle()
+
+    def _draw_empty_vuln_donut(self, card, card_bg, chart_theme):
+        """Zero-data donut placeholder: a flat ring drawn on a tkinter canvas
+        with 'No CVEs' centered. The ring geometry mirrors the matplotlib
+        donut (stroke ≈ 0.16 of diameter, matching wedge width 0.32 of radius)
+        so the empty and populated states read as the same widget. Redraws on
+        <Configure> so the ring stays centered as the card resizes."""
+        ring_color = chart_theme["grid"]
+        text_color = chart_theme["text"]
+        canvas = tk.Canvas(card, bg=card_bg, highlightthickness=0, bd=0)
+        canvas.grid(row=1, column=0, sticky="nsew", padx=(8, 4), pady=(0, 10))
+
+        def redraw(_e=None):
+            canvas.delete("all")
+            w = canvas.winfo_width()
+            h = canvas.winfo_height()
+            if w <= 1 or h <= 1:
+                return
+            cx, cy = w / 2, h / 2
+            diameter = min(w, h) * 0.7
+            thickness = max(6.0, diameter * 0.16)
+            # tkinter strokes the oval centered on its path, so inset the radius
+            # by half the stroke width to keep the outer edge inside the canvas.
+            rr = diameter / 2 - thickness / 2
+            canvas.create_oval(
+                cx - rr, cy - rr, cx + rr, cy + rr,
+                outline=ring_color,
+                width=thickness,
+            )
+            canvas.create_text(
+                cx, cy, text="No CVEs", fill=text_color, font=("Inter", 11)
+            )
+
+        canvas.bind("<Configure>", redraw)
 
     def _bucket_vulns_daily(self):
         """Group CVEs into 30 daily buckets ending today (UTC) by detection_date."""
@@ -3144,9 +3192,8 @@ class Plugin(BasePlugin):
             threat = self._device_threat_level(name, events_by_agent)
             rows.append({
                 "name": name,
-                # status retained because the row renderer uses it to detect
-                # active agents (so the 9999-sentinel lastKeepAlive becomes
-                # "Active now" instead of "in the future").
+                # status drives the row's "Active now" label vs. a relative
+                # last-seen time (see _inventory_row).
                 "status": (bi.get("status") or "").lower(),
                 "last_keep": bi.get("lastKeepAlive"),
                 "ip": bi.get("ip") or "—",
@@ -3611,15 +3658,14 @@ class Plugin(BasePlugin):
             anchor="w",
         ).grid(row=0, column=1, sticky="w", padx=(0, 12), pady=8)
 
-        # Last seen — col 2. Wazuh emits "9999-12-31T23:59:59+00:00" as a
-        # sentinel for "still alive right now"; show "Active now" rather than
-        # the literal "in the future" _format_relative would produce.
+        # Last seen — col 2. The /me/inventory status field is authoritative
+        # for connectivity: an "active" agent is connected right now, so show
+        # "Active now". Otherwise show the relative last-scan time.
         is_connected = dev["status"] in ("active", "connected")
-        last_keep = dev["last_keep"] or ""
-        if is_connected and last_keep.startswith("9999"):
+        if is_connected:
             last_seen_text = "Active now"
         else:
-            last_seen_text = _format_relative(last_keep)
+            last_seen_text = _format_relative(dev["last_keep"])
         customtkinter.CTkLabel(
             row_frame,
             text=last_seen_text,
@@ -3684,13 +3730,12 @@ class Plugin(BasePlugin):
             anchor="w",
         ).grid(row=0, column=1, sticky="w", padx=(0, 12), pady=8)
 
-        # Last seen — col 2 (same Wazuh 9999-sentinel handling as Devices)
+        # Last seen — col 2 (same status-driven handling as Devices)
         is_connected = dev["status"] in ("active", "connected")
-        last_keep = dev["last_keep"] or ""
-        if is_connected and last_keep.startswith("9999"):
+        if is_connected:
             last_seen_text = "Active now"
         else:
-            last_seen_text = _format_relative(last_keep)
+            last_seen_text = _format_relative(dev["last_keep"])
         customtkinter.CTkLabel(
             row_frame,
             text=last_seen_text,

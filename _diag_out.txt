@@ -1,0 +1,34 @@
+bytes=148610 lines=3780
+has_null=False
+count[donut]=12
+count[vuln_chart]=2
+count[cvss]=17
+count[Severity breakdown]=0
+count[matplotlib]=16
+count[.pie(]=1
+count[Vulnerabilities]=15
+count[_build_vuln]=15
+count[_draw_vuln]=0
+count[No vulnerabilities]=1
+--- defs ---
+121:_load_vulns
+134:_get_vulns
+1382:_vuln_card
+1933:_chart_theme
+1964:_build_event_chart
+1994:_render_event_chart
+2063:_on_chart_click
+2505:_build_vulnerabilities_pane
+2515:_vuln_severity_counts
+2531:_build_vuln_charts_row
+2546:_build_vuln_donut_card
+2660:_bucket_vulns_daily
+2686:_build_vuln_cvss_card
+2769:_build_vuln_table_header
+2809:_build_vuln_table
+2825:_build_vuln_table_columns
+2848:_configure_vuln_row_grid
+2856:_filter_vulns
+2876:_render_vuln_list
+2911:_vuln_row
+3104:_vulns_threat_for_name
