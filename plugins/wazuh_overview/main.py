@@ -3303,22 +3303,25 @@ class Plugin(BasePlugin):
         category_dropdown.grid(row=0, column=0, sticky="w", padx=(0, 8))
 
         # Group filter — values list reflects the actual groups present in
-        # the loaded agents. If a previously-selected group is no longer
-        # present (e.g., agents reloaded with a different sample set), fall
-        # back to "All groups" so the dropdown doesn't show a value that
-        # isn't in its menu.
+        # the loaded agents. The list always leads with "All groups", so it
+        # only offers a real choice when there are ≥2 group partitions (i.e.
+        # ≥3 entries). With a single group the filter is a no-op, so hide the
+        # dropdown entirely and pin the view to "All groups".
         group_values = self._inventory_group_values()
-        if self._inventory_group not in group_values:
+        if len(group_values) >= 3:
+            if self._inventory_group not in group_values:
+                self._inventory_group = self._GROUP_ALL
+            group_dropdown = customtkinter.CTkOptionMenu(
+                title_bar,
+                values=group_values,
+                command=self._on_inventory_group_change,
+                height=30,
+                corner_radius=8,
+            )
+            group_dropdown.set(self._inventory_group)
+            group_dropdown.grid(row=0, column=1, sticky="w")
+        else:
             self._inventory_group = self._GROUP_ALL
-        group_dropdown = customtkinter.CTkOptionMenu(
-            title_bar,
-            values=group_values,
-            command=self._on_inventory_group_change,
-            height=30,
-            corner_radius=8,
-        )
-        group_dropdown.set(self._inventory_group)
-        group_dropdown.grid(row=0, column=1, sticky="w")
 
         # Pagination frame — right-aligned in col 2, which absorbs the
         # trailing space. _render_inventory_body destroys + rebuilds the
@@ -3474,7 +3477,8 @@ class Plugin(BasePlugin):
         """Build the right-aligned page navigator. Format per design:
         [◀] [prev?] [current] [next?] [▶]  — prev shown only when current ≥ 2,
         next shown only when current < total_pages, arrows disabled at the
-        boundary pages. Always shows the current page even with only 1 page."""
+        boundary pages. When everything fits on a single page the navigator is
+        hidden entirely (no buttons)."""
         frame = self._inventory_pagination_frame
         if frame is None or not frame.winfo_exists():
             return
@@ -3483,6 +3487,16 @@ class Plugin(BasePlugin):
                 child.destroy()
             except Exception:
                 pass
+
+        # Single page → no navigator at all. grid_remove (not just emptying the
+        # frame) so it stops reserving space — an empty CTkFrame keeps its
+        # default 200px height and would inflate the title row otherwise.
+        if total_pages <= 1:
+            frame.grid_remove()
+            return
+
+        # Restore the frame in case a previous render removed it.
+        frame.grid()
 
         current = self._inventory_page
         text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
