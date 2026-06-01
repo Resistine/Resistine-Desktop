@@ -292,13 +292,13 @@ def stop_agent():
         
     return get_agent_status() != "Running"
 
-def remove_agent():
-    if not is_agent_installed():
+def remove_agent(wipe_keys: bool = False):
+    if not is_agent_installed() and not (wipe_keys and os.path.exists(_KEY_BACKUP)):
         return True
-        
+
     os_type = _get_os_info()
     backup_dir = os.path.dirname(_KEY_BACKUP)
-    
+
     uninstall_cmd = ""
     if os_type == "deb":
         uninstall_cmd = "apt-get remove -y wazuh-agent"
@@ -311,12 +311,19 @@ def remove_agent():
             "rm -f /usr/lib/systemd/system/wazuh-agent.service /etc/systemd/system/wazuh-agent.service; "
             "systemctl daemon-reload"
         )
-        
+
+    if wipe_keys:
+        key_phase = f"rm -f '{_KEY_BACKUP}'"
+    else:
+        key_phase = (
+            f"mkdir -p '{backup_dir}'; "
+            f"cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}' 2>/dev/null; "
+            f"chown {os.getuid()}:{os.getgid()} '{_KEY_BACKUP}' 2>/dev/null"
+        )
+
     script = f"""
         systemctl stop wazuh-agent 2>/dev/null
-        mkdir -p '{backup_dir}'
-        cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}' 2>/dev/null
-        chown {os.getuid()}:{os.getgid()} '{_KEY_BACKUP}' 2>/dev/null
+        {key_phase}
         {uninstall_cmd}
         rm -rf '{LINUX_WAZUH_DIR}'
     """

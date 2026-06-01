@@ -231,12 +231,49 @@ class TestHandleLogout:
         isolated_settings.set("auth", "logged_in", True)
         isolated_settings.set("auth", "email", "alice@example.com")
         self._set_messagebox(True)
-        with patch("plugins.vpn.wireguard.vpn_functions_darwin.stop_vpn"), \
+        mock_mgr = MagicMock()
+        mock_mgr.get_active_config_path.return_value = None
+        with patch("platform.system", return_value="Darwin"), \
+             patch("plugins.vpn.wireguard.vpn_functions_darwin.stop_vpn", create=True), \
+             patch(
+                 "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
+                 return_value="/tmp/wg",
+                 create=True,
+             ), \
+             patch("plugins.vpn.config_manager.VPNConfigManager", return_value=mock_mgr), \
+             patch(
+                 "plugins.wazuh.agent.wazuh_functions_darwin.remove_agent",
+                 return_value=True,
+                 create=True,
+             ), \
              patch("plugins.login.main.Plugin"):
             settings_plugin._handle_logout()
         # auth namespace is fully cleared on logout
         assert isolated_settings.get("auth", "logged_in") is None
         assert isolated_settings.get("auth", "email") is None
+
+    def test_handle_logout_invokes_wazuh_removal(self, settings_plugin):
+        """_handle_logout must call _remove_wazuh_agent so the service is
+        stopped and enrollment keys are wiped, not just settings cleared."""
+        self._set_messagebox(True)
+        mock_mgr = MagicMock()
+        mock_mgr.get_active_config_path.return_value = None
+        with patch("platform.system", return_value="Darwin"), \
+             patch("plugins.vpn.wireguard.vpn_functions_darwin.stop_vpn", create=True), \
+             patch(
+                 "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
+                 return_value="/tmp/wg",
+                 create=True,
+             ), \
+             patch("plugins.vpn.config_manager.VPNConfigManager", return_value=mock_mgr), \
+             patch(
+                 "plugins.wazuh.agent.wazuh_functions_darwin.remove_agent",
+                 return_value=True,
+                 create=True,
+             ) as mock_remove, \
+             patch("plugins.login.main.Plugin"):
+            settings_plugin._handle_logout()
+        mock_remove.assert_called_once_with(wipe_keys=True)
 
 
 # ---------------------------------------------------------------------------
@@ -309,13 +346,46 @@ class TestCheckForUpdates:
 @pytest.mark.unit
 class TestDisconnectVpn:
     def test_darwin(self, settings_plugin):
+        mock_mgr = MagicMock()
+        mock_mgr.get_active_config_path.return_value = "/tmp/resistine.conf"
         with patch("platform.system", return_value="Darwin"), \
              patch(
                  "plugins.vpn.wireguard.vpn_functions_darwin.stop_vpn",
                  create=True,
-             ) as mock_stop:
+             ) as mock_stop, \
+             patch(
+                 "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
+                 return_value="/tmp/wg",
+                 create=True,
+             ), \
+             patch(
+                 "plugins.vpn.config_manager.VPNConfigManager",
+                 return_value=mock_mgr,
+             ):
             settings_plugin._disconnect_vpn()
-            mock_stop.assert_called_once()
+            mock_stop.assert_called_once_with("/tmp/resistine.conf")
+
+    def test_darwin_no_active_config_still_stops(self, settings_plugin):
+        """If no config is registered, still call stop_vpn with a sentinel
+        so the tunnel is forcibly torn down rather than silently skipped."""
+        mock_mgr = MagicMock()
+        mock_mgr.get_active_config_path.return_value = None
+        with patch("platform.system", return_value="Darwin"), \
+             patch(
+                 "plugins.vpn.wireguard.vpn_functions_darwin.stop_vpn",
+                 create=True,
+             ) as mock_stop, \
+             patch(
+                 "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
+                 return_value="/tmp/wg",
+                 create=True,
+             ), \
+             patch(
+                 "plugins.vpn.config_manager.VPNConfigManager",
+                 return_value=mock_mgr,
+             ):
+            settings_plugin._disconnect_vpn()
+            mock_stop.assert_called_once_with("")
 
     def test_windows(self, settings_plugin):
         with patch("platform.system", return_value="Windows"), \
@@ -349,6 +419,58 @@ class TestDisconnectVpn:
     def test_failure_logs_warning(self, settings_plugin):
         with patch("platform.system", side_effect=RuntimeError("boom")):
             settings_plugin._disconnect_vpn()  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# _remove_wazuh_agent
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestRemoveWazuhAgent:
+    def test_darwin_calls_remove_agent_with_wipe_keys(self, settings_plugin):
+        with patch("platform.system", return_value="Darwin"), \
+             patch(
+                 "plugins.wazuh.agent.wazuh_functions_darwin.remove_agent",
+                 return_value=True,
+                 create=True,
+             ) as mock_remove:
+            settings_plugin._remove_wazuh_agent()
+            mock_remove.assert_called_once_with(wipe_keys=True)
+
+    def test_linux_calls_remove_agent_with_wipe_keys(self, settings_plugin):
+        with patch("platform.system", return_value="Linux"), \
+             patch(
+                 "plugins.wazuh.agent.wazuh_functions_linux.remove_agent",
+                 return_value=True,
+                 create=True,
+             ) as mock_remove:
+            settings_plugin._remove_wazuh_agent()
+            mock_remove.assert_called_once_with(wipe_keys=True)
+
+    def test_windows_calls_remove_agent_with_wipe_keys(self, settings_plugin):
+        with patch("platform.system", return_value="Windows"), \
+             patch(
+                 "plugins.wazuh.agent.wazuh_functions_windows.remove_agent",
+                 return_value=True,
+                 create=True,
+             ) as mock_remove:
+            settings_plugin._remove_wazuh_agent()
+            mock_remove.assert_called_once_with(wipe_keys=True)
+
+    def test_remove_failure_does_not_raise(self, settings_plugin):
+        """remove_agent() returning False (e.g. user cancels admin prompt)
+        must not break the logout flow."""
+        with patch("platform.system", return_value="Darwin"), \
+             patch(
+                 "plugins.wazuh.agent.wazuh_functions_darwin.remove_agent",
+                 return_value=False,
+                 create=True,
+             ):
+            settings_plugin._remove_wazuh_agent()  # should not raise
+
+    def test_remove_exception_does_not_raise(self, settings_plugin):
+        with patch("platform.system", side_effect=RuntimeError("boom")):
+            settings_plugin._remove_wazuh_agent()  # should not raise
 
 
 # ---------------------------------------------------------------------------
