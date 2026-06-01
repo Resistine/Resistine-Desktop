@@ -76,8 +76,12 @@ def _make_emoji_cell_text(
         s["busy"] = True
         try:
             res = w.count("1.0", "end-1c", "displaylines")
-            lines = (res[0] if isinstance(res, (list, tuple)) else res) or 1
-            new_h = max(1, int(lines))
+            if res is None:
+                lines = 1
+            else:
+                breaks = res[0] if isinstance(res, (list, tuple)) else res
+                lines = int(breaks) + 1
+            new_h = max(1, lines)
             if int(w.cget("height")) != new_h:
                 w.configure(height=new_h)
         except Exception:
@@ -146,10 +150,8 @@ class SelectableLabel(tk.Text):
             return
         self._in_autoheight = True
         try:
-            result = self.count("1.0", "end-1c", "displaylines")
-            lines = (result[0] if isinstance(result, (list, tuple))
-                     else result) or 1
-            new_h = max(1, int(lines))
+            lines = self._displayline_count()
+            new_h = max(1, lines)
             cur_h = int(self.cget("height"))
             if new_h != cur_h:
                 self.configure(height=new_h)
@@ -162,15 +164,26 @@ class SelectableLabel(tk.Text):
     def _update_justify(self) -> None:
         """Center text when it fits on one line, left-align otherwise."""
         try:
-            result = self.count("1.0", "end-1c", "displaylines")
-            lines = (result[0] if isinstance(result, (list, tuple))
-                     else result) or 1
-            if int(lines) <= 1:
+            if self._displayline_count() <= 1:
                 self.tag_add("center", "1.0", "end")
             else:
                 self.tag_remove("center", "1.0", "end")
         except Exception:
             pass
+
+    def _displayline_count(self) -> int:
+        """Number of rendered display lines from 1.0 to end-1c.
+
+        Tk's ``count -displaylines`` returns the number of line
+        *boundaries* crossed (newlines + wrap points), not the number of
+        lines themselves -- so a 2-line message returns ``(1,)`` and a
+        1-line message returns ``None``. Add 1 to get the actual count.
+        """
+        result = self.count("1.0", "end-1c", "displaylines")
+        if result is None:
+            return 1
+        breaks = result[0] if isinstance(result, (list, tuple)) else result
+        return int(breaks) + 1
 
     def set_width(self, max_width: int) -> None:
         if max_width == self._max_width:

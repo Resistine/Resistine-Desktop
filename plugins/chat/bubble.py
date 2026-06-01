@@ -198,14 +198,27 @@ class UserBubble(customtkinter.CTkFrame):
 
         # 1. Natural (unwrapped) text width — physical, because tw's font is
         #    already scaled. Cap against max_width (logical) converted to px.
+        #    ``count -xpixels`` across newlines returns the x-displacement of
+        #    end-1c on *its own* line (often the last paragraph), not the
+        #    max line width. Iterate lines and take the max so multi-line
+        #    messages get an appropriately wide bubble.
         tw.configure(wrap="none")
+        natural_w_phys = int(max_width * scale)
         try:
-            result = tw.count("1.0", "end-1c", "xpixels")
-            xpx = (result[0] if isinstance(result, (list, tuple))
-                   else result)
-            natural_w_phys = int(xpx) + padx_val * 2
+            last_line = int(tw.index("end-1c").split(".")[0])
+            max_x = 0
+            for line_no in range(1, last_line + 1):
+                result = tw.count(
+                    f"{line_no}.0", f"{line_no}.end", "xpixels")
+                if result is None:
+                    continue
+                xpx = (result[0] if isinstance(result, (list, tuple))
+                       else result)
+                max_x = max(max_x, int(xpx))
+            if max_x > 0:
+                natural_w_phys = max_x + padx_val * 2
         except Exception:
-            natural_w_phys = int(max_width * scale)
+            pass
         text_w_phys = min(natural_w_phys, int(max_width * scale))
 
         tw.configure(wrap="word")
