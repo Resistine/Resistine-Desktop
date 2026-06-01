@@ -20,6 +20,7 @@ import customtkinter
 from customtkinter import ThemeManager
 
 from plugins.antivirus import clamav, threat_log
+from plugins.antivirus.scan_picker import pick_scan_targets
 from plugins.antivirus.scanner import ScanHandle, ScanResult, scan
 from plugins.antivirus.theme import font
 from plugins.antivirus.ui_builders import (
@@ -28,11 +29,10 @@ from plugins.antivirus.ui_builders import (
     build_status_banner,
 )
 from plugins.antivirus.ui_cards import (
-    build_scan_exclusions,
-    build_siem_card,
-    build_updates_card,
-    build_whitelist_and_quarantine,
+    build_db_info_card,
+    build_quarantine_card,
 )
+from plugins.antivirus.ui_settings import build_settings_view
 from plugins.base_plugin import BasePlugin
 from utils import notifications, settings
 from utils.logger import logger
@@ -79,6 +79,9 @@ class Plugin(BasePlugin):
         self._auto_update_timer = None
         self._auto_update_stop = threading.Event()
         self._rtd_watcher = None
+        self._settings_gear_btn = None
+        self._settings_frame = None
+        self._current_view = "main"
         self._init_ready = threading.Event()
         self.status = self.get_status()
 
@@ -205,18 +208,27 @@ class Plugin(BasePlugin):
         self.main_frame.grid(row=0, column=1, sticky="nsew", pady=10)
         self.main_frame.grid_columnconfigure(0, weight=1)
 
+        # Build synchronously and fully — select_frame_by_name() in
+        # gui/user_interface.py uses build-first-swap-last, so the previous
+        # plugin stays visible until this method returns. Chunking the build
+        # via app.after() makes the new screen visible *partially*, which
+        # the user perceives as the gray-empty-bottom "loading box".
         row = 0
         row = build_status_banner(self, self.main_frame, row)
         row = build_scan_and_protection(self, self.main_frame, row)
         row = build_scan_activity(self, self.main_frame, row)
-        row = build_whitelist_and_quarantine(self, self.main_frame, row)
-        row = build_scan_exclusions(self, self.main_frame, row)
-        row = build_updates_card(self, self.main_frame, row)
-        row = build_siem_card(self, self.main_frame, row)
+        row = build_quarantine_card(self, self.main_frame, row)
+        row = build_db_info_card(self, self.main_frame, row)
 
         customtkinter.CTkLabel(
             self.main_frame, text="", height=12,
         ).grid(row=row, column=0)
+
+        # Settings view is built lazily on first gear-button click. Building
+        # the 4 settings cards eagerly added ~1-2s to every plugin mount on
+        # macOS even though most users never visit Settings.
+        self._settings_frame = None
+        self._current_view = "main"
 
         # Populate live data on screen creation
         self.app.after(100, self._refresh_db_info)
@@ -249,20 +261,25 @@ class Plugin(BasePlugin):
                 return
 
             # --- Auto-hide Scrollbar Logic ---
+            active = (
+                self._settings_frame
+                if self._current_view == "settings"
+                else self.main_frame
+            )
             try:
-                if hasattr(self.main_frame, "_parent_canvas") and hasattr(self.main_frame, "_scrollbar"):
-                    yview = self.main_frame._parent_canvas.yview()
-                    is_mapped = bool(self.main_frame._scrollbar.grid_info())
+                if hasattr(active, "_parent_canvas") and hasattr(active, "_scrollbar"):
+                    yview = active._parent_canvas.yview()
+                    is_mapped = bool(active._scrollbar.grid_info())
                     if yview and (yview[0] <= 0.01 and yview[1] >= 0.99):
                         if is_mapped:
-                            self.main_frame._saved_sb_grid = self.main_frame._scrollbar.grid_info()
-                            self.main_frame._scrollbar.grid_remove()
+                            active._saved_sb_grid = active._scrollbar.grid_info()
+                            active._scrollbar.grid_remove()
                     else:
                         if not is_mapped:
-                            if hasattr(self.main_frame, "_saved_sb_grid") and self.main_frame._saved_sb_grid:
-                                self.main_frame._scrollbar.grid(**self.main_frame._saved_sb_grid)
+                            if hasattr(active, "_saved_sb_grid") and active._saved_sb_grid:
+                                active._scrollbar.grid(**active._saved_sb_grid)
                             else:
-                                self.main_frame._scrollbar.grid(row=0, column=1, sticky="ns", pady=0)
+                                active._scrollbar.grid(row=0, column=1, sticky="ns", pady=0)
             except Exception:
                 pass
             # --- End Auto-hide ---
@@ -313,9 +330,45 @@ class Plugin(BasePlugin):
         self._banner_subtitle = None
         self._banner_action_btn = None
         self._banner_progress = None
+        self._settings_gear_btn = None
+        self._settings_frame = None
+        self._current_view = "main"
         if hasattr(self, "main_container") and self.main_container:
             self.main_container.destroy()
             self.main_container = None
+
+    # ── View Switching ─────────────────────────────────────
+
+    def _show_settings_view(self):
+        """Switch from main view to settings view, building it on demand."""
+        if self._current_view == "settings":
+            return
+        first_build = self._settings_frame is None
+        if first_build:
+            self._settings_frame = customtkinter.CTkScrollableFrame(
+                self.main_container, corner_radius=0, fg_color="transparent",
+            )
+            self._settings_frame.grid(row=0, column=1, sticky="nsew", pady=10)
+            self._settings_frame.grid_columnconfigure(0, weight=1)
+            build_settings_view(self, self._settings_frame)
+        self.main_frame.grid_remove()
+        self._settings_frame.grid()
+        self._current_view = "settings"
+        if first_build:
+            # Populate live data into the freshly-built whitelist + exclusions
+            # cards. Done after the swap so the user sees the static layout
+            # immediately and the data fills in a frame later.
+            self.app.after(20, self._refresh_whitelist)
+            self.app.after(40, self._refresh_exclusions)
+
+    def _show_main_view(self):
+        """Switch from settings view back to main view."""
+        if self._current_view == "main":
+            return
+        if self._settings_frame is not None:
+            self._settings_frame.grid_remove()
+        self.main_frame.grid()
+        self._current_view = "main"
 
     # ── UI Event Handlers ────────────────────────────────────
 
@@ -604,7 +657,14 @@ class Plugin(BasePlugin):
         Normal interval (10s) after setup is complete.
         """
         try:
-            if hasattr(self, "main_frame") and self.main_frame.winfo_exists():
+            alive = (
+                (hasattr(self, "main_frame") and self.main_frame.winfo_exists())
+                or (
+                    self._settings_frame
+                    and self._settings_frame.winfo_exists()
+                )
+            )
+            if alive:
                 setup_active = self._last_status and self._last_status.get(
                     "setup_state", "completed",
                 ) != "completed"
@@ -777,10 +837,11 @@ class Plugin(BasePlugin):
         self._scan_log.configure(state="disabled")
 
     def _set_scan_buttons_state(self, state: str):
-        for key in ("scan_file", "scan_directory", "scan_computer"):
-            btn = self._action_buttons.get(key)
-            if btn:
-                btn.configure(state=state)
+        btn = self._action_buttons.get("scan")
+        if btn:
+            btn.configure(state=state)
+        # scan_computer is gated separately on real-time protection — only
+        # re-enable it if the last poll said clamonacc is running.
         computer_btn = self._action_buttons.get("scan_computer")
         if computer_btn:
             computer_btn.configure(state=state)
@@ -959,8 +1020,7 @@ class Plugin(BasePlugin):
         logger.info(f"Antivirus: action triggered — {action_key}")
 
         actions = {
-            "scan_file": self._start_file_scan,
-            "scan_directory": self._start_directory_scan,
+            "scan": self._start_scan,
             "scan_computer": self._start_computer_scan,
             "update_sigs": self._start_sig_update,
             "whitelist_add": self._add_whitelist_entry,
@@ -971,43 +1031,29 @@ class Plugin(BasePlugin):
 
     # ── File / Directory Scan ─────────────────────────────────
 
-    def _start_file_scan(self):
+    def _start_scan(self):
         if self._scanning:
             return
-        path = filedialog.askopenfilename(
-            title="Select File to Scan", parent=self.app,
-        )
-        if not path:
+        paths = pick_scan_targets(self.app)
+        if not paths:
             return
-        if clamav.is_path_whitelisted(path):
+        targets = []
+        skipped = []
+        for path in dict.fromkeys(paths):
+            if clamav.is_path_whitelisted(path):
+                skipped.append(os.path.basename(path))
+            else:
+                targets.append(path)
+        if skipped:
             messagebox.showinfo(
                 "Whitelisted",
-                f"'{os.path.basename(path)}' is inside a whitelisted "
-                "location and will not be scanned.\n\n"
-                "Remove it from the whitelist first to scan.",
+                f"{len(skipped)} item(s) skipped (whitelisted):\n"
+                + "\n".join(skipped[:10]),
                 parent=self.app,
             )
+        if not targets:
             return
-        self._run_scan(path)
-
-    def _start_directory_scan(self):
-        if self._scanning:
-            return
-        path = filedialog.askdirectory(
-            title="Select Directory to Scan", parent=self.app,
-        )
-        if not path:
-            return
-        if clamav.is_path_whitelisted(path):
-            messagebox.showinfo(
-                "Whitelisted",
-                f"'{os.path.basename(path)}' is whitelisted and will "
-                "not be scanned.\n\n"
-                "Remove it from the whitelist first to scan.",
-                parent=self.app,
-            )
-            return
-        self._run_scan(path)
+        self._run_multi_scan(targets, label="Scan")
 
     def _computer_scan_targets(self) -> list[str]:
         """Return the fixed list of directories scanned by 'Scan Computer'.
@@ -1067,7 +1113,7 @@ class Plugin(BasePlugin):
             return
         self._run_multi_scan(targets)
 
-    def _run_multi_scan(self, targets: list[str]):
+    def _run_multi_scan(self, targets: list[str], label: str = "Computer"):
         """Run scans on multiple targets sequentially, aggregating results."""
         self._scanning = True
         self._cancel_requested = False
@@ -1085,7 +1131,7 @@ class Plugin(BasePlugin):
             cancel_btn.grid()
 
         self._log_append(
-            f"Scanning computer ({len(targets)} location"
+            f"Scanning {label.lower()} ({len(targets)} location"
             f"{'s' if len(targets) != 1 else ''})...",
         )
         for t in targets:
@@ -1171,7 +1217,7 @@ class Plugin(BasePlugin):
                     self._scan_handle = None
 
             final = ScanResult(
-                target="Computer",
+                target=label,
                 scanned=agg["scanned"],
                 infected=agg["infected"],
                 infections=agg["infections"],
@@ -1421,10 +1467,20 @@ class Plugin(BasePlugin):
         """Update the Signature Updates card with live DB info."""
         info = clamav.get_db_info()
         labels = getattr(self, "_db_labels", {})
-        if "Signatures" in labels:
-            labels["Signatures"].configure(text=info["signatures"])
-        if "Last Updated" in labels:
-            labels["Last Updated"].configure(text=info["last_updated"])
+        for key in ("Signatures", "Last Updated"):
+            widget = labels.get(key)
+            if widget is None:
+                continue
+            try:
+                if not widget.winfo_exists():
+                    continue
+                widget.configure(
+                    text=info[
+                        "signatures" if key == "Signatures" else "last_updated"
+                    ],
+                )
+            except Exception:
+                pass
 
     # ── Whitelist ──────────────────────────────────────────────
 
@@ -1441,6 +1497,15 @@ class Plugin(BasePlugin):
         """Rebuild the whitelist card contents."""
         frame = getattr(self, "_whitelist_frame", None)
         if frame is None:
+            return
+        try:
+            if not frame.winfo_exists():
+                # Widget tree was destroyed (e.g. user navigated away before
+                # this deferred refresh fired). Drop the stale reference.
+                self._whitelist_frame = None
+                return
+        except Exception:
+            self._whitelist_frame = None
             return
         for w in frame.winfo_children():
             w.destroy()
@@ -1519,6 +1584,13 @@ class Plugin(BasePlugin):
         frame = getattr(self, "_exclusions_frame", None)
         if frame is None:
             return
+        try:
+            if not frame.winfo_exists():
+                self._exclusions_frame = None
+                return
+        except Exception:
+            self._exclusions_frame = None
+            return
         for w in frame.winfo_children():
             w.destroy()
 
@@ -1592,6 +1664,13 @@ class Plugin(BasePlugin):
         """Rebuild the quarantine card contents."""
         frame = getattr(self, "_quarantine_frame", None)
         if frame is None:
+            return
+        try:
+            if not frame.winfo_exists():
+                self._quarantine_frame = None
+                return
+        except Exception:
+            self._quarantine_frame = None
             return
         for w in frame.winfo_children():
             w.destroy()

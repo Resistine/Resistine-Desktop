@@ -41,14 +41,14 @@ def build_status_banner(plugin, parent, row):
 
     plugin._banner_label = customtkinter.CTkLabel(
         text_col, text="Checking...",
-        font=customtkinter.CTkFont(family="Inter", size=28, weight="bold"),
+        font=font(28, bold=True),
         text_color=title_color,
     )
     plugin._banner_label.grid(row=0, column=0, sticky="w")
 
     plugin._banner_subtitle = customtkinter.CTkLabel(
         text_col, text="Checking protection status...",
-        font=customtkinter.CTkFont(family="Inter", size=12),
+        font=font(12),
         text_color=("#555555", "#AAAAAA"),
         wraplength=340, justify="left",
     )
@@ -57,18 +57,30 @@ def build_status_banner(plugin, parent, row):
     plugin._banner_action_btn = customtkinter.CTkButton(
         card, text="Open Settings", width=130, height=34,
         corner_radius=8,
-        font=customtkinter.CTkFont(family="Inter", size=12, weight="bold"),
+        font=font(12, bold=True),
         command=lambda: None,
     )
     # Hidden initially — shown only when user action is needed
     plugin._banner_action_btn.grid(row=0, column=1, padx=22, pady=20)
     plugin._banner_action_btn.grid_remove()
 
+    plugin._settings_gear_btn = customtkinter.CTkButton(
+        card, text="\u2699", width=52, height=52,
+        corner_radius=10, font=font(30),
+        fg_color="transparent",
+        hover_color=("#E5E7EB", "#2A2A2C"),
+        text_color=("#555555", "#AAAAAA"),
+        command=plugin._show_settings_view,
+    )
+    plugin._settings_gear_btn.grid(
+        row=0, column=2, padx=(0, 16), pady=20, sticky="e",
+    )
+
     plugin._banner_progress = customtkinter.CTkProgressBar(
         card, height=4, mode="indeterminate",
     )
     plugin._banner_progress.grid(
-        row=1, column=0, columnspan=2, padx=22, pady=(0, 12), sticky="ew",
+        row=1, column=0, columnspan=3, padx=22, pady=(0, 12), sticky="ew",
     )
     plugin._banner_progress.grid_remove()
 
@@ -92,8 +104,7 @@ def _build_scan_card(plugin, container):
     add_separator(card, 1)
 
     actions = [
-        ("Scan File", "scan_file"),
-        ("Scan Directory", "scan_directory"),
+        ("Scan…", "scan"),
         ("Scan Computer", "scan_computer"),
     ]
     btn_frame = customtkinter.CTkFrame(card, fg_color="transparent")
@@ -165,7 +176,7 @@ def build_scan_activity(plugin, parent, row):
 
     plugin._scan_log = customtkinter.CTkTextbox(
         card, height=140, corner_radius=6,
-        font=customtkinter.CTkFont(family="Courier New", size=11),
+        font=font(11, family="Courier New"),
         state="disabled",
     )
     plugin._scan_log.grid(
