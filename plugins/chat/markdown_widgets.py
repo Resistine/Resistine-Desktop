@@ -20,7 +20,7 @@ import customtkinter
 
 from plugins.chat.fonts import RESISTINE_BLUE, get_fonts, get_theme_colors
 from plugins.chat.markdown_bubble import (
-    _EMOJI_RE, _EMOJI_RENDER, MarkdownBubble,
+    _EMOJI_RE, _EMOJI_RENDER, MarkdownBubble, attach_emoji_copy,
 )
 from utils.logger import logger
 
@@ -65,6 +65,7 @@ def _make_emoji_cell_text(
             tw.insert("end", part)
     tw._emoji_photos = photos  # type: ignore[attr-defined]
     tw._image_to_emoji = image_to_emoji  # type: ignore[attr-defined]
+    attach_emoji_copy(tw, image_to_emoji)
     tw.configure(state="disabled")
 
     # Auto-size height to displayed lines as the column resizes.

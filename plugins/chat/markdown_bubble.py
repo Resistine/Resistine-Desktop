@@ -49,6 +49,37 @@ if _EMOJI_RE is not None:
     except (ImportError, OSError):
         pass
 
+
+def attach_emoji_copy(tw, image_to_emoji: dict) -> None:
+    """Bind ``<<Copy>>`` so inline emoji images yield their codepoints.
+
+    By default ``tk.Text`` skips embedded image items when copying, so
+    selections containing emoji images produce text with gaps. We
+    intercept the copy event, walk the selection via ``tw.dump``, and
+    substitute each image name with the emoji char from
+    ``image_to_emoji``.
+    """
+    import tkinter as _tk
+
+    def _on_copy(_event=None, w=tw, m=image_to_emoji):
+        try:
+            start = w.index("sel.first")
+            end = w.index("sel.last")
+        except _tk.TclError:
+            return None
+        parts = []
+        for kind, val, _idx in w.dump(start, end):
+            if kind == "text":
+                parts.append(val)
+            elif kind == "image":
+                parts.append(m.get(val, ""))
+        if parts:
+            w.clipboard_clear()
+            w.clipboard_append("".join(parts))
+        return "break"
+
+    tw.bind("<<Copy>>", _on_copy)
+
 # ---------------------------------------------------------------------------
 # MarkdownBubble -- thin CTkFrame that delegates rendering
 # ---------------------------------------------------------------------------

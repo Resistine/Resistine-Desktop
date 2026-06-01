@@ -15,7 +15,7 @@ import customtkinter
 
 from plugins.chat.fonts import get_fonts, get_theme_colors
 from plugins.chat.markdown_bubble import (
-    _EMOJI_RE, _EMOJI_RENDER, MarkdownBubble,
+    _EMOJI_RE, _EMOJI_RENDER, MarkdownBubble, attach_emoji_copy,
 )
 from plugins.chat.markdown_utils import is_box_drawing, strip_inline_md
 from plugins.chat.markdown_widgets import (
@@ -70,6 +70,7 @@ class MarkdownRenderer:
         # behind each embedded image so copy/paste yields real emoji.
         self._emoji_photos: list[object] = []
         self._image_to_emoji: dict[str, str] = {}
+        self._emoji_copy_bound = False
 
         self._build_textbox()
         self._configure_tags()
@@ -224,6 +225,9 @@ class MarkdownRenderer:
                         tw.insert("end", ch, tags)
             else:
                 tw.insert("end", part, tags)
+        if not self._emoji_copy_bound:
+            attach_emoji_copy(tw, self._image_to_emoji)
+            self._emoji_copy_bound = True
 
     def _parse_inline(self, line: str, stripped: str) -> bool:
         tw = self._tw
