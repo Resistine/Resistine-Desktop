@@ -11,6 +11,7 @@ Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
 
+import glob
 import os
 import sys
 
@@ -480,37 +481,24 @@ class Plugin(BasePlugin):
         confirmed = tkinter.messagebox.askyesno(
             "Log Out",
             "Are you sure you want to log out?\n\n"
+            "This will sign you out and remove your VPN configurations, "
+            "security agent enrollment, chat history, and account data from "
+            "this device.\n\n"
+            "An administrator password may be required to fully uninstall "
+            "the Wazuh agent.\n\n"
             "You will need to sign in again to use Resistine.",
         )
         if not confirmed:
             return
 
-        # Disconnect VPN before clearing auth state
-        try:
-            import platform
-            if platform.system() == "Windows":
-                from plugins.vpn.wireguard.vpn_windows_client import disconnect
-                disconnect("resistine")
-            else:
-                from plugins.vpn.wireguard.vpn_functions_darwin import stop_vpn
-                stop_vpn()
-        except Exception as e:
-            logger.warning(f"VPN disconnect on logout failed: {e}")
+        # Disconnect VPN before clearing data
+        self._disconnect_vpn()
 
-        # Clear auth state
-        settings.set("auth", "logged_in", False)
+        # Stop and uninstall the Wazuh agent, including its enrollment keys
+        self._remove_wazuh_agent()
 
-        # Remove saved email
-        email_file_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))),
-            "utils",
-            "email-settings.txt",
-        )
-        if os.path.exists(email_file_path):
-            try:
-                os.remove(email_file_path)
-            except Exception as e:
-                logger.error(f"Failed to remove email settings: {e}")
+        # Clear all user-scoped data
+        self._clear_user_data()
 
         # Tear down dashboard and show login screen
         try:
@@ -528,6 +516,133 @@ class Plugin(BasePlugin):
         except Exception as e:
             logger.error(f"Failed to show login screen: {e}")
             self.app.show_notification(f"Logout failed: {e}", type="error")
+
+    def _disconnect_vpn(self):
+        """Disconnect the VPN tunnel (platform-specific)."""
+        import platform as plat
+
+        try:
+            system = plat.system()
+            if system == "Darwin":
+                from plugins.vpn.config_manager import VPNConfigManager
+                from plugins.vpn.wireguard.vpn_functions_darwin import (
+                    get_writable_wireguard_dir,
+                    stop_vpn,
+                )
+                mgr = VPNConfigManager(get_writable_wireguard_dir())
+                config_path = mgr.get_active_config_path()
+                # The CLI's `stop` is interface-agnostic but the wrapper needs
+                # a path to clear its interface cache; if no config is active
+                # we still call the wrapper with a sentinel so the tunnel is
+                # forcibly torn down.
+                stop_vpn(config_path or "")
+            elif system == "Windows":
+                from plugins.vpn.wireguard.vpn_windows_client import disconnect
+                disconnect("resistine")
+            elif system == "Linux":
+                from plugins.vpn.config_manager import VPNConfigManager
+                from plugins.vpn.wireguard.vpn_functions_linux import (
+                    get_writable_wireguard_dir,
+                    stop_vpn,
+                )
+                mgr = VPNConfigManager(get_writable_wireguard_dir())
+                config_path = mgr.get_active_config_path()
+                if config_path:
+                    stop_vpn(config_path)
+        except Exception as e:
+            logger.warning(f"VPN disconnect on logout failed: {e}")
+
+    def _remove_wazuh_agent(self):
+        """Stop and uninstall the Wazuh agent, wiping its enrollment keys.
+
+        The platform ``remove_agent(wipe_keys=True)`` calls take care of:
+        stopping the service, deleting the install directory, removing the
+        client.keys backup file, and (on macOS) deleting the System Keychain
+        entry. Failures are logged but do not block logout — the settings
+        namespace will still be cleared so the UI no longer references the
+        old enrollment.
+        """
+        import platform as plat
+
+        try:
+            system = plat.system()
+            if system == "Darwin":
+                from plugins.wazuh.agent.wazuh_functions_darwin import remove_agent
+            elif system == "Windows":
+                from plugins.wazuh.agent.wazuh_functions_windows import remove_agent
+            elif system == "Linux":
+                from plugins.wazuh.agent.wazuh_functions_linux import remove_agent
+            else:
+                logger.info(f"Wazuh removal unsupported on {system}")
+                return
+
+            if not remove_agent(wipe_keys=True):
+                logger.warning(
+                    "Wazuh agent removal reported failure; continuing logout",
+                )
+        except Exception as e:
+            logger.warning(f"Wazuh agent removal on logout failed: {e}")
+
+    def _clear_user_data(self):
+        """Remove all user-scoped data, keeping device-scoped settings."""
+        import platform as plat
+
+        # Auth identity
+        settings.clear_namespace("auth")
+
+        # WireGuard keys — Darwin stores in "wireguard" namespace
+        settings.delete("wireguard", "private_key")
+        settings.delete("wireguard", "public_key")
+
+        # VPN namespace: config registry, active config, onboarding state,
+        # and Windows WireGuard keys (stored under "vpn")
+        settings.clear_namespace("vpn")
+
+        # VPN .conf files on disk
+        try:
+            system = plat.system()
+            if system == "Darwin":
+                from plugins.vpn.wireguard.vpn_functions_darwin import (
+                    get_writable_wireguard_dir,
+                )
+            elif system == "Windows":
+                from plugins.vpn.wireguard.vpn_functions_windows import (
+                    get_writable_wireguard_dir,
+                )
+            else:
+                from plugins.vpn.wireguard.vpn_functions_linux import (
+                    get_writable_wireguard_dir,
+                )
+            wg_dir = get_writable_wireguard_dir()
+            for conf in glob.glob(os.path.join(wg_dir, "*.conf")):
+                try:
+                    os.remove(conf)
+                except OSError as e:
+                    logger.warning(f"Failed to remove VPN config {conf}: {e}")
+        except Exception as e:
+            logger.warning(f"VPN config cleanup failed: {e}")
+
+        # Chat history and API credentials
+        settings.clear_namespace("chat_history")
+        settings.delete("chat", "openai_api_key")
+        settings.delete("chat", "openai_base_url")
+
+        # Wazuh SIEM enrollment and installation state
+        settings.clear_namespace("wazuh")
+
+        # Legacy email file
+        email_file_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(
+                os.path.realpath(__file__),
+            ))),
+            "utils",
+            "email-settings.txt",
+        )
+        if os.path.exists(email_file_path):
+            try:
+                os.remove(email_file_path)
+            except Exception as e:
+                logger.error(f"Failed to remove email settings: {e}")
 
     def change_appearance_mode(self, new_appearance_mode: str):
         try:

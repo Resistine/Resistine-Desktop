@@ -440,44 +440,72 @@ _KC_SERVICE = "com.resistine.wazuh.agent"
 _KC_ACCOUNT = "client_key"
 
 
-def remove_agent():
+def remove_agent(wipe_keys: bool = False):
     """Stop the Wazuh agent and remove /Library/Ossec/ with admin privileges.
 
-    Before wiping the install directory, the agent's client.keys is backed up
-    to a persistent location outside /Library/Ossec/.  This preserves the
-    manager-issued key so that reinstall can restore it and skip re-enrollment,
-    avoiding duplicate-name conflicts on the manager.
+    By default, the agent's client.keys is backed up to a persistent location
+    outside /Library/Ossec/ before the install directory is wiped, so a later
+    reinstall can restore the manager-issued key and skip re-enrollment.
+
+    When ``wipe_keys=True`` (used on user logout) the backup file and System
+    Keychain entry are deleted in the same privileged call, so the next user
+    cannot inherit the previous account's enrollment.
 
     Returns True on success.
     """
-    if not is_agent_installed() and not _is_service_loaded():
-        logger.info("Wazuh agent not installed, nothing to remove")
+    if not is_agent_installed() and not _is_service_loaded() and not (wipe_keys and (os.path.exists(_KEY_BACKUP) or _has_keychain_entry())):
+        logger.info("Wazuh agent not installed and no key material to wipe")
         return True
 
     backup_dir = os.path.dirname(_KEY_BACKUP)
-    # Stop all processes (launchd + wazuh-control + force-kill), back up
-    # client.keys, then delete the install directory and plist.
+    if wipe_keys:
+        # Tear everything down and wipe identity: no key backup written, and
+        # any existing backup file + Keychain entry are deleted.
+        key_phase = (
+            f"rm -f '{_KEY_BACKUP}'; "
+            f"security delete-generic-password "
+            f"-s '{_KC_SERVICE}' -a '{_KC_ACCOUNT}' '{_KEYCHAIN}' 2>/dev/null; "
+        )
+    else:
+        # Preserve the key in two places so reinstall can reconnect without
+        # re-enrolling.  Keychain is the primary (encrypted at rest); the file
+        # backup is a fallback and unprivileged sentinel for Python checks.
+        key_phase = (
+            f"mkdir -p '{backup_dir}' && "
+            f"cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}' 2>/dev/null && "
+            f"security add-generic-password -U "
+            f"-k '{_KEYCHAIN}' -s '{_KC_SERVICE}' -a '{_KC_ACCOUNT}' "
+            f"-w \"$(cat '{_CLIENT_KEYS}')\" 2>/dev/null; "
+        )
+
     script = (
         f"launchctl bootout system '{WAZUH_LAUNCHD_PLIST}' 2>/dev/null; "
         f"'{_WAZUH_CONTROL}' stop 2>/dev/null; "
         f"pkill -9 -f '/Library/Ossec/bin/wazuh-' 2>/dev/null; "
-        # Preserve the key in two places so reinstall can reconnect without
-        # re-enrolling.  Keychain is the primary (encrypted at rest); the file
-        # backup is a fallback and unprivileged sentinel for Python checks.
-        f"mkdir -p '{backup_dir}' && "
-        f"cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}' 2>/dev/null && "
-        f"security add-generic-password -U "
-        f"-k '{_KEYCHAIN}' -s '{_KC_SERVICE}' -a '{_KC_ACCOUNT}' "
-        f"-w \"$(cat '{_CLIENT_KEYS}')\" 2>/dev/null; "
+        f"{key_phase}"
         f"rm -rf '{WAZUH_INSTALL_DIR}'; "
         f"rm -f '{WAZUH_LAUNCHD_PLIST}'"
     )
     success, output = _run_privileged(script)
     if success:
-        logger.info("Wazuh agent removed successfully")
+        logger.info(f"Wazuh agent removed successfully (wipe_keys={wipe_keys})")
     else:
         logger.error(f"Failed to remove Wazuh agent: {output}")
     return success
+
+
+def _has_keychain_entry() -> bool:
+    """Return True if the agent's client.keys is present in the System Keychain."""
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password",
+             "-s", _KC_SERVICE, "-a", _KC_ACCOUNT, _KEYCHAIN],
+            capture_output=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
 
 
 def _get_script_path():

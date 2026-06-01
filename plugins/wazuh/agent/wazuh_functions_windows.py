@@ -449,16 +449,29 @@ def restore_client_key_if_needed():
     return success
 
 
-def remove_agent():
-    """Stop and uninstall the Wazuh agent."""
-    if not is_agent_installed():
+def remove_agent(wipe_keys: bool = False):
+    """Stop and uninstall the Wazuh agent.
+
+    When ``wipe_keys=True`` (used on user logout) the persistent client.keys
+    backup is also deleted so the next user starts with a clean enrollment.
+    """
+    if not is_agent_installed() and not (wipe_keys and os.path.exists(_KEY_BACKUP)):
         return True
 
     backup_dir = os.path.dirname(_KEY_BACKUP)
+    if wipe_keys:
+        key_phase = (
+            f"if (Test-Path '{_KEY_BACKUP}') {{ Remove-Item -Force '{_KEY_BACKUP}' }}; "
+        )
+    else:
+        key_phase = (
+            f"New-Item -ItemType Directory -Path '{backup_dir}' -Force | Out-Null; "
+            f"if (Test-Path '{_CLIENT_KEYS}') {{ Copy-Item '{_CLIENT_KEYS}' '{_KEY_BACKUP}' -Force }}; "
+        )
+
     script = (
         f"NET STOP {_SERVICE_NAME} 2>$null; "
-        f"New-Item -ItemType Directory -Path '{backup_dir}' -Force | Out-Null; "
-        f"if (Test-Path '{_CLIENT_KEYS}') {{ Copy-Item '{_CLIENT_KEYS}' '{_KEY_BACKUP}' -Force }}; "
+        f"{key_phase}"
         # Uninstall via MSI product code lookup
         f"$app = Get-WmiObject -Class Win32_Product | Where-Object {{ $_.Name -like '*Wazuh*' }}; "
         f"if ($app) {{ $app.Uninstall() }}; "
@@ -467,7 +480,7 @@ def remove_agent():
     )
     success, output = _run_privileged(script, timeout=300)
     if success:
-        logger.info("Wazuh agent removed successfully")
+        logger.info(f"Wazuh agent removed successfully (wipe_keys={wipe_keys})")
     else:
         logger.error(f"Failed to remove agent: {output}")
     return success
