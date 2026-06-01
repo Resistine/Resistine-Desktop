@@ -78,20 +78,98 @@ def fetch_agent():
     return payload, None
 
 
-def fetch_vulnerabilities():
-    """GET /api/v1/me/vulnerabilities. Returns the list of CVE dicts."""
-    payload, err = _get(
-        "/api/v1/me/vulnerabilities",
-        params={"limit": VULN_FETCH_LIMIT, "offset": 0},
-    )
+def _normalize_cve(raw):
+    """Map a raw /me/vulnerabilities CVE record to the UI's expected shape.
+
+    The live API uses Wazuh-Indexer-shaped fields (cve / cvss3_score / package
+    / version / published / updated). The Vulnerabilities pane reads
+    id / cvss_score / package_name / package_version / detection_date /
+    modified_date / severity (lowercase) — so remap here once instead of
+    touching every UI call site. Each fallback also accepts the UI-name so a
+    future API change to those names keeps working without a client update."""
+    if not isinstance(raw, dict):
+        return {}
+    score = raw.get("cvss3_score")
+    if score is None:
+        score = raw.get("cvss2_score")
+    if score is None:
+        score = raw.get("cvss_score")
+    return {
+        "id": raw.get("cve") or raw.get("id") or "",
+        "severity": (raw.get("severity") or "").lower(),
+        "cvss_score": score,
+        "epss": raw.get("epss"),
+        "package_name": raw.get("package") or raw.get("package_name") or "",
+        "package_version": raw.get("version") or raw.get("package_version") or "",
+        "description": raw.get("description") or "",
+        "status": raw.get("status"),
+        "detection_date": raw.get("published") or raw.get("detection_date"),
+        "modified_date": raw.get("updated") or raw.get("modified_date"),
+    }
+
+
+def fetch_vulnerabilities(agent_id=None):
+    """GET /api/v1/me/vulnerabilities. Returns the list of CVE dicts in the
+    UI's normalized shape (see _normalize_cve). When `agent_id` is provided
+    the server returns only that device's CVEs; without it, the API falls
+    back to the calling machine's own agent."""
+    params = {"limit": VULN_FETCH_LIMIT, "offset": 0}
+    if agent_id:
+        params["agent_id"] = agent_id
+    payload, err = _get("/api/v1/me/vulnerabilities", params=params)
     if err:
         return None, err
     if isinstance(payload, dict):
-        cves = payload.get("cves")
-        if not isinstance(cves, list):
-            cves = _affected_items(payload)
-        return list(cves or []), None
+        # Live API key is "vulnerabilities"; "cves" and the Wazuh-wrapped
+        # affected_items envelope are kept as fallbacks for older shapes.
+        items = payload.get("vulnerabilities")
+        if not isinstance(items, list):
+            items = payload.get("cves")
+        if not isinstance(items, list):
+            items = _affected_items(payload)
+        return [_normalize_cve(c) for c in (items or [])], None
     return None, "bad shape"
+
+
+def fetch_all_vulnerabilities():
+    """Fetch CVEs across every device on the caller's account by looping
+    `fetch_inventory_full()` -> `fetch_vulnerabilities(agent_id=...)` and
+    stamping each returned CVE with its origin `agent_id` + `agent_name`.
+
+    Partial-success contract: returns (merged_list, None) when at least one
+    per-device fetch succeeded; returns (None, "all device fetches failed")
+    only when every device errored. The Vulnerabilities pane's loading and
+    error branches consume this directly via _REMOTE_VULNS / _REMOTE_VULNS_ERROR.
+
+    TODO: dedupe the fetch_inventory_full call with main.py:_load_all_agents
+    (Inventory tab loader), which paginates the same endpoint independently.
+    Sequential cost is small for typical device counts (1–10)."""
+    devices, err = fetch_inventory_full()
+    if err:
+        return None, err
+
+    merged = []
+    failures = 0
+    total = 0
+    for d in devices or []:
+        aid = d.get("agent_id")
+        if not aid:
+            continue
+        total += 1
+        cves, derr = fetch_vulnerabilities(agent_id=aid)
+        if derr:
+            failures += 1
+            logger.warning(f"Vulnerabilities: fetch for agent {aid} failed: {derr}")
+            continue
+        name = d.get("agent_name") or ""
+        for c in cves or []:
+            c["agent_id"] = aid
+            c["agent_name"] = name
+        merged.extend(cves or [])
+
+    if total > 0 and failures == total:
+        return None, "all device fetches failed"
+    return merged, None
 
 
 def fetch_sca():

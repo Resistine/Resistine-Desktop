@@ -380,7 +380,12 @@ def _load_overview_api_async():
     _remote_agent_ready.set()
 
     global _REMOTE_VULNS, _REMOTE_VULNS_ERROR
-    data, err = api_client.fetch_vulnerabilities()
+    # fetch_all_vulnerabilities loops the user's devices and stamps each CVE
+    # with agent_id + agent_name so the Vulnerabilities pane can attribute
+    # rows per-device. fetch_vulnerabilities (no agent_id) returns only the
+    # caller's own machine's CVEs — fine for a single-device account but
+    # invisible-by-default for multi-device accounts.
+    data, err = api_client.fetch_all_vulnerabilities()
     if data is not None:
         _REMOTE_VULNS = data
     _REMOTE_VULNS_ERROR = err
@@ -667,6 +672,11 @@ class Plugin(BasePlugin):
         self._vuln_donut_canvas = None
         self._vuln_cvss_figure = None
         self._vuln_cvss_canvas = None
+        self._vuln_after_id = None  # poll handle for the Vulnerabilities readiness check
+        self._vuln_pane_parent = None  # reference for swapping loading -> table
+        # Active device filter on the Vulnerabilities table dropdown. Resolved
+        # lazily by _default_vuln_device() once _REMOTE_VULNS arrives.
+        self._vuln_device = None
 
     def check_status(self):
         return None
@@ -2511,7 +2521,56 @@ class Plugin(BasePlugin):
 
     # ----- Vulnerabilities pane ---------------------------------------------
 
+    # Sentinel for the device-picker dropdown's "show every device" choice.
+    # Mirrors _GROUP_ALL on the Inventory tab.
+    _VULN_DEVICE_ALL = "All devices"
+
     def _build_vulnerabilities_pane(self, parent):
+        # Close any matplotlib figures from a prior render so successive
+        # rebuilds (e.g., device dropdown changes) don't leak Figure objects.
+        # destroy()'s teardown handles the full plugin exit; this covers the
+        # mid-session rebuild path.
+        for attr in ("_vuln_donut_figure", "_vuln_cvss_figure"):
+            fig = getattr(self, attr, None)
+            if fig is not None:
+                try:
+                    import matplotlib.pyplot as _plt
+                    _plt.close(fig)
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+
+        # Clear any prior children (loading placeholder, error pane, or an
+        # earlier render) so this method is safe to call after the readiness
+        # poll fires. Mirrors _build_inventory_pane's teardown.
+        for w in parent.winfo_children():
+            try:
+                w.destroy()
+            except Exception:
+                pass
+
+        self._vuln_pane_parent = parent
+        # Idempotent: repeated kicks short-circuit on the locked guard, so
+        # opening the Vulnerabilities tab directly (without visiting Overview
+        # first) still triggers the /me/* fetch.
+        _kick_overview_api_loader()
+
+        if not _remote_vulns_ready.is_set():
+            self._render_vuln_loading(parent)
+            self._schedule_vuln_ready_check(parent)
+            return
+
+        if _REMOTE_VULNS_ERROR:
+            self._render_vuln_error(parent, _REMOTE_VULNS_ERROR)
+            return
+
+        # Lazily resolve the default device selection now that _REMOTE_VULNS
+        # and _REMOTE_AGENT have both landed. Re-resolve if a prior value is
+        # no longer present in the current device list (e.g., the chosen
+        # device dropped out across refreshes).
+        if self._vuln_device is None or self._vuln_device not in self._vuln_device_values():
+            self._vuln_device = self._default_vuln_device()
+
         parent.grid_columnconfigure(0, weight=1)
         parent.grid_rowconfigure(0, weight=0)  # charts row
         parent.grid_rowconfigure(1, weight=0)  # table header
@@ -2521,18 +2580,114 @@ class Plugin(BasePlugin):
         self._build_vuln_table_header(parent, row=1)
         self._build_vuln_table(parent, row=2)
 
+    def _render_vuln_loading(self, parent):
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(0, weight=1)
+        text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
+        customtkinter.CTkLabel(
+            parent,
+            text="Loading vulnerabilities…",
+            text_color=text_secondary,
+            font=customtkinter.CTkFont(size=14),
+        ).grid(row=0, column=0, sticky="nsew", padx=20, pady=40)
+
+    def _render_vuln_error(self, parent, err):
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(0, weight=1)
+        text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
+        container = customtkinter.CTkFrame(parent, fg_color="transparent")
+        container.grid(row=0, column=0, sticky="nsew", padx=20, pady=40)
+        container.grid_columnconfigure(0, weight=1)
+        customtkinter.CTkLabel(
+            container,
+            text="Couldn't load vulnerabilities",
+            font=customtkinter.CTkFont(size=14, weight="bold"),
+        ).grid(row=0, column=0, sticky="n")
+        customtkinter.CTkLabel(
+            container,
+            text=str(err),
+            text_color=text_secondary,
+            font=customtkinter.CTkFont(size=12),
+        ).grid(row=1, column=0, sticky="n", pady=(6, 0))
+
+    def _schedule_vuln_ready_check(self, parent):
+        # 20 ms matches the inventory + events poll cadence — tight enough to
+        # feel instant when the loader thread finishes.
+        poll_ms = 20
+
+        def check():
+            self._vuln_after_id = None
+            if not parent.winfo_exists():
+                return
+            if _remote_vulns_ready.is_set():
+                self._build_vulnerabilities_pane(parent)
+            else:
+                self._vuln_after_id = self.app.after(poll_ms, check)
+
+        self._vuln_after_id = self.app.after(poll_ms, check)
+
+    def _vuln_device_values(self):
+        """Distinct device names that actually contributed at least one CVE in
+        _REMOTE_VULNS, sorted, with _VULN_DEVICE_ALL prepended. A fully-patched
+        device therefore doesn't appear as a filter option."""
+        seen = set()
+        for v in _REMOTE_VULNS:
+            name = v.get("agent_name")
+            if name:
+                seen.add(name)
+        return [self._VULN_DEVICE_ALL] + sorted(seen)
+
+    def _default_vuln_device(self):
+        """Default dropdown selection: the local device's name (from
+        _REMOTE_AGENT) when it actually contributed CVEs. Falls back to
+        _VULN_DEVICE_ALL when the agent fetch failed or the local machine
+        had no CVEs."""
+        values = self._vuln_device_values()
+        if isinstance(_REMOTE_AGENT, dict):
+            local_name = _REMOTE_AGENT.get("name")
+            if local_name and local_name in values:
+                return local_name
+        return self._VULN_DEVICE_ALL
+
+    def _vuln_total_for_device(self):
+        """Count of CVEs available within the current device scope (before any
+        search-box filtering). Drives the table header's 'X vulnerabilities'
+        / 'shown/total' labels so the totals are coherent with the dropdown."""
+        device = self._vuln_device
+        if not device or device == self._VULN_DEVICE_ALL:
+            return len(_REMOTE_VULNS)
+        return sum(1 for v in _REMOTE_VULNS if v.get("agent_name") == device)
+
+    def _on_vuln_device_change(self, device_name):
+        if device_name == self._vuln_device:
+            return
+        self._vuln_device = device_name
+        # Rebuild the whole pane so the donut, severity legend, CVSS chart,
+        # table header count, and table rows all re-render against the new
+        # device scope. The CTkOptionMenu's `command` fires after the user's
+        # selection commits, so the menu has already closed — destroying and
+        # recreating it here doesn't disrupt interaction.
+        parent = self._vuln_pane_parent
+        if parent is not None and parent.winfo_exists():
+            self._build_vulnerabilities_pane(parent)
+
     def _vuln_severity_counts(self):
-        vulns = _get_vulns()
-        vulns_id = id(vulns)
+        vulns = _REMOTE_VULNS
+        device = self._vuln_device
+        # Cache keyed on (vulns identity, device filter) so a dropdown change
+        # invalidates without re-counting on every render of the same view.
+        cache_key = (id(vulns), device)
         cache = self._vuln_severity_cache
-        if cache is not None and cache[0] == vulns_id:
+        if cache is not None and cache[0] == cache_key:
             return cache[1]
         counts = {lvl: 0 for lvl in _SEVERITY_LEVELS}
         for v in vulns:
+            if device and device != self._VULN_DEVICE_ALL and v.get("agent_name") != device:
+                continue
             sev = (v.get("severity") or "").lower()
             if sev in counts:
                 counts[sev] += 1
-        self._vuln_severity_cache = (vulns_id, counts)
+        self._vuln_severity_cache = (cache_key, counts)
         return counts
 
     # ----- top-row cards -----
@@ -2708,16 +2863,20 @@ class Plugin(BasePlugin):
     def _bucket_vulns_daily(self):
         """Group CVEs into 30 daily buckets ending today (UTC) by detection_date."""
         today = datetime.now(timezone.utc).date()
-        vulns = _get_vulns()
-        # Cache keyed on (vulns identity, today) so a day-boundary crossing
-        # during a long-lived app session naturally invalidates the buckets.
-        cache_key = (id(vulns), today)
+        vulns = _REMOTE_VULNS
+        device = self._vuln_device
+        # Cache keyed on (vulns identity, today, device filter) so that
+        # crossing a day boundary OR switching the device dropdown both
+        # naturally invalidate the buckets.
+        cache_key = (id(vulns), today, device)
         cache = self._bucket_vulns_cache
         if cache is not None and cache[0] == cache_key:
             return cache[1]
         buckets = [today - timedelta(days=29 - i) for i in range(30)]
         counts = {b: {lvl: 0 for lvl in _SEVERITY_LEVELS} for b in buckets}
         for v in vulns:
+            if device and device != self._VULN_DEVICE_ALL and v.get("agent_name") != device:
+                continue
             ts = v.get("detection_date") or ""
             sev = (v.get("severity") or "").lower()
             if sev not in _SEVERITY_LEVELS or not ts:
@@ -2846,11 +3005,33 @@ class Plugin(BasePlugin):
 
         self._vuln_count_label = customtkinter.CTkLabel(
             header,
-            text=f"{len(_get_vulns())} vulnerabilities",
+            text=f"{self._vuln_total_for_device()} vulnerabilities",
             text_color=text_secondary,
             font=customtkinter.CTkFont(size=11),
         )
         self._vuln_count_label.grid(row=0, column=2, sticky="e", padx=(8, 0))
+
+        # Device-picker dropdown: a new row anchored directly under the
+        # "AFFECTED PACKAGES & CVES" title. Defaults to the local device
+        # (see _default_vuln_device). Hidden when fewer than 2 devices
+        # actually contributed CVEs — mirrors the Inventory tab's "show only
+        # when there's a real choice" guard.
+        device_values = self._vuln_device_values()
+        if len(device_values) >= 3:
+            if self._vuln_device not in device_values:
+                self._vuln_device = self._default_vuln_device()
+            device_dropdown = customtkinter.CTkOptionMenu(
+                header,
+                values=device_values,
+                command=self._on_vuln_device_change,
+                height=30,
+                corner_radius=8,
+            )
+            device_dropdown.set(self._vuln_device)
+            device_dropdown.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        else:
+            # No real choice — pin to the sentinel so the filter is a no-op.
+            self._vuln_device = self._VULN_DEVICE_ALL
 
     # ----- table -----
 
@@ -2903,8 +3084,12 @@ class Plugin(BasePlugin):
 
     def _filter_vulns(self, query):
         q = (query or "").lower().strip()
+        device_filter = self._vuln_device
         out = []
-        for v in _get_vulns():
+        for v in _REMOTE_VULNS:
+            if device_filter and device_filter != self._VULN_DEVICE_ALL \
+                    and v.get("agent_name") != device_filter:
+                continue
             if q:
                 haystack = " ".join((
                     str(v.get("id", "")),
@@ -2913,6 +3098,7 @@ class Plugin(BasePlugin):
                     str(v.get("severity", "")),
                     str(v.get("status", "")),
                     str(v.get("description", "")),
+                    str(v.get("agent_name", "")),
                 )).lower()
                 if q not in haystack:
                     continue
@@ -2933,7 +3119,7 @@ class Plugin(BasePlugin):
 
         vulns = self._filter_vulns(query)
         if self._vuln_count_label:
-            total = len(_get_vulns())
+            total = self._vuln_total_for_device()
             shown = len(vulns)
             text = (
                 f"{shown} vulnerabilities"
@@ -3790,6 +3976,12 @@ class Plugin(BasePlugin):
             except Exception:
                 pass
             self._inventory_after_id = None
+        if self._vuln_after_id:
+            try:
+                self.app.after_cancel(self._vuln_after_id)
+            except Exception:
+                pass
+            self._vuln_after_id = None
         if self._module_resize_after_id:
             try:
                 self.app.after_cancel(self._module_resize_after_id)
