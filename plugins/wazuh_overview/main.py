@@ -35,6 +35,14 @@ _FigureCanvasTkAgg = None
 def _ensure_matplotlib():
     global _Figure, _FigureCanvasTkAgg
     if _Figure is None:
+        import logging as _logging
+        # matplotlib's font_manager emits a DEBUG line per font candidate it
+        # scores, and that loop runs on every figure render. With Loguru
+        # intercepting stdlib logging at DEBUG (e.g. main.py -d debug mode),
+        # opening the Overview tab spams thousands of "findfont: score(...)"
+        # entries. Drop matplotlib's DEBUG/INFO at the source — useful warns
+        # and errors still flow through.
+        _logging.getLogger("matplotlib").setLevel(_logging.WARNING)
         import matplotlib
         matplotlib.use("TkAgg")
         from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg as _FCA
