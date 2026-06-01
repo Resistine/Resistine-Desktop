@@ -76,13 +76,20 @@ def _make_emoji_cell_text(
             return
         s["busy"] = True
         try:
-            res = w.count("1.0", "end-1c", "displaylines")
-            if res is None:
-                lines = 1
+            # Measure in pixels. tk.Text's ``-height`` is in font-line
+            # units, but an inline emoji image is typically taller than
+            # the font's linespace, so a "one display line" cell ends up
+            # shorter than the image and clips it. Compute the line count
+            # that covers the actual rendered pixel height instead.
+            import tkinter.font as tkfont
+            font_obj = tkfont.Font(font=w.cget("font"))
+            font_lh = max(1, font_obj.metrics("linespace"))
+            yp = w.count("1.0", "end", "ypixels")
+            if yp is None:
+                new_h = 1
             else:
-                breaks = res[0] if isinstance(res, (list, tuple)) else res
-                lines = int(breaks) + 1
-            new_h = max(1, lines)
+                content_px = yp[0] if isinstance(yp, (list, tuple)) else yp
+                new_h = max(1, -(-int(content_px) // font_lh))
             if int(w.cget("height")) != new_h:
                 w.configure(height=new_h)
         except Exception:
@@ -445,15 +452,33 @@ class TableWidget(customtkinter.CTkFrame):
         canvas cascades back up the parent chain (bubble reflow ->
         chat_scroll <Configure>) producing a single-frame jitter per
         scroll tick.
+
+        Use ``self._grid.winfo_reqheight()`` for height rather than
+        ``self._canvas.bbox("all")``: when cells autoheight, the grid's
+        reqheight grows immediately, but the canvas's bbox can return a
+        stale value cached from the embedded window-item's earlier size.
+        That stale bbox left TableWidget pinned at CTkFrame's default
+        200 px, even when its real content was taller, and the embed's
+        actual rendered content overflowed past its window_create line.
         """
         try:
             bbox = self._canvas.bbox("all")
-            if not bbox or bbox == self._last_grid_bbox:
+            grid_h = self._grid.winfo_reqheight()
+            if not bbox:
+                if grid_h <= 1:
+                    return
+                width = self._natural_width
+                content_h = grid_h
+            else:
+                width = bbox[2] - bbox[0]
+                content_h = max(grid_h, bbox[3] - bbox[1])
+            new_state = (width, content_h)
+            if new_state == self._last_grid_bbox:
                 return
-            self._last_grid_bbox = bbox
+            self._last_grid_bbox = new_state
             self._canvas.configure(
-                scrollregion=bbox,
-                height=bbox[3] - bbox[1],
+                scrollregion=(0, 0, width, content_h),
+                height=content_h,
             )
         except Exception:
             pass

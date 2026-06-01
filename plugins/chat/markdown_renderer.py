@@ -442,6 +442,24 @@ class MarkdownRenderer:
                     for tbl in self._tables:
                         tbl.configure(width=embed_w)
                         tbl._resize_to_width(embed_w)
+                        # Force TableWidget height to track its grid's
+                        # current reqheight. ``_on_grid_configure`` is
+                        # supposed to do this via ``<Configure>``, but
+                        # in practice the table can stay pinned at
+                        # CTkFrame's default 200 when cell autoheight
+                        # changes don't propagate as ``<Configure>``
+                        # events. Set it explicitly here so ``ypixels``
+                        # measured next pass reflects the right line
+                        # height.
+                        try:
+                            grid_h = tbl._grid.winfo_reqheight()
+                            if grid_h > 1:
+                                sb_h = (14 if tbl._scrollbar_visible
+                                        else 0)
+                                tbl._canvas.configure(height=grid_h)
+                                tbl.configure(height=grid_h + sb_h)
+                        except Exception:
+                            pass
                     for cb in self._code_blocks:
                         cb.configure(width=embed_w)
             except Exception:
