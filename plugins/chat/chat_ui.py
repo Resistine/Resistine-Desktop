@@ -261,16 +261,29 @@ class ChatUIMixin:
             self._scroll_btn_visible = False
 
     def _on_resize(self, _event=None) -> None:
-        avail = self._available_width()
-        uw, aw = user_width(avail), assistant_width(avail)
-        for row in self._bubble_rows:
-            for child in row.winfo_children():
-                if isinstance(child, UserBubble):
-                    child.set_width(uw)
-                elif isinstance(child, AssistantBubble):
-                    child.set_width(aw)
-        self._check_scroll_btn()
-        self._update_scrollbar_visibility()
+        # Re-entry guard. _on_resize itself triggers a cascade — set_width on
+        # emoji bubbles enters _layout_emoji which calls self.configure() and
+        # self.update_idletasks(); _update_scrollbar_visibility() toggles the
+        # scrollbar's grid which changes the canvas's effective width. Either
+        # path fires another <Configure> on chat_scroll, which re-enters
+        # _on_resize before the current call has returned, eventually busting
+        # Python's recursion limit.
+        if getattr(self, "_in_on_resize", False):
+            return
+        self._in_on_resize = True
+        try:
+            avail = self._available_width()
+            uw, aw = user_width(avail), assistant_width(avail)
+            for row in self._bubble_rows:
+                for child in row.winfo_children():
+                    if isinstance(child, UserBubble):
+                        child.set_width(uw)
+                    elif isinstance(child, AssistantBubble):
+                        child.set_width(aw)
+            self._check_scroll_btn()
+            self._update_scrollbar_visibility()
+        finally:
+            self._in_on_resize = False
 
     # -- Scrollbar visibility ----------------------------------------------
 
