@@ -2,29 +2,36 @@
 Debug Plugin — test bench for widget rendering, scroll artifacts, and
 other platform-specific issues.
 
-Enable by setting DEBUG_ENABLED = True below.
+Visible only when the app is launched with ``--debug`` / ``-d`` or
+detected running inside an IDE (mirrors ``main.py``'s DEBUG gate).
 """
 
-## Set to True to show the Debug plugin in the sidebar.
-## This is separate from the app-wide DEBUG flag — this controls only
-## whether the debug test bench page appears in the navigation.
-_SHOW_DEBUG_PAGE = False
-
 import os
+import sys
 import tkinter as tk
 
 import customtkinter
 from customtkinter import ThemeManager
 
 from plugins.base_plugin import BasePlugin
+from utils import functions
+
+
+def _is_debug_mode() -> bool:
+    """Mirror ``main.py``'s DEBUG detection."""
+    if any(a in ("-d", "--debug") for a in sys.argv[1:]):
+        return True
+    try:
+        return bool(functions.is_running_in_ide())
+    except Exception:
+        return False
 
 
 class Plugin(BasePlugin):
     def __init__(self, app):
-        if not _SHOW_DEBUG_PAGE:
+        if not _is_debug_mode():
             raise RuntimeError(
-                "Debug page disabled. Set _SHOW_DEBUG_PAGE = True in "
-                "plugins/debug/main.py to enable."
+                "Debug page hidden. Launch with --debug to enable."
             )
         super().__init__(
             id="999",

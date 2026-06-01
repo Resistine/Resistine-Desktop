@@ -22,7 +22,10 @@ from utils.logger import logger
 # ---------------------------------------------------------------------------
 
 _EMOJI_RE = re.compile(
-    "(["
+    # Keycap sequences: digit/#/* + optional VS16 + combining keycap.
+    # Matched first so the ASCII base character is pulled into the emoji
+    # chunk (e.g. "1️⃣" instead of "1" + lonely combiner).
+    "([0-9#*]️?⃣|["
     "\U0001F000-\U0001FAFF"  # Mahjong, Domino, Playing Cards, ..., Symbols Extended-A
     "\U00002300-\U000023FF"  # Misc Technical (⌚ ⌛ ⌨ ⏏ ⏩-⏳ ⏸-⏺)
     "\U000024C2"             # Ⓜ
@@ -48,6 +51,106 @@ if _EMOJI_RE is not None:
         _EMOJI_RENDER = True
     except (ImportError, OSError):
         pass
+
+# Shaped-emoji pipeline: HarfBuzz shapes the codepoint sequence into a
+# glyph ID in Noto Color Emoji, blackrenderer paints the COLRv1 glyph,
+# the resulting SVG goes through cairosvg -> PNG -> PhotoImage. This is
+# the only path that renders ZWJ sequences, flags, skin tones, keycaps,
+# etc. as their actual colour glyph instead of decomposing into separate
+# codepoint glyphs. Falls back to the plain cairosvg path below if any
+# dep or font is missing.
+_SHAPED_RENDER = False
+_hb_font = None
+_br_font = None
+_hb_extents = None
+_NCE_PATH = None
+if _EMOJI_RENDER:
+    try:
+        import logging as _logging
+        import subprocess as _subprocess
+        import uharfbuzz as _uharfbuzz
+        from blackrenderer.font import BlackRendererFont as _BlackRendererFont
+        from blackrenderer.backends.svg import SVGSurface as _SVGSurface
+        # blackrenderer's SVG backend logs a warning on each new canvas
+        # about "unbounded draw operations" (COLRv1 paint graphs with
+        # canvas-spanning gradients). The visual output is still correct,
+        # so silence that specific logger.
+        _logging.getLogger("blackrenderer.backends.svg").setLevel(
+            _logging.ERROR)
+        _NCE_PATH = _subprocess.run(
+            ["fc-match", "-f", "%{file}", "Noto Color Emoji"],
+            capture_output=True, text=True, timeout=2,
+        ).stdout.strip()
+        if _NCE_PATH:
+            with open(_NCE_PATH, "rb") as _f:
+                _font_bytes = _f.read()
+            _hb_face = _uharfbuzz.Face(_font_bytes)
+            _hb_font = _uharfbuzz.Font(_hb_face)
+            _hb_extents = _hb_font.get_font_extents("ltr")
+            _br_font = _BlackRendererFont(_NCE_PATH)
+            _SHAPED_RENDER = True
+    except (ImportError, OSError, FileNotFoundError, Exception):
+        _SHAPED_RENDER = False
+
+
+def _render_shaped_emoji(emoji_str: str, size: int):
+    """Shape ``emoji_str`` with HarfBuzz, paint the COLRv1 glyph(s), and
+    return a cropped RGBA ``PIL.Image`` or ``None`` on failure."""
+    if not _SHAPED_RENDER:
+        return None
+    try:
+        import tempfile
+        import os
+        buf = _uharfbuzz.Buffer()
+        buf.add_str(emoji_str)
+        buf.guess_segment_properties()
+        _uharfbuzz.shape(_hb_font, buf)
+        glyphs = list(zip(buf.glyph_infos, buf.glyph_positions))
+        if not glyphs or all(info.codepoint == 0 for info, _ in glyphs):
+            return None
+        upem = _hb_face.upem
+        scale = size / upem
+        pad = max(2, int(size * 0.15))
+        total_advance = sum(pos.x_advance for _, pos in glyphs)
+        width_px = int(total_advance * scale) + pad * 2
+        glyph_h = int((_hb_extents.ascender - _hb_extents.descender) * scale)
+        height_px = glyph_h + pad * 2
+        baseline_user_y = pad + int(-_hb_extents.descender * scale)
+        surface = _SVGSurface()
+        with surface.canvas((0, 0, width_px, height_px)) as canvas:
+            x = pad
+            for info, pos in glyphs:
+                gid = info.codepoint
+                if gid == 0 or gid >= len(_br_font.glyphNames):
+                    x += int(pos.x_advance * scale)
+                    continue
+                name = _br_font.glyphNames[gid]
+                with canvas.savedState():
+                    canvas.translate(
+                        x + pos.x_offset * scale,
+                        baseline_user_y + pos.y_offset * scale,
+                    )
+                    canvas.scale(scale, scale)
+                    _br_font.drawGlyph(name, canvas)
+                x += int(pos.x_advance * scale)
+        fd, tmp = tempfile.mkstemp(suffix=".svg")
+        os.close(fd)
+        try:
+            surface.saveImage(tmp)
+            with open(tmp, "rb") as f:
+                svg_data = f.read()
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        png = _emoji_cairosvg.svg2png(bytestring=svg_data)
+        img = _emoji_Image.open(io.BytesIO(png)).convert("RGBA")
+        crop = img.getbbox()
+        return img.crop(crop) if crop else img
+    except Exception as exc:
+        logger.warning(f"Shaped emoji render failed for {emoji_str!r}: {exc}")
+        return None
 
 
 def attach_emoji_copy(tw, image_to_emoji: dict) -> None:
@@ -149,8 +252,10 @@ class MarkdownBubble(customtkinter.CTkFrame):
         chunks: list[str] = []
         buf = ""
         for ch in text:
-            if ch == "\u200D" or "\uFE00" <= ch <= "\uFE0F":
-                # ZWJ or variation selector -- attach to previous
+            if (ch == "\u200D" or "\uFE00" <= ch <= "\uFE0F"
+                    or ch == "\u20E3"):
+                # ZWJ, variation selector, or combining enclosing keycap
+                # -- attach to previous
                 buf += ch
             elif buf and buf[-1] == "\u200D":
                 # Character after ZWJ -- part of the sequence
@@ -165,14 +270,25 @@ class MarkdownBubble(customtkinter.CTkFrame):
 
     @classmethod
     def _render_emoji(cls, emoji_str: str, size: int = 20) -> object | None:
-        """Rasterise an emoji string to a PhotoImage via cairosvg.
+        """Rasterise an emoji string to a PhotoImage.
 
-        Tries Noto Color Emoji first.  If the result is too narrow or
-        empty (font lacks a proper color glyph), falls back to Noto Sans.
+        Primary path: HarfBuzz shapes the codepoint sequence into a glyph
+        ID in Noto Color Emoji, blackrenderer paints the COLRv1 glyph.
+        Handles ZWJ sequences, flags, skin tones, keycaps, etc.
+
+        Fallback: cairosvg's toy-text renderer with Noto Color Emoji ->
+        Noto Sans Symbols 2 -> Noto Sans. Works for single-codepoint
+        emojis where shaping isn't required.
         """
         cache_key = f"{emoji_str}_{size}"
         if cache_key in cls._emoji_cache:
             return cls._emoji_cache[cache_key]
+
+        shaped = _render_shaped_emoji(emoji_str, size)
+        if shaped is not None:
+            photo = _emoji_ImageTk.PhotoImage(shaped)
+            cls._emoji_cache[cache_key] = photo
+            return photo
 
         canvas = size + 10
         pad = 5
