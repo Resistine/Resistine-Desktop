@@ -65,8 +65,8 @@ def build_status_banner(plugin, parent, row):
     plugin._banner_action_btn.grid_remove()
 
     plugin._settings_gear_btn = customtkinter.CTkButton(
-        card, text="\u2699", width=32, height=32,
-        corner_radius=8, font=font(16),
+        card, text="\u2699", width=52, height=52,
+        corner_radius=10, font=font(30),
         fg_color="transparent",
         hover_color=("#E5E7EB", "#2A2A2C"),
         text_color=("#555555", "#AAAAAA"),
