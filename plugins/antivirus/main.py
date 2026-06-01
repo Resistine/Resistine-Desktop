@@ -41,11 +41,18 @@ _PLUGIN_DIR = os.path.dirname(os.path.realpath(__file__))
 
 
 def _send_notification(title: str, body: str):
-    """Send a macOS system notification. No-op on other platforms."""
+    """Send a native OS notification (macOS + Windows)."""
     import platform as _platform
 
-    if _platform.system() != "Darwin":
-        return
+    system = _platform.system()
+    if system == "Darwin":
+        _send_notification_darwin(title, body)
+    elif system == "Windows":
+        _send_notification_windows(title, body)
+
+
+def _send_notification_darwin(title: str, body: str):
+    """macOS: NSUserNotification or osascript fallback."""
     try:
         from Foundation import NSUserNotification, NSUserNotificationCenter
 
@@ -56,7 +63,6 @@ def _send_notification(title: str, body: str):
         center = NSUserNotificationCenter.defaultUserNotificationCenter()
         center.deliverNotification_(notification)
     except ImportError:
-        # PyObjC not available — fall back to osascript
         import subprocess
 
         safe_body = body.replace("\\", "\\\\").replace('"', '\\"')
@@ -73,6 +79,40 @@ def _send_notification(title: str, body: str):
             )
         except Exception:
             pass
+
+
+def _send_notification_windows(title: str, body: str):
+    """Windows 10/11: native Action Center toast via WinRT."""
+    import subprocess
+
+    safe_title = title.replace("'", "''")
+    safe_body = body.replace("'", "''")
+    ps_script = (
+        "[Windows.UI.Notifications.ToastNotificationManager,"
+        " Windows.UI.Notifications, ContentType = WindowsRuntime]"
+        " | Out-Null; "
+        "$t = [Windows.UI.Notifications.ToastNotificationManager]"
+        "::GetTemplateContent("
+        "[Windows.UI.Notifications.ToastTemplateType]::ToastText02); "
+        "$n = $t.GetElementsByTagName('text'); "
+        f"$n.Item(0).AppendChild($t.CreateTextNode('{safe_title}'))"
+        " | Out-Null; "
+        f"$n.Item(1).AppendChild($t.CreateTextNode('{safe_body}'))"
+        " | Out-Null; "
+        "$toast = [Windows.UI.Notifications.ToastNotification]::new($t); "
+        "[Windows.UI.Notifications.ToastNotificationManager]"
+        "::CreateToastNotifier('Resistine').Show($toast)"
+    )
+    try:
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-Command", ps_script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=0x08000000,
+        )
+    except Exception:
+        pass
 
 
 class Plugin(BasePlugin):
@@ -112,6 +152,9 @@ class Plugin(BasePlugin):
         self._auto_update_timer = None
         self._auto_update_stop = threading.Event()
         self._init_ready = threading.Event()
+        self._rtd_watcher = None
+        self._rtd_stop = threading.Event()
+        self._seen_threat_ids: set[str] = set()
         self.status = self.get_status()
 
         # Register system-level ClamAV daemons via SMAppService and refresh
@@ -327,6 +370,7 @@ class Plugin(BasePlugin):
         return self.main_container
 
     def destroy(self):
+        self._stop_rtd_watcher()
         self._stop_auto_update_scheduler()
         self._action_buttons = {}
         self._banner_frame = None
@@ -366,6 +410,14 @@ class Plugin(BasePlugin):
             self._schedule_status_poll()
         except (TclError, AttributeError):
             pass
+
+        # Start/stop Windows RTD watcher based on Defender real-time state
+        rtd_on = bool(status.get("clamonacc_running"))
+        if platform.system() == "Windows":
+            if rtd_on and self._rtd_watcher is None:
+                self._start_rtd_watcher()
+            elif not rtd_on and self._rtd_watcher is not None:
+                self._stop_rtd_watcher()
 
     def _apply_realtime_status_ui(self, status: dict):
         """Update the status card widgets. Safe to call even if UI is gone."""
@@ -499,6 +551,62 @@ class Plugin(BasePlugin):
                 self.app.after(10000, self._update_realtime_status)
         except Exception:
             logger.debug("Antivirus: could not schedule next status poll")
+
+    # ── RTD Threat Watcher (Windows) ────────────────────────
+
+    def _start_rtd_watcher(self):
+        """Start polling Defender for real-time threat detections."""
+        if self._rtd_watcher is not None:
+            return
+        self._rtd_stop.clear()
+        self._rtd_watcher = threading.Thread(
+            target=self._rtd_poll_loop, daemon=True,
+        )
+        self._rtd_watcher.start()
+        logger.info("Antivirus: RTD watcher started")
+
+    def _stop_rtd_watcher(self):
+        """Stop the RTD polling thread."""
+        if self._rtd_watcher is None:
+            return
+        self._rtd_stop.set()
+        self._rtd_watcher = None
+        logger.info("Antivirus: RTD watcher stopped")
+
+    def _rtd_poll_loop(self):
+        """Background: poll Defender threat detections every 15s."""
+        while not self._rtd_stop.is_set():
+            try:
+                threats = clamav.get_recent_threats(since_seconds=30)
+                new_threats = [
+                    t for t in threats
+                    if t["threat_id"] not in self._seen_threat_ids
+                ]
+                if new_threats:
+                    for t in new_threats:
+                        self._seen_threat_ids.add(t["threat_id"])
+                    try:
+                        self.app.after(
+                            0, self._handle_rtd_threats, new_threats,
+                        )
+                    except Exception:
+                        break
+            except Exception:
+                logger.debug("Antivirus: RTD poll error")
+            self._rtd_stop.wait(15)
+
+    def _handle_rtd_threats(self, threats: list[dict]):
+        """UI thread: show notification + log each new RTD threat."""
+        for t in threats:
+            name = t["name"]
+            resources = t.get("resources", [])
+            path = resources[0] if resources else "unknown location"
+            _send_notification(
+                "Resistine — Threat Blocked",
+                f"{name} was blocked at {os.path.basename(path)}",
+            )
+            threat_log.log_threat_detected(name, path)
+            logger.warning(f"Antivirus RTD: {name} at {path}")
 
     def _toggle_auto_update(self):
         self._auto_update_on = bool(self._auto_update_switch.get())
