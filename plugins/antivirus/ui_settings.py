@@ -23,7 +23,11 @@ def build_settings_header(plugin, parent, row):
     """Build the settings view header with back button and title."""
     header = customtkinter.CTkFrame(parent, fg_color="transparent")
     header.grid(row=row, column=0, sticky="ew", padx=PAD_X, pady=(16, 10))
+    # 3-column layout so the title actually sits at the geometric center:
+    # [back btn | flexible center w/ title | invisible spacer same width as back]
+    header.grid_columnconfigure(0, weight=0, minsize=80)
     header.grid_columnconfigure(1, weight=1)
+    header.grid_columnconfigure(2, weight=0, minsize=80)
 
     back_btn = customtkinter.CTkButton(
         header, text="\u2190  Back", width=80, height=32,

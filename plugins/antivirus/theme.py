@@ -30,9 +30,46 @@ COLOR_CARD_BG = None                          # use CTk default
 COLOR_CARD_BORDER = None                      # use CTk default
 
 
-def font(size, bold=False):
+# CTkFont objects are surprisingly expensive to instantiate on macOS — each
+# call walks Tk's font registry. The same (size, weight) combination gets
+# requested dozens of times during a single plugin build, so cache them.
+# Theme tuples are static for a given appearance mode; if appearance changes
+# the cache is invalidated via clear_theme_cache() (called from
+# refresh_ui_theme in gui/user_interface.py).
+_FONT_CACHE: dict = {}
+_THEME_CACHE: dict = {}
+
+
+def font(size, bold=False, family=None):
+    family = family or _FONT_FAMILY
+    key = (family, size, bold)
+    cached = _FONT_CACHE.get(key)
+    if cached is not None:
+        return cached
     weight = "bold" if bold else "normal"
-    return customtkinter.CTkFont(family=_FONT_FAMILY, size=size, weight=weight)
+    obj = customtkinter.CTkFont(family=family, size=size, weight=weight)
+    _FONT_CACHE[key] = obj
+    return obj
+
+
+def _theme_token(name: str):
+    cached = _THEME_CACHE.get(name)
+    if cached is not None:
+        return cached
+    value = ThemeManager.theme.get("Theme", {}).get(name)
+    _THEME_CACHE[name] = value
+    return value
+
+
+def clear_theme_cache():
+    """Invalidate the font + theme-token caches.
+
+    Called from gui.user_interface.refresh_ui_theme() so theme switches pick
+    up new colors. The plugin's full widget tree is rebuilt right after, so
+    the next builder pass repopulates the caches.
+    """
+    _FONT_CACHE.clear()
+    _THEME_CACHE.clear()
 
 
 def make_card(parent, row):
@@ -45,19 +82,15 @@ def make_card(parent, row):
 
 
 def add_separator(card, row):
-    divider = ThemeManager.theme.get("Theme", {}).get("divider_color")
     customtkinter.CTkFrame(
-        card, height=1, fg_color=divider,
+        card, height=1, fg_color=_theme_token("divider_color"),
     ).grid(row=row, column=0, columnspan=2, sticky="ew", padx=16)
     return row + 1
 
 
 def section_title(parent, text):
-    accent = ThemeManager.theme.get("Theme", {}).get("sidebar_active_text")
     return customtkinter.CTkLabel(
         parent, text=text.upper(),
-        font=customtkinter.CTkFont(
-            family=_FONT_FAMILY, size=12, weight="bold",
-        ),
-        text_color=accent,
+        font=font(12, bold=True),
+        text_color=_theme_token("sidebar_active_text"),
     )

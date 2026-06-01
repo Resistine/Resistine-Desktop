@@ -41,14 +41,14 @@ def build_status_banner(plugin, parent, row):
 
     plugin._banner_label = customtkinter.CTkLabel(
         text_col, text="Checking...",
-        font=customtkinter.CTkFont(family="Inter", size=28, weight="bold"),
+        font=font(28, bold=True),
         text_color=title_color,
     )
     plugin._banner_label.grid(row=0, column=0, sticky="w")
 
     plugin._banner_subtitle = customtkinter.CTkLabel(
         text_col, text="Checking protection status...",
-        font=customtkinter.CTkFont(family="Inter", size=12),
+        font=font(12),
         text_color=("#555555", "#AAAAAA"),
         wraplength=340, justify="left",
     )
@@ -57,7 +57,7 @@ def build_status_banner(plugin, parent, row):
     plugin._banner_action_btn = customtkinter.CTkButton(
         card, text="Open Settings", width=130, height=34,
         corner_radius=8,
-        font=customtkinter.CTkFont(family="Inter", size=12, weight="bold"),
+        font=font(12, bold=True),
         command=lambda: None,
     )
     # Hidden initially — shown only when user action is needed
@@ -176,7 +176,7 @@ def build_scan_activity(plugin, parent, row):
 
     plugin._scan_log = customtkinter.CTkTextbox(
         card, height=140, corner_radius=6,
-        font=customtkinter.CTkFont(family="Courier New", size=11),
+        font=font(11, family="Courier New"),
         state="disabled",
     )
     plugin._scan_log.grid(

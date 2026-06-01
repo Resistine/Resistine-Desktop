@@ -680,32 +680,51 @@ class AppUI(customtkinter.CTk):
         except:
             self._content_width_hint = None
 
-        # Clear current screen
-        try:
-            if hasattr(self, "_current_main_screen") and self._current_main_screen:
-                self._current_main_screen.grid_forget()
-                self._current_main_screen.destroy()
-        except Exception:
-            pass
-        self._current_main_screen = None
-
-        # Update button active states
+        # Update button active states up-front so the click feels responsive
+        # even if the new screen takes a moment to build.
         for frame_name, frame in getattr(self, "frames", {}).items():
             btn = frame.get_button() if hasattr(frame, "get_button") else None
             if not btn:
                 continue
             self.update_tab_button_active_state(btn, is_active=(frame_name == name))
 
-        # Show new screen
+        # Resolve target plugin
         frame = self.frames.get(name) if hasattr(self, "frames") else None
         if not frame:
             return
 
+        # Build the new screen BEFORE touching the old one. main_container is
+        # parented to self.app but not yet gridded, so the build is invisible
+        # — the previous plugin stays fully on screen for the build's
+        # duration. We only swap (and destroy the old) once the new screen is
+        # fully populated, so the user never sees an empty gray rectangle.
+        previous_screen = getattr(self, "_current_main_screen", None)
+
         try:
             main_screen = frame.create_main_screen()
+            # Place new screen in the same cell as the previous one. Tk shows
+            # the most-recently-mapped widget on top, so the new (fully built)
+            # screen covers the old one atomically when this line lands.
             main_screen.grid(row=0, column=1, sticky="nsew")
             main_screen.grid_columnconfigure(0, weight=1)
             main_screen.grid_rowconfigure(0, weight=1)
+
+            # Now tear down the previous screen. Doing this AFTER the new one
+            # is gridded means there's no flash of empty cell.
+            if (
+                previous_screen is not None
+                and previous_screen is not main_screen
+            ):
+                try:
+                    if (
+                        hasattr(previous_screen, "winfo_exists")
+                        and previous_screen.winfo_exists()
+                    ):
+                        previous_screen.grid_forget()
+                        previous_screen.destroy()
+                except Exception:
+                    pass
+
             self._current_main_screen = main_screen
             # Attach smooth scrolling + auto-hide scrollbars for any CTkScrollableFrames in this screen
             try:
@@ -745,6 +764,13 @@ class AppUI(customtkinter.CTk):
         try:
             name = getattr(self, "current_frame_name", None)
             if name:
+                # Invalidate per-plugin theme/font caches so the next build
+                # picks up the new appearance-mode colors.
+                try:
+                    from plugins.antivirus.theme import clear_theme_cache
+                    clear_theme_cache()
+                except Exception:
+                    pass
                 self.select_frame_by_name(name)
         except Exception:
             pass

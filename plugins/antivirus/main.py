@@ -208,6 +208,11 @@ class Plugin(BasePlugin):
         self.main_frame.grid(row=0, column=1, sticky="nsew", pady=10)
         self.main_frame.grid_columnconfigure(0, weight=1)
 
+        # Build synchronously and fully — select_frame_by_name() in
+        # gui/user_interface.py uses build-first-swap-last, so the previous
+        # plugin stays visible until this method returns. Chunking the build
+        # via app.after() makes the new screen visible *partially*, which
+        # the user perceives as the gray-empty-bottom "loading box".
         row = 0
         row = build_status_banner(self, self.main_frame, row)
         row = build_scan_and_protection(self, self.main_frame, row)
@@ -219,15 +224,10 @@ class Plugin(BasePlugin):
             self.main_frame, text="", height=12,
         ).grid(row=row, column=0)
 
-        # Build settings view (hidden initially)
-        self._settings_frame = customtkinter.CTkScrollableFrame(
-            self.main_container, corner_radius=0, fg_color="transparent",
-        )
-        self._settings_frame.grid(row=0, column=1, sticky="nsew", pady=10)
-        self._settings_frame.grid_columnconfigure(0, weight=1)
-        self._settings_frame.grid_remove()
-
-        build_settings_view(self, self._settings_frame)
+        # Settings view is built lazily on first gear-button click. Building
+        # the 4 settings cards eagerly added ~1-2s to every plugin mount on
+        # macOS even though most users never visit Settings.
+        self._settings_frame = None
         self._current_view = "main"
 
         # Populate live data on screen creation
@@ -340,18 +340,33 @@ class Plugin(BasePlugin):
     # ── View Switching ─────────────────────────────────────
 
     def _show_settings_view(self):
-        """Switch from main view to settings view."""
+        """Switch from main view to settings view, building it on demand."""
         if self._current_view == "settings":
             return
+        first_build = self._settings_frame is None
+        if first_build:
+            self._settings_frame = customtkinter.CTkScrollableFrame(
+                self.main_container, corner_radius=0, fg_color="transparent",
+            )
+            self._settings_frame.grid(row=0, column=1, sticky="nsew", pady=10)
+            self._settings_frame.grid_columnconfigure(0, weight=1)
+            build_settings_view(self, self._settings_frame)
         self.main_frame.grid_remove()
         self._settings_frame.grid()
         self._current_view = "settings"
+        if first_build:
+            # Populate live data into the freshly-built whitelist + exclusions
+            # cards. Done after the swap so the user sees the static layout
+            # immediately and the data fills in a frame later.
+            self.app.after(20, self._refresh_whitelist)
+            self.app.after(40, self._refresh_exclusions)
 
     def _show_main_view(self):
         """Switch from settings view back to main view."""
         if self._current_view == "main":
             return
-        self._settings_frame.grid_remove()
+        if self._settings_frame is not None:
+            self._settings_frame.grid_remove()
         self.main_frame.grid()
         self._current_view = "main"
 
@@ -1452,10 +1467,20 @@ class Plugin(BasePlugin):
         """Update the Signature Updates card with live DB info."""
         info = clamav.get_db_info()
         labels = getattr(self, "_db_labels", {})
-        if "Signatures" in labels:
-            labels["Signatures"].configure(text=info["signatures"])
-        if "Last Updated" in labels:
-            labels["Last Updated"].configure(text=info["last_updated"])
+        for key in ("Signatures", "Last Updated"):
+            widget = labels.get(key)
+            if widget is None:
+                continue
+            try:
+                if not widget.winfo_exists():
+                    continue
+                widget.configure(
+                    text=info[
+                        "signatures" if key == "Signatures" else "last_updated"
+                    ],
+                )
+            except Exception:
+                pass
 
     # ── Whitelist ──────────────────────────────────────────────
 
@@ -1472,6 +1497,15 @@ class Plugin(BasePlugin):
         """Rebuild the whitelist card contents."""
         frame = getattr(self, "_whitelist_frame", None)
         if frame is None:
+            return
+        try:
+            if not frame.winfo_exists():
+                # Widget tree was destroyed (e.g. user navigated away before
+                # this deferred refresh fired). Drop the stale reference.
+                self._whitelist_frame = None
+                return
+        except Exception:
+            self._whitelist_frame = None
             return
         for w in frame.winfo_children():
             w.destroy()
@@ -1550,6 +1584,13 @@ class Plugin(BasePlugin):
         frame = getattr(self, "_exclusions_frame", None)
         if frame is None:
             return
+        try:
+            if not frame.winfo_exists():
+                self._exclusions_frame = None
+                return
+        except Exception:
+            self._exclusions_frame = None
+            return
         for w in frame.winfo_children():
             w.destroy()
 
@@ -1623,6 +1664,13 @@ class Plugin(BasePlugin):
         """Rebuild the quarantine card contents."""
         frame = getattr(self, "_quarantine_frame", None)
         if frame is None:
+            return
+        try:
+            if not frame.winfo_exists():
+                self._quarantine_frame = None
+                return
+        except Exception:
+            self._quarantine_frame = None
             return
         for w in frame.winfo_children():
             w.destroy()
