@@ -135,7 +135,9 @@ class UserBubble(customtkinter.CTkFrame):
 
     def _build_emoji(self, text: str, max_width: int) -> None:
         """Linux emoji path: tk.Text with inline emoji images."""
-        from plugins.chat.markdown_bubble import MarkdownBubble, _EMOJI_RE
+        from plugins.chat.markdown_bubble import (
+            MarkdownBubble, _EMOJI_RE, attach_emoji_copy,
+        )
 
         # tk.Text doesn't get CTk's auto-scaling for its font, so the text
         # and emoji glyphs render too small on HiDPI. Scale ONLY the font and
@@ -175,6 +177,7 @@ class UserBubble(customtkinter.CTkFrame):
         tw.bindtags(tuple(t for t in tags if t != "Text"))
         tw._emoji_photos = emoji_photos  # type: ignore[attr-defined]
         tw._image_to_emoji = image_to_emoji  # type: ignore[attr-defined]
+        attach_emoji_copy(tw, image_to_emoji)
 
         self._emoji_widget = tw
         self._layout_emoji(tw, max_width)
