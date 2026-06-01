@@ -23,8 +23,17 @@ from utils.logger import logger
 
 _EMOJI_RE = re.compile(
     "(["
-    "\U0001F100-\U0001FAFF"  # Enclosed Alphanumerics … Symbols Extended-A
+    "\U0001F000-\U0001FAFF"  # Mahjong, Domino, Playing Cards, ..., Symbols Extended-A
+    "\U00002300-\U000023FF"  # Misc Technical (⌚ ⌛ ⌨ ⏏ ⏩-⏳ ⏸-⏺)
+    "\U000024C2"             # Ⓜ
+    "\U000025AA-\U000025FE"  # Geometric Shapes used as emoji (▪ ▫ ▶ ◀ ◻ ◼ ◽ ◾)
     "\U00002600-\U000027BF"  # Misc Symbols, Dingbats
+    "\U00002934-\U00002935"  # ⤴ ⤵
+    "\U00002B00-\U00002BFF"  # Misc Symbols and Arrows (⬅ ⬆ ⬇ ⬛ ⬜ ⭐ ⭕)
+    "\U00003030"             # 〰
+    "\U0000303D"             # 〽
+    "\U00003297"             # ㊗
+    "\U00003299"             # ㊙
     "\U0000FE00-\U0000FE0F"  # Variation Selectors
     "\U0000200D"             # Zero Width Joiner (for composite emoji)
     "\U000020E3"             # Combining Enclosing Keycap

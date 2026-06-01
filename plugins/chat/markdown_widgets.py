@@ -19,7 +19,74 @@ import tkinter as tk
 import customtkinter
 
 from plugins.chat.fonts import RESISTINE_BLUE, get_fonts, get_theme_colors
+from plugins.chat.markdown_bubble import (
+    _EMOJI_RE, _EMOJI_RENDER, MarkdownBubble,
+)
 from utils.logger import logger
+
+
+def _cell_has_emoji(text: str) -> bool:
+    """Linux-only check: cell text needs the image-emoji path."""
+    return bool(
+        _EMOJI_RENDER and _EMOJI_RE is not None and _EMOJI_RE.search(text))
+
+
+def _make_emoji_cell_text(
+    parent: tk.Widget, text: str, bg: str, fg: str, font,
+) -> tk.Text:
+    """A label-like tk.Text widget that renders inline colour emoji.
+
+    Used in table cells on Linux when the cell text contains emoji
+    codepoints — tk.Label can't fall back per-glyph to a colour-emoji
+    font, but tk.Text supports inline images.
+    """
+    tw = tk.Text(
+        parent, wrap="word", font=font, fg=fg, bg=bg,
+        borderwidth=0, highlightthickness=0, relief="flat",
+        insertwidth=0, cursor="", padx=10, pady=6,
+        height=1, width=1,
+    )
+    photos: list[object] = []
+    image_to_emoji: dict[str, str] = {}
+    for i, part in enumerate(_EMOJI_RE.split(text)):
+        if not part:
+            continue
+        if i % 2 == 1:
+            for ch in MarkdownBubble._split_emoji_chars(part):
+                photo = MarkdownBubble._render_emoji(ch)
+                if photo:
+                    photos.append(photo)
+                    img_name = tw.image_create(
+                        "end", image=photo, padx=1)
+                    image_to_emoji[img_name] = ch
+                else:
+                    tw.insert("end", ch)
+        else:
+            tw.insert("end", part)
+    tw._emoji_photos = photos  # type: ignore[attr-defined]
+    tw._image_to_emoji = image_to_emoji  # type: ignore[attr-defined]
+    tw.configure(state="disabled")
+
+    # Auto-size height to displayed lines as the column resizes.
+    state = {"busy": False}
+
+    def _autoheight(_event=None, w=tw, s=state):
+        if s["busy"]:
+            return
+        s["busy"] = True
+        try:
+            res = w.count("1.0", "end-1c", "displaylines")
+            lines = (res[0] if isinstance(res, (list, tuple)) else res) or 1
+            new_h = max(1, int(lines))
+            if int(w.cget("height")) != new_h:
+                w.configure(height=new_h)
+        except Exception:
+            pass
+        finally:
+            s["busy"] = False
+
+    tw.bind("<Configure>", _autoheight, add="+")
+    return tw
 
 _COPY_MOD = 0x8 if sys.platform == "darwin" else 0x4  # Cmd on mac, Ctrl elsewhere
 
@@ -328,14 +395,19 @@ class TableWidget(customtkinter.CTkFrame):
                         bg = master.winfo_toplevel().cget("bg")
 
             for j, cell_text in enumerate(row_cells):
-                lbl = tk.Label(
-                    self._grid, text=cell_text, bg=bg,
-                    fg=(colors["heading"] if is_header
-                        else colors["fg"]),
-                    font=header_font if is_header else body_font,
-                    padx=10, pady=6, anchor="w", justify="left",
-                    wraplength=0,
-                )
+                cell_fg = colors["heading"] if is_header else colors["fg"]
+                cell_font = header_font if is_header else body_font
+                if _cell_has_emoji(cell_text):
+                    lbl = _make_emoji_cell_text(
+                        self._grid, cell_text, bg, cell_fg, cell_font,
+                    )
+                else:
+                    lbl = tk.Label(
+                        self._grid, text=cell_text, bg=bg,
+                        fg=cell_fg, font=cell_font,
+                        padx=10, pady=6, anchor="w", justify="left",
+                        wraplength=0,
+                    )
                 lbl.grid(
                     row=idx, column=j, sticky="nsew",
                     padx=(1 if j > 0 else 0, 0),
@@ -345,19 +417,30 @@ class TableWidget(customtkinter.CTkFrame):
 
         self._in_resize = False
         self._last_width = 0
+        self._last_grid_bbox: tuple[int, int, int, int] | None = None
         self._grid.bind("<Configure>", self._on_grid_configure)
         self.bind("<Configure>", self._on_configure)
         self.after(200, self._deferred_resize)
 
     def _on_grid_configure(self, _event=None) -> None:
-        """Update canvas scroll region and height when grid changes."""
+        """Update canvas scroll region and height when grid changes.
+
+        Guarded against no-op invocations: scrolling the outer chat can
+        fire <Configure> on the embedded grid even when its bbox hasn't
+        moved, and re-asserting ``configure(height=...)`` on the inner
+        canvas cascades back up the parent chain (bubble reflow ->
+        chat_scroll <Configure>) producing a single-frame jitter per
+        scroll tick.
+        """
         try:
             bbox = self._canvas.bbox("all")
-            if bbox:
-                self._canvas.configure(
-                    scrollregion=bbox,
-                    height=bbox[3] - bbox[1],
-                )
+            if not bbox or bbox == self._last_grid_bbox:
+                return
+            self._last_grid_bbox = bbox
+            self._canvas.configure(
+                scrollregion=bbox,
+                height=bbox[3] - bbox[1],
+            )
         except Exception:
             pass
 
