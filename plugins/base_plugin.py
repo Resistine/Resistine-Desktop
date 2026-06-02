@@ -107,6 +107,16 @@ class BasePlugin:
         """
         pass
 
+    def is_screen_ready(self):
+        """
+        For plugins using ``defer_reveal_until_settled``: gate the reveal until
+        the screen's content is actually ready (e.g. an async fetch has
+        returned), so it appears fully populated rather than filling in after.
+        The deferred-reveal cap still forces a reveal eventually, so a stuck
+        fetch can't hold the screen hidden forever. Default: always ready.
+        """
+        return True
+
     def destroy(self):
         """
         Cleanup method to be called when the plugin is uninstalled or reloaded.
