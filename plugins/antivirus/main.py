@@ -201,7 +201,7 @@ class Plugin(BasePlugin):
         self._rtd_watcher = None
         self._win_rtd_thread = None
         self._rtd_stop = threading.Event()
-        self._seen_threat_ids: set[str] = set()
+        self._seen_threat_ids: set[tuple[str, str]] = set()
         self.status = self.get_status()
 
         # Register system-level ClamAV daemons via SMAppService, refresh
@@ -845,13 +845,16 @@ class Plugin(BasePlugin):
         while not self._rtd_stop.is_set():
             try:
                 threats = clamav.get_recent_threats(since_seconds=30)
-                new_threats = [
-                    t for t in threats
-                    if t["threat_id"] not in self._seen_threat_ids
-                ]
+                new_threats = []
+                for t in threats:
+                    # Dedup on (threat_id, first_resource) so the same
+                    # threat type at different paths still notifies.
+                    resource = (t.get("resources") or [""])[0]
+                    key = (t["threat_id"], resource)
+                    if key not in self._seen_threat_ids:
+                        self._seen_threat_ids.add(key)
+                        new_threats.append(t)
                 if new_threats:
-                    for t in new_threats:
-                        self._seen_threat_ids.add(t["threat_id"])
                     try:
                         self.app.after(
                             0, self._handle_rtd_threats, new_threats,
