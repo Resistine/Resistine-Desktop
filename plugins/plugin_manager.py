@@ -214,7 +214,8 @@ class PluginManager:
             
             # Defer the UI refresh to keep the UI responsive
             def refresh_ui():
-                self.plugins = sorted(self.load_plugins(), key=lambda x: x.order)
+                # Post-download: reload=True to pick up the newly fetched code.
+                self.plugins = sorted(self.load_plugins(reload=True), key=lambda x: x.order)
                 if hasattr(self.app, "refresh_navigation"):
                     self.app.refresh_navigation()
                 elif hasattr(self.app, "create_dashboard"):
@@ -239,9 +240,16 @@ class PluginManager:
             logger.error(f"Unexpected error during plugin install: {e}")
             return False, f"Installation error: {str(e)}"
 
-    def load_plugins(self, include_uninstalled=False):
+    def load_plugins(self, include_uninstalled=False, reload=False):
         """
         Load all plugins from both system and user directories.
+
+        :param reload: When True, destroy existing live plugin instances and
+            reload their modules to pick up new code (used after a download /
+            update). When False (default) this is a NON-DESTRUCTIVE enumeration:
+            it must NOT tear down live plugins — the Store calls it just to list
+            available plugins, and destroying the currently-visible plugin's
+            widget mid-navigation caused a heavy synchronous teardown (a blip).
         """
         state = self._load_state()
         uninstalled_ids = state.get("uninstalled", []) if not include_uninstalled else []
@@ -285,8 +293,11 @@ class PluginManager:
                 module_name = f"{plugin_dir}.main"
                 
             try:
-                # Force reload if it was already in sys.modules (relevant for updates/downloads)
-                if module_name in sys.modules:
+                # Force reload if it was already in sys.modules (relevant for updates/downloads).
+                # Only when reload=True — otherwise this is a non-destructive
+                # enumeration and we must NOT destroy live plugin instances
+                # (doing so tore down the currently-visible plugin's widget).
+                if reload and module_name in sys.modules:
                     # If we had a previously loaded instance of this plugin, try to destroy it
                     # by searching in our current plugins list or other sources if necessary.
                     # Since we are about to reload the module and create a new instance,
@@ -298,9 +309,9 @@ class PluginManager:
                                     p.destroy()
                             except Exception as e:
                                 logger.error(f"Error destroying old plugin instance for {module_name}: {e}")
-                    
+
                     importlib.reload(sys.modules[module_name])
-                
+
                 module = importlib.import_module(module_name)
                 plugin_class = getattr(module, "Plugin")
                 plugin_instance = plugin_class(self.app)

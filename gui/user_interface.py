@@ -812,11 +812,19 @@ class AppUI(customtkinter.CTk):
                 else:
                     self._screen_cache.pop(name, None)
 
-            # Keep the new screen stacked BELOW the previous one while we settle
-            # its layout. The previous screen stays visible during the settle so
-            # the user never sees a provisional (pre-sized) layout flash.
+            # Stack the new screen directly BELOW the one it's replacing while we
+            # settle its layout, so the old screen stays visible during the
+            # settle (no provisional-layout flash). Lower it relative to the
+            # *currently visible* screen — NOT to the absolute bottom — otherwise
+            # it ends up beneath other cached/grid_removed screens (e.g. the
+            # Dashboard), which then surface for a frame when the old screen is
+            # removed during the swap.
             try:
-                main_screen.lower()
+                _vis = getattr(self, "_visible_screen", None)
+                if _vis is not None and _vis is not main_screen and _alive(_vis):
+                    main_screen.lower(_vis)
+                else:
+                    main_screen.lower()
             except Exception:
                 pass
 
@@ -848,27 +856,37 @@ class AppUI(customtkinter.CTk):
                     except Exception:
                         pass
 
-                # Hide/destroy whatever is currently on display, then bring the
-                # new screen to the front. Cached screens are kept (grid_remove);
-                # uncached ones are destroyed.
-                prev_visible = getattr(self, "_visible_screen", None)
-                if prev_visible is not None and prev_visible is not _screen:
-                    prev_cached = any(
-                        prev_visible is w for (w, _s) in self._screen_cache.values()
-                    )
-                    try:
-                        if _alive(prev_visible):
-                            if prev_cached:
-                                prev_visible.grid_remove()
-                            else:
-                                prev_visible.grid_forget()
-                                prev_visible.destroy()
-                    except Exception:
-                        pass
+                # Bring the new screen to the front, then hide EVERY other screen
+                # that could be occupying the content cell — the previously
+                # visible one AND any other cached (grid_removed) screen. Hiding
+                # only the previous screen left other cached screens (e.g. the
+                # Dashboard) able to surface for a frame during the swap. Cached
+                # screens are hidden (grid_remove, kept for reuse); uncached ones
+                # are destroyed.
                 try:
                     _screen.lift()
                 except Exception:
                     pass
+
+                _cached_widgets = [w for (w, _s) in self._screen_cache.values()]
+                to_hide = []
+                pv = getattr(self, "_visible_screen", None)
+                if pv is not None and pv is not _screen:
+                    to_hide.append(pv)
+                for w in _cached_widgets:
+                    if w is not _screen and w not in to_hide:
+                        to_hide.append(w)
+                for w in to_hide:
+                    if not _alive(w):
+                        continue
+                    try:
+                        if any(w is cw for cw in _cached_widgets):
+                            w.grid_remove()
+                        else:
+                            w.grid_forget()
+                            w.destroy()
+                    except Exception:
+                        pass
                 self._visible_screen = _screen
 
             # Reveal immediately for cached screens (already fully drawn) and for
@@ -882,8 +900,10 @@ class AppUI(customtkinter.CTk):
                 and getattr(frame, "defer_reveal_until_settled", False)
             )
             if _defer:
+                _ready = getattr(frame, "is_screen_ready", None)
                 self._reveal_when_settled(
-                    main_screen, _reveal, min_ms=120, quiet_ms=400, cap_ms=2500
+                    main_screen, _reveal, min_ms=120, quiet_ms=400,
+                    cap_ms=4000, ready=_ready,
                 )
             else:
                 _reveal()
@@ -1014,7 +1034,7 @@ class AppUI(customtkinter.CTk):
             pass
 
     def _reveal_when_settled(self, screen, reveal, interval_ms=40,
-                             quiet_ms=300, min_ms=300, cap_ms=2500):
+                             quiet_ms=300, min_ms=300, cap_ms=2500, ready=None):
         """Call ``reveal()`` once ``screen``'s layout has stopped changing.
 
         Tk resolves wraplength-driven heights, scroll regions and the auto-hide
@@ -1076,7 +1096,13 @@ class AppUI(customtkinter.CTk):
                 state["last_change"] = now
             elapsed = (now - start) * 1000.0
             quiet = (now - state["last_change"]) * 1000.0
-            if elapsed >= min_ms and quiet >= quiet_ms:
+            # Gate the "stable" reveal on the plugin reporting its content ready
+            # (e.g. an async fetch returned). cap_ms still forces a reveal.
+            try:
+                ready_ok = ready is None or bool(ready())
+            except Exception:
+                ready_ok = True
+            if ready_ok and elapsed >= min_ms and quiet >= quiet_ms:
                 _finish("stable")
             elif elapsed >= cap_ms:
                 _finish("cap")

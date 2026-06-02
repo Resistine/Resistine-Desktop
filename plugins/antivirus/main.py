@@ -307,6 +307,50 @@ class Plugin(BasePlugin):
             return "Error"
         return "Warning"
 
+    def _is_active_screen(self):
+        """True only while the antivirus screen is the active navigation target.
+
+        Because the screen is cached (kept alive when navigated away), its
+        recurring status poll would otherwise keep re-rendering the banner even
+        after you've navigated off — including during the brief swap window,
+        which showed up as a blip. The moment a different screen is selected,
+        ``_current_main_screen`` points elsewhere (set synchronously, before the
+        deferred swap completes), so this returns False and the poll goes quiet.
+        """
+        try:
+            return getattr(self.app, "_current_main_screen", None) is getattr(
+                self, "main_container", None
+            )
+        except Exception:
+            return True
+
+    def screen_signature(self):
+        """Cache the antivirus screen across navigation.
+
+        This is the heaviest plugin screen; rebuilding/destroying its widget
+        tree on every visit is expensive, and the synchronous destroy on the way
+        OUT froze the swap-in of the next page (the antivirus→store "blip"). With
+        a stable signature the screen is hidden with grid_remove() (instant) and
+        re-shown as-is — no destroy, no freeze. Live data is kept current by the
+        status poller and re-synced in on_screen_shown(); we only force a rebuild
+        when the appearance mode changes (so theme colors re-render).
+        """
+        try:
+            return ("antivirus", customtkinter.get_appearance_mode())
+        except Exception:
+            return None
+
+    def on_screen_shown(self):
+        """Re-sync live data when returning to the cached screen."""
+        try:
+            self.app.after(0, self._refresh_db_info)
+            self.app.after(0, self._refresh_quarantine)
+            self.app.after(0, self._refresh_whitelist)
+            self.app.after(0, self._refresh_exclusions)
+            self.app.after(0, self._update_realtime_status)
+        except Exception:
+            pass
+
     # ── Main screen ──────────────────────────────────────────
 
     def create_main_screen(self):
@@ -569,6 +613,12 @@ class Plugin(BasePlugin):
         if self._banner_frame is None:
             return
 
+        # Don't re-render the banner while the antivirus screen isn't the active
+        # one — the poll keeps running because the screen is cached, but touching
+        # the widgets during/after navigation causes a visible blip.
+        if not self._is_active_screen():
+            return
+
         try:
             if not self._banner_frame.winfo_exists():
                 self._banner_frame = None
@@ -811,7 +861,11 @@ class Plugin(BasePlugin):
                     and self._settings_frame.winfo_exists()
                 )
             )
-            if alive:
+            # Pause the poll entirely when the screen isn't the active one. The
+            # cached screen stays alive, so without this the poll would keep
+            # firing in the background and re-render the banner during/after
+            # navigation. on_screen_shown() restarts it when we return.
+            if alive and self._is_active_screen():
                 setup_active = self._last_status and self._last_status.get(
                     "setup_state", "completed",
                 ) != "completed"
