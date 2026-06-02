@@ -3390,6 +3390,7 @@ class Plugin(BasePlugin):
                 # last-seen time (see _inventory_row).
                 "status": (bi.get("status") or "").lower(),
                 "last_keep": bi.get("lastKeepAlive"),
+                "agent_id": bi.get("id") or "—",
                 "ip": bi.get("ip") or "—",
                 "threat": threat,
                 # groups feeds the group-filter dropdown; the Overview
@@ -3421,6 +3422,7 @@ class Plugin(BasePlugin):
                 "name": name,
                 "status": (bi.get("status") or "").lower(),
                 "last_keep": bi.get("lastKeepAlive"),
+                "agent_id": bi.get("id") or "—",
                 "ip": bi.get("ip") or "—",
                 "count": count,
                 "groups": self._agent_groups(bi),
@@ -3646,14 +3648,14 @@ class Plugin(BasePlugin):
         self._configure_inventory_columns(col_header)
         small_bold = customtkinter.CTkFont(size=10, weight="bold")
         lead_header = self._INVENTORY_LEAD_HEADER.get(view, "THREAT")
-        for c, label in enumerate((lead_header, "DEVICE", "LAST SEEN", "IP")):
+        for c, label in enumerate((lead_header, "DEVICE", "LAST SEEN", "AGENT ID", "IP")):
             customtkinter.CTkLabel(
                 col_header,
                 text=label,
                 text_color=text_secondary,
                 font=small_bold,
                 anchor="w",
-            ).grid(row=0, column=c, sticky="w", padx=(0, 12) if c < 3 else 0)
+            ).grid(row=0, column=c, sticky="w", padx=(0, 12) if c < 4 else 0)
 
         # ----- scrollable list -----
         # corner_radius=0 is intentional: CTkScrollableFrame's source computes
@@ -3817,7 +3819,8 @@ class Plugin(BasePlugin):
         frame.grid_columnconfigure(0, weight=0, minsize=110)  # threat badge
         frame.grid_columnconfigure(1, weight=1)               # device name (stretches)
         frame.grid_columnconfigure(2, weight=0, minsize=140)  # last seen
-        frame.grid_columnconfigure(3, weight=0, minsize=140)  # ip
+        frame.grid_columnconfigure(3, weight=0, minsize=80)   # agent id
+        frame.grid_columnconfigure(4, weight=0, minsize=140)  # ip
 
     def _inventory_row(self, parent, dev, row, fonts, divider_color):
         hover_bg = self._hover_bg
@@ -3868,14 +3871,23 @@ class Plugin(BasePlugin):
             anchor="w",
         ).grid(row=0, column=2, sticky="w", padx=(0, 12), pady=8)
 
-        # IP — col 3
+        # Agent ID — col 3
+        customtkinter.CTkLabel(
+            row_frame,
+            text=str(dev["agent_id"]),
+            text_color=text_secondary,
+            font=fonts["size_12"],
+            anchor="w",
+        ).grid(row=0, column=3, sticky="w", padx=(0, 12), pady=8)
+
+        # IP — col 4
         customtkinter.CTkLabel(
             row_frame,
             text=dev["ip"],
             text_color=text_secondary,
             font=fonts["size_12"],
             anchor="w",
-        ).grid(row=0, column=3, sticky="w", pady=8)
+        ).grid(row=0, column=4, sticky="w", pady=8)
 
         def on_enter(_e=None, rf=row_frame):
             try:
@@ -3938,14 +3950,23 @@ class Plugin(BasePlugin):
             anchor="w",
         ).grid(row=0, column=2, sticky="w", padx=(0, 12), pady=8)
 
-        # IP — col 3
+        # Agent ID — col 3
+        customtkinter.CTkLabel(
+            row_frame,
+            text=str(dev["agent_id"]),
+            text_color=text_secondary,
+            font=fonts["size_12"],
+            anchor="w",
+        ).grid(row=0, column=3, sticky="w", padx=(0, 12), pady=8)
+
+        # IP — col 4
         customtkinter.CTkLabel(
             row_frame,
             text=dev["ip"],
             text_color=text_secondary,
             font=fonts["size_12"],
             anchor="w",
-        ).grid(row=0, column=3, sticky="w", pady=8)
+        ).grid(row=0, column=4, sticky="w", pady=8)
 
         def on_enter(_e=None, rf=row_frame):
             try:

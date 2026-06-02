@@ -103,7 +103,7 @@ def _normalize_cve(raw):
         "package_version": raw.get("version") or raw.get("package_version") or "",
         "description": raw.get("description") or "",
         "status": raw.get("status"),
-        "detection_date": raw.get("published") or raw.get("detection_date"),
+        "detection_date": raw.get("detected_at") or raw.get("published") or raw.get("detection_date"),
         "modified_date": raw.get("updated") or raw.get("modified_date"),
     }
 
@@ -131,9 +131,29 @@ def fetch_vulnerabilities(agent_id=None):
     return None, "bad shape"
 
 
+def fetch_device_vulnerabilities(agent_id):
+    """GET /api/v1/me/vulnerabilities/{agent_id}. Returns the full per-device
+    CVE list in the UI's normalized shape (see _normalize_cve).
+
+    This is the new path-id endpoint introduced when /me/vulnerabilities was
+    redesigned into a summary (top-N-per-device preview). For the full list
+    of CVEs on one device, the API now requires hitting this endpoint."""
+    payload, err = _get(f"/api/v1/me/vulnerabilities/{agent_id}")
+    if err:
+        return None, err
+    if isinstance(payload, dict):
+        items = payload.get("vulnerabilities")
+        if not isinstance(items, list):
+            items = payload.get("cves")
+        if not isinstance(items, list):
+            items = _affected_items(payload)
+        return [_normalize_cve(c) for c in (items or [])], None
+    return None, "bad shape"
+
+
 def fetch_all_vulnerabilities():
     """Fetch CVEs across every device on the caller's account by looping
-    `fetch_inventory_full()` -> `fetch_vulnerabilities(agent_id=...)` and
+    `fetch_inventory_full()` -> `fetch_device_vulnerabilities(agent_id)` and
     stamping each returned CVE with its origin `agent_id` + `agent_name`.
 
     Partial-success contract: returns (merged_list, None) when at least one
@@ -156,7 +176,7 @@ def fetch_all_vulnerabilities():
         if not aid:
             continue
         total += 1
-        cves, derr = fetch_vulnerabilities(agent_id=aid)
+        cves, derr = fetch_device_vulnerabilities(aid)
         if derr:
             failures += 1
             logger.warning(f"Vulnerabilities: fetch for agent {aid} failed: {derr}")
