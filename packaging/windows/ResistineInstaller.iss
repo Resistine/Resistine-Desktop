@@ -890,7 +890,7 @@ begin
   if not Exec(ExpandConstant('{cmd}'),
     '/D /C call ' + QuotePath(ScriptPath) + ' /quiet',
     ExpandConstant('{app}'),
-    SW_SHOW, ewWaitUntilTerminated, ResultCode) then
+    SW_HIDE, ewWaitUntilTerminated, ResultCode) then
   begin
     MsgBox(
       'The installer could not start required VPN service setup.' + #13#10 +
