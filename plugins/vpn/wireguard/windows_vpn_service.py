@@ -137,11 +137,12 @@ logger.info(f"Service module loaded. Logging to: {LOG_FILE}")
 
 # ---------------- Helpers ----------------
 
-def run_cmd(cmd: list) -> subprocess.CompletedProcess:
+def run_cmd(cmd: list, timeout: int = 30) -> subprocess.CompletedProcess:
     return subprocess.run(
         cmd,
         capture_output=True,
         text=True,
+        timeout=timeout,
         creationflags=subprocess.CREATE_NO_WINDOW,
     )
 
@@ -152,15 +153,17 @@ def wg_service_name(tunnel: str) -> str:
 
 def _flush_dns_cache() -> None:
     """Flush the Windows DNS resolver cache after tunnel state changes."""
-    try:
-        subprocess.run(
-            ["ipconfig", "/flushdns"],
-            capture_output=True, timeout=10,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-        logger.debug("DNS cache flushed")
-    except Exception:
-        logger.debug("DNS cache flush failed (non-critical)")
+    def _flush():
+        try:
+            subprocess.run(
+                ["ipconfig", "/flushdns"],
+                capture_output=True, timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            logger.debug("DNS cache flushed")
+        except Exception:
+            logger.debug("DNS cache flush failed (non-critical)")
+    threading.Thread(target=_flush, daemon=True).start()
 
 
 # ---------------- Config discovery ----------------
@@ -422,6 +425,27 @@ def handle_request(request: dict) -> dict:
 
 # ---------------- Socket Server ----------------
 
+def _handle_connection(conn: socket.socket) -> None:
+    """Handle a single IPC connection in its own thread."""
+    try:
+        data = conn.recv(RECV_BUFFER)
+        if not data:
+            return
+        request = json.loads(data.decode("utf-8"))
+        response = handle_request(request)
+        conn.sendall(json.dumps(response).encode("utf-8"))
+    except Exception as e:
+        logger.error(f"Request error: {e}")
+        try:
+            conn.sendall(
+                json.dumps({"status": "error", "message": str(e)}).encode("utf-8")
+            )
+        except Exception:
+            pass
+    finally:
+        conn.close()
+
+
 def socket_server(stop_event):
     servicemanager.LogInfoMsg("IPC socket thread starting")
     time.sleep(0.2)
@@ -448,23 +472,9 @@ def socket_server(stop_event):
             logger.error(f"Accept error: {e}")
             break
 
-        try:
-            data = conn.recv(RECV_BUFFER)
-            if not data:
-                continue
-            request  = json.loads(data.decode("utf-8"))
-            response = handle_request(request)
-            conn.sendall(json.dumps(response).encode("utf-8"))
-        except Exception as e:
-            logger.error(f"Request error: {e}")
-            try:
-                conn.sendall(
-                    json.dumps({"status": "error", "message": str(e)}).encode("utf-8")
-                )
-            except Exception:
-                pass
-        finally:
-            conn.close()
+        threading.Thread(
+            target=_handle_connection, args=(conn,), daemon=True
+        ).start()
 
     sock.close()
     servicemanager.LogInfoMsg("IPC socket thread stopped")
