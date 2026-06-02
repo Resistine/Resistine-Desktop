@@ -49,6 +49,16 @@ class App(AppUI):
         """
         super().__init__()
 
+        # Stay fully transparent until the first screen is built, mapped,
+        # measured, and settled — then reveal in a single step (see the
+        # update()/_settle_screen()/alpha=1 sequence below). This is what
+        # prevents the window from appearing at a provisional size/layout and
+        # then visibly reconfiguring on startup.
+        try:
+            self.attributes("-alpha", 0.0)
+        except Exception:
+            pass
+
         # Fix Ctrl+A select-all on Linux (Tk default is cursor-to-start)
         patch_linux_keybindings(self)
 
@@ -74,6 +84,12 @@ class App(AppUI):
             f"{window_width}x{window_height}+{position_right}+{position_down}"
         )
         self.minsize(min_width, min_height)
+
+        # Realize the geometry now so winfo_width()/winfo_height() report the
+        # real window size during the first screen build. Screens size their
+        # layout from the real width up front, so the first paint is final —
+        # no post-paint correction timers, no visible reflow.
+        self.update_idletasks()
 
         # Check if already logged in
         if settings.get("auth", "logged_in", False):
@@ -104,8 +120,32 @@ class App(AppUI):
                 logger.error(f"❌ Failed to load login plugin: {e}")
                 self.create_dashboard()
 
-        # Ensure the window is visible
+        # Map the window — still transparent — so its widgets acquire their real
+        # geometry and Tk's layout cascade (wraplength → height → scroll region →
+        # scrollbar) can run. We then reveal the window only once that cascade
+        # has stopped moving, so the user never sees it reconfigure.
         self.update()
+        try:
+            screen = getattr(self, "_current_main_screen", None)
+            if screen is not None and hasattr(self, "_settle_screen"):
+                self._settle_screen(screen)
+        except Exception as e:
+            logger.warning(f"Initial layout settle failed: {e}")
+
+        def _reveal_window():
+            try:
+                self.attributes("-alpha", 1.0)
+            except Exception:
+                pass
+
+        try:
+            screen = getattr(self, "_current_main_screen", None)
+            if screen is not None and hasattr(self, "_reveal_when_settled"):
+                self._reveal_when_settled(screen, _reveal_window)
+            else:
+                _reveal_window()
+        except Exception:
+            _reveal_window()
 
         # Initialize auto-updater (cross-platform: Sparkle on macOS, stubs on Win/Linux)
         try:
@@ -281,6 +321,12 @@ if __name__ == "__main__":
     if args.debug or functions.is_running_in_ide():
         DEBUG = True
 
+    # Publish the resolved debug state so instrumentation in later-imported
+    # modules can gate itself with utils.debug.is_debug().
+    from utils.debug import set_debug
+
+    set_debug(DEBUG)
+
     # Configure logging based on configuration and flags
     # Default to DEBUG level if we are in DEBUG/IDE mode and no explicit level was provided
     log_level = args.log_level
@@ -316,6 +362,24 @@ if __name__ == "__main__":
         logger.info(f"Python version: {sys.version}")
         logger.info(f"Working directory: {os.getcwd()}")
         logger.info(f"Running in IDE: {functions.is_running_in_ide()}")
+
+        # Report the active CTk draw backend (catches the Windows
+        # font_shapes → circle_shapes slow-path downgrade).
+        from gui.render_diagnostics import (
+            log_render_backend,
+            log_render_environment,
+            watch_reconfigures,
+        )
+
+        log_render_backend(app)
+        log_render_environment(app)
+        # Log every window/content size change with timing so we can see exactly
+        # what reconfigures after the window is revealed (CTk scaling, titlebar,
+        # min/max, or content). Remove the watcher once the cause is fixed.
+        _screen = getattr(app, "_current_main_screen", None)
+        watch_reconfigures(
+            app, extra_widgets=[("content", _screen)] if _screen is not None else None
+        )
 
         # Attach Inspector
         app.inspector = RuntimeInspector(app)

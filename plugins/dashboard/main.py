@@ -222,6 +222,57 @@ class Plugin(BasePlugin):
 
         return self.main_frame
     
+    def _resolve_max_cols(self):
+        """Column count for the current content width (mirrors create_main_screen)."""
+        import platform as _plat
+        _sidebar = 250
+        _padding = 60 if _plat.system() == "Windows" else 40
+        window_width = self.app.winfo_width()
+        if window_width <= 1:
+            window_width = int(self.app.winfo_screenwidth() * 0.7)
+        content_width = max(1, window_width - _sidebar - _padding)
+        if content_width < 480:
+            return 1
+        if content_width < 680:
+            return 2
+        return 4
+
+    def screen_signature(self):
+        """Cache the built dashboard until something it displays actually changes.
+
+        Captures every volatile input the build bakes in: appearance mode, the
+        VPN "Protected" banner state, each card's status badge, and the column
+        count (which depends on window width). Any change → unequal signature →
+        full rebuild; otherwise the screen is re-shown instantly.
+        """
+        try:
+            if not hasattr(self.app, "plugin_list") or not self.app.plugin_list:
+                plugin_list = PluginManager(self.app).plugins
+            else:
+                plugin_list = self.app.plugin_list
+
+            plugins = [
+                p for p in plugin_list
+                if p.get_name() != "Dashboard" and p.order != -1
+            ]
+            statuses = tuple((p.get_name(), p.get_status()) for p in plugins)
+
+            vpn_plugin = next(
+                (p for p in plugin_list if p.get_name() == "VPN"), None
+            )
+            vpn_ok = bool(vpn_plugin and vpn_plugin.get_status() == "OK")
+
+            return (
+                "dashboard",
+                self._effective_appearance_mode(),
+                vpn_ok,
+                self._resolve_max_cols(),
+                statuses,
+            )
+        except Exception:
+            # Any failure → no caching (rebuild as before).
+            return None
+
     def _bind_responsive_resize(self):
         """
         Bind a resize handler to rebuild grid when the column count needs to change.
@@ -343,11 +394,18 @@ class Plugin(BasePlugin):
             min_cols=min_cols,
             aspect_ratio=1.0,
         )
-        
+
         for index, plugin in enumerate(plugins):
             r = index // len(cols)
             c = index % len(cols)
             self.app.create_plugin_card(
-                r, c, self.grid_frame, plugin, 
+                r, c, self.grid_frame, plugin,
                 show_description=True
             )
+
+        # Settle the rebuilt cards synchronously so a column-count change during
+        # resize lands in its final layout in one pass (no post-rebuild reflow).
+        try:
+            self.app._settle_screen(self.main_frame)
+        except Exception:
+            pass

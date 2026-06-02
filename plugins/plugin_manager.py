@@ -45,7 +45,7 @@ class PluginManager:
         Fetch the list of optional plugins from the remote repository.
         """
         try:
-            response = requests.get(self.OPTIONAL_PLUGINS_URL)
+            response = requests.get(self.OPTIONAL_PLUGINS_URL, timeout=10)
             response.raise_for_status()
             data = response.json()
             return data.get("plugins", [])

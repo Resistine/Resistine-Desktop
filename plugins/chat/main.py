@@ -21,6 +21,11 @@ _DEFAULT_BASE_URL = "http://dashboard.resisti.net:8001/v1"
 class Plugin(ChatUIMixin, BasePlugin):
     """Chat plugin -- lets users talk to an OpenAI-compatible AI assistant."""
 
+    # Chat renders asynchronously after build (markdown bubbles self-resize via
+    # after() timers, scroll-to-bottom, .place()'d input bar). Defer the swap
+    # until that settles so switching to Chat doesn't tear mid-render.
+    defer_reveal_until_settled = True
+
     def __init__(self, app):
         super().__init__(
             id="002", version="2025.01.01", order=2, name="Chat", status=None,
