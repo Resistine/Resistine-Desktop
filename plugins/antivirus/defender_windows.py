@@ -250,6 +250,49 @@ def get_realtime_status() -> dict:
     }
 
 
+# ── Real-time threat detection polling ─────────────────────
+
+
+def get_recent_threats(since_seconds: int = 30) -> list[dict]:
+    """Return threats Defender caught via real-time protection recently.
+
+    Polls ``Get-MpThreatDetection`` for detections within the last
+    *since_seconds*.  Each entry contains threat_id, name, and resources.
+    """
+    rc, out, _ = _ps(
+        "Get-MpThreatDetection"
+        f" | Where-Object {{ $_.InitialDetectionTime -gt"
+        f" (Get-Date).AddSeconds(-{since_seconds}) }}"
+        " | Select-Object ThreatID,"
+        " @{N='ThreatName';E={(Get-MpThreat -ThreatID"
+        " $_.ThreatID).ThreatName}}, Resources"
+        " | ConvertTo-Json -Compress",
+        timeout=20,
+    )
+    if rc != 0 or not out:
+        return []
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(data, dict):
+        data = [data]
+    results = []
+    for item in data:
+        tid = item.get("ThreatID")
+        if tid is None:
+            continue
+        resources = item.get("Resources") or []
+        if isinstance(resources, str):
+            resources = [resources]
+        results.append({
+            "threat_id": str(tid),
+            "name": item.get("ThreatName") or "Unknown Threat",
+            "resources": resources,
+        })
+    return results
+
+
 # ── Daemon lifecycle ───────────────────────────────────────
 
 
