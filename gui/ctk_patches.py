@@ -31,6 +31,46 @@ def _patched_check(self, widget):
 _sf.CTkScrollableFrame.check_if_master_is_canvas = _patched_check
 
 
+# ── Cross-platform: clamp scrollregion (overscroll fix) ──────────────────
+# CTkScrollableFrame sets scrollregion = bbox("all"), which is SMALLER than
+# the canvas viewport when the content fits — so the smooth scroller can fling
+# up past the top of the page (revealing empty space above the start) even
+# when there's no scrollbar. Clamp the scrollregion to at least the viewport
+# size so the top/left edge is pinned.
+#
+# Restored from commit 7244710 ("Clamp scrolling so you can't scroll above the
+# bounds of a page"), which lived in main.py's patch block and was dropped when
+# the patches moved here in a later merge.
+_orig_sf_init = _sf.CTkScrollableFrame.__init__
+
+
+def _clamp_scrollregion(sf):
+    try:
+        canvas = sf._parent_canvas
+        bbox = canvas.bbox("all")
+        if bbox is None:
+            return
+        x1, y1, x2, y2 = bbox
+        # Never let the scrollregion be smaller than the viewport, so yview
+        # can't move when content fits (no overscroll).
+        x2 = max(x2, x1 + canvas.winfo_width())
+        y2 = max(y2, y1 + canvas.winfo_height())
+        canvas.configure(scrollregion=(x1, y1, x2, y2))
+    except Exception:
+        pass
+
+
+def _sf_init_clamp_scroll(self, *args, **kwargs):
+    _orig_sf_init(self, *args, **kwargs)
+    # Replace CTk's own <Configure> handler (which sets scrollregion =
+    # bbox("all")) with the clamped version. Other <Configure> handlers added
+    # later via add="+" (e.g. auto-hide scrollbar) are unaffected.
+    self.bind("<Configure>", lambda e, s=self: _clamp_scrollregion(s))
+
+
+_sf.CTkScrollableFrame.__init__ = _sf_init_clamp_scroll
+
+
 # ── Windows: resize performance patch ───────────────────────────────────
 if sys.platform.startswith("win"):
     _orig_fit = _sf.CTkScrollableFrame._fit_frame_dimensions_to_canvas

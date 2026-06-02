@@ -321,12 +321,6 @@ if __name__ == "__main__":
     if args.debug or functions.is_running_in_ide():
         DEBUG = True
 
-    # Publish the resolved debug state so instrumentation in later-imported
-    # modules can gate itself with utils.debug.is_debug().
-    from utils.debug import set_debug
-
-    set_debug(DEBUG)
-
     # Configure logging based on configuration and flags
     # Default to DEBUG level if we are in DEBUG/IDE mode and no explicit level was provided
     log_level = args.log_level
@@ -362,24 +356,6 @@ if __name__ == "__main__":
         logger.info(f"Python version: {sys.version}")
         logger.info(f"Working directory: {os.getcwd()}")
         logger.info(f"Running in IDE: {functions.is_running_in_ide()}")
-
-        # Report the active CTk draw backend (catches the Windows
-        # font_shapes → circle_shapes slow-path downgrade).
-        from gui.render_diagnostics import (
-            log_render_backend,
-            log_render_environment,
-            watch_reconfigures,
-        )
-
-        log_render_backend(app)
-        log_render_environment(app)
-        # Log every window/content size change with timing so we can see exactly
-        # what reconfigures after the window is revealed (CTk scaling, titlebar,
-        # min/max, or content). Remove the watcher once the cause is fixed.
-        _screen = getattr(app, "_current_main_screen", None)
-        watch_reconfigures(
-            app, extra_widgets=[("content", _screen)] if _screen is not None else None
-        )
 
         # Attach Inspector
         app.inspector = RuntimeInspector(app)

@@ -760,9 +760,6 @@ class AppUI(customtkinter.CTk):
                 # grid options, so a bare grid() restores placement exactly.
                 main_screen = cached_widget
                 main_screen.grid(row=0, column=1, sticky="nsew")
-                from gui.render_diagnostics import log_cache_hit
-
-                log_cache_hit(name)
             else:
                 # Stale cache entry for this frame (signature changed): drop the
                 # old widget so we don't leak it. Skip if it's the currently
@@ -776,11 +773,7 @@ class AppUI(customtkinter.CTk):
                     except Exception:
                         pass
 
-                from gui.render_diagnostics import time_build
-
-                with time_build(name) as _record_build:
-                    main_screen = frame.create_main_screen()
-                    _record_build(main_screen)
+                main_screen = frame.create_main_screen()
 
                 main_screen.grid(row=0, column=1, sticky="nsew")
                 main_screen.grid_columnconfigure(0, weight=1)
@@ -1048,12 +1041,6 @@ class AppUI(customtkinter.CTk):
             if state["done"]:
                 return
             state["done"] = True
-            try:
-                from gui.render_diagnostics import log_reveal
-
-                log_reveal((_time.perf_counter() - start) * 1000.0, reason)
-            except Exception:
-                pass
             try:
                 reveal()
             except Exception:
