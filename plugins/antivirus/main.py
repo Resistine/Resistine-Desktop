@@ -81,27 +81,66 @@ def _send_notification_darwin(title: str, body: str):
             pass
 
 
+_TOAST_COUNTER = 0
+
+# PowerShell's registered AUMID — ensures toasts always display reliably.
+# Unregistered app IDs (like a plain 'Resistine' string) are silently
+# dropped by Windows after the first toast.
+_PS_AUMID = (
+    r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}"
+    r"\WindowsPowerShell\v1.0\powershell.exe"
+)
+
+
 def _send_notification_windows(title: str, body: str):
-    """Windows 10/11: native Action Center toast via WinRT."""
+    """Windows 10/11: native Action Center toast with Resistine logo."""
+    global _TOAST_COUNTER
     import subprocess
 
-    safe_title = title.replace("'", "''")
-    safe_body = body.replace("'", "''")
+    # Resolve logo path (works for both dev and PyInstaller builds)
+    logo = os.path.join(
+        os.path.dirname(os.path.dirname(_PLUGIN_DIR)),
+        "resources", "icons", "app_icon.png",
+    )
+
+    def _esc(s: str) -> str:
+        """Escape for XML content inside a PowerShell double-quoted here-string."""
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    esc_title = _esc(title)
+    esc_body = _esc(body)
+
+    # Unique tag per toast so Windows doesn't suppress repeats
+    _TOAST_COUNTER += 1
+    tag = f"resistine_{_TOAST_COUNTER}"
+
+    img_xml = ""
+    if os.path.isfile(logo):
+        img_xml = f'<image placement="appLogoOverride" src="{_esc(logo)}" />'
+
+    xml_str = (
+        "<toast>"
+        '<visual><binding template="ToastGeneric">'
+        f"<text>{esc_title}</text>"
+        f"<text>{esc_body}</text>"
+        f"{img_xml}"
+        "</binding></visual>"
+        "</toast>"
+    )
+
+    # Use a here-string (@"..."@) so the XML doesn't need quote escaping
     ps_script = (
         "[Windows.UI.Notifications.ToastNotificationManager,"
         " Windows.UI.Notifications, ContentType = WindowsRuntime]"
         " | Out-Null; "
-        "$t = [Windows.UI.Notifications.ToastNotificationManager]"
-        "::GetTemplateContent("
-        "[Windows.UI.Notifications.ToastTemplateType]::ToastText02); "
-        "$n = $t.GetElementsByTagName('text'); "
-        f"$n.Item(0).AppendChild($t.CreateTextNode('{safe_title}'))"
-        " | Out-Null; "
-        f"$n.Item(1).AppendChild($t.CreateTextNode('{safe_body}'))"
-        " | Out-Null; "
-        "$toast = [Windows.UI.Notifications.ToastNotification]::new($t); "
+        "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom,"
+        " ContentType = WindowsRuntime] | Out-Null; "
+        "$xml = New-Object Windows.Data.Xml.Dom.XmlDocument; "
+        f'$xml.LoadXml("{xml_str.replace(chr(34), "`" + chr(34))}"); '
+        "$toast = [Windows.UI.Notifications.ToastNotification]::new($xml); "
+        f"$toast.Tag = '{tag}'; "
         "[Windows.UI.Notifications.ToastNotificationManager]"
-        "::CreateToastNotifier('Resistine').Show($toast)"
+        f"::CreateToastNotifier('{_PS_AUMID}').Show($toast)"
     )
     try:
         subprocess.Popen(
@@ -200,6 +239,13 @@ class Plugin(BasePlugin):
         # Start the auto-update scheduler if enabled
         if self._auto_update_on:
             self._start_auto_update_scheduler()
+
+        # Start the Windows RTD watcher at init so threat notifications
+        # fire even when the Antivirus tab isn't visible.
+        if platform.system() == "Windows":
+            threading.Thread(
+                target=self._deferred_start_win_rtd, daemon=True,
+            ).start()
 
     _INITIAL_POLL_RETRIES = 8  # up to ~16s of retries (8 × 2s)
     _INITIAL_POLL_INTERVAL = 2  # seconds between retries
@@ -762,6 +808,18 @@ class Plugin(BasePlugin):
             logger.debug("Antivirus: could not schedule next status poll")
 
     # ── RTD Threat Watcher (Windows Defender) ─────────────────
+
+    def _deferred_start_win_rtd(self):
+        """Wait for initial status, then start the RTD watcher if Defender RT is on."""
+        self._init_ready.wait(timeout=15)
+        try:
+            status = clamav.get_realtime_status()
+            if status.get("clamonacc_running"):
+                self._start_win_rtd_watcher()
+            else:
+                logger.info("Antivirus: Defender RT not active, skipping RTD watcher")
+        except Exception:
+            logger.debug("Antivirus: could not check Defender status for RTD watcher")
 
     def _start_win_rtd_watcher(self):
         """Start polling Defender for real-time threat detections."""
