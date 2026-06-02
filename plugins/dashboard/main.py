@@ -25,6 +25,7 @@ from customtkinter import ThemeManager
 
 from plugins.base_plugin import BasePlugin
 from plugins.plugin_manager import PluginManager
+from utils.logger import logger
 
 
 class Plugin(BasePlugin):
@@ -220,8 +221,27 @@ class Plugin(BasePlugin):
         # Bind resize handler to app window for responsive layout
         self._bind_responsive_resize()
 
+        # Kick the Wazuh overview's "early" /me/* fetches in the background once
+        # the Dashboard's widgets have all been gridded. Three endpoints — agent,
+        # sca, hotfixes — pre-warm so the first Wazuh tab open has data ready.
+        # Scheduled on next tick so create_main_screen stays cheap and the
+        # dashboard is fully visible before the worker thread spins up.
+        self.app.after(0, self._kick_overview_early_endpoints)
+
         return self.main_frame
-    
+
+    def _kick_overview_early_endpoints(self):
+        """Lazy-imported pre-warm of the Wazuh Overview API loader's "early"
+        half. Lazy import keeps the Wazuh module out of Dashboard's import path
+        (Wazuh imports matplotlib lazily but spawns an events-loader thread on
+        import); the try/except ensures a missing/broken Wazuh plugin only
+        warns instead of breaking Dashboard load."""
+        try:
+            from plugins.wazuh_overview.main import _kick_overview_early_loader
+            _kick_overview_early_loader()
+        except Exception as e:
+            logger.warning(f"Dashboard: failed to pre-warm Wazuh endpoints: {e}")
+
     def _bind_responsive_resize(self):
         """
         Bind a resize handler to rebuild grid when the column count needs to change.

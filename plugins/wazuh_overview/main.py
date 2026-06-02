@@ -375,29 +375,25 @@ _REMOTE_HOTFIXES = []
 _REMOTE_HOTFIXES_ERROR = None
 _remote_hotfixes_ready = threading.Event()
 
-_overview_api_loader_started = False
-_overview_api_loader_lock = threading.Lock()
+# Overview preloader. Fires from the Dashboard's first-build completion hook
+# (see plugins/dashboard/main.py:_kick_overview_early_endpoints) to pre-warm
+# every /me/* endpoint the Wazuh tab depends on, so subsequent tab opens have
+# data already in hand. Idempotent via the locked started-flag, so the Wazuh
+# tab's _kick_overview_api_loader call on tab entry is safe — it's a no-op
+# whenever Dashboard already kicked things off.
+_overview_early_loader_started = False
+_overview_early_loader_lock = threading.Lock()
 
 
-def _load_overview_api_async():
-    """Sequentially fetch the 5 /me/* endpoints, setting each event as it
-    completes. Sequential (not parallel) because requests is sync and the
-    volume (5 GETs) doesn't justify a thread pool."""
+def _load_overview_early_async():
+    """Sequentially fetch all five /me/* endpoints in the user-requested
+    pre-warm order: agent → sca → hotfixes → vulnerabilities → inventory
+    summary. Each sets its readiness event as it completes so cards on the
+    Wazuh Overview tab can paint incrementally if the user navigates there
+    while this is still running."""
     global _REMOTE_AGENT, _REMOTE_AGENT_ERROR
     _REMOTE_AGENT, _REMOTE_AGENT_ERROR = api_client.fetch_agent()
     _remote_agent_ready.set()
-
-    global _REMOTE_VULNS, _REMOTE_VULNS_ERROR
-    # fetch_all_vulnerabilities loops the user's devices and stamps each CVE
-    # with agent_id + agent_name so the Vulnerabilities pane can attribute
-    # rows per-device. fetch_vulnerabilities (no agent_id) returns only the
-    # caller's own machine's CVEs — fine for a single-device account but
-    # invisible-by-default for multi-device accounts.
-    data, err = api_client.fetch_all_vulnerabilities()
-    if data is not None:
-        _REMOTE_VULNS = data
-    _REMOTE_VULNS_ERROR = err
-    _remote_vulns_ready.set()
 
     global _REMOTE_SCA, _REMOTE_SCA_ERROR
     data, err = api_client.fetch_sca()
@@ -406,13 +402,6 @@ def _load_overview_api_async():
     _REMOTE_SCA_ERROR = err
     _remote_sca_ready.set()
 
-    global _REMOTE_INVENTORY, _REMOTE_INVENTORY_ERROR
-    data, err = api_client.fetch_inventory_summary()
-    if data is not None:
-        _REMOTE_INVENTORY = data
-    _REMOTE_INVENTORY_ERROR = err
-    _remote_inventory_ready.set()
-
     global _REMOTE_HOTFIXES, _REMOTE_HOTFIXES_ERROR
     data, err = api_client.fetch_hotfixes()
     if data is not None:
@@ -420,22 +409,46 @@ def _load_overview_api_async():
     _REMOTE_HOTFIXES_ERROR = err
     _remote_hotfixes_ready.set()
 
+    global _REMOTE_VULNS, _REMOTE_VULNS_ERROR
+    # fetch_all_vulnerabilities loops fetch_inventory_full → fetch_vulnerabilities
+    # per device, stamping agent_id + agent_name on every CVE so the
+    # Vulnerabilities pane can attribute rows per-device. Sequential N+1 GETs;
+    # acceptable cost for typical device counts.
+    data, err = api_client.fetch_all_vulnerabilities()
+    if data is not None:
+        _REMOTE_VULNS = data
+    _REMOTE_VULNS_ERROR = err
+    _remote_vulns_ready.set()
 
-def _kick_overview_api_loader():
-    """Start the Overview API loader thread once. Same idempotent pattern as
-    _kick_agents_loader: repeat calls short-circuit on the locked guard, so
-    re-opening the plugin doesn't refire the requests. A future "Refresh"
-    button can reset the events + flag to force a fresh fetch."""
-    global _overview_api_loader_started
-    with _overview_api_loader_lock:
-        if _overview_api_loader_started:
+    global _REMOTE_INVENTORY, _REMOTE_INVENTORY_ERROR
+    data, err = api_client.fetch_inventory_summary()
+    if data is not None:
+        _REMOTE_INVENTORY = data
+    _REMOTE_INVENTORY_ERROR = err
+    _remote_inventory_ready.set()
+
+
+def _kick_overview_early_loader():
+    """Idempotent: spawn the preloader thread at most once per process."""
+    global _overview_early_loader_started
+    with _overview_early_loader_lock:
+        if _overview_early_loader_started:
             return
-        _overview_api_loader_started = True
+        _overview_early_loader_started = True
     threading.Thread(
-        target=_load_overview_api_async,
-        name="endpoint2-overview-api-loader",
+        target=_load_overview_early_async,
+        name="endpoint2-overview-preloader",
         daemon=True,
     ).start()
+
+
+def _kick_overview_api_loader():
+    """Back-compat alias for the Wazuh Overview + Vulnerabilities panes' tab-
+    entry kicks. Delegates to the preloader's idempotent kick — a no-op when
+    the Dashboard's end-of-build hook already started the fetch. A future
+    "Refresh" button can reset _overview_early_loader_started + the readiness
+    events to force a fresh fetch."""
+    _kick_overview_early_loader()
 
 
 def _ready_mask():
