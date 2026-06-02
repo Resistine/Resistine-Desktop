@@ -698,6 +698,20 @@ class Plugin(BasePlugin):
         # Active device filter on the Vulnerabilities table dropdown. Resolved
         # lazily by _default_vuln_device() once _REMOTE_VULNS arrives.
         self._vuln_device = None
+        # Vulnerabilities row selection — mirrors the Events pane's pattern.
+        # Composite key f"{agent_id}::{cve_id}" so the same CVE on different
+        # devices ("All devices" view) doesn't collide.
+        self._selected_vuln_key = None
+        self._vuln_row_frames = {}
+        self._vuln_detail_frame = None
+        # Donut-driven severity filter. None = show every severity; otherwise
+        # one of _SEVERITY_LEVELS. Set by clicking a donut slice; clicking
+        # the active slice again clears it (toggle).
+        self._vuln_severity_filter = None
+        # (wedge_artist, severity_level) pairs for the active donut. Used by
+        # the click handler to match a click to a slice and to re-skin alpha
+        # without rebuilding the chart.
+        self._vuln_donut_wedges = []
 
     def check_status(self):
         return None
@@ -2570,6 +2584,17 @@ class Plugin(BasePlugin):
             except Exception:
                 pass
 
+        # The previous widget tree was just destroyed, so any cached row /
+        # detail widget references are dead. Reset selection so the first
+        # row of the new render auto-selects via _render_vuln_list.
+        self._selected_vuln_key = None
+        self._vuln_row_frames = {}
+        self._vuln_detail_frame = None
+        # Severity filter is scoped to the current device + dataset, so the
+        # full-pane rebuild (device switch, initial data arrival) drops it.
+        self._vuln_severity_filter = None
+        self._vuln_donut_wedges = []
+
         self._vuln_pane_parent = parent
         # Idempotent: repeated kicks short-circuit on the locked guard, so
         # opening the Vulnerabilities tab directly (without visiting Overview
@@ -2800,7 +2825,14 @@ class Plugin(BasePlugin):
     def _draw_vuln_donut_chart(self, card, card_bg, chart_theme, text_secondary, counts, total):
         """Data-state donut: a matplotlib pie with a hollow center showing the
         total CVE count. Only built when total > 0 (see _draw_empty_vuln_donut
-        for the zero-data placeholder)."""
+        for the zero-data placeholder).
+
+        Each wedge is interactive: clicking it sets the severity filter on the
+        table below; clicking the active wedge again clears it. Non-selected
+        wedges dim to alpha 0.25 while a filter is active so the live severity
+        reads visually."""
+        import matplotlib.colors as mcolors
+
         Figure, FigureCanvasTkAgg = _ensure_matplotlib()
         fig = Figure(figsize=(2.6, 2.2), dpi=100, facecolor=card_bg)
         self._vuln_donut_figure = fig
@@ -2808,17 +2840,23 @@ class Plugin(BasePlugin):
         ax.set_facecolor(card_bg)
 
         sizes = [counts[lvl] for lvl in _SEVERITY_LEVELS]
-        colors = [
-            self._resolve_severity_color(lvl, chart_theme["is_dark"])
-            for lvl in _SEVERITY_LEVELS
-        ]
-        ax.pie(
+        sel = self._vuln_severity_filter
+        rgba_colors = []
+        for lvl in _SEVERITY_LEVELS:
+            base = self._resolve_severity_color(lvl, chart_theme["is_dark"])
+            rgb = mcolors.to_rgb(base)
+            alpha = 1.0 if (sel is None or lvl == sel) else 0.25
+            rgba_colors.append((rgb[0], rgb[1], rgb[2], alpha))
+        wedges, _texts = ax.pie(
             sizes,
-            colors=colors,
+            colors=rgba_colors,
             startangle=90,
             counterclock=False,
             wedgeprops={"width": 0.32, "edgecolor": card_bg},
         )
+        # Pair wedges with their severity level so the click handler can map
+        # a hit back to a filter value without recomputing angles.
+        self._vuln_donut_wedges = list(zip(wedges, _SEVERITY_LEVELS))
         ax.text(
             0,
             0.08,
@@ -2845,6 +2883,7 @@ class Plugin(BasePlugin):
         widget.configure(highlightthickness=0, bd=0, bg=card_bg)
         widget.grid(row=1, column=0, sticky="nsew", padx=(8, 4), pady=(0, 10))
         self._vuln_donut_canvas = canvas
+        canvas.mpl_connect("button_press_event", self._on_vuln_donut_click)
         canvas.draw_idle()
 
     def _draw_empty_vuln_donut(self, card, card_bg, chart_theme):
@@ -2880,6 +2919,57 @@ class Plugin(BasePlugin):
             )
 
         canvas.bind("<Configure>", redraw)
+
+    def _on_vuln_donut_click(self, event):
+        """Resolve a matplotlib click to a donut wedge and toggle the
+        severity filter for that slice. Clicks outside any wedge are a no-op
+        (the user is reaching for the legend or just missed)."""
+        if event.inaxes is None or not self._vuln_donut_wedges:
+            return
+        for wedge, level in self._vuln_donut_wedges:
+            # Zero-count severities have a degenerate (zero-angle) wedge —
+            # contains() returns False on them naturally, but the explicit
+            # guard skips wedge.contains' Path traversal when it can't match.
+            if wedge.theta1 == wedge.theta2:
+                continue
+            contains, _ = wedge.contains(event)
+            if contains:
+                self._toggle_vuln_severity_filter(level)
+                return
+
+    def _toggle_vuln_severity_filter(self, level):
+        """Switch the severity filter to `level`, or clear it if `level` is
+        already active. Refresh the donut's per-wedge dimming in place and
+        re-render the table rows so the change is visible immediately, no
+        full pane rebuild needed."""
+        if self._vuln_severity_filter == level:
+            self._vuln_severity_filter = None
+        else:
+            self._vuln_severity_filter = level
+        self._refresh_vuln_donut_alpha()
+        # Invalidate the severity-count cache — the donut center figure and
+        # the legend counts read from it on the next render. Today's
+        # _vuln_severity_counts cache key only tracks (vulns_id, device); the
+        # severity filter doesn't shrink the counts, so no invalidation is
+        # needed here. Left as a note for the future.
+        query = self._vuln_search_var.get() if self._vuln_search_var else ""
+        self._render_vuln_list(query)
+
+    def _refresh_vuln_donut_alpha(self):
+        """Re-skin each wedge's alpha against the current severity filter,
+        without rebuilding the figure. Cheaper than a full re-render and
+        avoids the flash of a destroy-then-recreate."""
+        sel = self._vuln_severity_filter
+        for wedge, level in self._vuln_donut_wedges:
+            try:
+                wedge.set_alpha(1.0 if (sel is None or level == sel) else 0.25)
+            except Exception:
+                pass
+        if self._vuln_donut_canvas is not None:
+            try:
+                self._vuln_donut_canvas.draw_idle()
+            except Exception:
+                pass
 
     def _bucket_vulns_daily(self):
         """Group CVEs into 30 daily buckets ending today (UTC) by detection_date."""
@@ -3057,8 +3147,16 @@ class Plugin(BasePlugin):
     # ----- table -----
 
     def _build_vuln_table(self, parent, row):
-        wrapper = customtkinter.CTkFrame(parent, corner_radius=12, border_width=1)
-        wrapper.grid(row=row, column=0, sticky="nsew")
+        # 3:2 split — bordered list card on the left, bordered detail card on
+        # the right. Mirrors _build_event_stream so both panes feel uniform.
+        split = customtkinter.CTkFrame(parent, fg_color="transparent")
+        split.grid(row=row, column=0, sticky="nsew")
+        split.grid_columnconfigure(0, weight=3, uniform="vstream")
+        split.grid_columnconfigure(1, weight=2, uniform="vstream")
+        split.grid_rowconfigure(0, weight=1)
+
+        wrapper = customtkinter.CTkFrame(split, corner_radius=12, border_width=1)
+        wrapper.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
         wrapper.grid_columnconfigure(0, weight=1)
         wrapper.grid_rowconfigure(1, weight=1)
 
@@ -3069,6 +3167,12 @@ class Plugin(BasePlugin):
         )
         self._vuln_list_frame.grid(row=1, column=0, sticky="nsew", padx=4, pady=(0, 4))
         self._vuln_list_frame.grid_columnconfigure(0, weight=1)
+
+        self._vuln_detail_frame = customtkinter.CTkFrame(
+            split, corner_radius=12, border_width=1
+        )
+        self._vuln_detail_frame.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        self._vuln_detail_frame.grid_columnconfigure(0, weight=1)
 
         self._render_vuln_list("")
 
@@ -3084,12 +3188,13 @@ class Plugin(BasePlugin):
         self._configure_vuln_row_grid(head)
 
         small_bold = customtkinter.CTkFont(size=10, weight="bold")
-        labels = ("SEV", "CVE", "AFFECTED PACKAGE", "CVSS", "STATUS", "EPSS")
+        labels = ("SEV", "CVE", "AFFECTED PACKAGE")
+        last_col = len(labels) - 1
         for col, label in enumerate(labels):
             # SEV column rows render a badge with "  HIGH  " interior padding,
             # so nudge the SEV header right to land on the badge's visible text.
             left_pad = 8 if col == 0 else 0
-            right_pad = 12 if col < 5 else 0
+            right_pad = 12 if col < last_col else 0
             customtkinter.CTkLabel(
                 head, text=label, text_color=text_secondary, font=small_bold
             ).grid(row=0, column=col, sticky="w", padx=(left_pad, right_pad))
@@ -3098,18 +3203,18 @@ class Plugin(BasePlugin):
     def _configure_vuln_row_grid(frame):
         frame.grid_columnconfigure(0, weight=0, minsize=70)   # severity badge
         frame.grid_columnconfigure(1, weight=0, minsize=180)  # CVE id + modified
-        frame.grid_columnconfigure(2, weight=1, minsize=200)  # package
-        frame.grid_columnconfigure(3, weight=0, minsize=70)   # cvss
-        frame.grid_columnconfigure(4, weight=0, minsize=100)  # status
-        frame.grid_columnconfigure(5, weight=0, minsize=70)   # epss
+        frame.grid_columnconfigure(2, weight=1, minsize=240)  # package (last column)
 
     def _filter_vulns(self, query):
         q = (query or "").lower().strip()
         device_filter = self._vuln_device
+        sev_filter = self._vuln_severity_filter
         out = []
         for v in _REMOTE_VULNS:
             if device_filter and device_filter != self._VULN_DEVICE_ALL \
                     and v.get("agent_name") != device_filter:
+                continue
+            if sev_filter and (v.get("severity") or "").lower() != sev_filter:
                 continue
             if q:
                 haystack = " ".join((
@@ -3137,6 +3242,7 @@ class Plugin(BasePlugin):
                 w.destroy()
             except Exception:
                 pass
+        self._vuln_row_frames.clear()
 
         vulns = self._filter_vulns(query)
         if self._vuln_count_label:
@@ -3149,8 +3255,20 @@ class Plugin(BasePlugin):
             )
             self._vuln_count_label.configure(text=text)
 
+        # Drop the selection if the previously selected vuln has filtered out
+        # so the row builder below doesn't try to highlight a row that won't
+        # render. We re-anchor to the top of the visible list afterwards.
+        visible_keys = {self._vuln_key(v) for v in vulns}
+        if self._selected_vuln_key not in visible_keys:
+            self._selected_vuln_key = None
+
         for r, v in enumerate(vulns):
             self._vuln_row(self._vuln_list_frame, v, r)
+
+        if not vulns:
+            self._render_vuln_detail(None)
+        elif self._selected_vuln_key is None:
+            self._select_vuln(self._vuln_key(vulns[0]))
 
     def _epss_color_key(self, epss):
         try:
@@ -3163,6 +3281,12 @@ class Plugin(BasePlugin):
             return "warning"
         return "muted"
 
+    @staticmethod
+    def _vuln_key(vuln):
+        """Composite selection key — agent id paired with CVE id so the same
+        CVE on two devices doesn't collide in the All-devices view."""
+        return f"{vuln.get('agent_id') or ''}::{vuln.get('id') or ''}"
+
     def _vuln_row(self, parent, vuln, row):
         fonts = self._ensure_fonts()
         text_secondary = self._theme(
@@ -3171,128 +3295,292 @@ class Plugin(BasePlugin):
         hover_bg = self._theme(
             "sidebar_hover_bg", default=["#F0F0F5", "#1F1F22"]
         )
+        active_bg = self._theme(
+            "sidebar_active_bg", default=["#EBF0FF", "#1A2744"]
+        )
 
         sev = (vuln.get("severity") or "").lower()
         sev_bg, sev_fg = self._severity_palette(sev)
         sev_label = _SEVERITY_SHORT.get(sev, sev.upper() or "—")
 
-        row_frame = customtkinter.CTkFrame(parent, fg_color="transparent", corner_radius=8)
+        key = self._vuln_key(vuln)
+        is_selected = key == self._selected_vuln_key
+
+        row_frame = customtkinter.CTkFrame(
+            parent,
+            fg_color=active_bg if is_selected else "transparent",
+            corner_radius=8,
+        )
         row_frame.grid(row=row, column=0, sticky="ew", padx=2, pady=1)
         self._configure_vuln_row_grid(row_frame)
 
+        def on_click(_e=None, k=key):
+            self._select_vuln(k)
+
+        row_frame.bind("<Button-1>", on_click)
+
         # SEV badge
-        customtkinter.CTkLabel(
+        sev_lbl = customtkinter.CTkLabel(
             row_frame,
             text=f"  {sev_label}  ",
             fg_color=sev_bg,
             text_color=sev_fg,
             corner_radius=6,
             font=fonts["bold_10"],
-        ).grid(row=0, column=0, sticky="w", padx=(0, 12), pady=8)
+        )
+        sev_lbl.grid(row=0, column=0, sticky="w", padx=(0, 12), pady=8)
+        sev_lbl.bind("<Button-1>", on_click)
 
         # CVE id + modified date
         cve_cell = customtkinter.CTkFrame(row_frame, fg_color="transparent")
         cve_cell.grid(row=0, column=1, sticky="w", padx=(0, 12), pady=4)
         cve_cell.grid_columnconfigure(0, weight=1)
-        customtkinter.CTkLabel(
+        cve_id_lbl = customtkinter.CTkLabel(
             cve_cell,
             text=vuln.get("id", "—"),
             font=fonts["inter_bold_12"],
             anchor="w",
-        ).grid(row=0, column=0, sticky="w")
+        )
+        cve_id_lbl.grid(row=0, column=0, sticky="w")
         modified = _format_relative(vuln.get("modified_date"))
-        customtkinter.CTkLabel(
+        cve_mod_lbl = customtkinter.CTkLabel(
             cve_cell,
             text=f"modified {modified}",
             text_color=text_secondary,
             font=fonts["size_10"],
             anchor="w",
-        ).grid(row=1, column=0, sticky="w")
+        )
+        cve_mod_lbl.grid(row=1, column=0, sticky="w")
+        cve_cell.bind("<Button-1>", on_click)
+        cve_id_lbl.bind("<Button-1>", on_click)
+        cve_mod_lbl.bind("<Button-1>", on_click)
 
         # Affected package + version
         pkg_cell = customtkinter.CTkFrame(row_frame, fg_color="transparent")
         pkg_cell.grid(row=0, column=2, sticky="w", padx=(0, 12), pady=4)
         pkg_cell.grid_columnconfigure(0, weight=1)
-        customtkinter.CTkLabel(
+        pkg_name_lbl = customtkinter.CTkLabel(
             pkg_cell,
             text=vuln.get("package_name", "—"),
             font=fonts["inter_bold_12"],
             anchor="w",
-        ).grid(row=0, column=0, sticky="w")
-        customtkinter.CTkLabel(
+        )
+        pkg_name_lbl.grid(row=0, column=0, sticky="w")
+        pkg_ver_lbl = customtkinter.CTkLabel(
             pkg_cell,
             text=str(vuln.get("package_version", "")),
             text_color=text_secondary,
             font=fonts["size_10"],
             anchor="w",
-        ).grid(row=1, column=0, sticky="w")
+        )
+        pkg_ver_lbl.grid(row=1, column=0, sticky="w")
+        pkg_cell.bind("<Button-1>", on_click)
+        pkg_name_lbl.bind("<Button-1>", on_click)
+        pkg_ver_lbl.bind("<Button-1>", on_click)
 
-        # CVSS
+        self._vuln_row_frames[key] = row_frame
+
+        # Hover effect for non-selected rows only — mirrors _event_row so the
+        # active row's highlight isn't blown away by a Leave event.
+        if not is_selected:
+            def on_enter(_e=None, rf=row_frame):
+                try:
+                    rf.configure(fg_color=hover_bg)
+                except Exception:
+                    pass
+
+            def on_leave(_e=None, rf=row_frame):
+                try:
+                    rf.configure(fg_color="transparent")
+                except Exception:
+                    pass
+
+            for w in (row_frame, *row_frame.winfo_children()):
+                w.bind("<Enter>", on_enter)
+                w.bind("<Leave>", on_leave)
+
+    def _find_vuln_by_key(self, key):
+        for v in _REMOTE_VULNS:
+            if self._vuln_key(v) == key:
+                return v
+        return None
+
+    def _select_vuln(self, key):
+        if key == self._selected_vuln_key:
+            return
+        self._selected_vuln_key = key
+
+        active_bg = self._theme(
+            "sidebar_active_bg", default=["#EBF0FF", "#1A2744"]
+        )
+        for k, rf in list(self._vuln_row_frames.items()):
+            try:
+                if not rf.winfo_exists():
+                    continue
+                rf.configure(fg_color=active_bg if k == key else "transparent")
+            except Exception:
+                pass
+
+        self._render_vuln_detail(self._find_vuln_by_key(key))
+
+    def _render_vuln_detail(self, vuln):
+        if not self._vuln_detail_frame or not self._vuln_detail_frame.winfo_exists():
+            return
+
+        for w in self._vuln_detail_frame.winfo_children():
+            try:
+                w.destroy()
+            except Exception:
+                pass
+
+        text_secondary = self._theme(
+            "text_secondary", default=["#6B7280", "#9CA3AF"]
+        )
+        divider_color = self._theme(
+            "divider_color", default=["#E5E7EB", "#2A2A2A"]
+        )
+
+        if vuln is None:
+            customtkinter.CTkLabel(
+                self._vuln_detail_frame,
+                text="Select a vulnerability to see details",
+                text_color=text_secondary,
+            ).grid(row=0, column=0, sticky="nsew", padx=20, pady=40)
+            return
+
+        sev = (vuln.get("severity") or "").lower()
+        sev_bg, sev_fg = self._severity_palette(sev)
+        sev_label = _SEVERITY_SHORT.get(sev, sev.upper() or "—")
+
+        header = customtkinter.CTkFrame(self._vuln_detail_frame, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=20, pady=(16, 8))
+        header.grid_columnconfigure(2, weight=1)
+
+        customtkinter.CTkLabel(
+            header,
+            text=f"  {sev_label}  ",
+            fg_color=sev_bg,
+            text_color=sev_fg,
+            corner_radius=6,
+            font=customtkinter.CTkFont(size=10, weight="bold"),
+        ).grid(row=0, column=0, sticky="w")
+
+        customtkinter.CTkLabel(
+            header,
+            text=vuln.get("id", "—"),
+            text_color=text_secondary,
+            font=customtkinter.CTkFont(size=11, weight="bold"),
+        ).grid(row=0, column=1, sticky="w", padx=(10, 0))
+
+        customtkinter.CTkLabel(
+            header,
+            text=_format_relative(vuln.get("modified_date")),
+            text_color=text_secondary,
+            font=customtkinter.CTkFont(size=11),
+        ).grid(row=0, column=2, sticky="e")
+
+        pkg_name = vuln.get("package_name") or ""
+        pkg_ver = vuln.get("package_version") or ""
+        title_text = f"{pkg_name} {pkg_ver}".strip() or vuln.get("id") or "—"
+        customtkinter.CTkLabel(
+            self._vuln_detail_frame,
+            text=title_text,
+            font=customtkinter.CTkFont(family="Inter", size=18, weight="bold"),
+            anchor="w",
+            justify="left",
+            wraplength=380,
+        ).grid(row=1, column=0, sticky="w", padx=20, pady=(0, 10))
+
+        meta = customtkinter.CTkFrame(self._vuln_detail_frame, fg_color="transparent")
+        meta.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 10))
+        meta.grid_columnconfigure(0, weight=0)
+        meta.grid_columnconfigure(1, weight=1)
+
+        rows = []
         try:
             cvss_text = f"{float(vuln.get('cvss_score') or 0.0):.1f}"
+            rows.append(("CVSS", cvss_text, sev_fg))
         except (TypeError, ValueError):
-            cvss_text = "—"
-        customtkinter.CTkLabel(
-            row_frame,
-            text=cvss_text,
-            text_color=sev_fg,
-            font=fonts["inter_bold_14"],
-        ).grid(row=0, column=3, sticky="w", padx=(0, 12), pady=8)
+            pass
 
-        # Status badge — alias unknown values to a sensible theme key so the
-        # color is never the muted fallback.
-        status = (vuln.get("status") or "").lower()
-        status_key = _VULN_STATUS_BADGE.get(status, status or "info")
-        st_bg = self._theme(
-            "status_badge_bg", status_key, default=["#F3F4F6", "#1F2937"]
-        )
-        st_fg = self._theme(
-            "status_badge_text", status_key, default=["#6B7280", "#9CA3AF"]
-        )
-        customtkinter.CTkLabel(
-            row_frame,
-            text=f"  {(status or '—').capitalize()}  ",
-            fg_color=st_bg,
-            text_color=st_fg,
-            corner_radius=6,
-            font=fonts["bold_10"],
-        ).grid(row=0, column=4, sticky="w", padx=(0, 12), pady=8)
-
-        # EPSS
         epss = vuln.get("epss")
-        epss_color_key = self._epss_color_key(epss)
-        if epss_color_key == "muted":
-            epss_color = text_secondary
-        else:
-            _, epss_color = self._severity_palette(
-                "high" if epss_color_key == "high" else "medium"
-            )
         try:
             epss_text = f"{float(epss) * 100:.0f}%"
+            epss_key = self._epss_color_key(epss)
+            if epss_key == "muted":
+                epss_color = None
+            else:
+                _, epss_color = self._severity_palette(
+                    "high" if epss_key == "high" else "medium"
+                )
+            rows.append(("EPSS", epss_text, epss_color))
         except (TypeError, ValueError):
-            epss_text = "—"
+            pass
+
+        status = (vuln.get("status") or "").strip()
+        if status:
+            rows.append(("STATUS", status.capitalize(), None))
+
+        device = vuln.get("agent_name")
+        if device:
+            rows.append(("DEVICE", device, None))
+
+        for label, key in (
+            ("DETECTED", "detection_date"),
+            ("PUBLISHED", "published_date"),
+            ("LAST MODIFIED", "modified_date"),
+        ):
+            ts = vuln.get(key)
+            if ts:
+                rows.append((label, _format_timestamp(ts), None))
+
+        for r, (label, value, value_color) in enumerate(rows):
+            customtkinter.CTkLabel(
+                meta, text=label,
+                text_color=text_secondary,
+                font=customtkinter.CTkFont(size=10, weight="bold"),
+            ).grid(row=r, column=0, sticky="w", padx=(0, 12), pady=2)
+            value_kwargs = dict(
+                text=value,
+                font=customtkinter.CTkFont(family="Inter", size=12),
+                anchor="w", justify="left",
+                wraplength=260,
+            )
+            if value_color is not None:
+                value_kwargs["text_color"] = value_color
+            customtkinter.CTkLabel(meta, **value_kwargs).grid(
+                row=r, column=1, sticky="w", pady=2
+            )
+
+        customtkinter.CTkFrame(
+            self._vuln_detail_frame, height=1, fg_color=divider_color, corner_radius=0
+        ).grid(row=3, column=0, sticky="ew", padx=20, pady=(8, 8))
+
         customtkinter.CTkLabel(
-            row_frame,
-            text=epss_text,
-            text_color=epss_color,
-            font=fonts["inter_bold_13"],
-        ).grid(row=0, column=5, sticky="w", pady=8)
+            self._vuln_detail_frame,
+            text="DESCRIPTION",
+            text_color=text_secondary,
+            font=customtkinter.CTkFont(size=10, weight="bold"),
+        ).grid(row=4, column=0, sticky="w", padx=20, pady=(0, 4))
 
-        def on_enter(_e=None, rf=row_frame):
-            try:
-                rf.configure(fg_color=hover_bg)
-            except Exception:
-                pass
-
-        def on_leave(_e=None, rf=row_frame):
-            try:
-                rf.configure(fg_color="transparent")
-            except Exception:
-                pass
-
-        for w in (row_frame, *row_frame.winfo_children()):
-            w.bind("<Enter>", on_enter)
-            w.bind("<Leave>", on_leave)
+        description = vuln.get("description") or ""
+        if description:
+            desc_box = customtkinter.CTkTextbox(
+                self._vuln_detail_frame,
+                height=140,
+                font=customtkinter.CTkFont(family="Courier", size=11),
+                wrap="word",
+            )
+            desc_box.grid(row=5, column=0, sticky="ew", padx=20, pady=(0, 16))
+            desc_box.insert("0.0", description)
+            desc_box.configure(state="disabled")
+        else:
+            customtkinter.CTkLabel(
+                self._vuln_detail_frame,
+                text="No description available.",
+                text_color=text_secondary,
+                font=customtkinter.CTkFont(size=12),
+            ).grid(row=5, column=0, sticky="w", padx=20, pady=(0, 16))
 
     # ----- Inventory pane ----------------------------------------------------
 

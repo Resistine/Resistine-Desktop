@@ -103,7 +103,11 @@ def _normalize_cve(raw):
         "package_version": raw.get("version") or raw.get("package_version") or "",
         "description": raw.get("description") or "",
         "status": raw.get("status"),
-        "detection_date": raw.get("detected_at") or raw.get("published") or raw.get("detection_date"),
+        # detection_date is the per-device detection time; published_date is the
+        # upstream CVE disclosure date. Kept separate so the detail panel can
+        # render both when the live response carries them.
+        "detection_date": raw.get("detected_at") or raw.get("detection_date"),
+        "published_date": raw.get("published"),
         "modified_date": raw.get("updated") or raw.get("modified_date"),
     }
 
