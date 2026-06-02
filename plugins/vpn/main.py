@@ -871,8 +871,10 @@ class Plugin(BasePlugin):
             _resize_job[0] = self.app.after_idle(_do_layout)
 
         self.main_container.bind("<Configure>", _on_resize)
-        # Apply correct initial centering once the widget is fully mapped
-        self.app.after(50, _do_layout)
+        # Synchronous finalizer: _settle_screen() applies the initial centering
+        # before reveal, so the content is correctly placed on first paint
+        # instead of shifting ~50 ms later. (<Configure> handles genuine resizes.)
+        self.main_container._resistine_finalize = _do_layout
 
         if IS_MACOS:
             self._start_extension_polling()

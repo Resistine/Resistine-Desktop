@@ -37,28 +37,48 @@ if sys.platform.startswith("win"):
     _orig_fit = _sf.CTkScrollableFrame._fit_frame_dimensions_to_canvas
 
     def _throttled_fit(self, event):
+        # Leading-edge debounce.
+        #
+        # The original CTk handler re-fits the inner frame to the canvas on
+        # *every* <Configure>, which is the resize-time performance problem this
+        # patch exists to solve. A pure *trailing* debounce (wait 200 ms, then
+        # fit) fixed the drag cost but made the inner frame paint at its
+        # requested width on first load and then snap to the canvas width 200 ms
+        # later — a visible "bounce" when a screen first loads.
+        #
+        # Leading-edge fixes both: fit immediately the first time we see a real
+        # canvas size (and on the leading edge of each resize burst), then
+        # coalesce the flood of <Configure>s during an active drag into a single
+        # trailing fit. First paint is correct; drags stay cheap.
+        canvas = self._parent_canvas
         if not hasattr(self, "_fit_job"):
             self._fit_job = None
-        if self._fit_job is not None:
+
+        has_real_size = canvas.winfo_width() > 1 and canvas.winfo_height() > 1
+        if has_real_size and (
+            not getattr(self, "_did_real_fit", False) or self._fit_job is None
+        ):
+            # First real size ever, or the leading edge of a new burst → fit now.
             try:
-                self._parent_canvas.after_cancel(self._fit_job)
+                _orig_fit(self, event)
+                self._did_real_fit = True
             except Exception:
                 pass
 
-        def _do_fit(inst=self):
-            inst._fit_job = None
-            if inst._orientation == "horizontal":
-                inst._parent_canvas.itemconfigure(
-                    inst._create_window_id,
-                    height=inst._parent_canvas.winfo_height(),
-                )
-            elif inst._orientation == "vertical":
-                inst._parent_canvas.itemconfigure(
-                    inst._create_window_id,
-                    width=inst._parent_canvas.winfo_width(),
-                )
+        if self._fit_job is not None:
+            try:
+                canvas.after_cancel(self._fit_job)
+            except Exception:
+                pass
 
-        self._fit_job = self._parent_canvas.after(200, _do_fit)
+        def _do_fit(inst=self, ev=event):
+            inst._fit_job = None
+            try:
+                _orig_fit(inst, ev)
+            except Exception:
+                pass
+
+        self._fit_job = canvas.after(200, _do_fit)
 
     _sf.CTkScrollableFrame._fit_frame_dimensions_to_canvas = _throttled_fit
 

@@ -93,54 +93,18 @@ class Plugin(BasePlugin):
         self.title_label.pack(expand=True, fill="both", padx=20, pady=20)
 
         # --- Plugins grid ---
-        manager = self.app.get_plugin_manager()
-        installed_plugins = manager.plugins
-        all_local_plugins = manager.load_plugins(include_uninstalled=True)
-        available_remote = manager.get_available_plugins()
-        
-        installed_ids = {p.id for p in installed_plugins}
-        local_ids = {p.id for p in all_local_plugins}
-        
-        plugins = list(installed_plugins)
-        
-        # Add uninstalled local plugins
-        for lp in all_local_plugins:
-            if lp.id not in installed_ids:
-                lp.status = "Uninstalled"
-                plugins.append(lp)
-        
-        # Add remote plugins that aren't local at all
-        for rp in available_remote:
-            if rp["id"] not in local_ids:
-                plugins.append(RemotePluginWrapper(self.app, rp))
-        
-        # Store remote data for restoration after uninstall
-        self.remote_data_map = {rp["id"]: rp for rp in available_remote}
-        
-        # Plugins hidden from the Store (still available in sidebar if installed)
-        HIDDEN_FROM_STORE = {"001", "004", "009", "010", "100"}  # Dashboard, Store, Help, Settings, Calculator
-        HIDDEN_NAMES = {"template"}  # Also hide by name for remote-only plugins
-        plugins = [
-            p for p in plugins
-            if p.id not in HIDDEN_FROM_STORE
-            and getattr(p, 'name', '').lower() not in HIDDEN_NAMES
-        ]
+        # Build with whatever remote data we already have (cached from a prior
+        # visit, or empty). The remote list comes over the network, so we NEVER
+        # block the build on it — a synchronous requests.get froze the whole UI
+        # on navigation to the Store. We render the local plugins immediately and
+        # fold in remote-only plugins when they arrive (_fetch_remote_async →
+        # _on_remote_loaded).
+        available_remote = getattr(self, "_remote_cache", None)
+        plugins = self._build_plugin_list(available_remote or [])
 
-        # Sort by name for the store
-        plugins = sorted(plugins, key=lambda x: x.get_name())
-
-        # Deduplicate list by ID to be absolutely safe
-        unique_plugins = []
-        seen_store_ids = set()
-        for p in plugins:
-            if p.id not in seen_store_ids:
-                unique_plugins.append(p)
-                seen_store_ids.add(p.id)
-        plugins = unique_plugins
-        
         # Store plugins for responsive rebuild
         self._store_plugins = plugins
-        
+
         from utils.logger import logger
         logger.info(f"Store: Rendering {len(plugins)} cards. IDs: {[p.id for p in plugins]}")
         
@@ -206,7 +170,100 @@ class Plugin(BasePlugin):
         # Bind resize handler to app window for responsive layout
         self._bind_responsive_resize(inject_store_buttons)
 
+        # On the first visit, fetch the remote plugin list in the background and
+        # fold it in when it lands. Cached afterwards, so revisits are instant
+        # and already complete (no fetch, no blip).
+        if available_remote is None:
+            self._fetch_remote_async()
+
         return self.main_frame
+
+    def _build_plugin_list(self, available_remote):
+        """Compose the Store's plugin list from local + already-fetched remote
+        data. Performs NO network I/O (safe to call on the build path)."""
+        manager = self.app.get_plugin_manager()
+        installed_plugins = manager.plugins
+        all_local_plugins = manager.load_plugins(include_uninstalled=True)
+        installed_ids = {p.id for p in installed_plugins}
+        local_ids = {p.id for p in all_local_plugins}
+
+        plugins = list(installed_plugins)
+        for lp in all_local_plugins:
+            if lp.id not in installed_ids:
+                lp.status = "Uninstalled"
+                plugins.append(lp)
+        for rp in available_remote:
+            if rp["id"] not in local_ids:
+                plugins.append(RemotePluginWrapper(self.app, rp))
+
+        # Keep remote data for restoration after uninstall.
+        self.remote_data_map = {rp["id"]: rp for rp in available_remote}
+
+        # Plugins hidden from the Store (still available in sidebar if installed)
+        HIDDEN_FROM_STORE = {"001", "004", "009", "010", "100"}  # Dashboard, Store, Help, Settings, Calculator
+        HIDDEN_NAMES = {"template"}  # Also hide by name for remote-only plugins
+        plugins = [
+            p for p in plugins
+            if p.id not in HIDDEN_FROM_STORE
+            and getattr(p, "name", "").lower() not in HIDDEN_NAMES
+        ]
+        plugins = sorted(plugins, key=lambda x: x.get_name())
+
+        # Deduplicate by ID to be safe.
+        unique_plugins, seen = [], set()
+        for p in plugins:
+            if p.id not in seen:
+                unique_plugins.append(p)
+                seen.add(p.id)
+        return unique_plugins
+
+    def _fetch_remote_async(self):
+        """Fetch the remote plugin list off the UI thread, then merge it in."""
+        import threading
+
+        def _work():
+            try:
+                data = self.app.get_plugin_manager().get_available_plugins()
+            except Exception:
+                data = []
+            try:
+                self.app.after(0, lambda: self._on_remote_loaded(data))
+            except Exception:
+                pass
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _on_remote_loaded(self, remote):
+        """Merge freshly-fetched remote plugins into the Store (main thread)."""
+        # Empty result means the fetch failed (or there genuinely are none).
+        # Don't cache it — leave _remote_cache unset so the next visit retries.
+        if not remote:
+            return
+        self._remote_cache = remote
+        # Bail if the Store screen was torn down while we were fetching.
+        if not (getattr(self, "main_frame", None)
+                and self.main_frame.winfo_exists()):
+            return
+
+        new_list = self._build_plugin_list(remote)
+        if [p.id for p in new_list] == [
+            p.id for p in getattr(self, "_store_plugins", [])
+        ]:
+            return  # nothing new to show
+
+        self._store_plugins = new_list
+
+        # Recompute responsive columns (same thresholds as create_main_screen)
+        # and rebuild the grid in one settled pass — no dance, no flicker.
+        screen_width = self.app.winfo_screenwidth()
+        window_width = self.app.winfo_width()
+        if window_width <= screen_width * 0.6:
+            max_cols, min_cols = 2, None
+        elif window_width >= screen_width * 0.9:
+            max_cols, min_cols = None, 4
+        else:
+            max_cols, min_cols = None, None
+        self._rebuild_grid(max_cols, min_cols, self._inject_store_buttons)
     
     def _bind_responsive_resize(self, inject_store_buttons):
         """
@@ -335,11 +392,18 @@ class Plugin(BasePlugin):
             r = index // len(cols)
             c = index % len(cols)
             card = self.app.create_plugin_card(
-                r, c, self.grid_frame, plugin, 
+                r, c, self.grid_frame, plugin,
                 show_description=True,
                 extra_buttons_func=inject_store_buttons
             )
             self.plugin_cards[plugin.id] = card
+
+        # Settle the rebuilt cards synchronously so a column-count change during
+        # resize lands in its final layout in one pass (no post-rebuild reflow).
+        try:
+            self.app._settle_screen(self.main_frame)
+        except Exception:
+            pass
 
     def _inject_store_buttons(self, container, p):
         """Helper to inject buttons with inline confirmation for uninstall."""

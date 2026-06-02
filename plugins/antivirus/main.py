@@ -453,7 +453,10 @@ class Plugin(BasePlugin):
             _resize_job[0] = self.app.after_idle(_do_layout)
 
         self.main_container.bind("<Configure>", _on_resize)
-        self.app.after(50, _do_layout)
+        # Synchronous finalizer: _settle_screen() runs the initial layout pass
+        # before reveal, so the content column is sized on first paint instead
+        # of jumping ~50 ms later. (<Configure> still handles genuine resizes.)
+        self.main_container._resistine_finalize = _do_layout
 
         return self.main_container
 
