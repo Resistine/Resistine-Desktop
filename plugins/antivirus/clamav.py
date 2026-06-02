@@ -138,6 +138,7 @@ elif _system == "Windows":
         find_certs_dir,
         get_db_info,
         get_realtime_status,
+        get_recent_threats,
         has_database,
         has_full_disk_access,
         is_app_bundle,
