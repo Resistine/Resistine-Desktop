@@ -14,6 +14,7 @@ import json
 import os
 import platform as _platform
 import threading
+import time
 import tkinter as tk
 from datetime import datetime, timedelta, timezone
 
@@ -27,12 +28,29 @@ from utils.logger import logger
 # matplotlib is imported lazily via _ensure_matplotlib() — see below. Pulling it
 # at module load adds ~200–500 ms to plugin discovery on the first run of the
 # app; deferring it means the Vulnerabilities/Events charts only pay that cost
-# the first time they're built.
+# the first time they're built. _ensure_matplotlib() also keeps pyplot out of
+# the import graph entirely and pins font.sans-serif to the bundled DejaVu Sans
+# so findfont skips the system-font scoring loop on every render.
 _Figure = None
 _FigureCanvasTkAgg = None
 
 
 def _ensure_matplotlib():
+    """Lazy-import matplotlib with the minimum footprint we can get away with.
+
+    Two deliberate omissions:
+
+    1. ``matplotlib.pyplot`` is never imported. pyplot is ~200KB of helpers
+       built around a global figure registry (``Gcf``) that this app doesn't
+       use — every chart is built via ``Figure(...)`` directly. Cleanup paths
+       call ``fig.clear()`` instead of ``pyplot.close()``.
+    2. ``font.sans-serif`` is pinned to the single bundled DejaVu Sans entry
+       so ``font_manager.findfont()`` returns on the first candidate. The
+       default sans-serif chain is ~10 fonts long, and findfont scores every
+       one of them against the system font cache on every render.
+
+    Don't undo either without re-measuring — the first-chart-render path
+    benefits from both."""
     global _Figure, _FigureCanvasTkAgg
     if _Figure is None:
         import logging as _logging
@@ -45,6 +63,13 @@ def _ensure_matplotlib():
         _logging.getLogger("matplotlib").setLevel(_logging.WARNING)
         import matplotlib
         matplotlib.use("TkAgg")
+        # Pin the font config before any Figure is constructed. DejaVu Sans
+        # ships with matplotlib, so findfont resolves on the first candidate
+        # without iterating the system font cache on each render. usetex is
+        # explicit so any conditional LaTeX-backend probe short-circuits.
+        matplotlib.rcParams["font.family"] = ["sans-serif"]
+        matplotlib.rcParams["font.sans-serif"] = ["DejaVu Sans"]
+        matplotlib.rcParams["text.usetex"] = False
         from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg as _FCA
         from matplotlib.figure import Figure as _F
         _Figure, _FigureCanvasTkAgg = _F, _FCA
@@ -385,12 +410,47 @@ _overview_early_loader_started = False
 _overview_early_loader_lock = threading.Lock()
 
 
+def _wait_for_vpn(poll_interval=2.0):
+    """Block until the VPN tunnel reports connected. The /api/v1/me/* host
+    is only reachable through the tunnel, so the preloader has to wait —
+    otherwise every GET errors out and the Overview cards land in their
+    "Couldn't load" state until something refreshes them.
+
+    Lazy-imports `is_vpn_connected` so this module stays usable in stripped
+    builds where the VPN plugin isn't shipped (the gate degrades to a no-op).
+    plugins.vpn.main exposes no event/observer for state changes, so polling
+    is the only option available today. Runs on the daemon preloader thread,
+    so an indefinite wait is bounded by process lifetime."""
+    try:
+        from plugins.vpn.main import is_vpn_connected
+    except ImportError:
+        logger.warning(
+            "[WAZUH-OVERVIEW] VPN plugin unavailable; preloader proceeding without VPN gate"
+        )
+        return
+
+    if is_vpn_connected():
+        return
+    logger.info(
+        "[WAZUH-OVERVIEW] Preloader waiting for VPN tunnel before fetching /me/* endpoints"
+    )
+    while not is_vpn_connected():
+        time.sleep(poll_interval)
+    logger.info("[WAZUH-OVERVIEW] VPN tunnel up — preloader proceeding")
+
+
 def _load_overview_early_async():
     """Sequentially fetch all five /me/* endpoints in the user-requested
     pre-warm order: agent → sca → hotfixes → vulnerabilities → inventory
     summary. Each sets its readiness event as it completes so cards on the
     Wazuh Overview tab can paint incrementally if the user navigates there
-    while this is still running."""
+    while this is still running.
+
+    Gated on VPN connectivity — the /me/* API is only reachable through the
+    tunnel, so the thread parks at _wait_for_vpn() until the user has the
+    VPN running."""
+    _wait_for_vpn()
+
     global _REMOTE_AGENT, _REMOTE_AGENT_ERROR
     _REMOTE_AGENT, _REMOTE_AGENT_ERROR = api_client.fetch_agent()
     _remote_agent_ready.set()
@@ -2569,8 +2629,10 @@ class Plugin(BasePlugin):
             fig = getattr(self, attr, None)
             if fig is not None:
                 try:
-                    import matplotlib.pyplot as _plt
-                    _plt.close(fig)
+                    # fig.clear() drops the Figure's Axes/Artist references
+                    # immediately. We deliberately avoid pyplot.close() — see
+                    # _ensure_matplotlib() for why.
+                    fig.clear()
                 except Exception:
                     pass
                 setattr(self, attr, None)
@@ -4326,8 +4388,8 @@ class Plugin(BasePlugin):
             self._module_resize_handler_id = None
         if self._event_chart_figure is not None:
             try:
-                import matplotlib.pyplot as _plt
-                _plt.close(self._event_chart_figure)
+                # See _ensure_matplotlib() — pyplot is never imported here.
+                self._event_chart_figure.clear()
             except Exception:
                 pass
             self._event_chart_figure = None
@@ -4336,8 +4398,8 @@ class Plugin(BasePlugin):
             fig = getattr(self, attr, None)
             if fig is not None:
                 try:
-                    import matplotlib.pyplot as _plt
-                    _plt.close(fig)
+                    # See _ensure_matplotlib() — pyplot is never imported here.
+                    fig.clear()
                 except Exception:
                     pass
                 setattr(self, attr, None)
