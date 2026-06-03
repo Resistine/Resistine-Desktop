@@ -114,56 +114,72 @@ def check_service_status(tunnel_name: str, test_ip: str = None) -> str:
 def generate_wireguard_keys() -> dict | None:
     """Generate a WireGuard public/private key pair.
 
-    Tries wg.exe first, falls back to Python cryptography library.
+    Uses the bundled ``cryptography`` library (X25519/Curve25519), which
+    produces standards-compliant WireGuard keys entirely in-process. We avoid
+    shelling out to wg.exe: some WireGuard builds ship a wg.exe that fails to
+    initialize when launched from a windowless GUI process, raising error
+    0xc0000142 and popping a modal "application was unable to start correctly"
+    dialog at the user. wg.exe is only tried as a last resort if the
+    cryptography library is somehow unavailable.
+
     Returns dict with 'private_key' and 'public_key', or None on failure.
     """
+    keys = _generate_keys_fallback()
+    if keys:
+        return keys
+
+    # Last resort: only reached if the cryptography library is unavailable.
     wg_cli = find_wg_cli()
     if wg_cli:
         try:
             private_key = subprocess.check_output(
-                [wg_cli, "genkey"], text=True
+                [wg_cli, "genkey"], text=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             ).strip()
             public_key = subprocess.check_output(
-                [wg_cli, "pubkey"], input=private_key, text=True
+                [wg_cli, "pubkey"], input=private_key, text=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             ).strip()
             logger.info("WireGuard keys generated via wg.exe")
             return {"private_key": private_key, "public_key": public_key}
-        except subprocess.CalledProcessError as e:
+        except Exception as e:
             logger.warning(f"wg.exe key generation failed: {e}")
 
-    logger.info("Falling back to Python key generation")
-    return _generate_keys_fallback()
+    return None
 
 
 def _generate_keys_fallback() -> dict | None:
-    """Fallback key generation using the cryptography library."""
+    """Generate a WireGuard key pair using the cryptography library.
+
+    Returns None if the cryptography library is unavailable so the caller can
+    fall back to wg.exe — never returns a random (non-matching) public key,
+    which would silently break the tunnel.
+    """
     try:
         import base64
         import secrets
 
-        private_key_bytes = secrets.token_bytes(32)
-        private_key = base64.b64encode(private_key_bytes).decode()
-
         try:
             from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
             from cryptography.hazmat.primitives import serialization
-
-            x25519_private = X25519PrivateKey.from_private_bytes(private_key_bytes)
-            public_key_bytes = x25519_private.public_key().public_bytes(
-                encoding=serialization.Encoding.Raw,
-                format=serialization.PublicFormat.Raw,
-            )
-            public_key = base64.b64encode(public_key_bytes).decode()
-            logger.info("WireGuard keys generated via cryptography library")
-            return {"private_key": private_key, "public_key": public_key}
-
         except ImportError:
-            logger.warning("cryptography library not available, using random bytes for public key")
-            public_key = base64.b64encode(secrets.token_bytes(32)).decode()
-            return {"private_key": private_key, "public_key": public_key}
+            logger.warning("cryptography library not available for key generation")
+            return None
+
+        private_key_bytes = secrets.token_bytes(32)
+        private_key = base64.b64encode(private_key_bytes).decode()
+
+        x25519_private = X25519PrivateKey.from_private_bytes(private_key_bytes)
+        public_key_bytes = x25519_private.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        public_key = base64.b64encode(public_key_bytes).decode()
+        logger.info("WireGuard keys generated via cryptography library")
+        return {"private_key": private_key, "public_key": public_key}
 
     except Exception as e:
-        logger.error(f"Fallback key generation failed: {e}")
+        logger.error(f"Key generation failed: {e}")
         return None
 
 
