@@ -84,11 +84,12 @@ def _normalize_cve(raw):
     """Map a raw /me/vulnerabilities CVE record to the UI's expected shape.
 
     The live API uses Wazuh-Indexer-shaped fields (cve / cvss3_score / package
-    / version / published / updated). The Vulnerabilities pane reads
-    id / cvss_score / package_name / package_version / detection_date /
-    modified_date / severity (lowercase) — so remap here once instead of
-    touching every UI call site. Each fallback also accepts the UI-name so a
-    future API change to those names keeps working without a client update."""
+    / version / published / updated / first_detected_at). The Vulnerabilities
+    pane reads id / cvss_score / package_name / package_version /
+    first_detected_at / published_date / modified_date / severity (lowercase)
+    — so remap here once instead of touching every UI call site. Each fallback
+    also accepts the UI-name so a future API change to those names keeps
+    working without a client update."""
     if not isinstance(raw, dict):
         return {}
     score = raw.get("cvss3_score")
@@ -105,10 +106,15 @@ def _normalize_cve(raw):
         "package_version": raw.get("version") or raw.get("package_version") or "",
         "description": raw.get("description") or "",
         "status": raw.get("status"),
-        # detection_date is the per-device detection time; published_date is the
-        # upstream CVE disclosure date. Kept separate so the detail panel can
-        # render both when the live response carries them.
-        "detection_date": raw.get("detected_at") or raw.get("detection_date"),
+        # first_detected_at is the immutable first sighting of this CVE on
+        # this device (sourced from the alerts index when the per-device
+        # endpoint is called with with_first_seen=true). When the alerts
+        # index has no record (server returns null — empirically the common
+        # case today), fall back to detected_at (last full scan) so the
+        # timeline chart + detail panel still render meaningful dates. Once
+        # the server backfills the alerts index, the field naturally
+        # becomes true first-sighting without a code change.
+        "first_detected_at": raw.get("first_detected_at") or raw.get("detected_at"),
         "published_date": raw.get("published"),
         "modified_date": raw.get("updated") or raw.get("modified_date"),
     }
@@ -137,14 +143,46 @@ def fetch_vulnerabilities(agent_id=None):
     return None, "bad shape"
 
 
-def fetch_device_vulnerabilities(agent_id):
+def fetch_vulnerabilities_summary():
+    """GET /api/v1/me/vulnerabilities (group-level summary).
+
+    Returns the raw response dict — kept un-normalized because consumers
+    read the top-level `by_severity` map directly to drive the Overview
+    Vulnerabilities card and the donut. Single indexer aggregation
+    server-side; cheap (~370ms vs ~1.5s for the full per-device fan-out)
+    so the Overview card can paint long before per-device data lands.
+
+    Caveats baked into the response:
+      - per-device `top_cves` is capped at 50 even when `top` is larger,
+        so this isn't a drop-in replacement for `fetch_all_vulnerabilities`
+        when callers need the full row set (e.g. the table).
+      - `first_detected_at` is NOT in the summary payload — the timeline
+        chart still requires per-device fetches.
+
+    Response shape (relevant keys):
+      total_devices: int
+      total_vulnerabilities: int
+      by_severity: {critical, high, medium, low: int}
+      devices: [{agent_id, total, by_severity, top_cves: [...]}]"""
+    payload, err = _get("/api/v1/me/vulnerabilities", params={"top": 5})
+    if err:
+        return None, err
+    if not isinstance(payload, dict):
+        return None, "bad shape"
+    return payload, None
+
+
+def fetch_device_vulnerabilities(agent_id, with_first_seen=True):
     """GET /api/v1/me/vulnerabilities/{agent_id}. Returns the full per-device
     CVE list in the UI's normalized shape (see _normalize_cve).
 
-    This is the new path-id endpoint introduced when /me/vulnerabilities was
-    redesigned into a summary (top-N-per-device preview). For the full list
-    of CVEs on one device, the API now requires hitting this endpoint."""
-    payload, err = _get(f"/api/v1/me/vulnerabilities/{agent_id}")
+    `with_first_seen=True` (default) asks the server to enrich each CVE with
+    `first_detected_at` from the alerts index — the immutable first sighting
+    on this device, used by both the detail panel and the timeline chart.
+    Costs one extra indexer query per device per the API spec; cheap enough
+    relative to the per-device fetch baseline."""
+    params = {"with_first_seen": "true"} if with_first_seen else None
+    payload, err = _get(f"/api/v1/me/vulnerabilities/{agent_id}", params=params)
     if err:
         return None, err
     if isinstance(payload, dict):

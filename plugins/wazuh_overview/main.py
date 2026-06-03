@@ -425,6 +425,15 @@ _REMOTE_VULNS = []
 _REMOTE_VULNS_ERROR = None
 _remote_vulns_ready = threading.Event()
 
+# Group-level vulnerability summary (by_severity counts + per-device totals).
+# Lands ~370 ms after preloader start vs ~1.5 s for the full per-device fan-out,
+# so the Overview Vulnerabilities card paints from this rather than waiting on
+# the heavier _REMOTE_VULNS. Full row data still comes from _REMOTE_VULNS — the
+# summary is capped at 50 CVEs per device and lacks first_detected_at.
+_REMOTE_VULNS_SUMMARY = None
+_REMOTE_VULNS_SUMMARY_ERROR = None
+_remote_vulns_summary_ready = threading.Event()
+
 _REMOTE_SCA = []
 _REMOTE_SCA_ERROR = None
 _remote_sca_ready = threading.Event()
@@ -533,19 +542,32 @@ def _load_overview_early_async():
         global _REMOTE_VULNS, _REMOTE_VULNS_ERROR
         # Pass the cached device list so fetch_all_vulnerabilities skips the
         # duplicate /me/inventory call. Per-device CVE fetches inside are
-        # also parallel — see api_client.fetch_all_vulnerabilities.
+        # also parallel — see api_client.fetch_all_vulnerabilities. Each
+        # per-device GET is now with_first_seen=true so the table + timeline
+        # chart get the immutable first-sighting date.
         data, err = api_client.fetch_all_vulnerabilities(devices=devices)
         if data is not None:
             _REMOTE_VULNS = data
         _REMOTE_VULNS_ERROR = err
         _remote_vulns_ready.set()
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
+    def _do_vulns_summary():
+        global _REMOTE_VULNS_SUMMARY, _REMOTE_VULNS_SUMMARY_ERROR
+        # Fast group-level aggregation (~370 ms). Drives the Overview vuln
+        # card so it paints without waiting on the slower per-device fan-out.
+        data, err = api_client.fetch_vulnerabilities_summary()
+        if data is not None:
+            _REMOTE_VULNS_SUMMARY = data
+        _REMOTE_VULNS_SUMMARY_ERROR = err
+        _remote_vulns_summary_ready.set()
+
+    with ThreadPoolExecutor(max_workers=5) as ex:
         futures = [
             ex.submit(_do_agent),
             ex.submit(_do_sca),
             ex.submit(_do_hotfixes),
             ex.submit(_do_vulns),
+            ex.submit(_do_vulns_summary),
         ]
         for f in as_completed(futures):
             # Surface unexpected exceptions to the log; the per-fetch error
@@ -582,10 +604,15 @@ def _kick_overview_api_loader():
 def _ready_mask():
     """Bitmask of which remote slots have completed (any state: data or error).
     Used by the refresh poll to detect transitions without re-rendering on
-    every 100 ms tick."""
+    every 100 ms tick.
+
+    Bit 2 tracks the vulns SUMMARY (not the full per-device data) because
+    the Overview vuln card reads from the summary — that's the slot whose
+    arrival should trigger a card repaint. _remote_vulns_ready is consumed
+    directly by the Vulnerabilities tab, which has its own readiness poll."""
     return (
         (1 if _remote_agent_ready.is_set() else 0)
-        | (2 if _remote_vulns_ready.is_set() else 0)
+        | (2 if _remote_vulns_summary_ready.is_set() else 0)
         | (4 if _remote_sca_ready.is_set() else 0)
         | (8 if _remote_inventory_ready.is_set() else 0)
         | (16 if _remote_hotfixes_ready.is_set() else 0)
@@ -1565,11 +1592,22 @@ class Plugin(BasePlugin):
         title = "Vulnerabilities"
         desc = "CVEs across installed packages"
         target = "Vulnerabilities"
-        if not _remote_vulns_ready.is_set():
+        # Counts come from /me/vulnerabilities (group-level summary) which
+        # lands ~4x faster than the per-device fan-out. The full per-device
+        # CVE list (_REMOTE_VULNS) is only needed by the Vulnerabilities
+        # tab's table + timeline chart.
+        if not _remote_vulns_summary_ready.is_set():
             return _loading_card(title, desc, target_tab=target)
-        if _REMOTE_VULNS_ERROR:
+        if _REMOTE_VULNS_SUMMARY_ERROR or not isinstance(_REMOTE_VULNS_SUMMARY, dict):
             return _error_card(title, desc, target_tab=target)
-        counts = _bucket_by_severity(_REMOTE_VULNS)
+
+        by_sev = _REMOTE_VULNS_SUMMARY.get("by_severity") or {}
+        # The server's by_severity keys are capitalized ("Critical", "High"...);
+        # our level constants are lowercase. Normalize both sides.
+        counts = {
+            lvl: int(by_sev.get(lvl.capitalize(), by_sev.get(lvl, 0)) or 0)
+            for lvl in _SEVERITY_LEVELS
+        }
         total = sum(counts.values())
         if total == 0:
             return {
@@ -3102,7 +3140,12 @@ class Plugin(BasePlugin):
                 pass
 
     def _bucket_vulns_daily(self):
-        """Group CVEs into 30 daily buckets ending today (UTC) by detection_date."""
+        """Group CVEs into 30 daily buckets ending today (UTC) by
+        first_detected_at — the immutable first-sighting date from the alerts
+        index, populated when per-device fetches are called with
+        with_first_seen=true. Using last-scan detection here would re-bucket
+        every CVE on each scan, so the timeline would only ever show the
+        last 30 days of scan activity rather than 30 days of NEW CVEs."""
         today = datetime.now(timezone.utc).date()
         vulns = _REMOTE_VULNS
         device = self._vuln_device
@@ -3118,7 +3161,7 @@ class Plugin(BasePlugin):
         for v in vulns:
             if device and device != self._VULN_DEVICE_ALL and v.get("agent_name") != device:
                 continue
-            ts = v.get("detection_date") or ""
+            ts = v.get("first_detected_at") or ""
             sev = (v.get("severity") or "").lower()
             if sev not in _SEVERITY_LEVELS or not ts:
                 continue
@@ -3144,7 +3187,7 @@ class Plugin(BasePlugin):
 
         customtkinter.CTkLabel(
             card,
-            text="CVSS DISTRIBUTION — LAST 30 DAYS",
+            text="FIRST DETECTED — LAST 30 DAYS",
             text_color=text_secondary,
             font=customtkinter.CTkFont(size=11, weight="bold"),
         ).grid(row=0, column=0, sticky="w", padx=14, pady=(12, 6))
@@ -3656,7 +3699,7 @@ class Plugin(BasePlugin):
             rows.append(("DEVICE", device, None))
 
         for label, key in (
-            ("DETECTED", "detection_date"),
+            ("FIRST DETECTED", "first_detected_at"),
             ("PUBLISHED", "published_date"),
             ("LAST MODIFIED", "modified_date"),
         ):
