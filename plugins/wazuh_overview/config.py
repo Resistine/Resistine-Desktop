@@ -18,3 +18,9 @@ REQUEST_TIMEOUT = 10.0
 # Matches the API's documented default; explicit so callers don't depend on the
 # server-side default not changing.
 VULN_FETCH_LIMIT = 500
+
+# Per-host concurrency cap for per-device fan-out (vulnerabilities + inventory
+# detail). Stays at/under urllib3's default pool_maxsize=10 so no Session
+# tuning is needed. Empirically 8 is past the efficiency knee for this API
+# without producing 5xx or queueing on the server.
+MAX_PARALLEL_FETCHES = 8

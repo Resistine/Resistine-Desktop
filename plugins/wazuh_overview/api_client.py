@@ -15,11 +15,13 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
 from plugins.wazuh_overview.config import (
     API_BASE_URL,
+    MAX_PARALLEL_FETCHES,
     REQUEST_TIMEOUT,
     VULN_FETCH_LIMIT,
 )
@@ -155,43 +157,59 @@ def fetch_device_vulnerabilities(agent_id):
     return None, "bad shape"
 
 
-def fetch_all_vulnerabilities():
-    """Fetch CVEs across every device on the caller's account by looping
-    `fetch_inventory_full()` -> `fetch_device_vulnerabilities(agent_id)` and
+def fetch_all_vulnerabilities(devices=None):
+    """Fetch CVEs across every device on the caller's account by calling
+    `fetch_device_vulnerabilities(agent_id)` per device IN PARALLEL and
     stamping each returned CVE with its origin `agent_id` + `agent_name`.
+
+    Pass `devices` to skip the internal `fetch_inventory_full()` call when
+    the caller already has the device list cached (the preloader does — see
+    main.py:_load_overview_early_async). When omitted, the device list is
+    fetched here for self-contained use.
+
+    Per-device fan-out runs through a ThreadPoolExecutor capped at
+    `MAX_PARALLEL_FETCHES` (see config.py) so wall-clock = max(per-device
+    time) instead of sum. The cap is well under urllib3's default
+    pool_maxsize and past the efficiency knee on this API.
 
     Partial-success contract: returns (merged_list, None) when at least one
     per-device fetch succeeded; returns (None, "all device fetches failed")
-    only when every device errored. The Vulnerabilities pane's loading and
-    error branches consume this directly via _REMOTE_VULNS / _REMOTE_VULNS_ERROR.
+    only when every device errored."""
+    if devices is None:
+        devices, err = fetch_inventory_full()
+        if err:
+            return None, err
 
-    TODO: dedupe the fetch_inventory_full call with main.py:_load_all_agents
-    (Inventory tab loader), which paginates the same endpoint independently.
-    Sequential cost is small for typical device counts (1–10)."""
-    devices, err = fetch_inventory_full()
-    if err:
-        return None, err
+    by_id = {
+        d.get("agent_id"): d
+        for d in (devices or [])
+        if d.get("agent_id")
+    }
+    if not by_id:
+        return [], None
 
+    workers = min(len(by_id), MAX_PARALLEL_FETCHES)
     merged = []
     failures = 0
-    total = 0
-    for d in devices or []:
-        aid = d.get("agent_id")
-        if not aid:
-            continue
-        total += 1
-        cves, derr = fetch_device_vulnerabilities(aid)
-        if derr:
-            failures += 1
-            logger.warning(f"Vulnerabilities: fetch for agent {aid} failed: {derr}")
-            continue
-        name = d.get("agent_name") or ""
-        for c in cves or []:
-            c["agent_id"] = aid
-            c["agent_name"] = name
-        merged.extend(cves or [])
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        future_to_aid = {
+            ex.submit(fetch_device_vulnerabilities, aid): aid
+            for aid in by_id
+        }
+        for future in as_completed(future_to_aid):
+            aid = future_to_aid[future]
+            cves, derr = future.result()
+            if derr:
+                failures += 1
+                logger.warning(f"Vulnerabilities: fetch for agent {aid} failed: {derr}")
+                continue
+            name = by_id[aid].get("agent_name") or ""
+            for c in cves or []:
+                c["agent_id"] = aid
+                c["agent_name"] = name
+            merged.extend(cves or [])
 
-    if total > 0 and failures == total:
+    if failures == len(by_id):
         return None, "all device fetches failed"
     return merged, None
 

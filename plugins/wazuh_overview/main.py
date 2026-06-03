@@ -16,6 +16,7 @@ import platform as _platform
 import threading
 import time
 import tkinter as tk
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 
 import customtkinter
@@ -23,6 +24,7 @@ from customtkinter import ThemeManager
 
 from plugins.base_plugin import BasePlugin
 from plugins.wazuh_overview import api_client
+from plugins.wazuh_overview.config import MAX_PARALLEL_FETCHES
 from utils.logger import logger
 
 # matplotlib is imported lazily via _ensure_matplotlib() — see below. Pulling it
@@ -326,36 +328,71 @@ def _shape_inventory_agent(summary, detail):
     }
 
 
-def _load_all_agents():
+def _load_all_agents(devices=None):
     """Fetch the device list from /api/v1/me/inventory and per-device detail
-    from /api/v1/me/inventory/{id}, returning agent dicts in the legacy shape
-    the Inventory tab consumes. Sequential per-device fetches — fine for the
-    small group sizes this API serves (typical: 1–10 devices)."""
-    devices, err = api_client.fetch_inventory_full()
-    if err:
-        logger.error(f"Inventory: fetch_inventory_full failed: {err}")
-        return []
+    from /api/v1/me/inventory/{id} IN PARALLEL, returning agent dicts in the
+    legacy shape the Inventory tab consumes.
+
+    Pass `devices` to skip the internal `fetch_inventory_full()` call when the
+    caller already has the device list cached (the preloader caches it via
+    `_REMOTE_INVENTORY`). When omitted, the device list is fetched here for
+    self-contained use (Inventory tab opened before the preloader finished).
+
+    Per-device fan-out runs through a ThreadPoolExecutor capped at
+    `MAX_PARALLEL_FETCHES`. Wall-clock collapses from `sum(per-device)` to
+    `max(per-device)` — significant for groups with a slow outlier device."""
+    if devices is None:
+        devices, err = api_client.fetch_inventory_full()
+        if err:
+            logger.error(f"Inventory: fetch_inventory_full failed: {err}")
+            return []
     if not devices:
         return []
 
+    ided = [(d.get("agent_id"), d) for d in devices]
+    fetchable = [(aid, d) for aid, d in ided if aid]
+    no_id = [(aid, d) for aid, d in ided if not aid]
+
+    detail_by_aid = {}
+    if fetchable:
+        workers = min(len(fetchable), MAX_PARALLEL_FETCHES)
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            future_to_aid = {
+                ex.submit(api_client.fetch_device_inventory, aid): aid
+                for aid, _ in fetchable
+            }
+            for future in as_completed(future_to_aid):
+                aid = future_to_aid[future]
+                detail, derr = future.result()
+                if derr:
+                    logger.warning(
+                        f"Inventory: fetch_device_inventory({aid}) failed: {derr}"
+                    )
+                detail_by_aid[aid] = detail
+
     out = []
-    for d in devices:
-        agent_id = d.get("agent_id")
-        detail = None
-        if agent_id:
-            detail, derr = api_client.fetch_device_inventory(agent_id)
-            if derr:
-                logger.warning(
-                    f"Inventory: fetch_device_inventory({agent_id}) failed: {derr}"
-                )
-        out.append(_shape_inventory_agent(d, detail))
+    for aid, d in fetchable:
+        out.append(_shape_inventory_agent(d, detail_by_aid.get(aid)))
+    for _, d in no_id:
+        out.append(_shape_inventory_agent(d, None))
     return out
 
 
 def _load_agents_async():
     global _AGENTS
     try:
-        _AGENTS = _load_all_agents()
+        # If the preloader has already cached the device list under
+        # _REMOTE_INVENTORY, hand it in so _load_all_agents skips the
+        # /me/inventory call entirely and goes straight to the parallel
+        # per-device fan-out. If the preloader hasn't completed yet (rare —
+        # Inventory tab opened mid-preload), pass None so _load_all_agents
+        # fetches the list itself.
+        cached = None
+        if _remote_inventory_ready.is_set() and isinstance(_REMOTE_INVENTORY, dict):
+            items = _REMOTE_INVENTORY.get("items")
+            if isinstance(items, list) and items:
+                cached = items
+        _AGENTS = _load_all_agents(devices=cached)
     finally:
         _agents_ready.set()
 
@@ -440,52 +477,83 @@ def _wait_for_vpn(poll_interval=2.0):
 
 
 def _load_overview_early_async():
-    """Sequentially fetch all five /me/* endpoints in the user-requested
-    pre-warm order: agent → sca → hotfixes → vulnerabilities → inventory
-    summary. Each sets its readiness event as it completes so cards on the
-    Wazuh Overview tab can paint incrementally if the user navigates there
-    while this is still running.
+    """Fetch all /me/* endpoints in parallel, after waiting for the VPN.
 
-    Gated on VPN connectivity — the /me/* API is only reachable through the
-    tunnel, so the thread parks at _wait_for_vpn() until the user has the
-    VPN running."""
+    Strategy:
+      1. Park until the VPN tunnel is up — every endpoint is behind it.
+      2. Fetch /me/inventory once and cache the device list. The summary card
+         is derived from the cached list (no separate /me/inventory?limit=1
+         call). The cached list is also fed into fetch_all_vulnerabilities so
+         it doesn't repeat the /me/inventory call internally. Three list calls
+         become one.
+      3. Fan out the remaining four endpoints (agent, sca, hotfixes,
+         vulnerabilities) on a ThreadPoolExecutor. Each thread owns its own
+         module global, so no locking is needed (single-statement assignment
+         + GIL = safe). Each sets its readiness event the moment it completes
+         so the Overview cards paint in completion order.
+
+    Net effect: total preloader wall-clock drops from ~sum(all endpoints) to
+    ~max(inventory + slowest-of-four-parallel-fetches)."""
     _wait_for_vpn()
 
-    global _REMOTE_AGENT, _REMOTE_AGENT_ERROR
-    _REMOTE_AGENT, _REMOTE_AGENT_ERROR = api_client.fetch_agent()
-    _remote_agent_ready.set()
-
-    global _REMOTE_SCA, _REMOTE_SCA_ERROR
-    data, err = api_client.fetch_sca()
-    if data is not None:
-        _REMOTE_SCA = data
-    _REMOTE_SCA_ERROR = err
-    _remote_sca_ready.set()
-
-    global _REMOTE_HOTFIXES, _REMOTE_HOTFIXES_ERROR
-    data, err = api_client.fetch_hotfixes()
-    if data is not None:
-        _REMOTE_HOTFIXES = data
-    _REMOTE_HOTFIXES_ERROR = err
-    _remote_hotfixes_ready.set()
-
-    global _REMOTE_VULNS, _REMOTE_VULNS_ERROR
-    # fetch_all_vulnerabilities loops fetch_inventory_full → fetch_vulnerabilities
-    # per device, stamping agent_id + agent_name on every CVE so the
-    # Vulnerabilities pane can attribute rows per-device. Sequential N+1 GETs;
-    # acceptable cost for typical device counts.
-    data, err = api_client.fetch_all_vulnerabilities()
-    if data is not None:
-        _REMOTE_VULNS = data
-    _REMOTE_VULNS_ERROR = err
-    _remote_vulns_ready.set()
+    # Step 1: inventory list, fetched once. Both the inventory summary card
+    # and fetch_all_vulnerabilities consume this.
+    devices, devices_err = api_client.fetch_inventory_full()
 
     global _REMOTE_INVENTORY, _REMOTE_INVENTORY_ERROR
-    data, err = api_client.fetch_inventory_summary()
-    if data is not None:
-        _REMOTE_INVENTORY = data
-    _REMOTE_INVENTORY_ERROR = err
+    if devices is None:
+        _REMOTE_INVENTORY_ERROR = devices_err
+    else:
+        _REMOTE_INVENTORY = {"total": len(devices), "items": list(devices)}
     _remote_inventory_ready.set()
+
+    # Step 2: fan out the four endpoints that don't share state.
+    def _do_agent():
+        global _REMOTE_AGENT, _REMOTE_AGENT_ERROR
+        _REMOTE_AGENT, _REMOTE_AGENT_ERROR = api_client.fetch_agent()
+        _remote_agent_ready.set()
+
+    def _do_sca():
+        global _REMOTE_SCA, _REMOTE_SCA_ERROR
+        data, err = api_client.fetch_sca()
+        if data is not None:
+            _REMOTE_SCA = data
+        _REMOTE_SCA_ERROR = err
+        _remote_sca_ready.set()
+
+    def _do_hotfixes():
+        global _REMOTE_HOTFIXES, _REMOTE_HOTFIXES_ERROR
+        data, err = api_client.fetch_hotfixes()
+        if data is not None:
+            _REMOTE_HOTFIXES = data
+        _REMOTE_HOTFIXES_ERROR = err
+        _remote_hotfixes_ready.set()
+
+    def _do_vulns():
+        global _REMOTE_VULNS, _REMOTE_VULNS_ERROR
+        # Pass the cached device list so fetch_all_vulnerabilities skips the
+        # duplicate /me/inventory call. Per-device CVE fetches inside are
+        # also parallel — see api_client.fetch_all_vulnerabilities.
+        data, err = api_client.fetch_all_vulnerabilities(devices=devices)
+        if data is not None:
+            _REMOTE_VULNS = data
+        _REMOTE_VULNS_ERROR = err
+        _remote_vulns_ready.set()
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futures = [
+            ex.submit(_do_agent),
+            ex.submit(_do_sca),
+            ex.submit(_do_hotfixes),
+            ex.submit(_do_vulns),
+        ]
+        for f in as_completed(futures):
+            # Surface unexpected exceptions to the log; the per-fetch error
+            # path already populates _REMOTE_*_ERROR for expected failures.
+            try:
+                f.result()
+            except Exception as e:
+                logger.error(f"[WAZUH-OVERVIEW] preloader thread crashed: {e}")
 
 
 def _kick_overview_early_loader():
