@@ -76,6 +76,15 @@ Root: HKLM64; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType
 [Run]
 Filename: "{app}\Resistine.exe"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent; Check: ShouldPerformInstallAction
 
+[UninstallDelete]
+; Inno Setup only removes files recorded in its install manifest. Python
+; generates __pycache__\*.pyc bytecode (e.g. windows_vpn_service.cpython-XX.pyc)
+; at runtime, and other components may drop logs/configs inside {app}. These
+; untracked files keep {app} non-empty so it survives uninstall and triggers a
+; "folder already exists" warning on the next fresh install. Force-remove the
+; entire install tree so nothing lingers.
+Type: filesandordirs; Name: "{app}"
+
 [Code]
 type
   TMaintenanceAction = (maInstall, maReinstall, maUninstall);
@@ -437,6 +446,22 @@ begin
     Log('Bundled service cleanup script failed to launch');
 end;
 
+procedure ForceKillServiceProcess(const ServiceName: string);
+var
+  ResultCode: Integer;
+begin
+  { Force-kill the service's hosting process by PID. The ResistineVPN service
+    is hosted by PythonService.exe running windows_vpn_service.py from the
+    install folder; if it lingers after "sc stop" it keeps open handles on
+    files there (including runtime-generated __pycache__ .pyc files), which
+    blocks folder removal. Querying the live service for its PID lets us target
+    only that process instead of killing unrelated python hosts. }
+  RunHiddenCmd(
+    'powershell -NoProfile -Command "$s = Get-CimInstance Win32_Service -Filter \"Name=''' + ServiceName + '''\"; ' +
+    'if ($s -and $s.ProcessId -gt 0) { Stop-Process -Id $s.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>nul',
+    ResultCode);
+end;
+
 procedure StopAndDeleteService(const ServiceName: string);
 var
   I: Integer;
@@ -446,7 +471,13 @@ begin
     exit;
 
   RunHiddenCmd('sc stop ' + QuotePath(ServiceName) + ' >nul 2>nul', ResultCode);
-  WaitForServiceStoppedOrAbsent(ServiceName, 10, 1000);
+  WaitForServiceStoppedOrAbsent(ServiceName, 15, 1000);
+
+  { Ensure the hosting process is gone (releases file handles on the install
+    folder) before deleting the registration. Must run while the service still
+    exists so its PID is queryable. }
+  ForceKillServiceProcess(ServiceName);
+  Sleep(750);
 
   for I := 0 to 4 do
   begin
@@ -1783,15 +1814,36 @@ var
   ResultCode: Integer;
 begin
   { Stop and uninstall Wazuh agent }
-  if HiddenCmdSucceeded('sc query WazuhSvc >nul 2>nul') then
+  if HiddenCmdSucceeded('sc query WazuhSvc >nul 2>nul') or
+     DirExists('C:\Program Files (x86)\ossec-agent') then
   begin
     Log('Uninstall cleanup: stopping WazuhSvc');
     RunHiddenCmd('sc stop WazuhSvc >nul 2>nul', ResultCode);
-    WaitForServiceStoppedOrAbsent('WazuhSvc', 10, 1000);
+    WaitForServiceStoppedOrAbsent('WazuhSvc', 15, 1000);
+
+    { Uninstall via the MSI product registered in the Uninstall registry hive.
+      wmic is deprecated and absent on newer Windows 11 builds, so resolve the
+      product GUID from the registry and drive msiexec directly. }
+    Log('Uninstall cleanup: uninstalling Wazuh agent MSI');
     RunHiddenCmd(
-      'wmic product where "Name like ''%Wazuh%''" call uninstall /nointeractive >nul 2>nul',
+      'powershell -NoProfile -Command "' +
+      '$app = Get-ItemProperty ' +
+      '''HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'',' +
+      '''HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'' ' +
+      '-ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like ''*Wazuh*'' } | ' +
+      'Select-Object -First 1; ' +
+      'if ($app) { Start-Process msiexec.exe -ArgumentList ''/x'',$app.PSChildName,''/qn'',''/norestart'' -Wait }" >nul 2>nul',
       ResultCode);
-    Log('Wazuh uninstall exit code: ' + IntToStr(ResultCode));
+
+    { Fallback to wmic on older systems where it is still available. }
+    if HiddenCmdSucceeded('sc query WazuhSvc >nul 2>nul') then
+      RunHiddenCmd(
+        'wmic product where "Name like ''%Wazuh%''" call uninstall /nointeractive >nul 2>nul',
+        ResultCode);
+
+    { Guarantee the service registration is gone even if the MSI left it. }
+    StopAndDeleteService('WazuhSvc');
+    Log('Wazuh uninstall complete');
   end;
 
   { Remove Sysmon/Defender localfile blocks from ossec.conf }
@@ -1826,6 +1878,10 @@ begin
 
   { Remove Resistine Sysmon directory }
   DeleteDirectoryIfExists(ExpandConstant('{pf}\Resistine\Sysmon'));
+
+  { Remove any leftover Wazuh agent directory so the SIEM state is fully clean
+    and a fresh install re-enrolls from scratch. }
+  DeleteDirectoryIfExists('C:\Program Files (x86)\ossec-agent');
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
