@@ -1258,7 +1258,10 @@ class Plugin(BasePlugin):
             )
         if not targets:
             return
-        self._run_multi_scan(targets, label="Scan")
+        if len(targets) == 1:
+            self._run_scan(targets[0])
+        else:
+            self._run_multi_scan(targets, label="Scan")
 
     def _computer_scan_targets(self) -> list[str]:
         """Return the fixed list of directories scanned by 'Scan Computer'.
@@ -1353,6 +1356,7 @@ class Plugin(BasePlugin):
         }
 
         def _worker():
+            start = time.monotonic()
             for idx, target in enumerate(targets, 1):
                 if agg["cancelled"] or self._cancel_requested:
                     agg["cancelled"] = True
@@ -1421,11 +1425,19 @@ class Plugin(BasePlugin):
                 with self._scan_lock:
                     self._scan_handle = None
 
+            elapsed = time.monotonic() - start
+            mins, secs = divmod(int(elapsed), 60)
+            duration = (
+                f"{elapsed:.3f} sec ({mins} m {secs} s)"
+                if mins
+                else f"{elapsed:.3f} sec ({secs} s)"
+            )
             final = ScanResult(
                 target=label,
                 scanned=agg["scanned"],
                 infected=agg["infected"],
                 infections=agg["infections"],
+                duration=duration,
                 error="Scan cancelled." if agg["cancelled"] else "",
             )
             self.app.after(0, self._handle_scan_complete, final)
