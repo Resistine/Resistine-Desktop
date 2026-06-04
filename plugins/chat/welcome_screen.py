@@ -7,7 +7,7 @@ from typing import Callable
 
 import customtkinter
 
-from plugins.chat.fonts import RESISTINE_BLUE
+from plugins.chat.fonts import RESISTINE_BLUE, ui_family
 
 # Pool of suggestion prompts shown on the welcome screen.
 # 4 are picked at random each time the chat is opened.
@@ -65,7 +65,7 @@ class WelcomeScreen(customtkinter.CTkFrame):
             self,
             text="How can I help you today?",
             font=customtkinter.CTkFont(
-                family="Inter", size=24, weight="bold"),
+                family=ui_family(), size=24, weight="bold"),
             text_color=fg_color,
         )
         greeting_label.pack(pady=(0, 4))
@@ -73,7 +73,7 @@ class WelcomeScreen(customtkinter.CTkFrame):
         subtitle_label = customtkinter.CTkLabel(
             self,
             text="Ask me anything about cybersecurity",
-            font=customtkinter.CTkFont(family="Inter", size=14),
+            font=customtkinter.CTkFont(family=ui_family(), size=14),
             text_color=secondary,
         )
         subtitle_label.pack(pady=(0, 28))
@@ -85,7 +85,7 @@ class WelcomeScreen(customtkinter.CTkFrame):
 
         # Measure longest text to set uniform chip width
         import tkinter.font as tkfont
-        measure_font = tkfont.Font(family="Inter", size=13)
+        measure_font = tkfont.Font(family=ui_family(), size=13)
         longest_px = max(measure_font.measure(s) for s in suggestions)
         # dot(16+18) + text + arrow(20+18) + padding
         chip_width = longest_px + 100
@@ -98,7 +98,7 @@ class WelcomeScreen(customtkinter.CTkFrame):
         section_label = customtkinter.CTkLabel(
             chips_box, text="TRY ASKING",
             font=customtkinter.CTkFont(
-                family="Inter", size=11, weight="bold"),
+                family=ui_family(), size=11, weight="bold"),
             text_color=RESISTINE_BLUE, anchor="w",
         )
         section_label.pack(anchor="w", pady=(16, 8))
@@ -120,7 +120,7 @@ class WelcomeScreen(customtkinter.CTkFrame):
             # Suggestion text
             lbl = customtkinter.CTkLabel(
                 chip, text=suggestion,
-                font=customtkinter.CTkFont(family="Inter", size=13),
+                font=customtkinter.CTkFont(family=ui_family(), size=13),
                 text_color=chip_fg, fg_color="transparent",
                 anchor="w", justify="left")
             lbl.pack(side="left", fill="x", expand=True, pady=8)
@@ -184,7 +184,7 @@ class ApiKeyMissingScreen(customtkinter.CTkFrame):
         title_label = customtkinter.CTkLabel(
             self,
             text="API Key Required",
-            font=customtkinter.CTkFont(family="Inter", size=20, weight="bold"),
+            font=customtkinter.CTkFont(family=ui_family(), size=20, weight="bold"),
             text_color="#ffffff" if is_dark else "#000000",
         )
         title_label.pack(pady=(0, 6))
@@ -192,7 +192,7 @@ class ApiKeyMissingScreen(customtkinter.CTkFrame):
         desc_label = customtkinter.CTkLabel(
             self,
             text="Add your OpenAI API key in Settings to start chatting.",
-            font=customtkinter.CTkFont(family="Inter", size=14),
+            font=customtkinter.CTkFont(family=ui_family(), size=14),
             text_color=secondary,
         )
         desc_label.pack(pady=(0, 20))
@@ -200,7 +200,7 @@ class ApiKeyMissingScreen(customtkinter.CTkFrame):
         settings_btn = customtkinter.CTkButton(
             self,
             text="Open Settings",
-            font=customtkinter.CTkFont(family="Inter", size=13, weight="bold"),
+            font=customtkinter.CTkFont(family=ui_family(), size=13, weight="bold"),
             fg_color=RESISTINE_BLUE,
             hover_color="#1565B0",
             text_color="#ffffff",

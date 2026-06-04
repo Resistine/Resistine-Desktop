@@ -299,6 +299,7 @@ class MarkdownRenderer:
             w = CodeBlockWidget(
                 self._tw, content,
                 language=lang, is_dark=self._is_dark,
+                width=self._initial_code_width(),
             )
             self._tw.window_create("end", window=w, padx=0, pady=4,
                                    stretch=1)
@@ -316,6 +317,7 @@ class MarkdownRenderer:
         w = CodeBlockWidget(
             self._tw, "\n".join(box_lines),
             language="", is_dark=self._is_dark,
+            width=self._initial_code_width(),
         )
         self._tw.window_create("end", window=w, padx=0, pady=4,
                                stretch=1)
@@ -342,7 +344,7 @@ class MarkdownRenderer:
             self._first_line = False
         return i
 
-    def _on_embed_resize(self, _event=None) -> None:
+    def _on_embed_resize(self, event=None) -> None:
         """Refit when an embedded table/code block changes size.
 
         Embedded widgets settle asynchronously (TableWidget calls
@@ -358,6 +360,22 @@ class MarkdownRenderer:
         # _resize_to_fit loops forever.
         if self._in_resize or self._suppress_embed_resize:
             return
+        # Ignore pure POSITION changes. Scrolling the outer chat moves these
+        # embedded widgets, which fires <Configure> with an UNCHANGED width/
+        # height. Reacting to those re-runs _resize_to_fit (and its
+        # update_idletasks) on every scroll tick, which on Windows shows as
+        # text ghosting / re-rendering as you scroll. Only a real size change
+        # needs a refit. (Cross-platform-correct; also trims wasted work on
+        # macOS, where the repaint was simply not visible.)
+        if event is not None and getattr(event, "widget", None) is not None:
+            size = (event.width, event.height)
+            w = event.widget
+            if getattr(w, "_emb_last_size", None) == size:
+                return
+            try:
+                w._emb_last_size = size
+            except Exception:
+                pass
         if self._resize_timer:
             try:
                 self._parent.after_cancel(self._resize_timer)
@@ -461,6 +479,19 @@ class MarkdownRenderer:
                 if tw_width > 1:
                     padx = int(str(tw.cget("padx") or 0))
                     embed_w = tw_width - padx * 2
+                    # Clamp code-block frames so the right-aligned Copy button
+                    # can never overflow off-screen. A wide wrap="none" code
+                    # block inflates the textbox, so the raw embed_w can exceed
+                    # the bubble's real content area. self._max_width is the
+                    # bubble's intended (viewport-derived) content width and is
+                    # NOT inflated, so it is the reliable cap; we also cap by
+                    # the viewport canvas as a backstop. Tables keep the raw
+                    # embed_w — they carry their own canvas + h-scrollbar.
+                    cap = self._max_width - padx * 2
+                    vp_w = self._viewport_width()
+                    if vp_w > 1:
+                        cap = min(cap, vp_w - padx * 2)
+                    cb_embed_w = min(embed_w, cap) if cap > 1 else embed_w
                     for tbl in self._tables:
                         if getattr(tbl, "_rf_embed_w", None) != embed_w:
                             tbl._rf_embed_w = embed_w
@@ -489,24 +520,50 @@ class MarkdownRenderer:
                         except Exception:
                             pass
                     for cb in self._code_blocks:
-                        if getattr(cb, "_rf_w", None) != embed_w:
-                            cb._rf_w = embed_w
-                            cb.configure(width=embed_w)
+                        if getattr(cb, "_rf_w", None) != cb_embed_w:
+                            cb._rf_w = cb_embed_w
+                            cb.configure(width=cb_embed_w)
             except Exception:
                 pass
         except Exception:
             pass
         finally:
             self._in_resize = False
-            # Release suppression after Tk processes the geometry changes
-            # queued above, so their echo <Configure> events are ignored.
+            # Release suppression only after Tk has drained the <Configure>
+            # echoes queued by the configure() calls above. A single after_idle
+            # races those echoes (same idle phase, no ordering guarantee); chain
+            # a second so suppression outlives them and they cannot re-arm the
+            # 80ms refit timer in _on_embed_resize.
             try:
-                self._parent.after_idle(self._end_suppress_embed_resize)
+                self._parent.after_idle(
+                    self._parent.after_idle,
+                    self._end_suppress_embed_resize)
             except Exception:
                 self._suppress_embed_resize = False
 
     def _end_suppress_embed_resize(self) -> None:
         self._suppress_embed_resize = False
+
+    def _initial_code_width(self) -> int:
+        """Best initial width for a code block, so it renders full-width at
+        creation instead of popping from CTkFrame's ~200px default when the
+        first _resize_to_fit fires. Matches the final embed width formula:
+        bubble content width (self._max_width) minus the CTkTextbox pack padx
+        (16*2) and the inner tk.Text padx (8*2) = 48.
+        """
+        return max(self._max_width - 48, 120)
+
+    def _viewport_width(self) -> int:
+        """Width of the enclosing CTkScrollableFrame's viewport canvas, or 0."""
+        parent = self._parent
+        while parent is not None:
+            if isinstance(parent, customtkinter.CTkScrollableFrame):
+                try:
+                    return parent._parent_canvas.winfo_width()
+                except Exception:
+                    return 0
+            parent = getattr(parent, "master", None)
+        return 0
 
     def _update_width(self, max_width: int) -> None:
         """Refit after a resize."""

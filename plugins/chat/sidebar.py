@@ -6,7 +6,7 @@ from typing import Callable
 
 import customtkinter
 
-from plugins.chat.fonts import RESISTINE_BLUE
+from plugins.chat.fonts import RESISTINE_BLUE, ui_family
 
 
 def _time_ago(ts: float) -> str:
@@ -67,14 +67,14 @@ class ChatSidebar(customtkinter.CTkFrame):
         customtkinter.CTkLabel(
             hdr, text="HISTORY",
             font=customtkinter.CTkFont(
-                family="Inter", size=10, weight="bold"),
+                family=ui_family(), size=10, weight="bold"),
             text_color="#6B7280", anchor="w",
         ).grid(row=0, column=0, sticky="w", padx=4)
 
         customtkinter.CTkButton(
             hdr, text="+ New",
             font=customtkinter.CTkFont(
-                family="Inter", size=11, weight="bold"),
+                family=ui_family(), size=11, weight="bold"),
             fg_color=RESISTINE_BLUE, hover_color="#1565B0", text_color="#fff",
             corner_radius=7, height=26, width=60,
             command=self._on_new_chat,
@@ -98,7 +98,7 @@ class ChatSidebar(customtkinter.CTkFrame):
         if not sessions:
             customtkinter.CTkLabel(
                 self._list, text="No conversations",
-                font=customtkinter.CTkFont(family="Inter", size=12),
+                font=customtkinter.CTkFont(family=ui_family(), size=12),
                 text_color="#6B7280",
             ).pack(pady=30)
             return
@@ -135,13 +135,13 @@ class ChatSidebar(customtkinter.CTkFrame):
 
         lbl = customtkinter.CTkLabel(
             row, text=title,
-            font=customtkinter.CTkFont(family="Inter", size=12),
+            font=customtkinter.CTkFont(family=ui_family(), size=12),
             text_color=fg, anchor="w")
         lbl.grid(row=0, column=0, padx=(8, 2), sticky="ew")
 
         customtkinter.CTkLabel(
             row, text=_time_ago(updated),
-            font=customtkinter.CTkFont(family="Inter", size=10),
+            font=customtkinter.CTkFont(family=ui_family(), size=10),
             text_color="#6B7280", width=24,
         ).grid(row=0, column=1, padx=2)
 

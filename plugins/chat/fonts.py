@@ -20,10 +20,22 @@ import customtkinter
 RESISTINE_BLUE = "#0D5394"
 
 # -- Base metrics (px) --------------------------------------------------------
-_BASE_SIZE = 15
+# Body text size for AI responses (and, matched in bubble.py, user messages).
+_BASE_SIZE = 20
 _MONO_FAMILY = "Menlo" if sys.platform == "darwin" else "Consolas"
-_BODY_FAMILY = "Inter"
-_HEADING_SIZES = {"h1": 20, "h2": 18, "h3": 16, "h4": 15, "h5": 14, "h6": 13}
+
+# Heading sizes, kept ~5px above/around the body so the hierarchy holds.
+# Windows gets a small extra bump because its default UI font renders a touch
+# smaller/denser than macOS's system font at the same point size.
+if sys.platform.startswith("win"):
+    _HEADING_SIZES = {"h1": 27, "h2": 25, "h3": 22, "h4": 21, "h5": 20, "h6": 19}
+else:
+    _HEADING_SIZES = {"h1": 25, "h2": 23, "h3": 21, "h4": 20, "h5": 19, "h6": 18}
+
+# Resolved once, after a Tk root exists. The chat hard-coded "Inter" everywhere,
+# but Inter is never installed or registered, so on Windows Tk silently falls
+# back to a tiny default font. Resolve a real, installed UI family per OS.
+_BODY_FAMILY: str | None = None
 
 # -- Internal state -----------------------------------------------------------
 _font_cache: dict[str, tkFont.Font] | None = None
@@ -59,6 +71,53 @@ def _named(name: str, **kw: object) -> tkFont.Font:
         return tkFont.Font(name=name, exists=False, **kw)
 
 
+def _resolve_family() -> str:
+    """Return a real, installed UI font family for this platform.
+
+    Requires a Tk root (``tkFont.families`` needs one); every caller runs
+    inside widget construction, well after the App root exists. Result is
+    cached so every chat widget shares one identical family.
+    """
+    global _BODY_FAMILY
+    if _BODY_FAMILY is not None:
+        return _BODY_FAMILY
+    try:
+        available = {f.lower() for f in tkFont.families()}
+    except Exception:
+        available = set()
+    if sys.platform == "darwin":
+        prefs = ["Inter", "SF Pro Text", "Helvetica Neue", ".AppleSystemUIFont"]
+    elif sys.platform.startswith("win"):
+        prefs = ["Inter", "Segoe UI"]
+    else:
+        prefs = ["Inter", "DejaVu Sans", "Noto Sans", "Cantarell"]
+    chosen = next((p for p in prefs if p.lower() in available), None)
+    # macOS hides system fonts from families(); fall back to the system UI font
+    # name, which Tk resolves even though it isn't enumerated.
+    if chosen is None and sys.platform == "darwin":
+        chosen = ".AppleSystemUIFont"
+    _BODY_FAMILY = chosen or (
+        "Segoe UI" if sys.platform.startswith("win") else "TkDefaultFont")
+    return _BODY_FAMILY
+
+
+def ui_family() -> str:
+    """Public accessor for the resolved chat UI body family."""
+    return _resolve_family()
+
+
+def ui_size(base: int, win_bump: int = 0) -> int:
+    """Platform-aware font size.
+
+    Bumps the size only on Windows (whose default UI font renders smaller /
+    denser than macOS's system font at the same point size). macOS and Linux
+    keep ``base`` unchanged so their already-good look is never altered.
+    """
+    if win_bump and sys.platform.startswith("win"):
+        return base + win_bump
+    return base
+
+
 def get_fonts(is_dark: bool = False) -> dict[str, tkFont.Font]:
     """Return a dict of named ``tkFont.Font`` objects for the chat UI.
 
@@ -69,33 +128,24 @@ def get_fonts(is_dark: bool = False) -> dict[str, tkFont.Font]:
     if _font_cache is not None:
         return _font_cache
 
+    fam = _resolve_family()
     fonts: dict[str, tkFont.Font] = {
-        "body": _named(
-            "chat_body", family=_BODY_FAMILY, size=_BASE_SIZE,
-        ),
-        "bold": _named(
-            "chat_bold", family=_BODY_FAMILY, size=_BASE_SIZE, weight="bold",
-        ),
+        "body": _named("chat_body", family=fam, size=_BASE_SIZE),
+        "bold": _named("chat_bold", family=fam, size=_BASE_SIZE, weight="bold"),
         "italic": _named(
-            "chat_italic", family=_BODY_FAMILY, size=_BASE_SIZE, slant="italic",
-        ),
+            "chat_italic", family=fam, size=_BASE_SIZE, slant="italic"),
         "bold_italic": _named(
-            "chat_bold_italic", family=_BODY_FAMILY, size=_BASE_SIZE,
-            weight="bold", slant="italic",
-        ),
-        "code": _named(
-            "chat_code", family=_MONO_FAMILY, size=_BASE_SIZE,
-        ),
+            "chat_bold_italic", family=fam, size=_BASE_SIZE,
+            weight="bold", slant="italic"),
+        "code": _named("chat_code", family=_MONO_FAMILY, size=_BASE_SIZE),
         "link": _named(
-            "chat_link", family=_BODY_FAMILY, size=_BASE_SIZE, underline=True,
-        ),
+            "chat_link", family=fam, size=_BASE_SIZE, underline=True),
         "strikethrough": _named(
-            "chat_strike", family=_BODY_FAMILY, size=_BASE_SIZE, overstrike=True,
-        ),
+            "chat_strike", family=fam, size=_BASE_SIZE, overstrike=True),
     }
     for tag, sz in _HEADING_SIZES.items():
         fonts[tag] = _named(
-            f"chat_{tag}", family=_BODY_FAMILY, size=sz, weight="bold",
+            f"chat_{tag}", family=fam, size=sz, weight="bold",
         )
 
     _font_cache = fonts

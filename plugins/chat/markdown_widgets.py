@@ -18,7 +18,9 @@ import tkinter as tk
 
 import customtkinter
 
-from plugins.chat.fonts import RESISTINE_BLUE, get_fonts, get_theme_colors
+from plugins.chat.fonts import (
+    RESISTINE_BLUE, get_fonts, get_theme_colors, ui_family, ui_size,
+)
 from plugins.chat.markdown_bubble import (
     _EMOJI_RE, _EMOJI_RENDER, MarkdownBubble, attach_emoji_copy,
 )
@@ -253,14 +255,14 @@ class CodeBlockWidget(customtkinter.CTkFrame):
             lang_label = customtkinter.CTkLabel(
                 header, text=language.lower(),
                 font=customtkinter.CTkFont(
-                    family="Inter", size=10),
+                    family=ui_family(), size=ui_size(10, win_bump=2)),
                 text_color=muted_fg, anchor="w",
             )
             lang_label.pack(side="left", padx=(14, 0), pady=6)
 
         self._copy_btn = customtkinter.CTkButton(
             header, text="Copy", width=56, height=24,
-            font=customtkinter.CTkFont(family="Inter", size=10),
+            font=customtkinter.CTkFont(family=ui_family(), size=ui_size(10, win_bump=2)),
             fg_color=RESISTINE_BLUE, hover_color="#1565B0",
             text_color="#FFFFFF",
             corner_radius=6, command=self._copy_to_clipboard,
@@ -378,13 +380,13 @@ class TableWidget(customtkinter.CTkFrame):
         for r in rows:
             all_rows.append((r, False))
 
-        header_font = customtkinter.CTkFont(family="Inter", size=13,
+        header_font = customtkinter.CTkFont(family=ui_family(), size=13,
                                             weight="bold")
-        body_font = customtkinter.CTkFont(family="Inter", size=13)
+        body_font = customtkinter.CTkFont(family=ui_family(), size=13)
 
         # Measure content to set minimum column widths
         import tkinter.font as tkfont
-        measure = tkfont.Font(family="Inter", size=13)
+        measure = tkfont.Font(family=ui_family(), size=13)
         self._col_min_px = [0] * self._num_cols
         for row_cells, _ in all_rows:
             for j in range(self._num_cols):
@@ -541,8 +543,20 @@ class TableWidget(customtkinter.CTkFrame):
         finally:
             self._in_resize = False
 
+    # Hysteresis dead-band for the horizontal-scrollbar show/hide decision.
+    # Showing the scrollbar adds ~14px of frame height (sb_h in
+    # markdown_renderer._resize_to_fit); without a dead-band that height delta
+    # reflows the bubble, shifts the canvas width 1-2px, and re-crosses a single
+    # bare threshold every reflow pass -> the table oscillates wider/narrower
+    # forever at certain window widths/DPIs. _SB_HIDE_MARGIN must exceed sb_h
+    # (14) so the scrollbar's own height cannot re-cross the hide threshold,
+    # making _scrollbar_visible a per-width monotone latch that pins sb_h and
+    # lets the reflow reach a fixed point.
+    _SB_SHOW_MARGIN = 2
+    _SB_HIDE_MARGIN = 16
+
     def _update_scrollbar(self) -> None:
-        """Show scrollbar only when content overflows horizontally."""
+        """Show scrollbar only when content overflows, with hysteresis."""
         try:
             self._canvas.update_idletasks()
             bbox = self._canvas.bbox("all")
@@ -550,10 +564,11 @@ class TableWidget(customtkinter.CTkFrame):
                 return
             content_w = bbox[2] - bbox[0]
             visible_w = self._canvas.winfo_width()
-            if content_w > visible_w and not self._scrollbar_visible:
+            overflow = content_w - visible_w
+            if not self._scrollbar_visible and overflow > self._SB_SHOW_MARGIN:
                 self._scrollbar.pack(fill="x")
                 self._scrollbar_visible = True
-            elif content_w <= visible_w and self._scrollbar_visible:
+            elif self._scrollbar_visible and overflow < -self._SB_HIDE_MARGIN:
                 self._scrollbar.pack_forget()
                 self._scrollbar_visible = False
         except Exception:
