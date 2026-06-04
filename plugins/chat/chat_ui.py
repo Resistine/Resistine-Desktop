@@ -86,15 +86,37 @@ class ChatUIMixin:
                     100, self._check_scroll_btn),
                 add="+")
             if sys.platform.startswith("win"):
-                # Windows blits the embedded canvas window on scroll and can
-                # leave ghost "tracers" of the old text until the child widgets
-                # repaint. Forcing a synchronous repaint right after each wheel
-                # scroll clears them. Gated to Windows — macOS/Linux repaint
-                # cleanly and need no nudge.
-                canvas.bind(
-                    "<MouseWheel>",
-                    lambda _e: canvas.update_idletasks(),
-                    add="+")
+                # CTk sets yscrollincrement=1 on Windows, so the wheel only
+                # moves ~20px per notch (delta/6 units * 1px) — too slow, and
+                # it feels even slower on long chats. Bump the increment so each
+                # notch moves a comfortable, FIXED ~100px regardless of page
+                # length (delta/6 = 20 units * 5px = 100px).
+                try:
+                    canvas.configure(yscrollincrement=5)
+                except Exception:
+                    pass
+                # Clear residual scroll "tracers" (a Windows canvas blit
+                # artifact) once the wheel burst SETTLES. Debounced on purpose:
+                # the previous per-tick update_idletasks() cost grew with page
+                # length and was the real cause of "slower the longer the page."
+                canvas.bind("<MouseWheel>", self._win_scroll_redraw, add="+")
+        except Exception:
+            pass
+
+    def _win_scroll_redraw(self, _event=None) -> None:
+        """Debounced repaint to clear Windows scroll tracers after the wheel
+        burst settles, without adding per-notch cost that scales with page
+        length."""
+        try:
+            canvas = self.chat_scroll._parent_canvas
+            prev = getattr(self, "_scroll_redraw_after", None)
+            if prev:
+                try:
+                    canvas.after_cancel(prev)
+                except Exception:
+                    pass
+            self._scroll_redraw_after = canvas.after(
+                60, canvas.update_idletasks)
         except Exception:
             pass
 
@@ -131,7 +153,7 @@ class ChatUIMixin:
         self.chat_entry = EmojiEntry(
             bar, placeholder_text="Message Resistine AI...",
             corner_radius=20, border_width=0, height=44,
-            font=customtkinter.CTkFont(family=ui_family(), size=18),
+            font=customtkinter.CTkFont(family=ui_family(), size=16),
             fg_color="transparent", text_color=fg,
             placeholder_text_color="#8ea8c6" if is_dark else "#9aa5b1")
         self.chat_entry.grid(

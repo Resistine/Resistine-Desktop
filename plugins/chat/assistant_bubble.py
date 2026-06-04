@@ -82,7 +82,7 @@ class AssistantBubble(customtkinter.CTkFrame):
         self._streaming_label = customtkinter.CTkLabel(
             self, text="", fg_color="transparent",
             text_color=self._bubble_fg, wraplength=self._max_width,
-            font=customtkinter.CTkFont(family=ui_family(), size=20),
+            font=customtkinter.CTkFont(family=ui_family(), size=18),
             justify="left", anchor="nw",
         )
         self._streaming_label.pack(

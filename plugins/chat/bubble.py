@@ -120,7 +120,7 @@ class UserBubble(customtkinter.CTkFrame):
         self._scale = getattr(self.winfo_toplevel(), "_hidpi_factor", 1.0)
         self._label = SelectableLabel(
             self, text=text, bg=self._bg, fg=self._fg,
-            font=customtkinter.CTkFont(family=ui_family(), size=int(20 * self._scale)),
+            font=customtkinter.CTkFont(family=ui_family(), size=int(18 * self._scale)),
             max_width=int(max_width * self._scale),
         )
         self._label.pack(
@@ -145,7 +145,7 @@ class UserBubble(customtkinter.CTkFrame):
         # are already correct and must not be scaled.
         self._scale = getattr(self.winfo_toplevel(), "_hidpi_factor", 1.0)
         _user_font = customtkinter.CTkFont(
-            family=ui_family(), size=int(20 * self._scale))
+            family=ui_family(), size=int(18 * self._scale))
         tw = tk.Text(
             self, bg=self._bg, fg=self._fg, font=_user_font,
             wrap="word", borderwidth=0, highlightthickness=0,
@@ -229,7 +229,7 @@ class UserBubble(customtkinter.CTkFrame):
         # 2. Measure wrapped height by rendering in the (mapped) bubble.
         import tkinter.font as tkfont
         content_h_phys = tkfont.Font(
-            font=(ui_family(), int(20 * scale))).metrics("linespace") + 4
+            font=(ui_family(), int(18 * scale))).metrics("linespace") + 4
         tw.place(in_=self, x=int(inset * scale), y=int(inset * scale),
                  width=text_w_phys, height=int(500 * scale))
         self.configure(

@@ -380,13 +380,14 @@ class TableWidget(customtkinter.CTkFrame):
         for r in rows:
             all_rows.append((r, False))
 
-        header_font = customtkinter.CTkFont(family=ui_family(), size=13,
-                                            weight="bold")
-        body_font = customtkinter.CTkFont(family=ui_family(), size=13)
+        # Use the shared chat body/bold fonts so table text matches the size
+        # and family of everything else in the conversation.
+        _tbl_fonts = get_fonts(is_dark)
+        header_font = _tbl_fonts["bold"]
+        body_font = _tbl_fonts["body"]
 
-        # Measure content to set minimum column widths
-        import tkinter.font as tkfont
-        measure = tkfont.Font(family=ui_family(), size=13)
+        # Measure with the actual body font so column widths match the text.
+        measure = body_font
         self._col_min_px = [0] * self._num_cols
         for row_cells, _ in all_rows:
             for j in range(self._num_cols):
