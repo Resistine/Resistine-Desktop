@@ -85,7 +85,7 @@ class WelcomeScreen(customtkinter.CTkFrame):
 
         # Measure longest text to set uniform chip width
         import tkinter.font as tkfont
-        measure_font = tkfont.Font(family=ui_family(), size=13)
+        measure_font = tkfont.Font(family=ui_family(), size=16)
         longest_px = max(measure_font.measure(s) for s in suggestions)
         # dot(16+18) + text + arrow(20+18) + padding
         chip_width = longest_px + 100
@@ -120,7 +120,7 @@ class WelcomeScreen(customtkinter.CTkFrame):
             # Suggestion text
             lbl = customtkinter.CTkLabel(
                 chip, text=suggestion,
-                font=customtkinter.CTkFont(family=ui_family(), size=13),
+                font=customtkinter.CTkFont(family=ui_family(), size=16),
                 text_color=chip_fg, fg_color="transparent",
                 anchor="w", justify="left")
             lbl.pack(side="left", fill="x", expand=True, pady=8)

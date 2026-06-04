@@ -21,16 +21,16 @@ RESISTINE_BLUE = "#0D5394"
 
 # -- Base metrics (px) --------------------------------------------------------
 # Body text size for AI responses (and, matched in bubble.py, user messages).
-_BASE_SIZE = 20
+_BASE_SIZE = 18
 _MONO_FAMILY = "Menlo" if sys.platform == "darwin" else "Consolas"
 
-# Heading sizes, kept ~5px above/around the body so the hierarchy holds.
+# Heading sizes, kept above/around the body so the hierarchy holds.
 # Windows gets a small extra bump because its default UI font renders a touch
 # smaller/denser than macOS's system font at the same point size.
 if sys.platform.startswith("win"):
-    _HEADING_SIZES = {"h1": 27, "h2": 25, "h3": 22, "h4": 21, "h5": 20, "h6": 19}
+    _HEADING_SIZES = {"h1": 25, "h2": 23, "h3": 20, "h4": 19, "h5": 18, "h6": 17}
 else:
-    _HEADING_SIZES = {"h1": 25, "h2": 23, "h3": 21, "h4": 20, "h5": 19, "h6": 18}
+    _HEADING_SIZES = {"h1": 23, "h2": 21, "h3": 19, "h4": 18, "h5": 17, "h6": 16}
 
 # Resolved once, after a Tk root exists. The chat hard-coded "Inter" everywhere,
 # but Inter is never installed or registered, so on Windows Tk silently falls
