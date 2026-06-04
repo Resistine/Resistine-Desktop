@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import customtkinter
 
-from plugins.chat.fonts import get_theme_colors
+from plugins.chat.fonts import get_theme_colors, ui_family
 from plugins.chat.markdown_renderer import MarkdownRenderer
 from utils.logger import logger
 
@@ -52,7 +52,7 @@ class AssistantBubble(customtkinter.CTkFrame):
             self, text="Thinking", fg_color="transparent",
             text_color=fg,
             font=customtkinter.CTkFont(
-                family="Inter", size=14, slant="italic"),
+                family=ui_family(), size=14, slant="italic"),
             justify="left", anchor="w",
         )
         self._thinking_label.pack(
@@ -82,7 +82,7 @@ class AssistantBubble(customtkinter.CTkFrame):
         self._streaming_label = customtkinter.CTkLabel(
             self, text="", fg_color="transparent",
             text_color=self._bubble_fg, wraplength=self._max_width,
-            font=customtkinter.CTkFont(family="Inter", size=15),
+            font=customtkinter.CTkFont(family=ui_family(), size=20),
             justify="left", anchor="nw",
         )
         self._streaming_label.pack(

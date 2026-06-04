@@ -1,14 +1,34 @@
 """Chat UI construction mixin for the Chat plugin."""
 from __future__ import annotations
 
+import sys
+
 import customtkinter
 
 from plugins.chat.assistant_bubble import AssistantBubble
 from plugins.chat.bubble import BubbleRow, UserBubble, assistant_width, user_width
-from plugins.chat.fonts import RESISTINE_BLUE, _is_dark_mode
+from plugins.chat.fonts import RESISTINE_BLUE, _is_dark_mode, ui_family
 from plugins.chat.sidebar import ChatSidebar
 from plugins.chat.welcome_screen import ApiKeyMissingScreen, WelcomeScreen
 from utils.emoji_entry import EmojiEntry
+
+
+# Symbol-capable UI font for glyph buttons (send arrow, menu, scroll-down).
+# These buttons set no family, so CTkFont falls back to the theme family
+# "Inter" — not installed on Windows, so Tk substitutes an inconsistent glyph
+# for the arrow/dingbat codepoints. "Segoe UI Symbol" ships on every supported
+# Windows and draws U+2191/U+2630/U+25BC/U+25A0 crisply and deterministically.
+# On macOS/Linux the default already renders well, so leave family unset to
+# keep the current appearance exactly (zero visual change off Windows).
+_GLYPH_FAMILY = "Segoe UI Symbol" if sys.platform.startswith("win") else None
+
+
+def _glyph_font(size: int, weight: str = "normal") -> customtkinter.CTkFont:
+    """CTkFont for glyph buttons; symbol-capable + deterministic on Windows."""
+    if _GLYPH_FAMILY is not None:
+        return customtkinter.CTkFont(
+            family=_GLYPH_FAMILY, size=size, weight=weight)
+    return customtkinter.CTkFont(size=size, weight=weight)
 
 
 class ChatUIMixin:
@@ -65,6 +85,16 @@ class ChatUIMixin:
                 lambda _e: self.chat_scroll.after(
                     100, self._check_scroll_btn),
                 add="+")
+            if sys.platform.startswith("win"):
+                # Windows blits the embedded canvas window on scroll and can
+                # leave ghost "tracers" of the old text until the child widgets
+                # repaint. Forcing a synchronous repaint right after each wheel
+                # scroll clears them. Gated to Windows — macOS/Linux repaint
+                # cleanly and need no nudge.
+                canvas.bind(
+                    "<MouseWheel>",
+                    lambda _e: canvas.update_idletasks(),
+                    add="+")
         except Exception:
             pass
 
@@ -101,7 +131,7 @@ class ChatUIMixin:
         self.chat_entry = EmojiEntry(
             bar, placeholder_text="Message Resistine AI...",
             corner_radius=20, border_width=0, height=44,
-            font=customtkinter.CTkFont(family="Inter", size=14),
+            font=customtkinter.CTkFont(family=ui_family(), size=18),
             fg_color="transparent", text_color=fg,
             placeholder_text_color="#8ea8c6" if is_dark else "#9aa5b1")
         self.chat_entry.grid(
@@ -109,7 +139,7 @@ class ChatUIMixin:
         self.send_button = customtkinter.CTkButton(
             bar, text="\u2191", command=self.send_message,
             corner_radius=18, height=36, width=36,
-            font=customtkinter.CTkFont(size=18, weight="bold"),
+            font=_glyph_font(18, weight="bold"),
             fg_color=RESISTINE_BLUE, hover_color="#1565B0",
             text_color="#ffffff")
         self.send_button.grid(row=0, column=1, padx=(0, 6), pady=6)
@@ -136,14 +166,14 @@ class ChatUIMixin:
             header, text="\u2630", width=btn_size, height=btn_size,
             corner_radius=8, fg_color=btn_bg, hover_color=hover_bg,
             text_color=fg,
-            font=customtkinter.CTkFont(size=16),
+            font=_glyph_font(16),
             command=self._toggle_sidebar)
         self._toggle_btn.grid(row=0, column=0, padx=(12, 0), pady=4)
 
         self._header_label = customtkinter.CTkLabel(
             header, text="Resistine AI",
             font=customtkinter.CTkFont(
-                family="Inter", size=16, weight="bold"),
+                family=ui_family(), size=16, weight="bold"),
             text_color=fg, fg_color="transparent")
         self._header_label.grid(row=0, column=1, pady=4)
         self._header_visible = True
@@ -161,7 +191,7 @@ class ChatUIMixin:
             corner_radius=15,
             fg_color=RESISTINE_BLUE, hover_color="#1565B0",
             text_color="#ffffff",
-            font=customtkinter.CTkFont(size=10),
+            font=_glyph_font(10),
             command=self._scroll_to_bottom)
         self._scroll_btn_visible = False
 
@@ -207,7 +237,15 @@ class ChatUIMixin:
     def _available_width(self) -> int:
         try:
             self.chat_scroll.update_idletasks()
-            w = self.chat_scroll.winfo_width()
+            # The scrollable INNER frame width is inflated by a wide wrap="none"
+            # code block on Windows; the parent canvas is the true viewport and
+            # is never inflated by content. Prefer it; fall back to the frame.
+            try:
+                w = self.chat_scroll._parent_canvas.winfo_width()
+            except Exception:
+                w = 0
+            if w <= 1:
+                w = self.chat_scroll.winfo_width()
             return max(w - 20, 300) if w > 1 else 800
         except Exception:
             return 800
