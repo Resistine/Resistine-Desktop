@@ -65,6 +65,12 @@ class MarkdownRenderer:
         self._tables: list[TableWidget] = []
         self._code_blocks: list[CodeBlockWidget] = []
         self._in_resize = False
+        # Convergence state for _resize_to_fit. The reflow re-fires itself via
+        # the embedded widgets' <Configure> bindings; these let it settle to a
+        # fixed point (skip identical writes) and ignore the echo of its own
+        # geometry changes, stopping the indefinite wider/narrower oscillation.
+        self._suppress_embed_resize = False
+        self._applied_parent_h = None
         # Linux-only colour-emoji image rendering. Hold strong refs to
         # PhotoImages so Tk doesn't GC them, and remember the codepoint
         # behind each embedded image so copy/paste yields real emoji.
@@ -347,6 +353,11 @@ class MarkdownRenderer:
         content and the textbox becomes internally scrollable. Debounce
         a refit so each settle-cycle updates the bubble height too.
         """
+        # Ignore the <Configure> echo of our own geometry writes — otherwise
+        # _resize_to_fit -> configure() -> <Configure> -> _on_embed_resize ->
+        # _resize_to_fit loops forever.
+        if self._in_resize or self._suppress_embed_resize:
+            return
         if self._resize_timer:
             try:
                 self._parent.after_cancel(self._resize_timer)
@@ -399,10 +410,19 @@ class MarkdownRenderer:
     # -- Resize -------------------------------------------------------------
 
     def _resize_to_fit(self) -> None:
-        """Set the parent frame height to fit content."""
+        """Set the parent frame height to fit content.
+
+        Idempotent: every geometry write below is skipped when the value is
+        unchanged, so once the layout settles this method mutates nothing,
+        emits no <Configure>, and _on_embed_resize stops rescheduling it.
+        That is what breaks the indefinite wider/narrower table oscillation.
+        """
         if self._in_resize:
             return
         self._in_resize = True
+        # Suppress the <Configure> events the configure() calls below queue,
+        # so they don't re-arm this reflow; released after Tk settles them.
+        self._suppress_embed_resize = True
         try:
             tw = self._tw
             tw.update_idletasks()
@@ -431,8 +451,10 @@ class MarkdownRenderer:
                 else:
                     return
 
-            self._parent.configure(height=h)
-            self.text_widget.configure(height=h)
+            if h != self._applied_parent_h:
+                self._applied_parent_h = h
+                self._parent.configure(height=h)
+                self.text_widget.configure(height=h)
             # Resize embedded widgets to textbox width
             try:
                 tw_width = tw.winfo_width()
@@ -440,8 +462,10 @@ class MarkdownRenderer:
                     padx = int(str(tw.cget("padx") or 0))
                     embed_w = tw_width - padx * 2
                     for tbl in self._tables:
-                        tbl.configure(width=embed_w)
-                        tbl._resize_to_width(embed_w)
+                        if getattr(tbl, "_rf_embed_w", None) != embed_w:
+                            tbl._rf_embed_w = embed_w
+                            tbl.configure(width=embed_w)
+                            tbl._resize_to_width(embed_w)
                         # Force TableWidget height to track its grid's
                         # current reqheight. ``_on_grid_configure`` is
                         # supposed to do this via ``<Configure>``, but
@@ -450,24 +474,39 @@ class MarkdownRenderer:
                         # changes don't propagate as ``<Configure>``
                         # events. Set it explicitly here so ``ypixels``
                         # measured next pass reflects the right line
-                        # height.
+                        # height. Skip when unchanged so we don't re-emit
+                        # <Configure> and re-trigger this reflow.
                         try:
                             grid_h = tbl._grid.winfo_reqheight()
                             if grid_h > 1:
                                 sb_h = (14 if tbl._scrollbar_visible
                                         else 0)
-                                tbl._canvas.configure(height=grid_h)
-                                tbl.configure(height=grid_h + sb_h)
+                                table_h = grid_h + sb_h
+                                if getattr(tbl, "_rf_h", None) != table_h:
+                                    tbl._rf_h = table_h
+                                    tbl._canvas.configure(height=grid_h)
+                                    tbl.configure(height=table_h)
                         except Exception:
                             pass
                     for cb in self._code_blocks:
-                        cb.configure(width=embed_w)
+                        if getattr(cb, "_rf_w", None) != embed_w:
+                            cb._rf_w = embed_w
+                            cb.configure(width=embed_w)
             except Exception:
                 pass
         except Exception:
             pass
         finally:
             self._in_resize = False
+            # Release suppression after Tk processes the geometry changes
+            # queued above, so their echo <Configure> events are ignored.
+            try:
+                self._parent.after_idle(self._end_suppress_embed_resize)
+            except Exception:
+                self._suppress_embed_resize = False
+
+    def _end_suppress_embed_resize(self) -> None:
+        self._suppress_embed_resize = False
 
     def _update_width(self, max_width: int) -> None:
         """Refit after a resize."""

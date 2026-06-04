@@ -345,6 +345,14 @@ class TableWidget(customtkinter.CTkFrame):
         super().__init__(master, fg_color=border_clr, corner_radius=0,
                          **kwargs)
 
+        # Hold the size we are told to be. Without this the frame propagates
+        # to its canvas content, which fights the explicit width/height the
+        # markdown renderer force-applies every reflow pass — the two
+        # authorities disagree at some window widths and the table oscillates
+        # wider/narrower forever. pack_propagate(False) makes our configured
+        # size authoritative so the reflow converges to a fixed point.
+        self.pack_propagate(False)
+
         self._num_cols = (max(len(headers), *(len(r) for r in rows))
                           if rows else len(headers))
         self._labels: list[tk.Label] = []
@@ -498,8 +506,13 @@ class TableWidget(customtkinter.CTkFrame):
             self._resize_to_width(width)
 
     def _resize_to_width(self, width: int) -> None:
-        """Resize table internals to the given width."""
-        if self._in_resize:
+        """Resize table internals to the given width.
+
+        Idempotent on width: re-applying the same width re-wraps cells and
+        re-asserts canvas geometry for no reason, which can re-fire the
+        <Configure> cascade. Skip when the width has not actually changed.
+        """
+        if self._in_resize or width == self._last_width:
             return
         self._in_resize = True
         self._last_width = width
