@@ -118,7 +118,16 @@ class AssistantBubble(customtkinter.CTkFrame):
     # -- public API ---------------------------------------------------------
 
     def set_width(self, max_width: int) -> None:
-        """Update content width on resize."""
+        """Update content width on resize.
+
+        ``_on_resize`` fires on every chat_scroll <Configure> -- including
+        scroll-triggered ones where the width hasn't actually changed.
+        Re-asserting widths on embedded tables/code blocks causes a
+        single-frame reflow on each scroll tick, so short-circuit when
+        the width is unchanged. UserBubble has the same guard.
+        """
+        if max_width == self._max_width:
+            return
         self._max_width = max_width
         if self._streaming_label is not None:
             self._streaming_label.configure(wraplength=max_width)

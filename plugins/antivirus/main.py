@@ -410,16 +410,19 @@ class Plugin(BasePlugin):
                 pass
             # --- End Auto-hide ---
 
-            app_w = self.app.winfo_width()
+            # winfo_width() returns PHYSICAL px; MAX_CONTENT_WIDTH is LOGICAL,
+            # so convert via _hidpi_factor and re-scale the minsize at the end.
+            _scale = getattr(self.app, "_hidpi_factor", 1.0)
+            app_w = self.app.winfo_width() / _scale
             if app_w < 10:
                 return
             try:
                 nav = getattr(self.app, "navigation_frame", None)
-                nav_w = nav.winfo_width() if (nav and nav.winfo_exists()) else 250
+                nav_w = (nav.winfo_width() / _scale) if (nav and nav.winfo_exists()) else 250
                 nav_w = max(nav_w, 250)
             except Exception:
                 nav_w = 250
-            width = app_w - nav_w
+            width = app_w - nav_w  # logical
             if width < 10:
                 return
             breathing = 60 if _is_windows else 40
@@ -428,8 +431,9 @@ class Plugin(BasePlugin):
             else:
                 col_w = max(100, width - breathing)
             try:
+                # grid_columnconfigure(minsize=) wants physical pixels — scale up.
                 self.main_container.grid_columnconfigure(
-                    1, weight=0, minsize=col_w,
+                    1, weight=0, minsize=int(col_w * _scale),
                 )
             except Exception:
                 return

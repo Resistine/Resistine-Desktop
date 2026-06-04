@@ -14,6 +14,9 @@ import tkinter as tk
 import customtkinter
 
 from plugins.chat.fonts import get_fonts, get_theme_colors
+from plugins.chat.markdown_bubble import (
+    _EMOJI_RE, _EMOJI_RENDER, MarkdownBubble, attach_emoji_copy,
+)
 from plugins.chat.markdown_utils import is_box_drawing, strip_inline_md
 from plugins.chat.markdown_widgets import (
     CodeBlockWidget, HorizontalRule, TableWidget,
@@ -62,6 +65,12 @@ class MarkdownRenderer:
         self._tables: list[TableWidget] = []
         self._code_blocks: list[CodeBlockWidget] = []
         self._in_resize = False
+        # Linux-only colour-emoji image rendering. Hold strong refs to
+        # PhotoImages so Tk doesn't GC them, and remember the codepoint
+        # behind each embedded image so copy/paste yields real emoji.
+        self._emoji_photos: list[object] = []
+        self._image_to_emoji: dict[str, str] = {}
+        self._emoji_copy_bound = False
 
         self._build_textbox()
         self._configure_tags()
@@ -91,9 +100,29 @@ class MarkdownRenderer:
         self._tw.configure(
             selectbackground=sel_bg, selectforeground=sel_fg,
             inactiveselectbackground=sel_bg,
-            xscrollcommand=lambda *_: None,
+            xscrollcommand=self._pin_xview,
         )
+        # The textbox should never xview-scroll: the only legitimate
+        # horizontal content (wide tables, fenced code) carries its own
+        # scrollbar. Block middle-click scan (Tk's drag-pan) outright,
+        # and block trackpad horizontal swipes (Shift-wheel). The
+        # ``xscrollcommand`` callback catches the remaining path
+        # (drag-select past the edge calls ``$w see``, which fires
+        # xscrollcommand before the redraw, so snapping there is
+        # visually clean).
+        for seq in ("<ButtonPress-2>", "<B2-Motion>",
+                    "<ButtonRelease-2>", "<Shift-MouseWheel>",
+                    "<Shift-Button-4>", "<Shift-Button-5>"):
+            self._tw.bind(seq, lambda _e: "break")
         self._parent.pack_propagate(False)
+
+    def _pin_xview(self, first: str = "0.0", _last: str = "1.0") -> None:
+        """Snap textbox xview back to 0 if anything shifts it."""
+        try:
+            if float(first) > 0.0:
+                self._tw.xview_moveto(0.0)
+        except (ValueError, tk.TclError):
+            pass
 
     def _configure_tags(self) -> None:
         """Set up text tags for headings, bullets, etc."""
@@ -162,7 +191,7 @@ class MarkdownRenderer:
                 i = self._parse_blockquote(lines, i)
                 continue
             self._insert_newline()
-            tw.insert("end", strip_inline_md(stripped), ("paragraph",))
+            self._insert(strip_inline_md(stripped), ("paragraph",))
             self._first_line = False
             i += 1
 
@@ -170,42 +199,72 @@ class MarkdownRenderer:
         if not self._first_line:
             self._tw.insert("end", "\n")
 
+    def _insert(self, text: str, tags: tuple = ()) -> None:
+        """Insert *text* into the textbox, rendering emoji as images on Linux.
+
+        Falls back to a plain ``insert`` on macOS/Windows or when no emoji
+        codepoints are present.
+        """
+        tw = self._tw
+        if (not _EMOJI_RENDER or _EMOJI_RE is None
+                or not _EMOJI_RE.search(text)):
+            tw.insert("end", text, tags)
+            return
+        for i, part in enumerate(_EMOJI_RE.split(text)):
+            if not part:
+                continue
+            if i % 2 == 1:
+                for ch in MarkdownBubble._split_emoji_chars(part):
+                    photo = MarkdownBubble._render_emoji(ch)
+                    if photo:
+                        self._emoji_photos.append(photo)
+                        img_name = tw.image_create(
+                            "end", image=photo, padx=1)
+                        self._image_to_emoji[img_name] = ch
+                    else:
+                        tw.insert("end", ch, tags)
+            else:
+                tw.insert("end", part, tags)
+        if not self._emoji_copy_bound:
+            attach_emoji_copy(tw, self._image_to_emoji)
+            self._emoji_copy_bound = True
+
     def _parse_inline(self, line: str, stripped: str) -> bool:
         tw = self._tw
         hm = _HEADING_RE.match(stripped)
         if hm:
             self._insert_newline()
             tag = f"h{len(hm.group(1))}"
-            tw.insert("end", strip_inline_md(hm.group(2)), (tag,))
+            self._insert(strip_inline_md(hm.group(2)), (tag,))
             self._first_line = False
             return True
         cm = _CHECKBOX_RE.match(stripped)
         if cm:
             self._insert_newline()
             ico = "\u2611  " if cm.group(1) in ("x", "X") else "\u2610  "
-            tw.insert("end", ico + strip_inline_md(cm.group(2)),
-                       ("bullet",))
+            tw.insert("end", ico, ("bullet",))
+            self._insert(strip_inline_md(cm.group(2)), ("bullet",))
             self._first_line = False
             return True
         bm = _BULLET_RE.match(line)
         if bm:
             self._insert_newline()
             pfx = "    " * (len(bm.group(1)) // 2) + "  \u2022  "
-            tw.insert("end", pfx + strip_inline_md(bm.group(3)),
-                       ("bullet",))
+            tw.insert("end", pfx, ("bullet",))
+            self._insert(strip_inline_md(bm.group(3)), ("bullet",))
             self._first_line = False
             return True
         nm = _NUMBERED_RE.match(stripped)
         if nm:
             self._insert_newline()
             tw.insert("end", f"  {nm.group(1)}  ", ("numbered", "bold"))
-            tw.insert("end", strip_inline_md(nm.group(2)), ("numbered",))
+            self._insert(strip_inline_md(nm.group(2)), ("numbered",))
             self._first_line = False
             return True
         bw = _BOLD_WRAP_RE.match(stripped)
         if bw:
             self._insert_newline()
-            tw.insert("end", strip_inline_md(stripped), ("bold",))
+            self._insert(strip_inline_md(stripped), ("bold",))
             self._first_line = False
             return True
         return False
@@ -238,6 +297,7 @@ class MarkdownRenderer:
             self._tw.window_create("end", window=w, padx=0, pady=4,
                                    stretch=1)
             self._code_blocks.append(w)
+            w.bind("<Configure>", self._on_embed_resize, add="+")
             self._first_line = False
         return i
 
@@ -254,6 +314,7 @@ class MarkdownRenderer:
         self._tw.window_create("end", window=w, padx=0, pady=4,
                                stretch=1)
         self._code_blocks.append(w)
+        w.bind("<Configure>", self._on_embed_resize, add="+")
         self._first_line = False
         return i
 
@@ -271,8 +332,27 @@ class MarkdownRenderer:
             self._tw.window_create("end", window=w, padx=0, pady=4,
                                    stretch=1)
             self._tables.append(w)
+            w.bind("<Configure>", self._on_embed_resize, add="+")
             self._first_line = False
         return i
+
+    def _on_embed_resize(self, _event=None) -> None:
+        """Refit when an embedded table/code block changes size.
+
+        Embedded widgets settle asynchronously (TableWidget calls
+        ``_deferred_resize`` at 200ms, ``_on_grid_configure`` fires after
+        labels measure, etc.). If they finalize *after* the renderer's
+        last scheduled ``_resize_to_fit`` (400ms), the bubble's frozen
+        ``pack_propagate(False)`` height ends up too short for the
+        content and the textbox becomes internally scrollable. Debounce
+        a refit so each settle-cycle updates the bubble height too.
+        """
+        if self._resize_timer:
+            try:
+                self._parent.after_cancel(self._resize_timer)
+            except Exception:
+                pass
+        self._resize_timer = self._parent.after(80, self._resize_to_fit)
 
     def _parse_blockquote(self, lines: list[str], i: int) -> int:
         quote_lines: list[str] = []
@@ -291,8 +371,7 @@ class MarkdownRenderer:
         for q in quote_lines:
             if q.strip():
                 self._insert_newline()
-                self._tw.insert(
-                    "end", strip_inline_md(q), ("blockquote",))
+                self._insert(strip_inline_md(q), ("blockquote",))
                 self._first_line = False
         return i
 
@@ -363,6 +442,24 @@ class MarkdownRenderer:
                     for tbl in self._tables:
                         tbl.configure(width=embed_w)
                         tbl._resize_to_width(embed_w)
+                        # Force TableWidget height to track its grid's
+                        # current reqheight. ``_on_grid_configure`` is
+                        # supposed to do this via ``<Configure>``, but
+                        # in practice the table can stay pinned at
+                        # CTkFrame's default 200 when cell autoheight
+                        # changes don't propagate as ``<Configure>``
+                        # events. Set it explicitly here so ``ypixels``
+                        # measured next pass reflects the right line
+                        # height.
+                        try:
+                            grid_h = tbl._grid.winfo_reqheight()
+                            if grid_h > 1:
+                                sb_h = (14 if tbl._scrollbar_visible
+                                        else 0)
+                                tbl._canvas.configure(height=grid_h)
+                                tbl.configure(height=grid_h + sb_h)
+                        except Exception:
+                            pass
                     for cb in self._code_blocks:
                         cb.configure(width=embed_w)
             except Exception:

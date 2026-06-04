@@ -29,6 +29,11 @@ from utils.logger import logger, setup_logging
 DEBUG_WINDOW = False
 DEBUG = False
 
+# 1080p reference. All logical dimensions are anchored to this so HiDPI
+# scaling produces an identical logical layout at any resolution.
+_REF_WIDTH = 1920
+_REF_HEIGHT = 1080
+
 
 def resource_path(relative_path: str) -> str:
     """Delegates to central utils.functions.get_resource_path."""
@@ -41,6 +46,22 @@ class App(AppUI):
     Main application class for Resistine.
     """
 
+    def _apply_hidpi_scaling(self):
+        """Scale CTk widgets proportionally based on the 1080p reference.
+
+        Factor is computed as ``min(screen_width / 1920, screen_height / 1080)``
+        so the window stays 16:9-shaped and inside the screen regardless of
+        the monitor's actual aspect ratio (handles ultrawide / DCI 4K, etc.).
+        """
+        factor = min(
+            self.winfo_screenwidth() / _REF_WIDTH,
+            self.winfo_screenheight() / _REF_HEIGHT,
+        )
+        if factor >= 1.5:
+            self._hidpi_factor = factor
+            customtkinter.set_widget_scaling(factor)
+            customtkinter.set_window_scaling(factor)
+
     def __init__(self):
         """
         @brief Initialize the main application window.
@@ -48,6 +69,9 @@ class App(AppUI):
         Check if the email is registered and create the appropriate screen.
         """
         super().__init__()
+
+        if sys.platform.startswith("linux"):
+            self._apply_hidpi_scaling()
 
         # Fix Ctrl+A select-all on Linux (Tk default is cursor-to-start)
         patch_linux_keybindings(self)
@@ -64,12 +88,18 @@ class App(AppUI):
         self._set_app_icon()
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
-        window_width = int(screen_width * 0.7)
-        window_height = int(screen_height * 0.7)
+        scale = getattr(self, "_hidpi_factor", 1.0)
+        # Window dimensions are LOGICAL, anchored to the 1080p reference
+        # (70% of 1920x1080). set_window_scaling() multiplies these by `scale`
+        # to produce the actual physical pixel size, so the logical layout is
+        # identical at every resolution and aspect ratio.
+        window_width = int(_REF_WIDTH * 0.7)
+        window_height = int(_REF_HEIGHT * 0.7)
         min_width = 750
         min_height = 350
-        position_right = int(screen_width / 2 - window_width / 2)
-        position_down = int(screen_height / 2 - window_height / 2)
+        # Centre the window on the physical screen.
+        position_right = int(screen_width / 2 - window_width * scale / 2)
+        position_down = int(screen_height / 2 - window_height * scale / 2)
         self.geometry(
             f"{window_width}x{window_height}+{position_right}+{position_down}"
         )

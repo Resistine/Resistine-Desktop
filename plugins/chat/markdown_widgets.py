@@ -19,7 +19,86 @@ import tkinter as tk
 import customtkinter
 
 from plugins.chat.fonts import RESISTINE_BLUE, get_fonts, get_theme_colors
+from plugins.chat.markdown_bubble import (
+    _EMOJI_RE, _EMOJI_RENDER, MarkdownBubble, attach_emoji_copy,
+)
 from utils.logger import logger
+
+
+def _cell_has_emoji(text: str) -> bool:
+    """Linux-only check: cell text needs the image-emoji path."""
+    return bool(
+        _EMOJI_RENDER and _EMOJI_RE is not None and _EMOJI_RE.search(text))
+
+
+def _make_emoji_cell_text(
+    parent: tk.Widget, text: str, bg: str, fg: str, font,
+) -> tk.Text:
+    """A label-like tk.Text widget that renders inline colour emoji.
+
+    Used in table cells on Linux when the cell text contains emoji
+    codepoints — tk.Label can't fall back per-glyph to a colour-emoji
+    font, but tk.Text supports inline images.
+    """
+    tw = tk.Text(
+        parent, wrap="word", font=font, fg=fg, bg=bg,
+        borderwidth=0, highlightthickness=0, relief="flat",
+        insertwidth=0, cursor="", padx=10, pady=6,
+        height=1, width=1,
+    )
+    photos: list[object] = []
+    image_to_emoji: dict[str, str] = {}
+    for i, part in enumerate(_EMOJI_RE.split(text)):
+        if not part:
+            continue
+        if i % 2 == 1:
+            for ch in MarkdownBubble._split_emoji_chars(part):
+                photo = MarkdownBubble._render_emoji(ch)
+                if photo:
+                    photos.append(photo)
+                    img_name = tw.image_create(
+                        "end", image=photo, padx=1)
+                    image_to_emoji[img_name] = ch
+                else:
+                    tw.insert("end", ch)
+        else:
+            tw.insert("end", part)
+    tw._emoji_photos = photos  # type: ignore[attr-defined]
+    tw._image_to_emoji = image_to_emoji  # type: ignore[attr-defined]
+    attach_emoji_copy(tw, image_to_emoji)
+    tw.configure(state="disabled")
+
+    # Auto-size height to displayed lines as the column resizes.
+    state = {"busy": False}
+
+    def _autoheight(_event=None, w=tw, s=state):
+        if s["busy"]:
+            return
+        s["busy"] = True
+        try:
+            # Measure in pixels. tk.Text's ``-height`` is in font-line
+            # units, but an inline emoji image is typically taller than
+            # the font's linespace, so a "one display line" cell ends up
+            # shorter than the image and clips it. Compute the line count
+            # that covers the actual rendered pixel height instead.
+            import tkinter.font as tkfont
+            font_obj = tkfont.Font(font=w.cget("font"))
+            font_lh = max(1, font_obj.metrics("linespace"))
+            yp = w.count("1.0", "end", "ypixels")
+            if yp is None:
+                new_h = 1
+            else:
+                content_px = yp[0] if isinstance(yp, (list, tuple)) else yp
+                new_h = max(1, -(-int(content_px) // font_lh))
+            if int(w.cget("height")) != new_h:
+                w.configure(height=new_h)
+        except Exception:
+            pass
+        finally:
+            s["busy"] = False
+
+    tw.bind("<Configure>", _autoheight, add="+")
+    return tw
 
 _COPY_MOD = 0x8 if sys.platform == "darwin" else 0x4  # Cmd on mac, Ctrl elsewhere
 
@@ -79,10 +158,8 @@ class SelectableLabel(tk.Text):
             return
         self._in_autoheight = True
         try:
-            result = self.count("1.0", "end-1c", "displaylines")
-            lines = (result[0] if isinstance(result, (list, tuple))
-                     else result) or 1
-            new_h = max(1, int(lines))
+            lines = self._displayline_count()
+            new_h = max(1, lines)
             cur_h = int(self.cget("height"))
             if new_h != cur_h:
                 self.configure(height=new_h)
@@ -95,18 +172,36 @@ class SelectableLabel(tk.Text):
     def _update_justify(self) -> None:
         """Center text when it fits on one line, left-align otherwise."""
         try:
-            result = self.count("1.0", "end-1c", "displaylines")
-            lines = (result[0] if isinstance(result, (list, tuple))
-                     else result) or 1
-            if int(lines) <= 1:
+            if self._displayline_count() <= 1:
                 self.tag_add("center", "1.0", "end")
             else:
                 self.tag_remove("center", "1.0", "end")
         except Exception:
             pass
 
+    def _displayline_count(self) -> int:
+        """Number of rendered display lines from 1.0 to end-1c.
+
+        Tk's ``count -displaylines`` returns the number of line
+        *boundaries* crossed (newlines + wrap points), not the number of
+        lines themselves -- so a 2-line message returns ``(1,)`` and a
+        1-line message returns ``None``. Add 1 to get the actual count.
+        """
+        result = self.count("1.0", "end-1c", "displaylines")
+        if result is None:
+            return 1
+        breaks = result[0] if isinstance(result, (list, tuple)) else result
+        return int(breaks) + 1
+
     def set_width(self, max_width: int) -> None:
+        if max_width == self._max_width:
+            return
         self._max_width = max_width
+        # Re-fit the widget so it actually grows/shrinks when the parent
+        # chat area resizes (e.g. when chat_scroll lays out to full size
+        # after the bubble has already been created).
+        text = self.get("1.0", "end-1c")
+        self._fit_width(self.cget("font"), text, max_width)
 
 
 # ---------------------------------------------------------------------------
@@ -321,14 +416,19 @@ class TableWidget(customtkinter.CTkFrame):
                         bg = master.winfo_toplevel().cget("bg")
 
             for j, cell_text in enumerate(row_cells):
-                lbl = tk.Label(
-                    self._grid, text=cell_text, bg=bg,
-                    fg=(colors["heading"] if is_header
-                        else colors["fg"]),
-                    font=header_font if is_header else body_font,
-                    padx=10, pady=6, anchor="w", justify="left",
-                    wraplength=0,
-                )
+                cell_fg = colors["heading"] if is_header else colors["fg"]
+                cell_font = header_font if is_header else body_font
+                if _cell_has_emoji(cell_text):
+                    lbl = _make_emoji_cell_text(
+                        self._grid, cell_text, bg, cell_fg, cell_font,
+                    )
+                else:
+                    lbl = tk.Label(
+                        self._grid, text=cell_text, bg=bg,
+                        fg=cell_fg, font=cell_font,
+                        padx=10, pady=6, anchor="w", justify="left",
+                        wraplength=0,
+                    )
                 lbl.grid(
                     row=idx, column=j, sticky="nsew",
                     padx=(1 if j > 0 else 0, 0),
@@ -338,19 +438,48 @@ class TableWidget(customtkinter.CTkFrame):
 
         self._in_resize = False
         self._last_width = 0
+        self._last_grid_bbox: tuple[int, int, int, int] | None = None
         self._grid.bind("<Configure>", self._on_grid_configure)
         self.bind("<Configure>", self._on_configure)
         self.after(200, self._deferred_resize)
 
     def _on_grid_configure(self, _event=None) -> None:
-        """Update canvas scroll region and height when grid changes."""
+        """Update canvas scroll region and height when grid changes.
+
+        Guarded against no-op invocations: scrolling the outer chat can
+        fire <Configure> on the embedded grid even when its bbox hasn't
+        moved, and re-asserting ``configure(height=...)`` on the inner
+        canvas cascades back up the parent chain (bubble reflow ->
+        chat_scroll <Configure>) producing a single-frame jitter per
+        scroll tick.
+
+        Use ``self._grid.winfo_reqheight()`` for height rather than
+        ``self._canvas.bbox("all")``: when cells autoheight, the grid's
+        reqheight grows immediately, but the canvas's bbox can return a
+        stale value cached from the embedded window-item's earlier size.
+        That stale bbox left TableWidget pinned at CTkFrame's default
+        200 px, even when its real content was taller, and the embed's
+        actual rendered content overflowed past its window_create line.
+        """
         try:
             bbox = self._canvas.bbox("all")
-            if bbox:
-                self._canvas.configure(
-                    scrollregion=bbox,
-                    height=bbox[3] - bbox[1],
-                )
+            grid_h = self._grid.winfo_reqheight()
+            if not bbox:
+                if grid_h <= 1:
+                    return
+                width = self._natural_width
+                content_h = grid_h
+            else:
+                width = bbox[2] - bbox[0]
+                content_h = max(grid_h, bbox[3] - bbox[1])
+            new_state = (width, content_h)
+            if new_state == self._last_grid_bbox:
+                return
+            self._last_grid_bbox = new_state
+            self._canvas.configure(
+                scrollregion=(0, 0, width, content_h),
+                height=content_h,
+            )
         except Exception:
             pass
 
