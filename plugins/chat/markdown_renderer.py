@@ -42,6 +42,23 @@ _H_SPACING = {
 _BOLD_WRAP_RE = re.compile(r'^\*\*(.+)\*\*[:\.\!\?]?\s*$')
 
 
+def _logical_px(widget, px: int) -> int:
+    """Convert a PHYSICAL-pixel size to the LOGICAL units a CTk widget's
+    ``configure(width=/height=)`` expects.
+
+    CTk multiplies configure() values by the display scaling. Our measurements
+    come from raw tk widgets (``winfo_*`` / ``count("ypixels")``) in physical
+    pixels, so passing them straight to a CTk widget scales them a SECOND time
+    (e.g. 1.25x too big on a Windows 125% display) — which inflated the bubble
+    height (the gap) and the table frame. Returns ``px`` unchanged at 100%.
+    """
+    try:
+        s = customtkinter.ScalingTracker.get_widget_scaling(widget)
+        return int(round(px / s)) if s else px
+    except Exception:
+        return px
+
+
 class MarkdownRenderer:
     """Parse markdown and render into a single CTkTextbox in *parent*."""
 
@@ -71,6 +88,11 @@ class MarkdownRenderer:
         # geometry changes, stopping the indefinite wider/narrower oscillation.
         self._suppress_embed_resize = False
         self._applied_parent_h = None
+        # Last textbox width seen by _on_textbox_configure, so a pure-text
+        # bubble re-measures its (width-dependent) height whenever the textbox
+        # width settles — without that, a height measured while the textbox was
+        # transiently narrow (over-wrapped) would be frozen forever.
+        self._tb_last_w = None
         # Linux-only colour-emoji image rendering. Hold strong refs to
         # PhotoImages so Tk doesn't GC them, and remember the codepoint
         # behind each embedded image so copy/paste yields real emoji.
@@ -121,6 +143,37 @@ class MarkdownRenderer:
                     "<Shift-Button-4>", "<Shift-Button-5>"):
             self._tw.bind(seq, lambda _e: "break")
         self._parent.pack_propagate(False)
+        # A pure-text bubble (no embedded code/table) has NO <Configure>-driven
+        # refit — those bindings live only on embedded widgets. Its only refits
+        # are the fixed after(100)/after(400) timers, so if the textbox width
+        # has not settled by 400ms the over-wrapped (too-tall) ypixels
+        # measurement is frozen forever, leaving a large empty band below the
+        # text. Bind a refit to the textbox's OWN <Configure> so a width settle
+        # always re-measures, on every path (stream-finalize and restore alike).
+        self.text_widget.bind(
+            "<Configure>", self._on_textbox_configure, add="+")
+
+    def _on_textbox_configure(self, event=None) -> None:
+        """Refit when the textbox WIDTH changes; ignore height echoes.
+
+        Reuses the same convergence guards as _on_embed_resize so it can never
+        reintroduce the table reflow oscillation: bail while a resize is in
+        flight, react to WIDTH changes only, and debounce. _resize_to_fit's
+        height write stays gated on a settled width, so once width and height
+        settle this mutates nothing and the timer stops.
+        """
+        if self._in_resize or self._suppress_embed_resize:
+            return
+        w = getattr(event, "width", None)
+        if w is not None and w == self._tb_last_w:
+            return
+        self._tb_last_w = w
+        if self._resize_timer:
+            try:
+                self._parent.after_cancel(self._resize_timer)
+            except Exception:
+                pass
+        self._resize_timer = self._parent.after(80, self._resize_to_fit)
 
     def _pin_xview(self, first: str = "0.0", _last: str = "1.0") -> None:
         """Snap textbox xview back to 0 if anything shifts it."""
@@ -299,7 +352,7 @@ class MarkdownRenderer:
             w = CodeBlockWidget(
                 self._tw, content,
                 language=lang, is_dark=self._is_dark,
-                width=self._initial_code_width(),
+                width=_logical_px(self._parent, self._initial_code_width()),
             )
             self._tw.window_create("end", window=w, padx=0, pady=4,
                                    stretch=1)
@@ -317,7 +370,7 @@ class MarkdownRenderer:
         w = CodeBlockWidget(
             self._tw, "\n".join(box_lines),
             language="", is_dark=self._is_dark,
-            width=self._initial_code_width(),
+            width=_logical_px(self._parent, self._initial_code_width()),
         )
         self._tw.window_create("end", window=w, padx=0, pady=4,
                                stretch=1)
@@ -469,10 +522,18 @@ class MarkdownRenderer:
                 else:
                     return
 
+            # Commit the measured height. With wrap="word" this height depends
+            # on the textbox WIDTH, so an early pass (before the textbox reaches
+            # its final width) over-wraps and over-measures; that is corrected
+            # by _on_textbox_configure, which re-runs this measurement when the
+            # width settles to its final value and commits the (shorter) correct
+            # height. The `h != _applied_parent_h` guard makes it idempotent
+            # once stable, so it converges and never oscillates.
             if h != self._applied_parent_h:
                 self._applied_parent_h = h
-                self._parent.configure(height=h)
-                self.text_widget.configure(height=h)
+                self._parent.configure(height=_logical_px(self._parent, h))
+                self.text_widget.configure(
+                    height=_logical_px(self.text_widget, h))
             # Resize embedded widgets to textbox width
             try:
                 tw_width = tw.winfo_width()
@@ -485,44 +546,48 @@ class MarkdownRenderer:
                     # the bubble's real content area. self._max_width is the
                     # bubble's intended (viewport-derived) content width and is
                     # NOT inflated, so it is the reliable cap; we also cap by
-                    # the viewport canvas as a backstop. Tables keep the raw
-                    # embed_w — they carry their own canvas + h-scrollbar.
+                    # the viewport canvas as a backstop.
                     cap = self._max_width - padx * 2
                     vp_w = self._viewport_width()
                     if vp_w > 1:
                         cap = min(cap, vp_w - padx * 2)
                     cb_embed_w = min(embed_w, cap) if cap > 1 else embed_w
                     for tbl in self._tables:
-                        if getattr(tbl, "_rf_embed_w", None) != embed_w:
-                            tbl._rf_embed_w = embed_w
-                            tbl.configure(width=embed_w)
-                            tbl._resize_to_width(embed_w)
+                        # Clamp the table frame to the bubble width too. If it
+                        # keeps the raw (inflated) embed_w, its frame grows as
+                        # wide as its own content, so nothing overflows the
+                        # canvas -> no horizontal scrollbar, and it spills past
+                        # the viewport. Clamping makes the frame narrower than
+                        # the natural grid, so the overflow shows a scrollbar.
+                        if getattr(tbl, "_rf_embed_w", None) != cb_embed_w:
+                            tbl._rf_embed_w = cb_embed_w
+                            # CTk frame -> logical; raw-tk canvas inside
+                            # _resize_to_width stays physical.
+                            tbl.configure(width=_logical_px(tbl, cb_embed_w))
+                            tbl._resize_to_width(cb_embed_w)
                         # Force TableWidget height to track its grid's
-                        # current reqheight. ``_on_grid_configure`` is
-                        # supposed to do this via ``<Configure>``, but
-                        # in practice the table can stay pinned at
-                        # CTkFrame's default 200 when cell autoheight
-                        # changes don't propagate as ``<Configure>``
-                        # events. Set it explicitly here so ``ypixels``
-                        # measured next pass reflects the right line
-                        # height. Skip when unchanged so we don't re-emit
-                        # <Configure> and re-trigger this reflow.
+                        # current reqheight. Read it AFTER an idle update so it
+                        # reflects the current (post-relayout) wrap state — a
+                        # stale, too-tall reqheight here would inflate the
+                        # bubble's ypixels and leave a phantom gap below it.
                         try:
+                            tbl._grid.update_idletasks()
                             grid_h = tbl._grid.winfo_reqheight()
                             if grid_h > 1:
-                                sb_h = (14 if tbl._scrollbar_visible
-                                        else 0)
+                                sb_h = (getattr(tbl, "_SB_H", 12)
+                                        if tbl._scrollbar_visible else 0)
                                 table_h = grid_h + sb_h
                                 if getattr(tbl, "_rf_h", None) != table_h:
                                     tbl._rf_h = table_h
                                     tbl._canvas.configure(height=grid_h)
-                                    tbl.configure(height=table_h)
+                                    tbl.configure(
+                                        height=_logical_px(tbl, table_h))
                         except Exception:
                             pass
                     for cb in self._code_blocks:
                         if getattr(cb, "_rf_w", None) != cb_embed_w:
                             cb._rf_w = cb_embed_w
-                            cb.configure(width=cb_embed_w)
+                            cb.configure(width=_logical_px(cb, cb_embed_w))
             except Exception:
                 pass
         except Exception:

@@ -296,6 +296,16 @@ class CodeBlockWidget(customtkinter.CTkFrame):
             line_h = 20
         # header(32) + text(lines*lineheight + pady*2) + scrollbar(14) + buffer
         frame_h = 32 + visible * line_h + 20 + 14 + 10
+        # frame_h is a PHYSICAL measurement (line_h from raw tkfont metrics);
+        # CTk's configure(height=) multiplies by display scaling, so divide it
+        # out or the code block is scaling-factor times too tall on a Windows
+        # 125% display (which also inflates the bubble height).
+        try:
+            _s = customtkinter.ScalingTracker.get_widget_scaling(self)
+            if _s:
+                frame_h = int(round(frame_h / _s))
+        except Exception:
+            pass
         self.configure(height=frame_h)
 
         # -- Horizontal scrollbar (always visible) --------------------------
@@ -372,9 +382,14 @@ class TableWidget(customtkinter.CTkFrame):
             button_color=sb_color,
             button_hover_color=sb_hover)
         self._canvas.configure(xscrollcommand=self._scrollbar.set)
-        self._canvas.pack(fill="both", expand=True)
-        # Scrollbar hidden initially; shown only when needed
-        self._scrollbar_visible = False
+        # Always reserve a scrollbar row at the bottom (like code blocks).
+        # Packing it conditionally fought the renderer's frame-height sizing and
+        # left the freshly-packed bar clipped to zero height -> invisible. With
+        # it always on, the thumb is full-width when the table fits and scrolls
+        # when it overflows; sb height is constant so nothing oscillates.
+        self._scrollbar.pack(side="bottom", fill="x")
+        self._canvas.pack(side="top", fill="both", expand=True)
+        self._scrollbar_visible = True
 
         all_rows: list[tuple[list[str], bool]] = [(headers, True)]
         for r in rows:
@@ -491,6 +506,13 @@ class TableWidget(customtkinter.CTkFrame):
                 scrollregion=(0, 0, width, content_h),
                 height=content_h,
             )
+            # Re-evaluate the horizontal scrollbar here too. _update_scrollbar
+            # otherwise runs only inside _resize_to_width, which early-returns
+            # on an unchanged width — so the very first evaluation can happen
+            # before the grid has laid out (bbox is None) and then never re-run.
+            # The grid's <Configure> fires once it has real content, which is
+            # exactly when the overflow decision becomes valid.
+            self._update_scrollbar()
         except Exception:
             pass
 
@@ -521,24 +543,24 @@ class TableWidget(customtkinter.CTkFrame):
         self._last_width = width
         try:
             natural_width = self._natural_width
+            # Never wrap cell text: data/terminal tables should keep each row
+            # on one line and scroll HORIZONTALLY when wider than the bubble.
+            for lbl in self._labels:
+                try:
+                    lbl.configure(wraplength=0)
+                except tk.TclError:
+                    pass
             if natural_width <= width:
+                # Fits — stretch the grid to fill the bubble (columns share the
+                # extra space via their grid weights); no scrollbar needed.
                 self._canvas.configure(width=width)
                 self._canvas.itemconfigure(
                     self._canvas_window, width=width)
-                col_width = max(int(width / self._num_cols) - 12, 50)
-                for lbl in self._labels:
-                    try:
-                        lbl.configure(wraplength=col_width)
-                    except tk.TclError:
-                        pass
             else:
+                # Wider than the bubble — render at full content width and let
+                # the horizontal scrollbar handle the overflow.
                 self._canvas.itemconfigure(
                     self._canvas_window, width=natural_width)
-                for lbl in self._labels:
-                    try:
-                        lbl.configure(wraplength=0)
-                    except tk.TclError:
-                        pass
             self._on_grid_configure()
             self._update_scrollbar()
         finally:
@@ -556,24 +578,13 @@ class TableWidget(customtkinter.CTkFrame):
     _SB_SHOW_MARGIN = 2
     _SB_HIDE_MARGIN = 16
 
+    _SB_H = 12  # horizontal scrollbar height + a little breathing room
+
     def _update_scrollbar(self) -> None:
-        """Show scrollbar only when content overflows, with hysteresis."""
-        try:
-            self._canvas.update_idletasks()
-            bbox = self._canvas.bbox("all")
-            if not bbox:
-                return
-            content_w = bbox[2] - bbox[0]
-            visible_w = self._canvas.winfo_width()
-            overflow = content_w - visible_w
-            if not self._scrollbar_visible and overflow > self._SB_SHOW_MARGIN:
-                self._scrollbar.pack(fill="x")
-                self._scrollbar_visible = True
-            elif self._scrollbar_visible and overflow < -self._SB_HIDE_MARGIN:
-                self._scrollbar.pack_forget()
-                self._scrollbar_visible = False
-        except Exception:
-            pass
+        """No-op: the horizontal scrollbar is always packed (see __init__), so
+        there is nothing to show/hide. The canvas xscrollcommand keeps the
+        thumb in sync with the content automatically."""
+        return
 
 
 # ---------------------------------------------------------------------------
