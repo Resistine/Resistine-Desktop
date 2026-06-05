@@ -429,14 +429,16 @@ class TableWidget(customtkinter.CTkFrame):
         header_font = _tbl_fonts["bold"]
         body_font = _tbl_fonts["body"]
 
-        # Measure with the actual body font so column widths match the text.
-        measure = body_font
+        # Measure each cell with the font it ACTUALLY renders in: the header
+        # row is bold (wider), so measuring it with the regular body font
+        # under-sizes the column and the bold header text gets clipped.
         self._col_min_px = [0] * self._num_cols
-        for row_cells, _ in all_rows:
+        for row_cells, is_header in all_rows:
+            mfont = header_font if is_header else body_font
             for j in range(self._num_cols):
                 txt = row_cells[j] if j < len(row_cells) else ""
                 self._col_min_px[j] = max(
-                    self._col_min_px[j], measure.measure(txt) + 24)
+                    self._col_min_px[j], mfont.measure(txt) + 24)
         self._col_min_px = [max(px, 60) for px in self._col_min_px]
 
         # Grid frame inside the canvas — set explicit min width
