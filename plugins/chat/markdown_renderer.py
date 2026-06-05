@@ -27,12 +27,35 @@ _MD_IN_FENCE_RE = re.compile(
     r'|[\U0001F100-\U0001FAFF\U00002600-\U000027BF]'
 )
 _HR_RE = re.compile(r'^[-*_]{3,}\s*$')
+# ASCII rule / table border made of +, -, = (no pipes): e.g. +--------+ or
+# ====. Used both as a standalone divider and as the top/middle/bottom border
+# the model sometimes draws around a markdown table.
+_ASCII_RULE_RE = re.compile(r'^[\s+=]*[-=]{3,}[\s+=\-]*$')
 _FENCE_RE = re.compile(r'^(\s*)```')
 _HEADING_RE = re.compile(r'^(#{1,6})\s+(.*)')
 _BULLET_RE = re.compile(r'^(\s*)([-*+])\s(.*)')
 _NUMBERED_RE = re.compile(r'^(\d+\.)\s(.*)')
 _CHECKBOX_RE = re.compile(r'^-\s\[([ xX])\]\s(.*)')
-_TABLE_SEP_RE = re.compile(r'^[\s\-:|]+$')
+_TABLE_SEP_RE = re.compile(r'^[\s\-:|+]+$')
+
+
+def _fence_has_md_table(content: str) -> bool:
+    """True if *content* contains a markdown table — a row starting with '|'
+    immediately followed by a separator row (|---|---|, dashes required).
+
+    Used to recover a markdown table the model wrongly wrapped in a
+    ```plaintext / ```text fence (it would otherwise show as raw '| **x** |'
+    monospace). Terminal/data dumps without a separator row are NOT matched,
+    so genuine code blocks stay code blocks.
+    """
+    rows = content.split("\n")
+    for k in range(len(rows) - 1):
+        nxt = rows[k + 1]
+        if (rows[k].strip().startswith("|")
+                and "-" in nxt
+                and _TABLE_SEP_RE.match(nxt.strip().strip("|").strip())):
+            return True
+    return False
 _ADMONITION_RE = re.compile(
     r'^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]')
 _H_SPACING = {
@@ -230,6 +253,26 @@ class MarkdownRenderer:
             if stripped.startswith("|"):
                 i = self._parse_table_block(lines, i)
                 continue
+            if _ASCII_RULE_RE.match(stripped):
+                # A +-----+ ASCII border. If a |-row follows (skipping further
+                # borders/blanks) it's the top of a model-drawn table -> parse
+                # the table (the collector absorbs the borders). Otherwise it
+                # is just a divider -> render as a horizontal rule.
+                j = i
+                while j < len(lines) and (
+                        not lines[j].strip()
+                        or _ASCII_RULE_RE.match(lines[j].strip())):
+                    j += 1
+                if j < len(lines) and lines[j].strip().startswith("|"):
+                    i = self._parse_table_block(lines, i)
+                    continue
+                self._insert_newline()
+                hr = HorizontalRule(tw, is_dark=self._is_dark)
+                tw.window_create("end", window=hr, padx=0, pady=2,
+                                 stretch=1)
+                self._first_line = False
+                i += 1
+                continue
             if _HR_RE.match(stripped):
                 self._insert_newline()
                 hr = HorizontalRule(tw, is_dark=self._is_dark)
@@ -342,10 +385,13 @@ class MarkdownRenderer:
             code_lines.append(lines[i])
             i += 1
         content = "\n".join(code_lines)
-        if ((not lang
-             or lang.lower() in ("markdown", "md", "text"))
-                and _depth < 2
-                and _MD_IN_FENCE_RE.search(content)):
+        md_lang = (not lang or lang.lower() in ("markdown", "md", "text"))
+        if _depth < 2 and (
+            (md_lang and _MD_IN_FENCE_RE.search(content))
+            # A markdown table the model fenced (e.g. ```plaintext) — render it
+            # as a real table regardless of the fence language.
+            or _fence_has_md_table(content)
+        ):
             self.render(content, _depth + 1)
         else:
             self._insert_newline()
@@ -381,8 +427,17 @@ class MarkdownRenderer:
 
     def _parse_table_block(self, lines: list[str], i: int) -> int:
         table_lines: list[str] = []
-        while i < len(lines) and lines[i].strip().startswith("|"):
-            table_lines.append(lines[i].strip())
+        while i < len(lines):
+            s = lines[i].strip()
+            if s.startswith("|"):
+                table_lines.append(s)
+            elif "-" in s and _ASCII_RULE_RE.match(s):
+                # +-----+ border the model drew around the table (top/mid/
+                # bottom) — absorb it so it doesn't split the table into
+                # fragments and a stray line.
+                pass
+            else:
+                break
             i += 1
         hdrs, rows = self._parse_table(table_lines)
         if hdrs:
