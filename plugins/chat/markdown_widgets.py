@@ -134,20 +134,48 @@ class SelectableLabel(tk.Text):
         self.bind("<Configure>", self._autoheight, add="+")
 
     def _fit_width(self, font, text: str, max_width: int) -> None:
-        """Set widget width to fit text content, up to max_width."""
+        """Size the widget to HUG the text, up to max_width.
+
+        A message that fits on one line gets a bubble exactly that wide. A
+        message that wraps is sized to its LONGEST WRAPPED LINE rather than the
+        full max_width — otherwise a right-aligned user bubble shows a wide
+        empty band to the right of the shorter wrapped lines.
+        """
         try:
             import tkinter.font as tkfont
             if hasattr(font, "actual"):
                 measure_font = font
             else:
                 measure_font = tkfont.Font(font=font)
-            text_px = measure_font.measure(text)
-            width_px = min(text_px + 4, max_width)
+            one_line_px = measure_font.measure(text.replace("\n", " "))
+            if one_line_px + 4 <= max_width:
+                width_px = one_line_px + 4
+            else:
+                longest = self._wrapped_max_line_px(
+                    measure_font, text, max_width)
+                width_px = min(longest + 4, max_width)
             avg_char = measure_font.measure("0") or 8
             char_width = max(1, -(-width_px // avg_char))
             self.configure(width=char_width)
         except Exception:
             pass
+
+    @staticmethod
+    def _wrapped_max_line_px(measure_font, text: str, max_width: int) -> int:
+        """Greedy word-wrap *text* at *max_width* px (matching wrap="word");
+        return the pixel width of the widest resulting line."""
+        widest = 0
+        for paragraph in text.split("\n"):
+            cur = ""
+            for word in paragraph.split(" "):
+                trial = word if not cur else cur + " " + word
+                if not cur or measure_font.measure(trial) <= max_width:
+                    cur = trial
+                else:
+                    widest = max(widest, measure_font.measure(cur))
+                    cur = word
+            widest = max(widest, measure_font.measure(cur))
+        return widest
 
     @staticmethod
     def _readonly(event) -> str | None:
