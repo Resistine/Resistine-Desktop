@@ -183,6 +183,22 @@ class SelectableLabel(tk.Text):
             return None
         return "break"
 
+    def _display_lines(self) -> int:
+        """Number of display lines the text occupies.
+
+        Tk's ``count -displaylines`` reports the number of line *breaks*
+        between the two indices (N-1 for N display lines), so it reads one
+        short. Add 1 to get the real line count — without this, every
+        multi-line message rendered one line too short (and the old ``or 1``
+        only happened to mask the single-line case).
+        """
+        try:
+            result = self.count("1.0", "end-1c", "displaylines")
+            n = result[0] if isinstance(result, (list, tuple)) else result
+            return (int(n) + 1) if n is not None else 1
+        except Exception:
+            return 1
+
     def _autoheight(self, _event=None) -> None:
         if self._in_autoheight:
             return

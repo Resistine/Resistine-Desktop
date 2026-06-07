@@ -1152,6 +1152,54 @@ class AppUI(customtkinter.CTk):
         except Exception:
             pass
 
+    def _smooth_wheel_dispatch(self, event):
+        """Global <MouseWheel> router for smooth scrolling.
+
+        Sends the wheel event to whichever registered CTkScrollableFrame
+        contains the widget under the cursor, so multiple scroll frames on one
+        screen (chat messages + history sidebar) each scroll when hovered. A
+        per-frame bind_all can't do this — bind_all is global and last-wins.
+        Dead frames are pruned as they're encountered.
+        """
+        handlers = getattr(self, "_smooth_scroll_handlers", None)
+        if not handlers:
+            return None
+
+        # CTk 5.x exposed CTkScrollableFrame.check_if_master_is_canvas; CTk
+        # 6.0 removed it. Walk the master chain inline to stay portable.
+        def _is_inside(scroll_frame, widget):
+            canvas = getattr(scroll_frame, "_parent_canvas", None)
+            cur = widget
+            while cur is not None:
+                if cur is canvas:
+                    return True
+                try:
+                    cur = cur.master
+                except Exception:
+                    return False
+            return False
+
+        target = None
+        alive = []
+        for sc, fn in handlers:
+            try:
+                if not sc.winfo_exists():
+                    continue
+            except Exception:
+                continue
+            alive.append((sc, fn))
+            if target is None:
+                try:
+                    if _is_inside(sc, event.widget):
+                        target = fn
+                except Exception:
+                    pass
+        if len(alive) != len(handlers):
+            self._smooth_scroll_handlers = alive
+        if target is not None:
+            return target(event)
+        return None
+
     def _enable_smooth_scroll_and_autohide(self, scrollable: customtkinter.CTkScrollableFrame):
         """
         Make scrolling feel smoother and hide the scrollbar when the content fits.
@@ -1259,49 +1307,53 @@ class AppUI(customtkinter.CTk):
             except Exception:
                 pass
 
-        # Override the built-in _mouse_wheel_all so that the bind_all handler
-        # (which fires for ALL descendants including gaps) uses our smooth
-        # scrolling instead of the default jerky scroll.
-        #
-        # NOTE: simply replacing scrollable._mouse_wheel_all does NOT work
-        # because bind_all stores a reference to the original bound method.
-        # We must patch the original method to redirect to ours.
-        # CTk 5.x had .check_if_master_is_canvas; 6.0+ removed it. Inline the
-        # ancestor-walk so this works on both.
-        def _widget_is_inside_scrollable(widget):
-            target = scrollable._parent_canvas
-            cur = widget
-            while cur is not None:
-                if cur == target:
-                    return True
-                try:
-                    cur = cur.master
-                except Exception:
-                    return False
-            return False
-
-        def _patched_mouse_wheel_all(event):
-            if _widget_is_inside_scrollable(event.widget):
-                return _on_mousewheel(event)
-
-        # Monkey-patch the bound method's __func__ won't work, so we
-        # replace the actual callback in the bind_all registry by
-        # unbinding and rebinding.
+        # Route <MouseWheel> through a SINGLE global dispatcher rather than a
+        # per-frame bind_all. bind_all is global and unbind_all clears every
+        # handler, so a per-frame "bind_all + check_if_master_is_canvas" closure
+        # meant only the LAST-attached scrollable responded — when a screen has
+        # more than one (e.g. the chat messages plus the history sidebar's list,
+        # which attaches last), the others stopped scrolling everywhere except
+        # widgets that explicitly forward the wheel. The dispatcher sends the
+        # event to whichever registered frame the cursor is actually over, so
+        # they all coexist. As a side benefit, this avoids CTk 5.x's
+        # ``check_if_master_is_canvas`` method which was removed in CTk 6.0.
+        if not hasattr(self, "_smooth_scroll_handlers"):
+            self._smooth_scroll_handlers = []
+        if not any(s is scrollable for s, _ in self._smooth_scroll_handlers):
+            self._smooth_scroll_handlers.append((scrollable, _on_mousewheel))
         try:
+            # Clear CTk's per-frame default (jerky) handler + any prior
+            # dispatcher, then bind the one shared dispatcher as the sole
+            # global <MouseWheel> handler.
             scrollable.unbind_all("<MouseWheel>")
-            scrollable.bind_all("<MouseWheel>", _patched_mouse_wheel_all, add="+")
+            scrollable.bind_all(
+                "<MouseWheel>", self._smooth_wheel_dispatch, add="+")
         except Exception:
-            # Fallback: at least try the attribute swap
-            scrollable._mouse_wheel_all = _patched_mouse_wheel_all
+            scrollable._mouse_wheel_all = self._smooth_wheel_dispatch
 
         # bind_all for <Button-4>/<Button-5> on Linux so child widgets are covered
         if _is_linux:
+            # Inline ancestor-walk for the Linux button-scroll path. Mirrors
+            # the helper in _smooth_wheel_dispatch but stays per-frame so we
+            # don't have to plumb a separate registry through bind_all.
+            def _inside_this(widget, _sc=scrollable):
+                canvas = getattr(_sc, "_parent_canvas", None)
+                cur = widget
+                while cur is not None:
+                    if cur is canvas:
+                        return True
+                    try:
+                        cur = cur.master
+                    except Exception:
+                        return False
+                return False
+
             def _bind_all_button4(event):
-                if _widget_is_inside_scrollable(event.widget):
+                if _inside_this(event.widget):
                     return _on_linux_scroll_up(event)
 
             def _bind_all_button5(event):
-                if _widget_is_inside_scrollable(event.widget):
+                if _inside_this(event.widget):
                     return _on_linux_scroll_down(event)
 
             scrollable.bind_all("<Button-4>", _bind_all_button4, add="+")
