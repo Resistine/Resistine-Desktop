@@ -158,6 +158,12 @@ def _send_notification_windows(title: str, body: str):
 class Plugin(BasePlugin):
     """Antivirus plugin powered by ClamAV."""
 
+    # Scrollbar auto-hide + content-column centering settle just after build
+    # (the canvas reflows when the scrollbar toggles); defer the reveal until
+    # the layout is quiescent so the page doesn't visibly "shift right" after
+    # appearing. (Mirrors the VPN plugin, which shares this layout.)
+    defer_reveal_until_settled = True
+
     def __init__(self, app):
         super().__init__(
             id="012",
@@ -301,6 +307,50 @@ class Plugin(BasePlugin):
             return "Error"
         return "Warning"
 
+    def _is_active_screen(self):
+        """True only while the antivirus screen is the active navigation target.
+
+        Because the screen is cached (kept alive when navigated away), its
+        recurring status poll would otherwise keep re-rendering the banner even
+        after you've navigated off — including during the brief swap window,
+        which showed up as a blip. The moment a different screen is selected,
+        ``_current_main_screen`` points elsewhere (set synchronously, before the
+        deferred swap completes), so this returns False and the poll goes quiet.
+        """
+        try:
+            return getattr(self.app, "_current_main_screen", None) is getattr(
+                self, "main_container", None
+            )
+        except Exception:
+            return True
+
+    def screen_signature(self):
+        """Cache the antivirus screen across navigation.
+
+        This is the heaviest plugin screen; rebuilding/destroying its widget
+        tree on every visit is expensive, and the synchronous destroy on the way
+        OUT froze the swap-in of the next page (the antivirus→store "blip"). With
+        a stable signature the screen is hidden with grid_remove() (instant) and
+        re-shown as-is — no destroy, no freeze. Live data is kept current by the
+        status poller and re-synced in on_screen_shown(); we only force a rebuild
+        when the appearance mode changes (so theme colors re-render).
+        """
+        try:
+            return ("antivirus", customtkinter.get_appearance_mode())
+        except Exception:
+            return None
+
+    def on_screen_shown(self):
+        """Re-sync live data when returning to the cached screen."""
+        try:
+            self.app.after(0, self._refresh_db_info)
+            self.app.after(0, self._refresh_quarantine)
+            self.app.after(0, self._refresh_whitelist)
+            self.app.after(0, self._refresh_exclusions)
+            self.app.after(0, self._update_realtime_status)
+        except Exception:
+            pass
+
     # ── Main screen ──────────────────────────────────────────
 
     def create_main_screen(self):
@@ -405,7 +455,11 @@ class Plugin(BasePlugin):
                             if hasattr(active, "_saved_sb_grid") and active._saved_sb_grid:
                                 active._scrollbar.grid(**active._saved_sb_grid)
                             else:
-                                active._scrollbar.grid(row=0, column=1, sticky="ns", pady=0)
+                                # CTk grids the vertical scrollbar at row=1
+                                # (row 0 is the label row). row=0 dropped a
+                                # default height=200 scrollbar into the empty
+                                # label row, pushing the canvas down 200px.
+                                active._scrollbar.grid(row=1, column=1, sticky="ns", pady=0)
             except Exception:
                 pass
             # --- End Auto-hide ---
@@ -447,7 +501,10 @@ class Plugin(BasePlugin):
             _resize_job[0] = self.app.after_idle(_do_layout)
 
         self.main_container.bind("<Configure>", _on_resize)
-        self.app.after(50, _do_layout)
+        # Synchronous finalizer: _settle_screen() runs the initial layout pass
+        # before reveal, so the content column is sized on first paint instead
+        # of jumping ~50 ms later. (<Configure> still handles genuine resizes.)
+        self.main_container._resistine_finalize = _do_layout
 
         return self.main_container
 
@@ -558,6 +615,12 @@ class Plugin(BasePlugin):
         Safe to call even if UI is gone.
         """
         if self._banner_frame is None:
+            return
+
+        # Don't re-render the banner while the antivirus screen isn't the active
+        # one — the poll keeps running because the screen is cached, but touching
+        # the widgets during/after navigation causes a visible blip.
+        if not self._is_active_screen():
             return
 
         try:
@@ -802,7 +865,20 @@ class Plugin(BasePlugin):
                     and self._settings_frame.winfo_exists()
                 )
             )
-            if alive:
+            # Pause the poll when the screen isn't the active one so it doesn't
+            # re-render the banner in the background during/after navigation.
+            # EXCEPTION: on Windows the poll is the ONLY thing that restarts the
+            # RTD threat watcher when Defender's real-time state flips (see the
+            # start/stop block in _apply_realtime_status), so it must keep running
+            # even while the tab is backgrounded — otherwise a watcher stopped
+            # while hidden never restarts and threat toasts silently stop. The
+            # banner re-render is independently suppressed in
+            # _apply_realtime_status_ui (early-returns when not active), so the
+            # background poll on Windows costs nothing visually. On macOS/Linux
+            # on_screen_shown() restarts the poll when we return to the screen.
+            if alive and (
+                self._is_active_screen() or platform.system() == "Windows"
+            ):
                 setup_active = self._last_status and self._last_status.get(
                     "setup_state", "completed",
                 ) != "completed"

@@ -73,6 +73,16 @@ class App(AppUI):
         if sys.platform.startswith("linux"):
             self._apply_hidpi_scaling()
 
+        # Stay fully transparent until the first screen is built, mapped,
+        # measured, and settled — then reveal in a single step (see the
+        # update()/_settle_screen()/alpha=1 sequence below). This is what
+        # prevents the window from appearing at a provisional size/layout and
+        # then visibly reconfiguring on startup.
+        try:
+            self.attributes("-alpha", 0.0)
+        except Exception:
+            pass
+
         # Fix Ctrl+A select-all on Linux (Tk default is cursor-to-start)
         patch_linux_keybindings(self)
 
@@ -105,6 +115,12 @@ class App(AppUI):
         )
         self.minsize(min_width, min_height)
 
+        # Realize the geometry now so winfo_width()/winfo_height() report the
+        # real window size during the first screen build. Screens size their
+        # layout from the real width up front, so the first paint is final —
+        # no post-paint correction timers, no visible reflow.
+        self.update_idletasks()
+
         # Check if already logged in
         if settings.get("auth", "logged_in", False):
             logger.info("✅ User already logged in.")
@@ -134,8 +150,32 @@ class App(AppUI):
                 logger.error(f"❌ Failed to load login plugin: {e}")
                 self.create_dashboard()
 
-        # Ensure the window is visible
+        # Map the window — still transparent — so its widgets acquire their real
+        # geometry and Tk's layout cascade (wraplength → height → scroll region →
+        # scrollbar) can run. We then reveal the window only once that cascade
+        # has stopped moving, so the user never sees it reconfigure.
         self.update()
+        try:
+            screen = getattr(self, "_current_main_screen", None)
+            if screen is not None and hasattr(self, "_settle_screen"):
+                self._settle_screen(screen)
+        except Exception as e:
+            logger.warning(f"Initial layout settle failed: {e}")
+
+        def _reveal_window():
+            try:
+                self.attributes("-alpha", 1.0)
+            except Exception:
+                pass
+
+        try:
+            screen = getattr(self, "_current_main_screen", None)
+            if screen is not None and hasattr(self, "_reveal_when_settled"):
+                self._reveal_when_settled(screen, _reveal_window)
+            else:
+                _reveal_window()
+        except Exception:
+            _reveal_window()
 
         # Initialize auto-updater (cross-platform: Sparkle on macOS, stubs on Win/Linux)
         try:

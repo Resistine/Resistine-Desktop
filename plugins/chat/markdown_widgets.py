@@ -188,8 +188,7 @@ class SelectableLabel(tk.Text):
             return
         self._in_autoheight = True
         try:
-            lines = self._displayline_count()
-            new_h = max(1, lines)
+            new_h = max(1, self._displayline_count())
             cur_h = int(self.cget("height"))
             if new_h != cur_h:
                 self.configure(height=new_h)

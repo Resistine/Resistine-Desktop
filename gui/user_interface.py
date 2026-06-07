@@ -263,10 +263,12 @@ class AppUI(customtkinter.CTk):
                     pass
             _j[0] = _f.after(150, _apply_wraplength)
 
-        # <Configure> only schedules (cheap); <Map> and the initial after() fire immediately.
+        # <Configure> only schedules (cheap) — for genuine resizes after load.
         frame.bind("<Configure>", _schedule_wraplength)
-        frame.bind("<Map>", lambda e: _apply_wraplength())
-        frame.after(1, _apply_wraplength)
+        # Synchronous finalizer: _settle_screen() calls this once, after layout,
+        # so the wraplength is correct on first paint. This replaces the old
+        # <Map> + after(1) correction timers that made the text reflow visibly.
+        frame._resistine_finalize = _apply_wraplength
 
         # --- Interaction ---
         def on_click(_e=None):
@@ -472,10 +474,15 @@ class AppUI(customtkinter.CTk):
                 pass
 
         container.bind("<Configure>", update_aspect_ratio)
-        
-        # INSTANT-READY LAYOUT:
-        # Check for width hint from AppUI to perform the VERY FIRST layout pass synchronously.
-        # This ensures row minsize and target_height are set before child cards are even created.
+
+        # Synchronous finalizer: _settle_screen() calls this once, after the
+        # screen is gridded, to set row heights from the real measured width —
+        # so the first paint is final. (The <Configure> handler above only
+        # fires for genuine resizes afterwards.)
+        container._resistine_finalize = lambda: _do_update_aspect_ratio()
+
+        # Best-effort eager pass from the width hint so the pre-settle layout is
+        # already close (avoids a large jump if anything paints before settle).
         hint = None
         parent = container.master
         while parent:
@@ -483,14 +490,11 @@ class AppUI(customtkinter.CTk):
                 hint = parent._content_width_hint
                 break
             parent = getattr(parent, "master", None)
-            
+
         if hint and hint > 1:
             update_aspect_ratio(force_width=hint)
         elif container.winfo_width() > 1:
             update_aspect_ratio()
-        else:
-            # Fallback for unexpected cases where hint is missing
-            container.after(10, lambda: update_aspect_ratio())
 
         return container
 
@@ -554,6 +558,22 @@ class AppUI(customtkinter.CTk):
                 logger.error(f"Error loading plugin button {plugin.get_name()}: {e}")
             row += 1
 
+        # Invalidate cached screens for plugins that no longer exist
+        # (e.g. after an uninstall) so we don't leak their widget trees.
+        if hasattr(self, "_screen_cache"):
+            for cached_name in list(self._screen_cache.keys()):
+                if cached_name in self.frames:
+                    continue
+                widget, _sig = self._screen_cache.pop(cached_name)
+                try:
+                    if (
+                        widget is not getattr(self, "_current_main_screen", None)
+                        and widget.winfo_exists()
+                    ):
+                        widget.destroy()
+                except Exception:
+                    pass
+
     def create_dashboard(self):
         """
         Create the main dashboard of the application.
@@ -562,6 +582,11 @@ class AppUI(customtkinter.CTk):
             if isinstance(widget, (tk.Toplevel, customtkinter.CTkToplevel)):
                 continue
             widget.destroy()
+
+        # All main screens were just destroyed; drop their (now-dead) cache refs
+        # and the current-screen pointer so navigation rebuilds from scratch.
+        self._screen_cache = {}
+        self._current_main_screen = None
 
         # Re-configure the main window
         self.grid_rowconfigure(0, weight=1)
@@ -702,44 +727,177 @@ class AppUI(customtkinter.CTk):
         if not frame:
             return
 
-        # Build the new screen BEFORE touching the old one. main_container is
-        # parented to self.app but not yet gridded, so the build is invisible
-        # — the previous plugin stays fully on screen for the build's
-        # duration. We only swap (and destroy the old) once the new screen is
-        # fully populated, so the user never sees an empty gray rectangle.
-        previous_screen = getattr(self, "_current_main_screen", None)
+        # Build the new screen BEFORE touching the old one. It is parented to
+        # self.app and gridded but stacked *below* the currently visible screen,
+        # so the old screen stays on display until the new one is ready to swap
+        # in — the user never sees an empty/partial rectangle.
+        #
+        # Each navigation gets a sequence number so a *deferred* reveal (used for
+        # async-rendering screens) can detect that a newer navigation superseded
+        # it while it was waiting to settle, and bow out cleanly.
+        self._nav_seq = getattr(self, "_nav_seq", 0) + 1
+        _my_seq = self._nav_seq
+
+        # Per-frame cache of built screens: {name: (widget, signature)}.
+        # A plugin opts into caching by returning a non-None screen_signature();
+        # when that signature is unchanged we re-show the existing widget tree
+        # instead of rebuilding it (rebuilds re-run hundreds of canvas draws).
+        if not hasattr(self, "_screen_cache"):
+            self._screen_cache = {}
+
+        def _alive(w):
+            try:
+                return w is not None and w.winfo_exists()
+            except Exception:
+                return False
 
         try:
-            main_screen = frame.create_main_screen()
-            # Place new screen in the same cell as the previous one. Tk shows
-            # the most-recently-mapped widget on top, so the new (fully built)
-            # screen covers the old one atomically when this line lands.
-            main_screen.grid(row=0, column=1, sticky="nsew")
-            main_screen.grid_columnconfigure(0, weight=1)
-            main_screen.grid_rowconfigure(0, weight=1)
+            signature = frame.screen_signature() if hasattr(frame, "screen_signature") else None
+        except Exception:
+            signature = None
 
-            # Now tear down the previous screen. Doing this AFTER the new one
-            # is gridded means there's no flash of empty cell.
-            if (
-                previous_screen is not None
-                and previous_screen is not main_screen
-            ):
+        cached_widget, cached_sig = self._screen_cache.get(name, (None, None))
+        cache_hit = (
+            signature is not None
+            and _alive(cached_widget)
+            and cached_sig == signature
+        )
+
+        try:
+            if cache_hit:
+                # Re-show the existing widget tree. grid_remove() preserved its
+                # grid options, so a bare grid() restores placement exactly.
+                main_screen = cached_widget
+                main_screen.grid(row=0, column=1, sticky="nsew")
+            else:
+                # Stale cache entry for this frame (signature changed): drop the
+                # old widget so we don't leak it. Skip if it's the currently
+                # shown screen — that's handled by the teardown step below.
+                if (
+                    _alive(cached_widget)
+                    and cached_widget is not getattr(self, "_visible_screen", None)
+                ):
+                    try:
+                        cached_widget.destroy()
+                    except Exception:
+                        pass
+
+                main_screen = frame.create_main_screen()
+
+                main_screen.grid(row=0, column=1, sticky="nsew")
+                main_screen.grid_columnconfigure(0, weight=1)
+                main_screen.grid_rowconfigure(0, weight=1)
+
+                # Attach smooth scrolling + auto-hide scrollbars for any
+                # CTkScrollableFrames in this screen (idempotent; build-only).
                 try:
-                    if (
-                        hasattr(previous_screen, "winfo_exists")
-                        and previous_screen.winfo_exists()
-                    ):
-                        previous_screen.grid_forget()
-                        previous_screen.destroy()
+                    self._install_scroll_behaviors(main_screen)
                 except Exception:
                     pass
 
-            self._current_main_screen = main_screen
-            # Attach smooth scrolling + auto-hide scrollbars for any CTkScrollableFrames in this screen
+                # Cache the freshly built screen if the plugin opted in.
+                if signature is not None:
+                    self._screen_cache[name] = (main_screen, signature)
+                else:
+                    self._screen_cache.pop(name, None)
+
+            # Stack the new screen directly BELOW the one it's replacing while we
+            # settle its layout, so the old screen stays visible during the
+            # settle (no provisional-layout flash). Lower it relative to the
+            # *currently visible* screen — NOT to the absolute bottom — otherwise
+            # it ends up beneath other cached/grid_removed screens (e.g. the
+            # Dashboard), which then surface for a frame when the old screen is
+            # removed during the swap.
             try:
-                self._install_scroll_behaviors(main_screen)
+                _vis = getattr(self, "_visible_screen", None)
+                if _vis is not None and _vis is not main_screen and _alive(_vis):
+                    main_screen.lower(_vis)
+                else:
+                    main_screen.lower()
             except Exception:
                 pass
+
+            # Resolve all size-dependent layout synchronously, now, against the
+            # real geometry — instead of via a cascade of post-paint timers.
+            self._settle_screen(main_screen)
+
+            def _reveal(_seq=_my_seq, _screen=main_screen, _hit=cache_hit):
+                # Superseded by a newer navigation while we waited to settle?
+                # Abandon this reveal and clean up our now-orphaned screen.
+                if _seq != getattr(self, "_nav_seq", _seq):
+                    if _screen is not getattr(self, "_visible_screen", None):
+                        _cached = any(
+                            _screen is w for (w, _s) in self._screen_cache.values()
+                        )
+                        try:
+                            if _cached:
+                                _screen.grid_remove()
+                            elif _alive(_screen):
+                                _screen.destroy()
+                        except Exception:
+                            pass
+                    return
+
+                if _hit:
+                    try:
+                        if hasattr(frame, "on_screen_shown"):
+                            frame.on_screen_shown()
+                    except Exception:
+                        pass
+
+                # Bring the new screen to the front, then hide EVERY other screen
+                # that could be occupying the content cell — the previously
+                # visible one AND any other cached (grid_removed) screen. Hiding
+                # only the previous screen left other cached screens (e.g. the
+                # Dashboard) able to surface for a frame during the swap. Cached
+                # screens are hidden (grid_remove, kept for reuse); uncached ones
+                # are destroyed.
+                try:
+                    _screen.lift()
+                except Exception:
+                    pass
+
+                _cached_widgets = [w for (w, _s) in self._screen_cache.values()]
+                to_hide = []
+                pv = getattr(self, "_visible_screen", None)
+                if pv is not None and pv is not _screen:
+                    to_hide.append(pv)
+                for w in _cached_widgets:
+                    if w is not _screen and w not in to_hide:
+                        to_hide.append(w)
+                for w in to_hide:
+                    if not _alive(w):
+                        continue
+                    try:
+                        if any(w is cw for cw in _cached_widgets):
+                            w.grid_remove()
+                        else:
+                            w.grid_forget()
+                            w.destroy()
+                    except Exception:
+                        pass
+                self._visible_screen = _screen
+
+            # Reveal immediately for cached screens (already fully drawn) and for
+            # the very first screen (nothing to hide behind — startup reveal is
+            # timed by main.py). For screens that opt into deferred reveal
+            # (async rendering, e.g. Chat), keep the current screen visible until
+            # the new one stops changing, then swap — so it doesn't tear mid-render.
+            _defer = (
+                not cache_hit
+                and getattr(self, "_visible_screen", None) is not None
+                and getattr(frame, "defer_reveal_until_settled", False)
+            )
+            if _defer:
+                _ready = getattr(frame, "is_screen_ready", None)
+                self._reveal_when_settled(
+                    main_screen, _reveal, min_ms=120, quiet_ms=400,
+                    cap_ms=4000, ready=_ready,
+                )
+            else:
+                _reveal()
+
+            self._current_main_screen = main_screen
         except Exception as e:
             logger.error(f"Error loading plugin frame {name}: {e}")
             self.show_notification(
@@ -765,6 +923,188 @@ class AppUI(customtkinter.CTk):
             )
             error_label.pack(expand=True, padx=20, pady=20)
             self._current_main_screen = error_frame
+
+    def _settle_screen(self, root_widget):
+        """Resolve all size-dependent layout synchronously, before reveal.
+
+        This replaces the old cascade of post-paint ``after()`` timers
+        (per-card wraplength, grid row heights, scrollbar auto-hide) that made
+        screens visibly reflow/"dance" after they appeared. Widgets register a
+        synchronous finalizer and ``_settle_screen`` runs them all, in order,
+        against the real measured geometry:
+
+          1. ``_resistine_finalize_scroll`` — decide scrollbar visibility first,
+             since removing an unneeded scrollbar widens the content area.
+          2. ``_resistine_finalize`` — grid row heights and card wraplengths,
+             now measured at their final width.
+
+        Genuine user resizes are still handled by the debounced ``<Configure>``
+        handlers each widget keeps; this only governs the first paint.
+        """
+        try:
+            self.update_idletasks()
+        except Exception:
+            return
+
+        # If the screen isn't mapped yet (startup, before the window is shown),
+        # child widgets report size 1 — measuring would produce garbage. The
+        # build-time (hint-based) sizing stands; main.py settles again once the
+        # window is mapped (transparently) so the real measurement happens then.
+        try:
+            if not root_widget.winfo_ismapped():
+                return
+        except Exception:
+            return
+
+        def _walk(widget, attr):
+            fn = getattr(widget, attr, None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:
+                    pass
+            try:
+                for child in widget.winfo_children():
+                    _walk(child, attr)
+            except Exception:
+                pass
+
+        # 1) Scrollbar visibility — before measuring card widths.
+        _walk(root_widget, "_resistine_finalize_scroll")
+        try:
+            self.update_idletasks()
+        except Exception:
+            pass
+
+        # 1b) Re-fit each scrollable frame's inner content to its canvas.
+        #     Showing/hiding the scrollbar in step 1 changes the canvas width,
+        #     but the inner-frame refit is normally driven by a <Configure>
+        #     event — which update_idletasks() does NOT dispatch (only the event
+        #     loop does). Without this, the content keeps the old width until the
+        #     loop catches up after reveal (a visible correction: the scrollbar
+        #     is right but the page is sized as if it weren't there).
+        def _refit(widget):
+            if isinstance(widget, customtkinter.CTkScrollableFrame):
+                # Fit directly via itemconfigure rather than
+                # _fit_frame_dimensions_to_canvas(): on Windows that method is
+                # the throttled (leading-edge) patch, which suppresses an
+                # immediate fit when a trailing job is already pending. We need
+                # the fit to happen NOW, synchronously, so we replicate its body.
+                try:
+                    canvas = widget._parent_canvas
+                    if widget._orientation == "horizontal":
+                        canvas.itemconfigure(
+                            widget._create_window_id, height=canvas.winfo_height()
+                        )
+                    elif widget._orientation == "vertical":
+                        canvas.itemconfigure(
+                            widget._create_window_id, width=canvas.winfo_width()
+                        )
+                except Exception:
+                    pass
+            try:
+                for child in widget.winfo_children():
+                    _refit(child)
+            except Exception:
+                pass
+
+        _refit(root_widget)
+        try:
+            self.update_idletasks()
+        except Exception:
+            pass
+
+        # 2) Grid + card sizing, measured against the now-final geometry.
+        #    Pre-order walk sizes each grid container before its child cards.
+        _walk(root_widget, "_resistine_finalize")
+        try:
+            self.update_idletasks()
+        except Exception:
+            pass
+
+    def _reveal_when_settled(self, screen, reveal, interval_ms=40,
+                             quiet_ms=300, min_ms=300, cap_ms=2500, ready=None):
+        """Call ``reveal()`` once ``screen``'s layout has stopped changing.
+
+        Tk resolves wraplength-driven heights, scroll regions and the auto-hide
+        scrollbar over several feedback passes that take a few hundred ms to
+        damp out — in *bursts* with gaps between them. Rather than fight to make
+        that synchronous, we let it run while the window is still invisible and
+        reveal only once the layout signature has been unchanged for ``quiet_ms``
+        — longer than the biggest debounce gap (~250 ms), so we don't reveal in
+        a lull mid-cascade.
+
+        ``min_ms`` keeps us past the brief quiet window before the debounced
+        handlers (60–250 ms) even begin. ``cap_ms`` is a hard ceiling so a
+        never-quiescent screen still appears.
+        """
+        import time as _time
+
+        start = _time.perf_counter()
+        state = {"prev": None, "last_change": start, "done": False}
+
+        def _signature():
+            try:
+                parts = [
+                    screen.winfo_width(), screen.winfo_height(),
+                    screen.winfo_reqwidth(), screen.winfo_reqheight(),
+                ]
+                stack = [screen]
+                while stack:
+                    w = stack.pop()
+                    canvas = getattr(w, "_parent_canvas", None)
+                    if canvas is not None:
+                        try:
+                            parts.append(canvas.bbox("all"))
+                        except Exception:
+                            pass
+                    try:
+                        stack.extend(w.winfo_children())
+                    except Exception:
+                        pass
+                return tuple(repr(p) for p in parts)
+            except Exception:
+                return None
+
+        def _finish(reason):
+            if state["done"]:
+                return
+            state["done"] = True
+            try:
+                reveal()
+            except Exception:
+                pass
+
+        def _tick():
+            if state["done"]:
+                return
+            now = _time.perf_counter()
+            sig = _signature()
+            if sig != state["prev"]:
+                state["prev"] = sig
+                state["last_change"] = now
+            elapsed = (now - start) * 1000.0
+            quiet = (now - state["last_change"]) * 1000.0
+            # Gate the "stable" reveal on the plugin reporting its content ready
+            # (e.g. an async fetch returned). cap_ms still forces a reveal.
+            try:
+                ready_ok = ready is None or bool(ready())
+            except Exception:
+                ready_ok = True
+            if ready_ok and elapsed >= min_ms and quiet >= quiet_ms:
+                _finish("stable")
+            elif elapsed >= cap_ms:
+                _finish("cap")
+            else:
+                try:
+                    self.after(interval_ms, _tick)
+                except Exception:
+                    _finish("error")
+
+        try:
+            self.after(interval_ms, _tick)
+        except Exception:
+            _finish("error")
 
     def refresh_ui_theme(self):
         """Refresh sidebar colors (if needed beyond automatic CTk updates)."""
@@ -800,6 +1140,39 @@ class AppUI(customtkinter.CTk):
                 self._install_scroll_behaviors(child)
         except Exception:
             pass
+
+    def _smooth_wheel_dispatch(self, event):
+        """Global <MouseWheel> router for smooth scrolling.
+
+        Sends the wheel event to whichever registered CTkScrollableFrame
+        contains the widget under the cursor, so multiple scroll frames on one
+        screen (chat messages + history sidebar) each scroll when hovered. A
+        per-frame bind_all can't do this — bind_all is global and last-wins.
+        Dead frames are pruned as they're encountered.
+        """
+        handlers = getattr(self, "_smooth_scroll_handlers", None)
+        if not handlers:
+            return None
+        target = None
+        alive = []
+        for sc, fn in handlers:
+            try:
+                if not sc.winfo_exists():
+                    continue
+            except Exception:
+                continue
+            alive.append((sc, fn))
+            if target is None:
+                try:
+                    if sc.check_if_master_is_canvas(event.widget):
+                        target = fn
+                except Exception:
+                    pass
+        if len(alive) != len(handlers):
+            self._smooth_scroll_handlers = alive
+        if target is not None:
+            return target(event)
+        return None
 
     def _enable_smooth_scroll_and_autohide(self, scrollable: customtkinter.CTkScrollableFrame):
         """
@@ -908,26 +1281,28 @@ class AppUI(customtkinter.CTk):
             except Exception:
                 pass
 
-        # Override the built-in _mouse_wheel_all so that the bind_all handler
-        # (which fires for ALL descendants including gaps) uses our smooth
-        # scrolling instead of the default jerky scroll.
-        #
-        # NOTE: simply replacing scrollable._mouse_wheel_all does NOT work
-        # because bind_all stores a reference to the original bound method.
-        # We must patch the original method to redirect to ours.
-        def _patched_mouse_wheel_all(event):
-            if scrollable.check_if_master_is_canvas(event.widget):
-                return _on_mousewheel(event)
-
-        # Monkey-patch the bound method's __func__ won't work, so we
-        # replace the actual callback in the bind_all registry by
-        # unbinding and rebinding.
+        # Route <MouseWheel> through a SINGLE global dispatcher rather than a
+        # per-frame bind_all. bind_all is global and unbind_all clears every
+        # handler, so a per-frame "bind_all + check_if_master_is_canvas" closure
+        # meant only the LAST-attached scrollable responded — when a screen has
+        # more than one (e.g. the chat messages plus the history sidebar's list,
+        # which attaches last), the others stopped scrolling everywhere except
+        # widgets that explicitly forward the wheel. The dispatcher sends the
+        # event to whichever registered frame the cursor is actually over, so
+        # they all coexist.
+        if not hasattr(self, "_smooth_scroll_handlers"):
+            self._smooth_scroll_handlers = []
+        if not any(s is scrollable for s, _ in self._smooth_scroll_handlers):
+            self._smooth_scroll_handlers.append((scrollable, _on_mousewheel))
         try:
+            # Clear CTk's per-frame default (jerky) handler + any prior
+            # dispatcher, then bind the one shared dispatcher as the sole
+            # global <MouseWheel> handler.
             scrollable.unbind_all("<MouseWheel>")
-            scrollable.bind_all("<MouseWheel>", _patched_mouse_wheel_all, add="+")
+            scrollable.bind_all(
+                "<MouseWheel>", self._smooth_wheel_dispatch, add="+")
         except Exception:
-            # Fallback: at least try the attribute swap
-            scrollable._mouse_wheel_all = _patched_mouse_wheel_all
+            scrollable._mouse_wheel_all = self._smooth_wheel_dispatch
 
         # bind_all for <Button-4>/<Button-5> on Linux so child widgets are covered
         if _is_linux:
@@ -949,8 +1324,19 @@ class AppUI(customtkinter.CTk):
         # pages whose background didn't match the CTkScrollbar fg colour.
         # grid_remove() preserves the widget's grid options so a bare
         # grid() call restores its former placement exactly.
-
-        hide_state = {"job": None, "hidden": False}
+        #
+        # Start HIDDEN: a CTkScrollableFrame is created with its scrollbar shown,
+        # so pages that don't need one would otherwise build at the narrower
+        # "scrollbar-present" width and then visibly widen when the bar is
+        # removed. Hiding it up front means pages that fit never flash; pages
+        # that genuinely overflow get the bar added by _update_scrollbar_visibility
+        # (which runs during _settle_screen, before the screen is revealed).
+        hide_state = {"job": None, "hidden": True}
+        try:
+            if scrollbar is not None and scrollbar.winfo_exists():
+                scrollbar.grid_remove()
+        except Exception:
+            pass
 
         def _update_scrollbar_visibility():
             try:
@@ -997,11 +1383,10 @@ class AppUI(customtkinter.CTk):
         except Exception:
             pass
 
-        # Kick it once after layout
-        try:
-            canvas.after(120, _update_scrollbar_visibility)
-        except Exception:
-            pass
+        # Synchronous finalizer: _settle_screen() decides scrollbar visibility
+        # before first paint, so the bar never appears and then disappears
+        # (which used to shift the content width ~120 ms after load).
+        scrollable._resistine_finalize_scroll = _update_scrollbar_visibility
 
     def get_plugin_manager(self):
         """
