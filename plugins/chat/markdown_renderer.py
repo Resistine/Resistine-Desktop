@@ -608,35 +608,22 @@ class MarkdownRenderer:
                         cap = min(cap, vp_w - padx * 2)
                     cb_embed_w = min(embed_w, cap) if cap > 1 else embed_w
                     for tbl in self._tables:
-                        # Clamp the table frame to the bubble width too. If it
-                        # keeps the raw (inflated) embed_w, its frame grows as
-                        # wide as its own content, so nothing overflows the
-                        # canvas -> no horizontal scrollbar, and it spills past
-                        # the viewport. Clamping makes the frame narrower than
-                        # the natural grid, so the overflow shows a scrollbar.
+                        # Clamp the table frame to the bubble width so a wide
+                        # table overflows into its own horizontal scrollbar
+                        # instead of spilling past the viewport.
                         if getattr(tbl, "_rf_embed_w", None) != cb_embed_w:
                             tbl._rf_embed_w = cb_embed_w
-                            # CTk frame -> logical; raw-tk canvas inside
-                            # _resize_to_width stays physical.
                             tbl.configure(width=_logical_px(tbl, cb_embed_w))
                             tbl._resize_to_width(cb_embed_w)
-                        # Force TableWidget height to track its grid's
-                        # current reqheight. Read it AFTER an idle update so it
-                        # reflects the current (post-relayout) wrap state — a
-                        # stale, too-tall reqheight here would inflate the
-                        # bubble's ypixels and leave a phantom gap below it.
+                        # Track the table's natural pixel height (it is a single
+                        # text widget that knows its own row count).
                         try:
-                            tbl._grid.update_idletasks()
-                            grid_h = tbl._grid.winfo_reqheight()
-                            if grid_h > 1:
-                                sb_h = (getattr(tbl, "_SB_H", 12)
-                                        if tbl._scrollbar_visible else 0)
-                                table_h = grid_h + sb_h
-                                if getattr(tbl, "_rf_h", None) != table_h:
-                                    tbl._rf_h = table_h
-                                    tbl._canvas.configure(height=grid_h)
-                                    tbl.configure(
-                                        height=_logical_px(tbl, table_h))
+                            table_h = tbl.desired_height()
+                            if table_h > 1 and getattr(
+                                    tbl, "_rf_h", None) != table_h:
+                                tbl._rf_h = table_h
+                                tbl.configure(
+                                    height=_logical_px(tbl, table_h))
                         except Exception:
                             pass
                     for cb in self._code_blocks:

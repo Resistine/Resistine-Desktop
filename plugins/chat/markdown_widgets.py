@@ -105,6 +105,72 @@ def _make_emoji_cell_text(
 _COPY_MOD = 0x8 if sys.platform == "darwin" else 0x4  # Cmd on mac, Ctrl elsewhere
 
 
+def _cell_readonly(event) -> str | None:
+    """Block edits in a read-only cell while allowing copy / select-all."""
+    if event.state & _COPY_MOD and event.keysym.lower() in ("c", "a"):
+        return None
+    return "break"
+
+
+def _forward_cell_wheel(widget) -> None:
+    """Forward vertical mouse-wheel over a table cell to the enclosing chat
+    scroll frame.
+
+    A selectable cell is a tk.Text, whose own wheel handling would otherwise
+    swallow the scroll so the chat won't move while the pointer is over a
+    table. Walk up to the CTkScrollableFrame and re-emit the wheel on its
+    canvas (mirrors MarkdownRenderer._setup_scroll_redirect).
+    """
+    parent = widget
+    while parent is not None:
+        if isinstance(parent, customtkinter.CTkScrollableFrame):
+            canvas = parent._parent_canvas
+
+            def _fwd(e, c=canvas):
+                try:
+                    c.event_generate("<MouseWheel>", delta=e.delta)
+                except Exception:
+                    pass
+                return "break"
+
+            def _fwd_linux(e, c=canvas):
+                try:
+                    c.event_generate(
+                        "<Button-4>" if e.num == 4 else "<Button-5>")
+                except Exception:
+                    pass
+                return "break"
+
+            widget.bind("<MouseWheel>", _fwd)
+            widget.bind("<Button-4>", _fwd_linux)
+            widget.bind("<Button-5>", _fwd_linux)
+            return
+        parent = getattr(parent, "master", None)
+
+
+def _make_selectable_cell(
+    parent: tk.Widget, text: str, bg: str, fg: str, font,
+) -> tk.Text:
+    """A label-like tk.Text table cell whose text can be highlighted + copied.
+
+    Looks like the old tk.Label cell (single line, no wrap, left aligned, 10/6
+    padding) but, being a tk.Text in the normal state, supports mouse selection
+    and Ctrl/Cmd+C copy. Key edits are blocked so it stays read-only, and the
+    mouse-wheel is forwarded so it never traps chat scrolling.
+    """
+    tw = tk.Text(
+        parent, wrap="none", font=font, fg=fg, bg=bg,
+        borderwidth=0, highlightthickness=0, relief="flat",
+        insertwidth=0, cursor="xterm", padx=10, pady=6,
+        height=1, width=1,
+        selectbackground="#3A6DB5", selectforeground="#FFFFFF",
+    )
+    tw.insert("1.0", text)
+    tw.bind("<Key>", _cell_readonly)
+    _forward_cell_wheel(tw)
+    return tw
+
+
 # ---------------------------------------------------------------------------
 # SelectableLabel
 # ---------------------------------------------------------------------------
@@ -367,7 +433,18 @@ class CodeBlockWidget(customtkinter.CTkFrame):
 # ---------------------------------------------------------------------------
 
 class TableWidget(customtkinter.CTkFrame):
-    """GitHub-style markdown table with horizontal scroll for wide tables."""
+    """Markdown table rendered as a single selectable tk.Text.
+
+    Columns are aligned with pixel tab stops and rows are striped with text
+    tags. Using ONE text widget (instead of a grid of per-cell widgets in a
+    nested canvas) lets the whole table be drag-selected and copied, and
+    avoids the Windows blit "tracers"/ghosting that the nested-canvas grid
+    produced when the chat scrolled. Wide tables scroll horizontally via the
+    text widget's own xview.
+    """
+
+    _LPAD = 10   # left/right inner padding of the table text (px)
+    _SB_H = 12   # horizontal scrollbar height + a little breathing room
 
     def __init__(
         self,
@@ -394,225 +471,210 @@ class TableWidget(customtkinter.CTkFrame):
 
         self._num_cols = (max(len(headers), *(len(r) for r in rows))
                           if rows else len(headers))
-        self._labels: list[tk.Label] = []
-
-        # Scrollable canvas wrapper
-        self._canvas = tk.Canvas(
-            self, bg=canvas_bg, highlightthickness=0, bd=0)
-        sb_color = "#3A3A3C" if is_dark else "#C8C8CC"
-        sb_hover = "#555558" if is_dark else "#A8A8AC"
-        self._scrollbar = customtkinter.CTkScrollbar(
-            self, orientation="horizontal",
-            command=self._canvas.xview,
-            height=10, corner_radius=5,
-            fg_color=border_clr,
-            button_color=sb_color,
-            button_hover_color=sb_hover)
-        self._canvas.configure(xscrollcommand=self._scrollbar.set)
-        # Always reserve a scrollbar row at the bottom (like code blocks).
-        # Packing it conditionally fought the renderer's frame-height sizing and
-        # left the freshly-packed bar clipped to zero height -> invisible. With
-        # it always on, the thumb is full-width when the table fits and scrolls
-        # when it overflows; sb height is constant so nothing oscillates.
-        self._scrollbar.pack(side="bottom", fill="x")
-        self._canvas.pack(side="top", fill="both", expand=True)
-        self._scrollbar_visible = True
+        self._labels: list[tk.Widget] = []
 
         all_rows: list[tuple[list[str], bool]] = [(headers, True)]
         for r in rows:
             all_rows.append((r, False))
+        self._num_rows = len(all_rows)
 
-        # Use the shared chat body/bold fonts so table text matches the size
-        # and family of everything else in the conversation.
+        # Shared chat body/bold fonts so table text matches the conversation.
         _tbl_fonts = get_fonts(is_dark)
         header_font = _tbl_fonts["bold"]
         body_font = _tbl_fonts["body"]
 
-        # Measure each cell with the font it ACTUALLY renders in: the header
-        # row is bold (wider), so measuring it with the regular body font
-        # under-sizes the column and the bold header text gets clipped.
-        self._col_min_px = [0] * self._num_cols
+        # Per-column pixel width: widest cell measured in the font it ACTUALLY
+        # renders in (the header is bold and wider). +24 for the gutter.
+        col_w = [0] * self._num_cols
         for row_cells, is_header in all_rows:
             mfont = header_font if is_header else body_font
             for j in range(self._num_cols):
                 txt = row_cells[j] if j < len(row_cells) else ""
-                self._col_min_px[j] = max(
-                    self._col_min_px[j], mfont.measure(txt) + 24)
-        self._col_min_px = [max(px, 60) for px in self._col_min_px]
+                w = mfont.measure(txt)
+                if _cell_has_emoji(txt):
+                    w += self._emoji_extra_px(txt, body_font)
+                col_w[j] = max(col_w[j], w)
+        col_w = [max(w + 24, 60) for w in col_w]
+        self._col_w = col_w
+        self._natural_width = sum(col_w) + self._LPAD * 2
 
-        # Grid frame inside the canvas — set explicit min width
-        self._natural_width = sum(self._col_min_px) + self._num_cols
-        self._grid = tk.Frame(self._canvas, bg=border_clr,
-                              highlightthickness=0, bd=0,
-                              width=self._natural_width)
-        self._grid.grid_propagate(True)
-        self._canvas_window = self._canvas.create_window(
-            (0, 0), window=self._grid, anchor="nw",
-            width=self._natural_width)
-
+        # A left tab stop at the start of EVERY column, including the first.
+        # The first stop (at _LPAD) gives the table a left inset; because each
+        # row begins with a tab, that inset is part of the tagged line and is
+        # filled by the row's background — so there is no bare widget-bg strip
+        # ("dark bar") down the edges.
+        tabs: list[int] = []
+        acc = self._LPAD
         for j in range(self._num_cols):
-            self._grid.grid_columnconfigure(
-                j, weight=1, minsize=self._col_min_px[j])
+            tabs.append(acc)
+            acc += col_w[j]
+
+        # ── One selectable text widget (NOT a grid of per-cell widgets in a
+        # nested canvas). This lets the whole table be drag-selected/copied AND
+        # avoids the Windows scroll "tracers"/ghosting that many embedded
+        # tk.Text cells in a nested canvas produced. Columns align via pixel
+        # tab stops; rows are striped with tags; wide tables scroll
+        # horizontally via the text widget's own xview.
+        self._emoji_photos: list[object] = []
+        self._image_to_emoji: dict[str, str] = {}
+        self._text = tk.Text(
+            self, wrap="none", font=body_font,
+            bg=canvas_bg, fg=colors["fg"],
+            borderwidth=0, highlightthickness=0, relief="flat",
+            insertwidth=0, cursor="xterm", padx=0, pady=0,
+            spacing1=5, spacing3=6, height=self._num_rows, width=1,
+            selectbackground="#3A6DB5", selectforeground="#FFFFFF",
+            inactiveselectbackground="#3A6DB5",
+        )
+        if tabs:
+            self._text.configure(tabs=tuple(str(t) for t in tabs))
+        # The table shows every row, so it must NEVER scroll vertically —
+        # otherwise drag-selecting to the bottom auto-scrolls and "displaces"
+        # the table. Pin the view to the top.
+        self._text.configure(yscrollcommand=self._lock_yview)
+
+        normal_bg = colors["bubble_bg"]
+        if normal_bg == "transparent":
+            try:
+                normal_bg = master.cget("bg")
+            except Exception:
+                normal_bg = self.winfo_toplevel().cget("bg")
+        self._text.tag_configure(
+            "header", font=header_font,
+            foreground=colors["heading"],
+            background=colors["table_header_bg"])
+        self._text.tag_configure("even", background=colors["table_alt_bg"])
+        self._text.tag_configure("odd", background=normal_bg)
 
         for idx, (row_cells, is_header) in enumerate(all_rows):
-            while len(row_cells) < self._num_cols:
-                row_cells.append("")
+            for j in range(self._num_cols):
+                # Leading tab on every column (incl. the first) so the row's
+                # background fills the left inset — no bare edge strip.
+                self._text.insert("end", "\t")
+                cell = row_cells[j] if j < len(row_cells) else ""
+                self._insert_cell(cell, body_font)
+            self._text.insert("end", "\n")
+            tag = "header" if is_header else (
+                "even" if idx % 2 == 0 else "odd")
+            self._text.tag_add(tag, f"{idx + 1}.0", f"{idx + 2}.0")
 
-            if is_header:
-                bg = colors["table_header_bg"]
-            elif idx % 2 == 0:
-                bg = colors["table_alt_bg"]
-            else:
-                bg = colors["bubble_bg"]
-                if bg == "transparent":
-                    try:
-                        bg = master.cget("bg")
-                    except Exception:
-                        bg = master.winfo_toplevel().cget("bg")
+        # The row-background tags are created AFTER the built-in "sel" tag, so
+        # they out-prioritize it and paint OVER the selection (highlight looks
+        # invisible). Raise "sel" to the top so selecting a cell is visible.
+        self._text.tag_raise("sel")
 
-            for j, cell_text in enumerate(row_cells):
-                cell_fg = colors["heading"] if is_header else colors["fg"]
-                cell_font = header_font if is_header else body_font
-                if _cell_has_emoji(cell_text):
-                    lbl = _make_emoji_cell_text(
-                        self._grid, cell_text, bg, cell_fg, cell_font,
-                    )
-                else:
-                    lbl = tk.Label(
-                        self._grid, text=cell_text, bg=bg,
-                        fg=cell_fg, font=cell_font,
-                        padx=10, pady=6, anchor="w", justify="left",
-                        wraplength=0,
-                    )
-                lbl.grid(
-                    row=idx, column=j, sticky="nsew",
-                    padx=(1 if j > 0 else 0, 0),
-                    pady=(1 if idx > 0 else 0, 0),
-                )
-                self._labels.append(lbl)
+        # Read-only but selectable: block edit keys, allow copy/select-all.
+        self._text.bind("<Key>", _cell_readonly)
+        _forward_cell_wheel(self._text)
+
+        sb_color = "#3A3A3C" if is_dark else "#C8C8CC"
+        sb_hover = "#555558" if is_dark else "#A8A8AC"
+        self._scrollbar = customtkinter.CTkScrollbar(
+            self, orientation="horizontal", command=self._text.xview,
+            height=10, corner_radius=5, fg_color=border_clr,
+            button_color=sb_color, button_hover_color=sb_hover)
+        self._text.configure(xscrollcommand=self._scrollbar.set)
+        # Always reserve the scrollbar row so showing/hiding it can't reflow
+        # the bubble height and oscillate; the thumb is full when it fits.
+        self._scrollbar.pack(side="bottom", fill="x")
+        self._scrollbar_visible = True
+        self._text.pack(side="top", fill="both", expand=True)
 
         self._in_resize = False
         self._last_width = 0
-        self._last_grid_bbox: tuple[int, int, int, int] | None = None
-        self._grid.bind("<Configure>", self._on_grid_configure)
         self.bind("<Configure>", self._on_configure)
-        self.after(200, self._deferred_resize)
+        self.after(0, self._apply_initial_height)
 
-    def _on_grid_configure(self, _event=None) -> None:
-        """Update canvas scroll region and height when grid changes.
-
-        Guarded against no-op invocations: scrolling the outer chat can
-        fire <Configure> on the embedded grid even when its bbox hasn't
-        moved, and re-asserting ``configure(height=...)`` on the inner
-        canvas cascades back up the parent chain (bubble reflow ->
-        chat_scroll <Configure>) producing a single-frame jitter per
-        scroll tick.
-
-        Use ``self._grid.winfo_reqheight()`` for height rather than
-        ``self._canvas.bbox("all")``: when cells autoheight, the grid's
-        reqheight grows immediately, but the canvas's bbox can return a
-        stale value cached from the embedded window-item's earlier size.
-        That stale bbox left TableWidget pinned at CTkFrame's default
-        200 px, even when its real content was taller, and the embed's
-        actual rendered content overflowed past its window_create line.
-        """
+    @staticmethod
+    def _emoji_extra_px(text: str, body_font) -> int:
+        """Approx extra px an inline color-emoji image adds over its text."""
         try:
-            bbox = self._canvas.bbox("all")
-            grid_h = self._grid.winfo_reqheight()
-            if not bbox:
-                if grid_h <= 1:
-                    return
-                width = self._natural_width
-                content_h = grid_h
+            n = 0
+            for i, part in enumerate(_EMOJI_RE.split(text)):
+                if part and i % 2 == 1:
+                    n += len(MarkdownBubble._split_emoji_chars(part))
+            return int(n * body_font.metrics("linespace") * 0.4)
+        except Exception:
+            return 0
+
+    def _insert_cell(self, text: str, body_font) -> None:
+        """Insert a cell's text at the end of the widget. On Linux, render
+        inline color emoji as images (tk can't fall back per-glyph there)."""
+        if not (text and _cell_has_emoji(text)
+                and sys.platform.startswith("linux")):
+            if text:
+                self._text.insert("end", text)
+            return
+        for i, part in enumerate(_EMOJI_RE.split(text)):
+            if not part:
+                continue
+            if i % 2 == 1:
+                for ch in MarkdownBubble._split_emoji_chars(part):
+                    photo = MarkdownBubble._render_emoji(ch)
+                    if photo:
+                        self._emoji_photos.append(photo)
+                        name = self._text.image_create(
+                            "end", image=photo, padx=1)
+                        self._image_to_emoji[name] = ch
+                    else:
+                        self._text.insert("end", ch)
             else:
-                width = bbox[2] - bbox[0]
-                content_h = max(grid_h, bbox[3] - bbox[1])
-            new_state = (width, content_h)
-            if new_state == self._last_grid_bbox:
-                return
-            self._last_grid_bbox = new_state
-            self._canvas.configure(
-                scrollregion=(0, 0, width, content_h),
-                height=content_h,
-            )
-            # Re-evaluate the horizontal scrollbar here too. _update_scrollbar
-            # otherwise runs only inside _resize_to_width, which early-returns
-            # on an unchanged width — so the very first evaluation can happen
-            # before the grid has laid out (bbox is None) and then never re-run.
-            # The grid's <Configure> fires once it has real content, which is
-            # exactly when the overflow decision becomes valid.
-            self._update_scrollbar()
+                self._text.insert("end", part)
+
+    def desired_height(self) -> int:
+        """Pixel height to show every row plus the reserved scrollbar."""
+        content = 0
+        try:
+            self._text.update_idletasks()
+            yp = self._text.count("1.0", "end-1c", "ypixels")
+            content = (yp[0] if isinstance(yp, (list, tuple)) else yp) or 0
+        except Exception:
+            content = 0
+        if int(content) <= 1:
+            try:
+                import tkinter.font as _tkfont
+                lh = _tkfont.Font(
+                    font=self._text.cget("font")).metrics("linespace")
+            except Exception:
+                lh = 17
+            content = self._num_rows * (lh + 11)
+        return int(content) + (self._SB_H if self._scrollbar_visible else 0)
+
+    def _apply_initial_height(self) -> None:
+        try:
+            self.configure(height=self.desired_height())
         except Exception:
             pass
 
-    def _deferred_resize(self) -> None:
-        """Re-layout after stretch has taken effect."""
+    def _lock_yview(self, first, last) -> None:
+        """Pin the vertical view to the top. The table shows every row, so it
+        must not scroll vertically; without this, drag-selecting past the
+        bottom edge auto-scrolls the text and visually displaces the table."""
         try:
-            w = self.winfo_width()
-            if w > 1:
-                self._resize_to_width(w)
+            if float(first) > 0.0:
+                self._text.yview_moveto(0.0)
         except Exception:
             pass
 
     def _on_configure(self, event) -> None:
-        width = event.width
-        if width > 1 and self._num_cols > 0 and width != self._last_width:
-            self._resize_to_width(width)
+        if event.width > 1 and event.width != self._last_width:
+            self._resize_to_width(event.width)
 
     def _resize_to_width(self, width: int) -> None:
-        """Resize table internals to the given width.
-
-        Idempotent on width: re-applying the same width re-wraps cells and
-        re-asserts canvas geometry for no reason, which can re-fire the
-        <Configure> cascade. Skip when the width has not actually changed.
-        """
+        """Kept for the renderer's contract. A single text widget needs no
+        per-cell relayout — horizontal overflow is handled by its own xview and
+        the always-on scrollbar — so just record the width."""
         if self._in_resize or width == self._last_width:
             return
         self._in_resize = True
         self._last_width = width
         try:
-            natural_width = self._natural_width
-            # Never wrap cell text: data/terminal tables should keep each row
-            # on one line and scroll HORIZONTALLY when wider than the bubble.
-            for lbl in self._labels:
-                try:
-                    lbl.configure(wraplength=0)
-                except tk.TclError:
-                    pass
-            if natural_width <= width:
-                # Fits — stretch the grid to fill the bubble (columns share the
-                # extra space via their grid weights); no scrollbar needed.
-                self._canvas.configure(width=width)
-                self._canvas.itemconfigure(
-                    self._canvas_window, width=width)
-            else:
-                # Wider than the bubble — render at full content width and let
-                # the horizontal scrollbar handle the overflow.
-                self._canvas.itemconfigure(
-                    self._canvas_window, width=natural_width)
-            self._on_grid_configure()
-            self._update_scrollbar()
+            pass
         finally:
             self._in_resize = False
 
-    # Hysteresis dead-band for the horizontal-scrollbar show/hide decision.
-    # Showing the scrollbar adds ~14px of frame height (sb_h in
-    # markdown_renderer._resize_to_fit); without a dead-band that height delta
-    # reflows the bubble, shifts the canvas width 1-2px, and re-crosses a single
-    # bare threshold every reflow pass -> the table oscillates wider/narrower
-    # forever at certain window widths/DPIs. _SB_HIDE_MARGIN must exceed sb_h
-    # (14) so the scrollbar's own height cannot re-cross the hide threshold,
-    # making _scrollbar_visible a per-width monotone latch that pins sb_h and
-    # lets the reflow reach a fixed point.
-    _SB_SHOW_MARGIN = 2
-    _SB_HIDE_MARGIN = 16
-
-    _SB_H = 12  # horizontal scrollbar height + a little breathing room
-
     def _update_scrollbar(self) -> None:
-        """No-op: the horizontal scrollbar is always packed (see __init__), so
-        there is nothing to show/hide. The canvas xscrollcommand keeps the
-        thumb in sync with the content automatically."""
+        """No-op: the horizontal scrollbar is always packed (see __init__)."""
         return
 
 
