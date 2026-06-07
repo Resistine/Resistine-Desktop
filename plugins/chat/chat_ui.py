@@ -1,6 +1,8 @@
 """Chat UI construction mixin for the Chat plugin."""
 from __future__ import annotations
 
+import tkinter
+
 import customtkinter
 
 from plugins.chat.assistant_bubble import AssistantBubble
@@ -10,9 +12,16 @@ from plugins.chat.sidebar import ChatSidebar
 from plugins.chat.welcome_screen import ApiKeyMissingScreen, WelcomeScreen
 from utils.emoji_entry import EmojiEntry
 
+# Opacity of the layer that dims the chat behind the open history drawer.
+# 0 = invisible, 1 = solid black; this is the "slightly darker" look.
+_DIM_ALPHA = 0.4
+
 
 class ChatUIMixin:
     """UI construction methods mixed into the Chat Plugin class."""
+
+    # Drawer overlay starts just below the header bar (header sits at y=4..46).
+    _DRAWER_TOP = 46
 
     def create_main_screen(self):
         is_dark = _is_dark_mode()
@@ -21,18 +30,75 @@ class ChatUIMixin:
         self.second_frame = customtkinter.CTkFrame(
             self.app, corner_radius=0, fg_color="transparent")
 
+        # Build the full-width chat area first. The history sidebar is an
+        # OVERLAY drawer over this area (see _show_sidebar) rather than a packed
+        # column — so toggling it never resizes/reflows the chat content and the
+        # markdown bubbles never re-wrap. That eliminates the toggle jaggedness.
+        self._build_chat_area(is_dark)
+
         self._sidebar = ChatSidebar(
             self.second_frame,
             on_select=self._select_chat,
             on_new_chat=self._new_chat,
             on_delete=self._delete_chat,
             is_dark=is_dark)
+        # Keep the open drawer sized to the chat area as the window resizes.
+        self.second_frame.bind(
+            "<Configure>", self._on_second_frame_configure, add="+")
+        # The dim layer is a separate top-level window, so it must follow the
+        # chat screen's visibility: hide it when this screen is unmapped
+        # (navigated away / minimized), re-show it on return if the drawer is
+        # still open.
+        self.second_frame.bind("<Unmap>", self._on_chat_unmapped, add="+")
+        self.second_frame.bind("<Map>", self._on_chat_mapped, add="+")
         if self._sidebar_visible:
-            self._sidebar.pack(side="left", fill="y")
+            self._show_sidebar()
 
-        self._build_chat_area(is_dark)
         self._refresh_sidebar()
         return self.second_frame
+
+    def _on_chat_unmapped(self, _event=None) -> None:
+        # Navigated away (or minimized): fully collapse the history drawer so
+        # returning to chat doesn't greet the user with the dimmed overlay still
+        # up. _hide_sidebar withdraws the dim layer and forgets the drawer; we
+        # also clear the open-state so the rebuild/remap doesn't re-open it.
+        if getattr(self, "_sidebar_visible", False):
+            try:
+                self._hide_sidebar()
+            except Exception:
+                pass
+            self._sidebar_visible = False
+        else:
+            ov = getattr(self, "_dim_overlay", None)
+            try:
+                if ov is not None:
+                    ov.withdraw()
+            except Exception:
+                pass
+
+    def _on_chat_mapped(self, _event=None) -> None:
+        # The drawer is collapsed on unmap, so there's nothing to restore here;
+        # kept as a no-op guard in case the open-state is set some other way.
+        if getattr(self, "_sidebar_visible", False):
+            try:
+                self._set_chat_dim(True)
+            except Exception:
+                pass
+
+    def _on_second_frame_configure(self, _event=None) -> None:
+        try:
+            if self._sidebar is not None and self._sidebar.winfo_ismapped():
+                self._sync_drawer_geometry()
+                # Keep the dim overlay aligned to the chat as it resizes, and
+                # ensure it's shown (covers the case where the chat wasn't sized
+                # yet when the drawer first opened).
+                if self._position_dim_overlay():
+                    ov = getattr(self, "_dim_overlay", None)
+                    if ov is not None:
+                        ov.deiconify()
+                        ov.lift()
+        except Exception:
+            pass
 
     def _build_chat_area(self, is_dark: bool) -> None:
         self._chat_area = customtkinter.CTkFrame(
@@ -96,6 +162,7 @@ class ChatUIMixin:
         bar = customtkinter.CTkFrame(
             self._chat_area, fg_color=bg,
             corner_radius=22, border_width=1, border_color=brd)
+        self._input_bar = bar
         bar.place(relx=0.5, rely=1.0, anchor="s", relwidth=0.98, y=-14)
         bar.grid_columnconfigure(0, weight=1)
         self.chat_entry = EmojiEntry(
@@ -165,12 +232,147 @@ class ChatUIMixin:
             command=self._scroll_to_bottom)
         self._scroll_btn_visible = False
 
+    def _show_sidebar(self) -> None:
+        """Reveal the history drawer as an overlay on the left of the chat area.
+
+        It floats over the chat (below the header bar) instead of pushing it, so
+        the chat content keeps its width and never re-wraps.
+        """
+        self._set_chat_dim(True)
+        self._sync_drawer_geometry()
+        try:
+            self._sidebar.lift()
+        except Exception:
+            pass
+
+    def _set_chat_dim(self, dim: bool) -> None:
+        """Show/hide the dim layer over the chat while the drawer is open.
+
+        Instead of recoloring every widget (which Tk can't repaint atomically —
+        it BitBlts each canvas one at a time), we lay a single borderless,
+        semi-transparent top-level window over the chat, to the RIGHT of the
+        drawer so the drawer stays bright. It darkens everything beneath it in
+        one OS-composited frame (truly atomic), and being on top it also
+        swallows hover and clicks — a click collapses the drawer.
+        """
+        ov = self._ensure_dim_overlay()
+        if ov is None:
+            return
+        if dim:
+            if self._position_dim_overlay():
+                try:
+                    ov.deiconify()
+                    ov.lift()
+                except Exception:
+                    pass
+        else:
+            try:
+                ov.withdraw()
+            except Exception:
+                pass
+
+    def _ensure_dim_overlay(self):
+        """Create the dim layer once (borderless, alpha). Returns it or None."""
+        ov = getattr(self, "_dim_overlay", None)
+        try:
+            if ov is not None and ov.winfo_exists():
+                return ov
+        except Exception:
+            pass
+        try:
+            ov = tkinter.Toplevel(self.app)
+            ov.overrideredirect(True)       # borderless; no taskbar/focus steal
+            ov.configure(bg="#000000")
+            try:
+                ov.attributes("-alpha", _DIM_ALPHA)
+            except Exception:
+                pass
+            try:
+                ov.transient(self.app)      # stack + minimize with the main win
+            except Exception:
+                pass
+            ov.withdraw()
+            # Clicking the dimmed area collapses the drawer; being on top, the
+            # overlay also blocks hover on everything beneath it.
+            ov.bind("<Button-1>", lambda _e: self._hide_sidebar())
+            self._dim_overlay = ov
+            # second_frame <Configure> fires on resize but not on a window move,
+            # so also track the top-level window's geometry. Bind ONCE — the
+            # overlay can be recreated across chat rebuilds, and stacking
+            # duplicate handlers would slow every resize.
+            if not getattr(self, "_app_cfg_bound", False):
+                try:
+                    self.app.bind(
+                        "<Configure>", self._on_app_configure, add="+")
+                    self._app_cfg_bound = True
+                except Exception:
+                    pass
+        except Exception:
+            self._dim_overlay = None
+        return self._dim_overlay
+
+    def _on_app_configure(self, _event=None) -> None:
+        ov = getattr(self, "_dim_overlay", None)
+        try:
+            if ov is not None and ov.winfo_ismapped():
+                self._position_dim_overlay()
+                ov.lift()
+        except Exception:
+            pass
+
+    def _position_dim_overlay(self) -> bool:
+        """Size the overlay to the visible chat right of the drawer.
+
+        Returns False if the chat isn't laid out yet (can't size).
+        """
+        ov = getattr(self, "_dim_overlay", None)
+        if ov is None:
+            return False
+        try:
+            # NOTE: never call update_idletasks() here — this runs inside
+            # <Configure> handlers, and forcing idle processing mid-resize
+            # re-enters the event loop and crashes. winfo_* is already current
+            # during a Configure.
+            sf = self.second_frame
+            x, y = sf.winfo_rootx(), sf.winfo_rooty()
+            w, h = sf.winfo_width(), sf.winfo_height()
+            drawer_w = getattr(self._sidebar, "_WIDTH", 220)
+            ox = x + drawer_w
+            ow = w - drawer_w
+            if ow <= 1 or h <= 1:
+                return False
+            ov.geometry(f"{int(ow)}x{int(h)}+{int(ox)}+{int(y)}")
+            return True
+        except Exception:
+            return False
+
+    def _sync_drawer_geometry(self) -> None:
+        """Size + place the drawer to fill the chat area below the header.
+
+        CTk's place() refuses an absolute height (it must be set via the
+        constructor / configure()), so we configure() the height and only pass
+        x/y to place(). Width comes from the ChatSidebar constructor.
+        """
+        try:
+            h = self.second_frame.winfo_height() - self._DRAWER_TOP
+            self._sidebar.configure(height=max(1, h))
+            self._sidebar.place(x=0, y=self._DRAWER_TOP)
+        except Exception:
+            pass
+
+    def _hide_sidebar(self) -> None:
+        self._set_chat_dim(False)
+        try:
+            if getattr(self, "_sidebar", None) is not None:
+                self._sidebar.place_forget()
+        except Exception:
+            pass
+
     def _toggle_sidebar(self) -> None:
         if self._sidebar_visible:
-            self._sidebar.pack_forget()
+            self._hide_sidebar()
         else:
-            self._sidebar.pack(side="left", fill="y",
-                               before=self._chat_area)
+            self._show_sidebar()
         self._sidebar_visible = not self._sidebar_visible
 
     def _check_scroll_btn(self) -> None:

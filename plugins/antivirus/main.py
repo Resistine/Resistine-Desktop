@@ -119,6 +119,12 @@ def _send_notification_windows(title: str, body: str):
 class Plugin(BasePlugin):
     """Antivirus plugin powered by ClamAV."""
 
+    # Scrollbar auto-hide + content-column centering settle just after build
+    # (the canvas reflows when the scrollbar toggles); defer the reveal until
+    # the layout is quiescent so the page doesn't visibly "shift right" after
+    # appearing. (Mirrors the VPN plugin, which shares this layout.)
+    defer_reveal_until_settled = True
+
     def __init__(self, app):
         super().__init__(
             id="012",
@@ -403,7 +409,11 @@ class Plugin(BasePlugin):
                             if hasattr(active, "_saved_sb_grid") and active._saved_sb_grid:
                                 active._scrollbar.grid(**active._saved_sb_grid)
                             else:
-                                active._scrollbar.grid(row=0, column=1, sticky="ns", pady=0)
+                                # CTk grids the vertical scrollbar at row=1
+                                # (row 0 is the label row). row=0 dropped a
+                                # default height=200 scrollbar into the empty
+                                # label row, pushing the canvas down 200px.
+                                active._scrollbar.grid(row=1, column=1, sticky="ns", pady=0)
             except Exception:
                 pass
             # --- End Auto-hide ---

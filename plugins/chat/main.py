@@ -159,6 +159,10 @@ class Plugin(ChatUIMixin, BasePlugin):
         self.send_button = self._bottom_spacer = None
         self._build_chat_area(_is_dark_mode())
         self._refresh_sidebar()
+        # The drawer is a sibling overlay that survives the rebuild; the new
+        # chat area is created on top of it, so re-assert its z-order.
+        if self._sidebar_visible:
+            self._show_sidebar()
 
     def send_message(self) -> None:
         user_text = self.chat_entry.get().strip()

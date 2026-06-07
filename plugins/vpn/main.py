@@ -155,6 +155,14 @@ class Plugin(BasePlugin):
     """
     @brief Plugin class for the VPN plugin.
     """
+
+    # The scrollbar auto-hide + content-column centering settle just after the
+    # screen is built (the canvas reflows when the scrollbar toggles), which
+    # would otherwise be a visible "shift right" after the page appears. Defer
+    # the reveal until the layout goes quiescent so the page is shown already
+    # settled.
+    defer_reveal_until_settled = True
+
     def __init__(self, app):
         super().__init__(
             id="008",
@@ -782,9 +790,14 @@ class Plugin(BasePlugin):
                              if hasattr(scroll_frame, "_saved_sb_grid") and scroll_frame._saved_sb_grid:
                                  scroll_frame._scrollbar.grid(**scroll_frame._saved_sb_grid)
                              else:
-                                 # Default fallback if we somehow didn't save it
-                                 # Standard CTkScrollableFrame layout: row=0, column=1, sticky="ns"
-                                 scroll_frame._scrollbar.grid(row=0, column=1, sticky="ns", pady=0)
+                                 # Default fallback if we somehow didn't save it.
+                                 # CTk's vertical CTkScrollableFrame grids the
+                                 # scrollbar at row=1, column=1 (row 0 is the
+                                 # label row). Using row=0 dropped a default
+                                 # height=200 scrollbar into the empty label row,
+                                 # creating a 200px gap that pushed the canvas
+                                 # down and shrank it.
+                                 scroll_frame._scrollbar.grid(row=1, column=1, sticky="ns", pady=0)
             except Exception:
                 pass
             # --- End Auto-hide ---

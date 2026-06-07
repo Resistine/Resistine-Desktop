@@ -1132,6 +1132,39 @@ class AppUI(customtkinter.CTk):
         except Exception:
             pass
 
+    def _smooth_wheel_dispatch(self, event):
+        """Global <MouseWheel> router for smooth scrolling.
+
+        Sends the wheel event to whichever registered CTkScrollableFrame
+        contains the widget under the cursor, so multiple scroll frames on one
+        screen (chat messages + history sidebar) each scroll when hovered. A
+        per-frame bind_all can't do this — bind_all is global and last-wins.
+        Dead frames are pruned as they're encountered.
+        """
+        handlers = getattr(self, "_smooth_scroll_handlers", None)
+        if not handlers:
+            return None
+        target = None
+        alive = []
+        for sc, fn in handlers:
+            try:
+                if not sc.winfo_exists():
+                    continue
+            except Exception:
+                continue
+            alive.append((sc, fn))
+            if target is None:
+                try:
+                    if sc.check_if_master_is_canvas(event.widget):
+                        target = fn
+                except Exception:
+                    pass
+        if len(alive) != len(handlers):
+            self._smooth_scroll_handlers = alive
+        if target is not None:
+            return target(event)
+        return None
+
     def _enable_smooth_scroll_and_autohide(self, scrollable: customtkinter.CTkScrollableFrame):
         """
         Make scrolling feel smoother and hide the scrollbar when the content fits.
@@ -1239,26 +1272,28 @@ class AppUI(customtkinter.CTk):
             except Exception:
                 pass
 
-        # Override the built-in _mouse_wheel_all so that the bind_all handler
-        # (which fires for ALL descendants including gaps) uses our smooth
-        # scrolling instead of the default jerky scroll.
-        #
-        # NOTE: simply replacing scrollable._mouse_wheel_all does NOT work
-        # because bind_all stores a reference to the original bound method.
-        # We must patch the original method to redirect to ours.
-        def _patched_mouse_wheel_all(event):
-            if scrollable.check_if_master_is_canvas(event.widget):
-                return _on_mousewheel(event)
-
-        # Monkey-patch the bound method's __func__ won't work, so we
-        # replace the actual callback in the bind_all registry by
-        # unbinding and rebinding.
+        # Route <MouseWheel> through a SINGLE global dispatcher rather than a
+        # per-frame bind_all. bind_all is global and unbind_all clears every
+        # handler, so a per-frame "bind_all + check_if_master_is_canvas" closure
+        # meant only the LAST-attached scrollable responded — when a screen has
+        # more than one (e.g. the chat messages plus the history sidebar's list,
+        # which attaches last), the others stopped scrolling everywhere except
+        # widgets that explicitly forward the wheel. The dispatcher sends the
+        # event to whichever registered frame the cursor is actually over, so
+        # they all coexist.
+        if not hasattr(self, "_smooth_scroll_handlers"):
+            self._smooth_scroll_handlers = []
+        if not any(s is scrollable for s, _ in self._smooth_scroll_handlers):
+            self._smooth_scroll_handlers.append((scrollable, _on_mousewheel))
         try:
+            # Clear CTk's per-frame default (jerky) handler + any prior
+            # dispatcher, then bind the one shared dispatcher as the sole
+            # global <MouseWheel> handler.
             scrollable.unbind_all("<MouseWheel>")
-            scrollable.bind_all("<MouseWheel>", _patched_mouse_wheel_all, add="+")
+            scrollable.bind_all(
+                "<MouseWheel>", self._smooth_wheel_dispatch, add="+")
         except Exception:
-            # Fallback: at least try the attribute swap
-            scrollable._mouse_wheel_all = _patched_mouse_wheel_all
+            scrollable._mouse_wheel_all = self._smooth_wheel_dispatch
 
         # bind_all for <Button-4>/<Button-5> on Linux so child widgets are covered
         if _is_linux:

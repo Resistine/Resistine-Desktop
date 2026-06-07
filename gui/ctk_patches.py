@@ -71,6 +71,43 @@ def _sf_init_clamp_scroll(self, *args, **kwargs):
 _sf.CTkScrollableFrame.__init__ = _sf_init_clamp_scroll
 
 
+# ── Cross-platform: stop CTkScrollbar from forcing a present on every draw ─
+# CTkScrollbar._draw ends with self._canvas.update_idletasks() — a forced,
+# synchronous flush of the whole pending-render queue on EVERY scrollbar
+# redraw. Its result is unused; it's purely "paint now", and it fires on every
+# hover/scroll/resize/theme change across the app. Suppress just that trailing
+# flush; the scrollbar still redraws and paints at the next natural idle.
+#
+# This flush was also (accidentally) load-bearing for CTkScrollableFrame's
+# first-paint sizing — it masked the fact that _settle_screen() fits a scroll
+# frame's inner content BEFORE a plugin's _resistine_finalize widens its
+# column. _settle_screen now re-fits after the finalizers (see its step 3), so
+# layout no longer depends on this flush.
+from customtkinter.windows.widgets.ctk_scrollbar import (  # noqa: E402
+    CTkScrollbar as _CTkScrollbar_perf,
+)
+
+_orig_scrollbar_draw = _CTkScrollbar_perf._draw
+
+
+def _scrollbar_draw_no_flush(self, no_color_updates=False):
+    canvas = self._canvas
+    # Shadow the canvas's update_idletasks with a no-op for the duration of the
+    # draw, so the trailing forced flush inside _draw becomes a no-op. Restored
+    # immediately after, so nothing else is affected.
+    canvas.update_idletasks = lambda: None
+    try:
+        return _orig_scrollbar_draw(self, no_color_updates)
+    finally:
+        try:
+            del canvas.update_idletasks  # drop the shadow; class method returns
+        except Exception:
+            pass
+
+
+_CTkScrollbar_perf._draw = _scrollbar_draw_no_flush
+
+
 # ── Windows: resize performance patch ───────────────────────────────────
 if sys.platform.startswith("win"):
     _orig_fit = _sf.CTkScrollableFrame._fit_frame_dimensions_to_canvas
@@ -120,6 +157,46 @@ if sys.platform.startswith("win"):
         self._fit_job = canvas.after(200, _do_fit)
 
     _sf.CTkScrollableFrame._fit_frame_dimensions_to_canvas = _throttled_fit
+
+
+# ── Windows/macOS: geometry cache for the stock draw engine ─────────────
+# CTk's font_shapes / polygon_shapes draw_rounded_rect_with_border re-issues
+# every find_withtag()/coords() call on EVERY _draw — even when the widget's
+# geometry (size, corner radius, border width, drawing method) is identical to
+# the previous draw. So a pure *color* change — hover feedback, theme toggle,
+# text selection, the chat dim — pays the full geometry re-layout cost. With
+# many widgets that adds up to hundreds of ms (measured ~197 ms to recolor ~100
+# widgets) and shows up as sluggish, staggered repaints app-wide.
+#
+# The canvas items are already created and positioned, so when the geometry
+# args match the last call we can skip the whole geometry pass. We return False
+# ("no new parts created", z-order already managed); the widget's _draw() still
+# applies color because it keys off its own no_color_updates flag, not this
+# return value. Only the plain rounded-rect is cached — progress/slider/
+# scrollbar draws depend on a value, not just geometry, so they're left alone.
+#
+# Linux swaps the entire draw engine for Cairo (which caches via its own
+# _poly_cache_key), so this is for the stock engine on Windows/macOS only.
+if not sys.platform.startswith("linux"):
+    from customtkinter.windows.widgets.core_rendering import (
+        DrawEngine as _DrawEngine,
+    )
+
+    _orig_rrb = _DrawEngine.draw_rounded_rect_with_border
+
+    def _cached_rrb(self, width, height, corner_radius, border_width,
+                    overwrite_preferred_drawing_method=None):
+        key = (width, height, corner_radius, border_width,
+               overwrite_preferred_drawing_method
+               or self.preferred_drawing_method)
+        if getattr(self, "_rrb_geom_key", None) == key:
+            return False  # geometry unchanged → items already drawn/positioned
+        result = _orig_rrb(self, width, height, corner_radius, border_width,
+                           overwrite_preferred_drawing_method)
+        self._rrb_geom_key = key
+        return result
+
+    _DrawEngine.draw_rounded_rect_with_border = _cached_rrb
 
 
 # ── Linux: Cairo smooth rendering + cursor / keyboard patches ───────────
