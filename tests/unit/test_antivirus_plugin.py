@@ -329,52 +329,33 @@ class TestToggleAutoUpdate:
             mock_stop.assert_called_once()
             mock_clamav.set_freshclam_daemon_enabled.assert_not_called()
 
-    def test_toggle_on_darwin_enables_daemon_not_scheduler(self, plugin):
-        # On macOS the toggle controls the OS freshclam LaunchDaemon, NOT
-        # the in-process thread.
-        plugin._auto_update_switch = MagicMock()
-        plugin._auto_update_switch.get.return_value = True
+    def test_toggle_is_noop_on_darwin(self, plugin):
+        # macOS has no auto-update toggle — updates are always on via the OS
+        # freshclam daemon. _toggle_auto_update must do nothing there: no
+        # daemon call, no scheduler, no settings write.
+        plugin._auto_update_switch = None
         with patch("platform.system", return_value="Darwin"), \
              patch("plugins.antivirus.main.settings") as mock_settings, \
              patch("plugins.antivirus.main.clamav") as mock_clamav, \
-             patch("plugins.antivirus.main.threading") as mock_threading, \
-             patch.object(plugin, "_start_auto_update_scheduler") as mock_start:
-            mock_clamav.set_freshclam_daemon_enabled.return_value = (True, "")
-            plugin._toggle_auto_update()
-            # Run the worker thread's target synchronously.
-            target = mock_threading.Thread.call_args.kwargs["target"]
-            target()
-
-            assert plugin._auto_update_on is True
-            mock_settings.set.assert_called_once_with(
-                "antivirus", "auto_update_enabled", True,
-            )
-            mock_start.assert_not_called()
-            mock_clamav.set_freshclam_daemon_enabled.assert_called_once_with(
-                True,
-            )
-
-    def test_toggle_off_darwin_disables_daemon(self, plugin):
-        plugin._auto_update_switch = MagicMock()
-        plugin._auto_update_switch.get.return_value = False
-        with patch("platform.system", return_value="Darwin"), \
-             patch("plugins.antivirus.main.settings") as mock_settings, \
-             patch("plugins.antivirus.main.clamav") as mock_clamav, \
-             patch("plugins.antivirus.main.threading") as mock_threading, \
+             patch.object(plugin, "_start_auto_update_scheduler") as mock_start, \
              patch.object(plugin, "_stop_auto_update_scheduler") as mock_stop:
-            mock_clamav.set_freshclam_daemon_enabled.return_value = (True, "")
             plugin._toggle_auto_update()
-            target = mock_threading.Thread.call_args.kwargs["target"]
-            target()
 
-            assert plugin._auto_update_on is False
-            mock_settings.set.assert_called_once_with(
-                "antivirus", "auto_update_enabled", False,
-            )
+            mock_settings.set.assert_not_called()
+            mock_start.assert_not_called()
             mock_stop.assert_not_called()
-            mock_clamav.set_freshclam_daemon_enabled.assert_called_once_with(
-                False,
-            )
+            mock_clamav.set_freshclam_daemon_enabled.assert_not_called()
+
+    def test_toggle_noop_without_switch_widget(self, plugin):
+        # Defensive: even on a non-Darwin platform, calling the handler
+        # before the settings card built the switch must not crash.
+        plugin._auto_update_switch = None
+        with patch("platform.system", return_value="Linux"), \
+             patch("plugins.antivirus.main.settings") as mock_settings, \
+             patch.object(plugin, "_start_auto_update_scheduler") as mock_start:
+            plugin._toggle_auto_update()  # must not raise
+            mock_settings.set.assert_not_called()
+            mock_start.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

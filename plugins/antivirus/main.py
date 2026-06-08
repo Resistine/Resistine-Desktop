@@ -193,6 +193,7 @@ class Plugin(BasePlugin):
         self._last_status = None
         self._auto_update_timer = None
         self._auto_update_stop = threading.Event()
+        self._auto_update_switch = None
         self._rtd_watcher = None
         self._settings_gear_btn = None
         self._settings_frame = None
@@ -884,28 +885,21 @@ class Plugin(BasePlugin):
             logger.warning(f"Antivirus RTD: {name} at {path}")
 
     def _toggle_auto_update(self):
+        # macOS has no auto-update toggle: signature updates are always on,
+        # owned by the OS-level freshclam LaunchDaemon (registered in
+        # _darwin_daemon_init). The settings card shows a read-only
+        # "Automatic" status there, so this handler is only wired to the
+        # Linux/Windows switch. Guard defensively in case it's ever called
+        # without a switch widget.
+        if platform.system() == "Darwin" or self._auto_update_switch is None:
+            return
         self._auto_update_on = bool(self._auto_update_switch.get())
         settings.set("antivirus", "auto_update_enabled", self._auto_update_on)
         logger.info(
             f"Antivirus: auto-update toggled "
             f"{'on' if self._auto_update_on else 'off'}",
         )
-        if platform.system() == "Darwin":
-            # On macOS the setting controls the OS-level freshclam
-            # LaunchDaemon (runs even when the app is closed), not the
-            # in-process thread. Enable registers/loads it; disable boots
-            # out only the freshclam daemon (clamd/clamonacc untouched).
-            def _apply():
-                ok, msg = clamav.set_freshclam_daemon_enabled(
-                    self._auto_update_on,
-                )
-                if not ok:
-                    logger.warning(
-                        f"Antivirus: freshclam daemon toggle failed — {msg}",
-                    )
-
-            threading.Thread(target=_apply, daemon=True).start()
-        elif self._auto_update_on:
+        if self._auto_update_on:
             self._start_auto_update_scheduler()
         else:
             self._stop_auto_update_scheduler()
