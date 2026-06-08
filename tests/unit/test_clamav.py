@@ -1553,3 +1553,93 @@ class TestOpenSettings:
             clamav.open_fda_settings()
 
 
+# ---------------------------------------------------------------------------
+# freshclam auto-update LaunchDaemon
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestFreshclamDaemon:
+    def test_daemon_plists_includes_freshclam(self):
+        # The freshclam plist must be registered (and last, after clamd
+        # and clamonacc) so ensure_daemons_registered/deactivate cover it.
+        assert (
+            "com.resistine.desktop.freshclam.plist"
+            in clamav_platform_darwin._DAEMON_PLISTS
+        )
+        assert clamav_platform_darwin._DAEMON_PLISTS[-1] == (
+            "com.resistine.desktop.freshclam.plist"
+        )
+
+    def test_enable_routes_through_ensure_registered(self, monkeypatch):
+        # Enabling must (re)register daemons, not run launchctl bootout.
+        calls = {"ensure": 0}
+
+        def _ensure():
+            calls["ensure"] += 1
+
+        monkeypatch.setattr(
+            clamav_platform_darwin, "ensure_daemons_registered", _ensure,
+        )
+        ran = MagicMock()
+        monkeypatch.setattr(subprocess, "run", ran)
+
+        ok, _msg = clamav_platform_darwin.set_freshclam_daemon_enabled(True)
+
+        assert ok is True
+        assert calls["ensure"] == 1
+        ran.assert_not_called()  # no osascript on enable
+
+    def test_disable_boots_out_only_freshclam(self, monkeypatch):
+        # Disabling must bootout ONLY the freshclam label — never clamd or
+        # clamonacc — and must not call ensure_daemons_registered.
+        ensure = MagicMock()
+        monkeypatch.setattr(
+            clamav_platform_darwin, "ensure_daemons_registered", ensure,
+        )
+        result = MagicMock(returncode=0, stderr="")
+        ran = MagicMock(return_value=result)
+        monkeypatch.setattr(subprocess, "run", ran)
+
+        ok, _msg = clamav_platform_darwin.set_freshclam_daemon_enabled(False)
+
+        assert ok is True
+        ensure.assert_not_called()
+        # The osascript shell script targets exactly the freshclam label.
+        script = " ".join(str(a) for a in ran.call_args[0][0])
+        assert "bootout system/com.resistine.desktop.freshclam" in script
+        assert "clamd" not in script
+        assert "clamonacc" not in script
+
+    def test_disable_returns_error_on_failure(self, monkeypatch):
+        monkeypatch.setattr(
+            clamav_platform_darwin, "ensure_daemons_registered", MagicMock(),
+        )
+        result = MagicMock(returncode=1, stderr="User cancelled")
+        monkeypatch.setattr(
+            subprocess, "run", MagicMock(return_value=result),
+        )
+
+        ok, msg = clamav_platform_darwin.set_freshclam_daemon_enabled(False)
+
+        assert ok is False
+        assert "User cancelled" in msg
+
+    def test_enable_swallows_ensure_exception(self, monkeypatch):
+        # A failure inside ensure_daemons_registered must NOT propagate
+        # (it runs on the toggle's worker thread) — return (False, msg).
+        def _boom():
+            raise RuntimeError("BTM unavailable")
+
+        monkeypatch.setattr(
+            clamav_platform_darwin, "ensure_daemons_registered", _boom,
+        )
+        ran = MagicMock()
+        monkeypatch.setattr(subprocess, "run", ran)
+
+        ok, msg = clamav_platform_darwin.set_freshclam_daemon_enabled(True)
+
+        assert ok is False
+        assert "BTM unavailable" in msg
+        ran.assert_not_called()  # never falls through to osascript on enable
+
+

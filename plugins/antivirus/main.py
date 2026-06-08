@@ -236,8 +236,13 @@ class Plugin(BasePlugin):
         # Waits for daemon registration to finish first.
         threading.Thread(target=self._poll_initial_status, daemon=True).start()
 
-        # Start the auto-update scheduler if enabled
-        if self._auto_update_on:
+        # Start the auto-update scheduler if enabled.
+        # On macOS, signature auto-updates are owned by the OS-level freshclam
+        # LaunchDaemon (registered via ensure_daemons_registered() in
+        # _darwin_daemon_init above), not an in-process thread — so we do NOT
+        # start the scheduler here. On Linux/Windows the in-process scheduler
+        # remains the only updater and starts exactly as before.
+        if platform.system() != "Darwin" and self._auto_update_on:
             self._start_auto_update_scheduler()
 
         # Start the Windows RTD watcher at init so threat notifications
@@ -885,7 +890,22 @@ class Plugin(BasePlugin):
             f"Antivirus: auto-update toggled "
             f"{'on' if self._auto_update_on else 'off'}",
         )
-        if self._auto_update_on:
+        if platform.system() == "Darwin":
+            # On macOS the setting controls the OS-level freshclam
+            # LaunchDaemon (runs even when the app is closed), not the
+            # in-process thread. Enable registers/loads it; disable boots
+            # out only the freshclam daemon (clamd/clamonacc untouched).
+            def _apply():
+                ok, msg = clamav.set_freshclam_daemon_enabled(
+                    self._auto_update_on,
+                )
+                if not ok:
+                    logger.warning(
+                        f"Antivirus: freshclam daemon toggle failed — {msg}",
+                    )
+
+            threading.Thread(target=_apply, daemon=True).start()
+        elif self._auto_update_on:
             self._start_auto_update_scheduler()
         else:
             self._stop_auto_update_scheduler()
@@ -994,7 +1014,12 @@ class Plugin(BasePlugin):
         return max(60, (target - now) + jitter)
 
     def _auto_update_loop(self):
-        """Background loop: sleep until next run, then call freshclam."""
+        """Background loop: sleep until next run, then call freshclam.
+
+        Linux/Windows only. On macOS the OS-level freshclam LaunchDaemon
+        owns auto-updates (runs even when the app is closed), so this
+        in-process loop is never started there.
+        """
         while not self._auto_update_stop.is_set():
             delay = self._seconds_until_next_run()
             logger.info(

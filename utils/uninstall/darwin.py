@@ -160,6 +160,7 @@ def _remove_clamav_daemons(admin_cmds):
 
     # 1. SMAppService unregistration (no admin needed)
     _smappservice_plist_names = [
+        "com.resistine.desktop.freshclam.plist",
         "com.resistine.desktop.clamonacc.plist",
         "com.resistine.desktop.clamd.plist",
         "com.resistine.clamonacc.plist",
@@ -196,6 +197,7 @@ def _remove_clamav_daemons(admin_cmds):
         "/Library/LaunchDaemons/com.resistine.clamd.plist",
         "/Library/LaunchDaemons/com.resistine.desktop.clamonacc.plist",
         "/Library/LaunchDaemons/com.resistine.desktop.clamd.plist",
+        "/Library/LaunchDaemons/com.resistine.desktop.freshclam.plist",
     ]
     for plist in legacy_plists:
         if os.path.exists(plist):
@@ -204,6 +206,7 @@ def _remove_clamav_daemons(admin_cmds):
 
     # Bootout by label in case plists are gone but daemons still loaded
     for label in (
+        "com.resistine.desktop.freshclam",
         "com.resistine.desktop.clamd",
         "com.resistine.desktop.clamonacc",
         "com.resistine.clamd",
@@ -214,6 +217,8 @@ def _remove_clamav_daemons(admin_cmds):
         )
 
     # Kill running ClamAV processes (root-owned, needs admin)
+    admin_cmds.append("pkill -f freshclam-update.sh 2>/dev/null || true")
+    admin_cmds.append("pkill -x freshclam 2>/dev/null || true")
     admin_cmds.append("pkill -x clamonacc 2>/dev/null || true")
     admin_cmds.append("pkill -x clamd 2>/dev/null || true")
 

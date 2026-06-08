@@ -352,6 +352,15 @@ PLISTEOF
         fi
     done
 
+    # First-party freshclam auto-update wrapper → Contents/Helpers/
+    # Run by the root LaunchDaemon com.resistine.desktop.freshclam.
+    if [ -f "$PYTHON_UI_PATH/scripts/clamav/freshclam-update.sh" ]; then
+        cp "$PYTHON_UI_PATH/scripts/clamav/freshclam-update.sh" \
+            "$PYTHON_APP/Contents/Helpers/freshclam-update.sh"
+        chmod 755 "$PYTHON_APP/Contents/Helpers/freshclam-update.sh"
+        echo "  - Placed freshclam-update.sh in Contents/Helpers/"
+    fi
+
     # CVD signature-verification certs → Contents/certs/
     if [ -d "$CLAMAV_ARTIFACTS_DIR/certs" ]; then
         mkdir -p "$PYTHON_APP/Contents/certs"
@@ -442,13 +451,26 @@ PLISTEOF
 
     # LaunchDaemon plists → Contents/Library/LaunchDaemons/
     # Registered at runtime via SMAppService (no manual launchctl needed).
+    # clamd/clamonacc plists ship from the ClamAV-Mac CI artifact (downloaded
+    # into the gitignored clamav-artifacts/ dir, which download-clamav-artifacts.sh
+    # wipes+repopulates each build).
     LAUNCHD_SRC="$CLAMAV_ARTIFACTS_DIR/launchd"
+    mkdir -p "$PYTHON_APP/Contents/Library/LaunchDaemons"
     if [ -d "$LAUNCHD_SRC" ]; then
-        mkdir -p "$PYTHON_APP/Contents/Library/LaunchDaemons"
         cp "$LAUNCHD_SRC/"*.plist "$PYTHON_APP/Contents/Library/LaunchDaemons/"
         echo "  - Placed launchd plists in Contents/Library/LaunchDaemons/"
     else
         echo "  - Warning: No launchd plists found in artifacts"
+    fi
+
+    # First-party freshclam auto-update daemon plist (tracked in git, NOT a
+    # downloaded artifact — so it survives the artifacts-dir wipe and needs no
+    # ClamAV-Mac changes). Pairs with Contents/Helpers/freshclam-update.sh.
+    FRESHCLAM_PLIST_SRC="$PYTHON_UI_PATH/scripts/clamav/com.resistine.desktop.freshclam.plist"
+    if [ -f "$FRESHCLAM_PLIST_SRC" ]; then
+        cp "$FRESHCLAM_PLIST_SRC" \
+            "$PYTHON_APP/Contents/Library/LaunchDaemons/com.resistine.desktop.freshclam.plist"
+        echo "  - Placed freshclam auto-update daemon plist"
     fi
 
     echo "  ClamAV components placed in bundle"
@@ -631,8 +653,10 @@ if [ "$CLAMAV_AVAILABLE" = true ]; then
         exit 1
     }
 
-    # Sign other ClamAV binaries (hardened runtime for notarization)
-    for binary in clamd clamscan clamdscan freshclam; do
+    # Sign other ClamAV binaries (hardened runtime for notarization).
+    # freshclam-update.sh is the first-party auto-update wrapper — a signed
+    # shell script inside the notarized bundle.
+    for binary in clamd clamscan clamdscan freshclam freshclam-update.sh; do
         if [ -f "$PYTHON_APP/Contents/Helpers/$binary" ]; then
             codesign --force --sign "$SIGN_IDENTITY" \
                 --options runtime --timestamp \

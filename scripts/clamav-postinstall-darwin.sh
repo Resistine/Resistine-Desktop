@@ -90,6 +90,7 @@ set -x
 # --- Cleanup on Failure ---
 cleanup_failed_install() {
     # Bootout any daemons we may have loaded
+    launchctl bootout system/com.resistine.desktop.freshclam 2>/dev/null || true
     launchctl bootout system/com.resistine.desktop.clamonacc 2>/dev/null || true
     launchctl bootout system/com.resistine.desktop.clamd 2>/dev/null || true
     # Remove config files (safe to retry)
@@ -186,7 +187,7 @@ rm -f /Library/LaunchDaemons/com.resistine.clamonacc.plist 2>/dev/null || true
 CURRENT_STEP="load_daemons"
 write_status '{"status":"running","step":"load_daemons","pid":'"$$"',"ts":'"$(date +%s)"'}'
 
-for PLIST_NAME in com.resistine.desktop.clamd.plist com.resistine.desktop.clamonacc.plist; do
+for PLIST_NAME in com.resistine.desktop.clamd.plist com.resistine.desktop.clamonacc.plist com.resistine.desktop.freshclam.plist; do
     LABEL="${PLIST_NAME%.plist}"
     PLIST_PATH="$LAUNCHD_DIR/$PLIST_NAME"
     if [ ! -f "$PLIST_PATH" ]; then
