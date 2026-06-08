@@ -49,6 +49,12 @@ DisableProgramGroupPage=yes
 SetupIconFile=..\..\resources\icons\icon.ico
 UninstallDisplayIcon={app}\Resistine.exe
 SetupLogging=yes
+; Show the GPL-2.0-or-later text on the install acceptance screen. Inno
+; reads this at compile time and displays the contents as plain text in the
+; License Agreement dialog. Third-party licenses are shipped as a separate
+; file inside the install dir (see [Files] below) since they're 370+ lines
+; and would dominate the acceptance dialog if combined.
+LicenseFile=..\..\LICENSE.md
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -59,6 +65,12 @@ Name: "startup"; Description: "Start Resistine when I sign in"; Flags: unchecked
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+; License files — installed next to the app so end users, auditors, and
+; security teams can find them via the install directory without needing to
+; go to GitHub. LICENSE.md is also shown at the install acceptance screen
+; (see LicenseFile= in [Setup] above).
+Source: "..\..\LICENSE.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\LICENSE-3rd-Party.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 ; Bundled dependency installers — only extracted when the dep is missing
 Source: "deps\python-3.13.13-amd64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall nocompression; Check: NeedPythonInstall
 Source: "deps\wireguard-amd64.msi"; DestDir: "{tmp}"; Flags: deleteafterinstall nocompression; Check: NeedWireGuardInstall

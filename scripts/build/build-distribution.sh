@@ -545,6 +545,30 @@ else
     echo "    Warning: Sparkle.framework not found at $SPARKLE_SOURCE — skipping auto-update"
 fi
 
+# --- Copy LICENSE files into bundle Resources/ ---
+# Ship the GPL text and the auto-generated third-party license file inside
+# Contents/Resources/ so end users can find them via "Show Package Contents"
+# in Finder, and so compliance/auditor questions have a single canonical
+# answer that lives next to the app rather than only on GitHub.
+echo "  - Copying LICENSE files into bundle Resources/..."
+mkdir -p "$PYTHON_APP/Contents/Resources"
+if [ -f "$PYTHON_UI_PATH/LICENSE.md" ]; then
+    cp "$PYTHON_UI_PATH/LICENSE.md" "$PYTHON_APP/Contents/Resources/LICENSE.md"
+    echo "    LICENSE.md copied"
+else
+    echo "    Warning: LICENSE.md not found at $PYTHON_UI_PATH/LICENSE.md"
+fi
+if [ -f "$PYTHON_UI_PATH/LICENSE-3rd-Party.md" ]; then
+    cp "$PYTHON_UI_PATH/LICENSE-3rd-Party.md" "$PYTHON_APP/Contents/Resources/LICENSE-3rd-Party.md"
+    echo "    LICENSE-3rd-Party.md copied"
+else
+    # Don't fail the build — release.yml regenerates this before this step
+    # runs, but local dev builds may skip generation. Warn loudly so it's
+    # obvious in the build log.
+    echo "    Warning: LICENSE-3rd-Party.md not found at repo root."
+    echo "    Run scripts/build/generate-license-third-party.sh to create it."
+fi
+
 
 # Locate entitlements files
 ENTITLEMENTS_FILE="$PYTHON_UI_PATH/packaging/Resistine.entitlements"
