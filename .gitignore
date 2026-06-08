@@ -153,3 +153,7 @@ resistine.github.io/
 dist/installer/
 *.exe
 VERSION
+
+# Generated from LICENSE.md by scripts/build/build-windows-installer.ps1
+# for Inno Setup's license-acceptance screen. Regenerated on every build.
+LICENSE.txt
