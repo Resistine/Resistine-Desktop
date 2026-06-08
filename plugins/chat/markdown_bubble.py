@@ -154,13 +154,14 @@ def _render_shaped_emoji(emoji_str: str, size: int):
 
 
 def attach_emoji_copy(tw, image_to_emoji: dict) -> None:
-    """Bind ``<<Copy>>`` so inline emoji images yield their codepoints.
+    """Bind ``<<Copy>>`` so a selection yields complete text.
 
-    By default ``tk.Text`` skips embedded image items when copying, so
-    selections containing emoji images produce text with gaps. We
-    intercept the copy event, walk the selection via ``tw.dump``, and
-    substitute each image name with the emoji char from
-    ``image_to_emoji``.
+    By default ``tk.Text`` skips embedded items when copying, so a
+    selection produces text with gaps. We intercept the copy event, walk
+    the selection via ``tw.dump``, and fill in each embed: inline emoji
+    images become their codepoint (from ``image_to_emoji``), and embedded
+    table / code-block windows contribute their text content — so a drag
+    across the whole response copies the tables and code too.
     """
     import tkinter as _tk
 
@@ -176,6 +177,17 @@ def attach_emoji_copy(tw, image_to_emoji: dict) -> None:
                 parts.append(val)
             elif kind == "image":
                 parts.append(m.get(val, ""))
+            elif kind == "window":
+                # Embedded table / code block — Tk omits these on copy, so
+                # pull their text so the selection includes them.
+                try:
+                    embed = w.nametowidget(val)
+                except Exception:
+                    embed = None
+                emb_txt = (getattr(embed, "_copy_text", None)
+                           or getattr(embed, "_code_text", None))
+                if emb_txt:
+                    parts.append(emb_txt)
         if parts:
             w.clipboard_clear()
             w.clipboard_append("".join(parts))

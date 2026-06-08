@@ -495,6 +495,14 @@ class TableWidget(customtkinter.CTkFrame):
             all_rows.append((r, False))
         self._num_rows = len(all_rows)
 
+        # Tab-separated text used when this table is part of a larger selection
+        # copied from the response bubble (attach_emoji_copy reads _copy_text).
+        self._copy_text = "\n".join(
+            "\t".join(
+                (cells[j] if j < len(cells) else "")
+                for j in range(self._num_cols))
+            for cells, _h in all_rows)
+
         # Shared chat body/bold fonts so table text matches the conversation.
         _tbl_fonts = get_fonts(is_dark)
         header_font = _tbl_fonts["bold"]

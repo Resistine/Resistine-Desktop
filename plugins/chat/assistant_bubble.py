@@ -100,20 +100,63 @@ class AssistantBubble(customtkinter.CTkFrame):
 
     def finalize_markdown(self, markdown_text: str) -> None:
         """Replace the streaming placeholder with rendered markdown."""
+        # Idempotent: ignore a second finalize (e.g. a stop/done race) so we
+        # don't stack a duplicate response + Copy button.
+        if getattr(self, "_renderer", None) is not None:
+            return
         self._stop_thinking()
         if self._streaming_label is not None:
             self._streaming_label.destroy()
             self._streaming_label = None
+        # Keep the raw response so the whole thing (prose + tables + code) can
+        # be copied in one click. Selecting across embedded table/code widgets
+        # isn't possible in Tk (each is its own widget), so the Copy button is
+        # the way to grab the entire response at once.
+        self._markdown_text = markdown_text
+        # The renderer calls pack_propagate(False) on its parent and freezes
+        # that parent's height to exactly the content. Give it an inner frame
+        # to own, so THIS bubble can still auto-size to (content + Copy button)
+        # — otherwise the button would be clipped.
+        self._content_frame = customtkinter.CTkFrame(
+            self, fg_color="transparent")
+        self._content_frame.pack(fill="x", expand=True)
         try:
             self._renderer = MarkdownRenderer(
-                self, markdown_text, self._is_dark, self._max_width)
+                self._content_frame, markdown_text,
+                self._is_dark, self._max_width)
         except Exception as exc:
             logger.warning(
                 f"MarkdownRenderer failed, using fallback: {exc}")
             from plugins.chat.markdown_bubble import MarkdownBubble
             self._renderer = MarkdownBubble(
-                self, markdown_text, width=self._max_width)
+                self._content_frame, markdown_text, width=self._max_width)
             self._renderer.pack(fill="x", expand=True)
+        self._build_copy_button()
+
+    # -- copy whole response ------------------------------------------------
+
+    def _build_copy_button(self) -> None:
+        """Subtle 'Copy' affordance below the response that copies the entire
+        message (body text, tables and code) to the clipboard at once."""
+        fg = "#9CA3AF" if self._is_dark else "#6B7280"
+        hover_bg = "#2A2A2C" if self._is_dark else "#E8E8EA"
+        self._copy_btn = customtkinter.CTkButton(
+            self, text="Copy", width=58, height=24, corner_radius=6,
+            fg_color="transparent", hover_color=hover_bg, text_color=fg,
+            font=customtkinter.CTkFont(family=ui_family(), size=12),
+            command=self._copy_response,
+        )
+        self._copy_btn.pack(anchor="w", padx=14, pady=(2, 4))
+
+    def _copy_response(self) -> None:
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(getattr(self, "_markdown_text", "") or "")
+            self._copy_btn.configure(text="Copied!")
+            self.after(
+                1200, lambda: self._copy_btn.configure(text="Copy"))
+        except Exception:
+            logger.debug("Copy response to clipboard failed")
 
     # -- public API ---------------------------------------------------------
 
