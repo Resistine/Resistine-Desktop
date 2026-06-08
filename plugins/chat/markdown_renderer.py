@@ -612,14 +612,24 @@ class MarkdownRenderer:
                     if vp_w > 1:
                         cap = min(cap, vp_w - padx * 2)
                     cb_embed_w = min(embed_w, cap) if cap > 1 else embed_w
+                    # Tables may use the FULL viewport width — not the narrower
+                    # prose cap (self._max_width) — so a wide table shows more of
+                    # its columns before it has to scroll. Prose/code stay at the
+                    # readable max_width cap (cb_embed_w).
+                    tbl_cap = (vp_w - padx * 2) if vp_w > 1 else cap
+                    tbl_embed_w = (min(embed_w, tbl_cap)
+                                   if tbl_cap > 1 else embed_w)
                     for tbl in self._tables:
-                        # Clamp the table frame to the bubble width so a wide
-                        # table overflows into its own horizontal scrollbar
-                        # instead of spilling past the viewport.
-                        if getattr(tbl, "_rf_embed_w", None) != cb_embed_w:
-                            tbl._rf_embed_w = cb_embed_w
-                            tbl.configure(width=_logical_px(tbl, cb_embed_w))
-                            tbl._resize_to_width(cb_embed_w)
+                        # Size the table to its own content width, capped at the
+                        # viewport: narrow tables hug their content (no empty
+                        # band), wide tables grow to fill the available width and
+                        # only scroll when they exceed the viewport.
+                        nat = getattr(tbl, "_natural_width", tbl_embed_w)
+                        tw_target = min(nat, tbl_embed_w)
+                        if getattr(tbl, "_rf_embed_w", None) != tw_target:
+                            tbl._rf_embed_w = tw_target
+                            tbl.configure(width=_logical_px(tbl, tw_target))
+                            tbl._resize_to_width(tw_target)
                         # Track the table's natural pixel height (it is a single
                         # text widget that knows its own row count).
                         try:
