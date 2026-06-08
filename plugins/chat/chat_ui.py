@@ -289,6 +289,18 @@ class ChatUIMixin:
         It floats over the chat (below the header bar) instead of pushing it, so
         the chat content keeps its width and never re-wraps.
         """
+        # Single source of truth for the open-state: every show/hide path
+        # (toggle button, clicking the dim overlay, navigation) updates it here
+        # so it can never go stale. Closing via the overlay used to leave this
+        # True, which re-opened the drawer on the next chat rebuild (+ New).
+        self._sidebar_visible = True
+        # Place + size the drawer FIRST so the dim overlay can measure its real
+        # width and position itself to the drawer's right (not over its buttons).
+        self._sync_drawer_geometry()
+        try:
+            self._sidebar.update_idletasks()
+        except Exception:
+            pass
         self._set_chat_dim(True)
         self._sync_drawer_geometry()
         try:
@@ -412,6 +424,10 @@ class ChatUIMixin:
             pass
 
     def _hide_sidebar(self) -> None:
+        # Single source of truth — see _show_sidebar. Clear it here so closing
+        # via the dim-overlay click (which calls _hide_sidebar directly, NOT
+        # _toggle_sidebar) doesn't leave a stale "open" flag.
+        self._sidebar_visible = False
         self._set_chat_dim(False)
         try:
             if getattr(self, "_sidebar", None) is not None:
@@ -420,11 +436,12 @@ class ChatUIMixin:
             pass
 
     def _toggle_sidebar(self) -> None:
+        # _show_sidebar / _hide_sidebar own _sidebar_visible now, so don't flip
+        # it here too (that would double-toggle).
         if self._sidebar_visible:
             self._hide_sidebar()
         else:
             self._show_sidebar()
-        self._sidebar_visible = not self._sidebar_visible
 
     def _check_scroll_btn(self) -> None:
         if not hasattr(self, "_scroll_btn") or self._scroll_btn is None:
