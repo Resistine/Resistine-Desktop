@@ -82,7 +82,47 @@ jobs:
           python3 -m venv .venv
           source .venv/bin/activate
           pip install -r scripts/requirements/requirements-mac.txt
+          pip install "pip-licenses>=4.0.0"
           brew install create-dmg
+
+      # --- Regenerate LICENSE-3rd-Party.md from the exact installed env ---
+      # Runs against the venv we just provisioned so the licenses table
+      # matches what actually ships in this release artifact. Also fails
+      # the build if any AGPL/SSPL/BUSL deps are present (see --fail-on
+      # in the generator script).
+      - name: Generate third-party license file
+        run: |
+          source .venv/bin/activate
+          ./scripts/build/generate-license-third-party.sh
+
+      # --- Verify committed LICENSE-3rd-Party.md is up to date ---
+      # Forces developers to regenerate and commit before tagging a release.
+      # If this fails, the dev needs to run
+      #   ./scripts/build/generate-license-third-party.sh
+      # locally and commit the result. Catches the "I added a pip dep but
+      # forgot to regenerate" mistake at the latest possible moment.
+      - name: Verify LICENSE-3rd-Party.md is committed and up to date
+        run: |
+          if ! git diff --exit-code LICENSE-3rd-Party.md; then
+            echo ""
+            echo "============================================================"
+            echo "ERROR: LICENSE-3rd-Party.md is out of date."
+            echo ""
+            echo "A pip dependency was added or changed without regenerating"
+            echo "the third-party license file. Fix this before re-tagging:"
+            echo ""
+            echo "  source .venv/bin/activate"
+            echo "  pip install -r scripts/requirements/requirements-mac.txt"
+            echo "  pip install pip-licenses"
+            echo "  ./scripts/build/generate-license-third-party.sh"
+            echo "  git add LICENSE-3rd-Party.md"
+            echo "  git commit -m 'chore: regenerate third-party license file'"
+            echo "  git tag -d ${GITHUB_REF_NAME} && git push --delete origin ${GITHUB_REF_NAME}"
+            echo "  git tag ${GITHUB_REF_NAME} && git push origin ${GITHUB_REF_NAME}"
+            echo "============================================================"
+            exit 1
+          fi
+          echo "LICENSE-3rd-Party.md matches the freshly-generated version."
 
       # --- Build the app + DMG ---
       - name: Build distribution
