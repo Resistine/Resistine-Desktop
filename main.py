@@ -100,11 +100,12 @@ class App(AppUI):
         screen_height = self.winfo_screenheight()
         scale = getattr(self, "_hidpi_factor", 1.0)
         # Window dimensions are LOGICAL, anchored to the 1080p reference
-        # (70% of 1920x1080). set_window_scaling() multiplies these by `scale`
-        # to produce the actual physical pixel size, so the logical layout is
-        # identical at every resolution and aspect ratio.
-        window_width = int(_REF_WIDTH * 0.7)
-        window_height = int(_REF_HEIGHT * 0.7)
+        # (~47% of 1920x1080, i.e. ~1/3 smaller than the previous 70% default).
+        # set_window_scaling() multiplies these by `scale` to produce the actual
+        # physical pixel size, so the logical layout is identical at every
+        # resolution and aspect ratio.
+        window_width = int(_REF_WIDTH * 0.47)
+        window_height = int(_REF_HEIGHT * 0.47)
         min_width = 750
         min_height = 350
         # Centre the window on the physical screen.

@@ -76,7 +76,7 @@ class WelcomeScreen(customtkinter.CTkFrame):
             font=customtkinter.CTkFont(family=ui_family(), size=14),
             text_color=secondary,
         )
-        subtitle_label.pack(pady=(0, 28))
+        subtitle_label.pack(pady=(0, 14))
 
         # Pick 4 random suggestions from the pool
         suggestions = random.sample(
