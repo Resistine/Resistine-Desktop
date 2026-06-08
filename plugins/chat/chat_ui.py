@@ -10,7 +10,8 @@ from plugins.chat.assistant_bubble import AssistantBubble
 from plugins.chat.bubble import BubbleRow, UserBubble, assistant_width, user_width
 from plugins.chat.fonts import RESISTINE_BLUE, _is_dark_mode, ui_family
 from plugins.chat.sidebar import ChatSidebar
-from plugins.chat.welcome_screen import ApiKeyMissingScreen, WelcomeScreen
+from plugins.chat.welcome_screen import (
+    ApiKeyMissingScreen, ChatLockedScreen, WelcomeScreen)
 from utils.emoji_entry import EmojiEntry
 
 # Opacity of the layer that dims the chat behind the open history drawer.
@@ -49,6 +50,14 @@ class ChatUIMixin:
         self.second_frame = customtkinter.CTkFrame(
             self.app, corner_radius=0, fg_color="transparent")
 
+        # Access gate: chat is only available when the VPN is connected AND the
+        # Endpoint agent is installed. Re-checked on every navigation to chat
+        # (the screen isn't cached), so it unlocks as soon as both are ready.
+        vpn_on, agent_installed = self._chat_access_status()
+        if not (vpn_on and agent_installed):
+            self._build_locked_screen(is_dark, vpn_on, agent_installed)
+            return self.second_frame
+
         # Build the full-width chat area first. The history sidebar is an
         # OVERLAY drawer over this area (see _show_sidebar) rather than a packed
         # column — so toggling it never resizes/reflows the chat content and the
@@ -80,6 +89,56 @@ class ChatUIMixin:
 
         self._refresh_sidebar()
         return self.second_frame
+
+    # -- Access gate (VPN + endpoint agent) --------------------------------
+
+    def _chat_access_status(self) -> tuple[bool, bool]:
+        """Return (vpn_connected, endpoint_agent_installed) for the gate.
+
+        Note: the endpoint check is "installed" (not "running") on purpose.
+        Falls back to the VPN plugin's status badge if the helper is missing.
+        """
+        vpn_on = False
+        try:
+            from plugins.vpn.main import is_vpn_connected
+            vpn_on = bool(is_vpn_connected())
+        except Exception:
+            try:
+                vp = next(
+                    (p for p in self.app.plugin_list
+                     if p.get_name() == "VPN"), None)
+                vpn_on = bool(vp and vp.get_status() == "OK")
+            except Exception:
+                vpn_on = False
+        agent_installed = False
+        try:
+            from plugins.wazuh.main import is_agent_installed
+            agent_installed = bool(is_agent_installed())
+        except Exception:
+            agent_installed = False
+        return vpn_on, agent_installed
+
+    def _build_locked_screen(
+        self, is_dark: bool, vpn_on: bool, agent_installed: bool,
+    ) -> None:
+        screen = ChatLockedScreen(
+            self.second_frame, vpn_on, agent_installed,
+            on_open_vpn=lambda: self._open_plugin("VPN"),
+            on_open_endpoint=lambda: self._open_plugin("Endpoint"),
+            is_dark=is_dark)
+        screen.place(relx=0.5, rely=0.5, anchor="center")
+
+    def _open_plugin(self, name: str) -> None:
+        """Navigate to another plugin's screen by its display name."""
+        try:
+            p = next(
+                (p for p in self.app.plugin_list
+                 if p.get_name() == name), None)
+            if p is not None:
+                self.app.select_frame_by_name(
+                    f"frame_{name}", button=p.get_button())
+        except Exception:
+            pass
 
     def _on_chat_unmapped(self, _event=None) -> None:
         # Navigated away (or minimized): fully collapse the history drawer so
