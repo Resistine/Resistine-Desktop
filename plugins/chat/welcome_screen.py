@@ -210,3 +210,95 @@ class ApiKeyMissingScreen(customtkinter.CTkFrame):
             command=self._on_configure_click,
         )
         settings_btn.pack()
+
+
+class ChatLockedScreen(customtkinter.CTkFrame):
+    """Centered overlay shown when chat is gated behind security requirements.
+
+    Chat is only available once the VPN is connected AND the Endpoint agent is
+    installed. Shows which requirements are met and offers shortcuts to the
+    relevant pages for the ones that aren't.
+    """
+
+    def __init__(
+        self,
+        master: customtkinter.CTkBaseClass,
+        vpn_on: bool,
+        agent_installed: bool,
+        on_open_vpn: Callable[[], None],
+        on_open_endpoint: Callable[[], None],
+        is_dark: bool = False,
+        **kwargs,
+    ) -> None:
+        kwargs.setdefault("fg_color", "transparent")
+        super().__init__(master, **kwargs)
+
+        fg = "#ffffff" if is_dark else "#000000"
+        secondary = _secondary_color(is_dark)
+        self._ok_color = "#2CC985" if is_dark else "#1B7A3E"
+        self._bad_color = "#FF6B6B" if is_dark else "#C5221F"
+        self._fg = fg
+        self._secondary = secondary
+
+        icon_label = customtkinter.CTkLabel(
+            self,
+            text="\U0001F512",  # lock
+            font=customtkinter.CTkFont(size=40),
+            text_color=secondary,
+        )
+        icon_label.pack(pady=(0, 8))
+
+        title_label = customtkinter.CTkLabel(
+            self,
+            text="Secure Chat Locked",
+            font=customtkinter.CTkFont(
+                family=ui_family(), size=22, weight="bold"),
+            text_color=fg,
+        )
+        title_label.pack(pady=(0, 6))
+
+        desc_label = customtkinter.CTkLabel(
+            self,
+            text=("Chat is only available on a protected device.\n"
+                  "Connect the VPN and install the Endpoint agent to continue."),
+            font=customtkinter.CTkFont(family=ui_family(), size=14),
+            text_color=secondary,
+            justify="center",
+        )
+        desc_label.pack(pady=(0, 20))
+
+        self._add_requirement(
+            "VPN connection", vpn_on, "Turn on VPN", on_open_vpn)
+        self._add_requirement(
+            "Endpoint agent", agent_installed,
+            "Install agent", on_open_endpoint)
+
+    def _add_requirement(
+        self, label: str, ok: bool, action_text: str,
+        on_click: Callable[[], None],
+    ) -> None:
+        row = customtkinter.CTkFrame(self, fg_color="transparent")
+        row.pack(pady=6)
+
+        customtkinter.CTkLabel(
+            row, text="✓" if ok else "✕", width=24,
+            font=customtkinter.CTkFont(size=16, weight="bold"),
+            text_color=self._ok_color if ok else self._bad_color,
+        ).pack(side="left", padx=(0, 8))
+
+        customtkinter.CTkLabel(
+            row,
+            text=f"{label}  —  {'ready' if ok else 'required'}",
+            font=customtkinter.CTkFont(family=ui_family(), size=14),
+            text_color=self._fg if ok else self._secondary,
+        ).pack(side="left")
+
+        if not ok and on_click is not None:
+            customtkinter.CTkButton(
+                row, text=action_text, width=120, height=30,
+                corner_radius=8, fg_color=RESISTINE_BLUE,
+                hover_color="#1565B0", text_color="#ffffff",
+                font=customtkinter.CTkFont(
+                    family=ui_family(), size=12, weight="bold"),
+                command=on_click,
+            ).pack(side="left", padx=(16, 0))
