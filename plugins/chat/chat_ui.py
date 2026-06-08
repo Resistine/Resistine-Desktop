@@ -187,8 +187,11 @@ class ChatUIMixin:
 
         self.chat_scroll = customtkinter.CTkScrollableFrame(
             self._chat_area, fg_color="transparent", corner_radius=0)
+        # Left buffer so content doesn't touch the edge, but NO right padding so
+        # the scrollbar stays flush with the right side of the window (its width
+        # already separates the content from the edge).
         self.chat_scroll.grid(
-            row=0, column=0, padx=0, pady=(50, 76), sticky="nsew")
+            row=0, column=0, padx=(14, 0), pady=(50, 76), sticky="nsew")
         # Hide scrollbar initially; show only when content overflows
         self._hide_scrollbar()
 
@@ -264,7 +267,10 @@ class ChatUIMixin:
         else:
             self._welcome_frame = ApiKeyMissingScreen(
                 self.chat_scroll, self._open_settings, is_dark)
-        self._welcome_frame.pack(expand=True, fill="both", pady=(80, 0))
+        # Modest top inset (not 80px): with widget scaling the greeting +
+        # 4 suggestion chips were taller than the viewport, pushing the bottom
+        # chips behind the input bar. A smaller inset keeps them all visible.
+        self._welcome_frame.pack(expand=True, fill="both", pady=(24, 0))
 
     def _build_input_bar(self, is_dark: bool) -> None:
         fg = "#ffffff" if is_dark else "#000000"
@@ -273,7 +279,7 @@ class ChatUIMixin:
             self._chat_area, fg_color=bg,
             corner_radius=22, border_width=1, border_color=brd)
         self._input_bar = bar
-        bar.place(relx=0.5, rely=1.0, anchor="s", relwidth=0.98, y=-14)
+        bar.place(relx=0.5, rely=1.0, anchor="s", relwidth=0.96, y=-14)
         bar.grid_columnconfigure(0, weight=1)
         self.chat_entry = EmojiEntry(
             bar, placeholder_text="Message Resistine AI...",
