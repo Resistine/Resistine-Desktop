@@ -238,9 +238,19 @@ class AppUI(customtkinter.CTk):
             _j[0] = None
             try:
                 # winfo_width() is physical px; CTkLabel.configure(wraplength=)
-                # re-applies widget scaling internally, so feed it logical units
-                # to match the value the constructor was given.
-                _scale = getattr(_f.winfo_toplevel(), "_hidpi_factor", 1.0)
+                # re-applies widget scaling internally, so feed it logical units.
+                # Divide by the SAME scaling CTk re-applies — its widget scaling
+                # — NOT _hidpi_factor. On Windows _hidpi_factor is unset (1.0) but
+                # CTk's widget scaling is ~1.25 at 125%, so dividing by
+                # _hidpi_factor left card_w physical and the re-applied scaling
+                # made wraplength ~25% too wide → the description never wrapped
+                # and got clipped. get_widget_scaling == _hidpi_factor on Linux,
+                # 1.25 on Windows 125%, 1.0 on macOS.
+                try:
+                    _scale = customtkinter.ScalingTracker.get_widget_scaling(_f)
+                except Exception:
+                    _scale = getattr(
+                        _f.winfo_toplevel(), "_hidpi_factor", 1.0) or 1.0
                 card_w = _f.winfo_width() / _scale
                 if card_w <= 4:
                     return
