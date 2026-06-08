@@ -127,6 +127,11 @@ class MarkdownRenderer:
         self._configure_tags()
         self.render(markdown_text)
         self.text_widget.configure(state="disabled")
+        # Bind copy handling even when there is no emoji, so a selection that
+        # spans an embedded table / code block copies their content too.
+        if not self._emoji_copy_bound:
+            attach_emoji_copy(self._tw, self._image_to_emoji)
+            self._emoji_copy_bound = True
         self._setup_scroll_redirect()
         self.text_widget.after(100, self._resize_to_fit)
         self.text_widget.after(400, self._resize_to_fit)
