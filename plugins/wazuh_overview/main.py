@@ -80,7 +80,6 @@ def _ensure_matplotlib():
 _PLUGIN_DIR = os.path.dirname(os.path.realpath(__file__))
 _WAZUH_DIR = os.path.join(os.path.dirname(_PLUGIN_DIR), "wazuh")
 _DATA_FILE = os.path.join(_PLUGIN_DIR, "data", "agent.013.json")
-_EVENTS_FILE = os.path.join(_PLUGIN_DIR, "data", "log_events.json")
 _VULNS_FILE = os.path.join(_PLUGIN_DIR, "data", "vulnerabilities.json")
 
 _TAB_NAMES = ("Overview", "Events", "Vulnerabilities", "Inventory")
@@ -189,8 +188,12 @@ def _wazuh_level_to_severity(level):
 
 
 def _normalize_wazuh_hit(hit):
-    """Flatten an OpenSearch hit into the dict shape the events UI expects."""
-    src = hit.get("_source") or {}
+    """Flatten a Wazuh alert hit into the dict shape the events UI expects.
+
+    Tolerates both OpenSearch-shaped hits (with `_source` envelope) and
+    pre-flattened payloads returned by the /me/vulnerabilities/{id}/events
+    endpoint — `src` falls back to `hit` itself when `_source` is absent."""
+    src = hit.get("_source") or hit
     rule = src.get("rule") or {}
     agent = src.get("agent") or {}
     mitre = (rule.get("mitre") or {}).get("id") or []
@@ -220,46 +223,6 @@ def _normalize_wazuh_hit(hit):
         "hash": src.get("id", ""),
         "raw_log": raw_log,
     }
-
-
-def _load_events_data():
-    try:
-        with open(_EVENTS_FILE, "r", encoding="utf-8") as f:
-            payload = json.load(f)
-        hits = ((payload.get("hits") or {}).get("hits") or []) if isinstance(payload, dict) else []
-        events = [_normalize_wazuh_hit(h) for h in hits]
-        # Sort newest first by timestamp; events without a timestamp sort to the end.
-        events.sort(
-            key=lambda e: e.get("timestamp") or "",
-            reverse=True,
-        )
-        return events
-    except Exception as e:
-        logger.error(f"Endpoint 2: failed to load events sample ({_EVENTS_FILE}): {e}")
-        return []
-
-
-# Populated by the background loader below. The Events pane gates on
-# _events_ready and shows a loading placeholder until the thread finishes,
-# so the JSON parse + per-hit normalization stays off the import path and off
-# the UI thread when the Wazuh page is first opened.
-_EVENTS = []
-_events_ready = threading.Event()
-
-
-def _load_events_async():
-    global _EVENTS
-    try:
-        _EVENTS = _load_events_data()
-    finally:
-        _events_ready.set()
-
-
-threading.Thread(
-    target=_load_events_async,
-    name="endpoint2-events-loader",
-    daemon=True,
-).start()
 
 
 # Inventory's multi-device dataset. Kicked off lazily on first Inventory-tab
@@ -446,6 +409,18 @@ _REMOTE_HOTFIXES = []
 _REMOTE_HOTFIXES_ERROR = None
 _remote_hotfixes_ready = threading.Event()
 
+# Vulnerability detection events from /me/vulnerabilities/{agent_id}/events.
+# Two-phase load: _remote_vuln_events_ready fires once the LOCAL device's
+# events finish (Events tab can render immediately at that point);
+# _remote_vuln_events_complete fires once every device in the group has been
+# fetched (the Events pane's poll uses it to know when to stop rebuilding).
+# Identity of _REMOTE_VULN_EVENTS changes on each merge — the Events pane's
+# id(...)-keyed caches treat that as cache invalidation automatically.
+_REMOTE_VULN_EVENTS = []
+_REMOTE_VULN_EVENTS_ERROR = None
+_remote_vuln_events_ready = threading.Event()
+_remote_vuln_events_complete = threading.Event()
+
 # Overview preloader. Fires from the Dashboard's first-build completion hook
 # (see plugins/dashboard/main.py:_kick_overview_early_endpoints) to pre-warm
 # every /me/* endpoint the Wazuh tab depends on, so subsequent tab opens have
@@ -542,9 +517,7 @@ def _load_overview_early_async():
         global _REMOTE_VULNS, _REMOTE_VULNS_ERROR
         # Pass the cached device list so fetch_all_vulnerabilities skips the
         # duplicate /me/inventory call. Per-device CVE fetches inside are
-        # also parallel — see api_client.fetch_all_vulnerabilities. Each
-        # per-device GET is now with_first_seen=true so the table + timeline
-        # chart get the immutable first-sighting date.
+        # also parallel — see api_client.fetch_all_vulnerabilities.
         data, err = api_client.fetch_all_vulnerabilities(devices=devices)
         if data is not None:
             _REMOTE_VULNS = data
@@ -578,6 +551,75 @@ def _load_overview_early_async():
                 logger.error(f"[WAZUH-OVERVIEW] preloader thread crashed: {e}")
 
 
+def _load_vuln_events_async():
+    """Two-phase loader for the Events tab.
+
+    Phase 1: wait for the agent fetch, then pull every vulnerability detection
+    event for the LOCAL device across all four severity buckets (in parallel
+    internally — see api_client.fetch_device_vulnerability_events). As soon as
+    that finishes, set _remote_vuln_events_ready so the Events tab can render.
+
+    Phase 2: wait for inventory, then fan out to the rest of the group's
+    devices via a ThreadPoolExecutor. Each device's result is merged into
+    _REMOTE_VULN_EVENTS by ATOMIC REBIND of the global — no lock needed
+    because all rebinds happen on this single coordinator thread. The Events
+    pane's id(_REMOTE_VULN_EVENTS)-keyed caches naturally invalidate on each
+    rebind, and the pane's poll callback (_schedule_events_ready_check)
+    rebuilds the list whenever the identity changes."""
+    global _REMOTE_VULN_EVENTS, _REMOTE_VULN_EVENTS_ERROR
+
+    _remote_agent_ready.wait()
+    local_id = (_REMOTE_AGENT or {}).get("id") if isinstance(_REMOTE_AGENT, dict) else None
+    if not local_id:
+        _REMOTE_VULN_EVENTS_ERROR = "no local agent"
+        _remote_vuln_events_ready.set()
+        _remote_vuln_events_complete.set()
+        return
+
+    local_events, err = api_client.fetch_device_vulnerability_events(local_id)
+    if err:
+        _REMOTE_VULN_EVENTS_ERROR = err
+    else:
+        normalized = [_normalize_wazuh_hit(h) for h in (local_events or [])]
+        normalized.sort(key=lambda e: e.get("timestamp") or "", reverse=True)
+        _REMOTE_VULN_EVENTS = normalized
+    _remote_vuln_events_ready.set()
+
+    _remote_inventory_ready.wait()
+    items = _REMOTE_INVENTORY.get("items") if isinstance(_REMOTE_INVENTORY, dict) else []
+    other_ids = [
+        d.get("agent_id")
+        for d in (items or [])
+        if d.get("agent_id") and d.get("agent_id") != local_id
+    ]
+    if not other_ids:
+        _remote_vuln_events_complete.set()
+        return
+
+    workers = min(len(other_ids), MAX_PARALLEL_FETCHES)
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        future_to_aid = {
+            ex.submit(api_client.fetch_device_vulnerability_events, aid): aid
+            for aid in other_ids
+        }
+        for future in as_completed(future_to_aid):
+            aid = future_to_aid[future]
+            events, derr = future.result()
+            if derr:
+                logger.warning(
+                    f"[WAZUH-OVERVIEW] Vuln-events fetch for agent {aid} failed: {derr}"
+                )
+                continue
+            new_normalized = [_normalize_wazuh_hit(h) for h in (events or [])]
+            if not new_normalized:
+                continue
+            merged = _REMOTE_VULN_EVENTS + new_normalized
+            merged.sort(key=lambda e: e.get("timestamp") or "", reverse=True)
+            _REMOTE_VULN_EVENTS = merged
+
+    _remote_vuln_events_complete.set()
+
+
 def _kick_overview_early_loader():
     """Idempotent: spawn the preloader thread at most once per process."""
     global _overview_early_loader_started
@@ -588,6 +630,11 @@ def _kick_overview_early_loader():
     threading.Thread(
         target=_load_overview_early_async,
         name="endpoint2-overview-preloader",
+        daemon=True,
+    ).start()
+    threading.Thread(
+        target=_load_vuln_events_async,
+        name="endpoint2-vuln-events-loader",
         daemon=True,
     ).start()
 
@@ -796,8 +843,8 @@ class Plugin(BasePlugin):
         # aggregation memoization in _severity_counts etc).
         self._fonts_cache = None
         self._theme_cache = {}
-        self._severity_counts_cache = None  # (id(_EVENTS), result) or None
-        self._bucket_events_cache = None    # (id(_EVENTS), result) or None
+        self._severity_counts_cache = None  # (id(_REMOTE_VULN_EVENTS), result) or None
+        self._bucket_events_cache = None    # (id(_REMOTE_VULN_EVENTS), result) or None
         self._vuln_severity_cache = None    # (id(vulns), result) or None
         self._bucket_vulns_cache = None     # (id(vulns), result) or None
         # Events pane state
@@ -814,6 +861,7 @@ class Plugin(BasePlugin):
         self._chart_counts = {}
         self._selected_bucket = None  # datetime of the active 30-min bucket filter, or None
         self._events_ready_after_id = None  # poll handle for the background events loader
+        self._events_last_seen_id = None    # id(_REMOTE_VULN_EVENTS) at last rebuild; used to detect incremental merges
         self._prebuild_after_id = None  # handle for the inactive-tab pre-build chain
         self._overview_events_after_id = None  # poll handle for the Overview's API-data refresh
         self._overview_ready_mask = -1  # last-seen _ready_mask(); -1 == no render yet
@@ -967,7 +1015,7 @@ class Plugin(BasePlugin):
         # otherwise the on-click polling chain in _schedule_events_ready_check
         # would race with us.
         if not self._tab_built.get("Events", False):
-            if _events_ready.is_set():
+            if _remote_vuln_events_ready.is_set():
                 pane = self._tab_panes.get("Events")
                 if pane is not None and pane.winfo_exists():
                     try:
@@ -1996,7 +2044,7 @@ class Plugin(BasePlugin):
             except Exception:
                 pass
 
-        if not _events_ready.is_set():
+        if not _remote_vuln_events_ready.is_set():
             self._render_events_loading(parent)
             self._schedule_events_ready_check(parent)
             return
@@ -2013,8 +2061,8 @@ class Plugin(BasePlugin):
         self._build_event_stream(parent, row=3)
 
         # Default selection: most recent event (already sorted newest-first)
-        if _EVENTS:
-            self._select_event(_EVENTS[0]["id"])
+        if _REMOTE_VULN_EVENTS:
+            self._select_event(_REMOTE_VULN_EVENTS[0]["id"])
 
     def _render_events_loading(self, parent):
         parent.grid_columnconfigure(0, weight=1)
@@ -2030,21 +2078,31 @@ class Plugin(BasePlugin):
         ).grid(row=0, column=0, sticky="nsew", padx=20, pady=40)
 
     def _schedule_events_ready_check(self, parent):
-        # 20 ms ≈ one frame at 50 Hz. Tight enough that the placeholder→content
-        # handoff feels instant once the background loader finishes; loose
-        # enough that pre-ready polls are negligible.
-        poll_ms = 20
+        # Tight pre-ready cadence so the placeholder→content handoff feels
+        # instant the moment the local-device fetch completes. Once we've
+        # rendered, fall back to a slower poll: the loader keeps appending
+        # group-device events behind the scenes, and the pane has to rebuild
+        # whenever the global is rebound (id(_REMOTE_VULN_EVENTS) changes).
+        # Stop polling entirely once _remote_vuln_events_complete fires.
+        pre_ready_poll_ms = 20
+        post_ready_poll_ms = 250
 
         def check():
             self._events_ready_after_id = None
             if not parent.winfo_exists():
                 return
-            if _events_ready.is_set():
+            if not _remote_vuln_events_ready.is_set():
+                self._events_ready_after_id = self.app.after(pre_ready_poll_ms, check)
+                return
+            current_id = id(_REMOTE_VULN_EVENTS)
+            if self._events_last_seen_id != current_id:
+                self._events_last_seen_id = current_id
                 self._build_events_pane(parent)
-            else:
-                self._events_ready_after_id = self.app.after(poll_ms, check)
+            if _remote_vuln_events_complete.is_set():
+                return
+            self._events_ready_after_id = self.app.after(post_ready_poll_ms, check)
 
-        self._events_ready_after_id = self.app.after(poll_ms, check)
+        self._events_ready_after_id = self.app.after(pre_ready_poll_ms, check)
 
     def _severity_palette(self, level):
         """Return (bg, text) tuple for a severity level, theme-resolved."""
@@ -2054,12 +2112,12 @@ class Plugin(BasePlugin):
         return bg, fg
 
     def _severity_counts(self):
-        events_id = id(_EVENTS)
+        events_id = id(_REMOTE_VULN_EVENTS)
         cache = self._severity_counts_cache
         if cache is not None and cache[0] == events_id:
             return cache[1]
         counts = {lvl: 0 for lvl in _SEVERITY_LEVELS}
-        for ev in _EVENTS:
+        for ev in _REMOTE_VULN_EVENTS:
             sev = (ev.get("severity") or "").lower()
             if sev in counts:
                 counts[sev] += 1
@@ -2107,17 +2165,17 @@ class Plugin(BasePlugin):
 
     def _bucket_events_30min(self):
         """Group events into 30-minute bucket dicts keyed by datetime."""
-        events_id = id(_EVENTS)
+        events_id = id(_REMOTE_VULN_EVENTS)
         cache = self._bucket_events_cache
         if cache is not None and cache[0] == events_id:
             return cache[1]
-        if not _EVENTS:
+        if not _REMOTE_VULN_EVENTS:
             self._bucket_events_cache = (events_id, ([], {}))
             return [], {}
 
         timestamps = []
         per_event = []
-        for ev in _EVENTS:
+        for ev in _REMOTE_VULN_EVENTS:
             try:
                 dt = datetime.fromisoformat(ev["timestamp"].replace("Z", "+00:00"))
             except (KeyError, ValueError):
@@ -2337,7 +2395,7 @@ class Plugin(BasePlugin):
 
         self._event_count_label = customtkinter.CTkLabel(
             header,
-            text=f"{len(_EVENTS)} events",
+            text=f"{len(_REMOTE_VULN_EVENTS)} events",
             text_color=text_secondary,
             font=customtkinter.CTkFont(size=11),
         )
@@ -2398,7 +2456,7 @@ class Plugin(BasePlugin):
         sel = self._selected_bucket
         q = (query or "").lower().strip()
         out = []
-        for ev in _EVENTS:
+        for ev in _REMOTE_VULN_EVENTS:
             # Bucket filter (from clicking a bar in the chart)
             if sel is not None:
                 ts = ev.get("timestamp")
@@ -2443,7 +2501,7 @@ class Plugin(BasePlugin):
 
         events = self._filter_events(query)
         if self._event_count_label:
-            total = len(_EVENTS)
+            total = len(_REMOTE_VULN_EVENTS)
             shown = len(events)
             text = f"{shown} events" if shown == total else f"{shown}/{total} events"
             sel = self._selected_bucket
@@ -2568,7 +2626,7 @@ class Plugin(BasePlugin):
             except Exception:
                 pass
 
-        ev = next((e for e in _EVENTS if e["id"] == event_id), None)
+        ev = next((e for e in _REMOTE_VULN_EVENTS if e["id"] == event_id), None)
         self._render_event_detail(ev)
 
     def _render_event_detail(self, ev):
@@ -3141,11 +3199,13 @@ class Plugin(BasePlugin):
 
     def _bucket_vulns_daily(self):
         """Group CVEs into 30 daily buckets ending today (UTC) by
-        first_detected_at — the immutable first-sighting date from the alerts
-        index, populated when per-device fetches are called with
-        with_first_seen=true. Using last-scan detection here would re-bucket
-        every CVE on each scan, so the timeline would only ever show the
-        last 30 days of scan activity rather than 30 days of NEW CVEs."""
+        first_detected_at — the immutable first-sighting date. The field is
+        not currently populated by the per-device vulnerabilities endpoint
+        (it moved to /me/vulnerabilities/{agent_id}/events, not yet wired
+        up), so this chart will render empty until that endpoint is
+        consumed. Using last-scan detection here would re-bucket every CVE
+        on each scan, so the timeline would only ever show the last 30 days
+        of scan activity rather than 30 days of NEW CVEs."""
         today = datetime.now(timezone.utc).date()
         vulns = _REMOTE_VULNS
         device = self._vuln_device
@@ -3807,7 +3867,7 @@ class Plugin(BasePlugin):
         """Map agent name → highest event severity present for that agent.
         Only includes agents with at least one event."""
         out = {}
-        for ev in _EVENTS:
+        for ev in _REMOTE_VULN_EVENTS:
             name = (ev.get("agent") or "").strip()
             sev = (ev.get("severity") or "").lower()
             if not name or sev not in _THREAT_RANK:

@@ -23,7 +23,6 @@ from plugins.wazuh_overview.config import (
     API_BASE_URL,
     MAX_PARALLEL_FETCHES,
     REQUEST_TIMEOUT,
-    VULN_FETCH_LIMIT,
 )
 from utils.logger import logger
 
@@ -60,15 +59,19 @@ def _affected_items(payload):
     return None
 
 
-def fetch_agent():
+def fetch_agent(agent_id=None):
     """GET /api/v1/me/agent. Returns the basic_info dict (or None on error).
 
     The backend wraps the agent record under an "agent" key alongside
     caller_ip/user_id metadata. Some variants nest under "basic_info"; some
     return the fields flat. Unwrap whichever shape arrives so callers always
     receive the basic_info dict directly.
+
+    Pass `agent_id` to look up a specific agent in the caller's group instead
+    of the source-IP-resolved default. Server still enforces group membership.
     """
-    payload, err = _get("/api/v1/me/agent")
+    params = {"agent_id": agent_id} if agent_id else None
+    payload, err = _get("/api/v1/me/agent", params=params)
     if err:
         return None, err
     if not isinstance(payload, dict):
@@ -106,41 +109,9 @@ def _normalize_cve(raw):
         "package_version": raw.get("version") or raw.get("package_version") or "",
         "description": raw.get("description") or "",
         "status": raw.get("status"),
-        # first_detected_at is the immutable first sighting of this CVE on
-        # this device (sourced from the alerts index when the per-device
-        # endpoint is called with with_first_seen=true). When the alerts
-        # index has no record (server returns null — empirically the common
-        # case today), fall back to detected_at (last full scan) so the
-        # timeline chart + detail panel still render meaningful dates. Once
-        # the server backfills the alerts index, the field naturally
-        # becomes true first-sighting without a code change.
-        "first_detected_at": raw.get("first_detected_at") or raw.get("detected_at"),
         "published_date": raw.get("published"),
         "modified_date": raw.get("updated") or raw.get("modified_date"),
     }
-
-
-def fetch_vulnerabilities(agent_id=None):
-    """GET /api/v1/me/vulnerabilities. Returns the list of CVE dicts in the
-    UI's normalized shape (see _normalize_cve). When `agent_id` is provided
-    the server returns only that device's CVEs; without it, the API falls
-    back to the calling machine's own agent."""
-    params = {"limit": VULN_FETCH_LIMIT, "offset": 0}
-    if agent_id:
-        params["agent_id"] = agent_id
-    payload, err = _get("/api/v1/me/vulnerabilities", params=params)
-    if err:
-        return None, err
-    if isinstance(payload, dict):
-        # Live API key is "vulnerabilities"; "cves" and the Wazuh-wrapped
-        # affected_items envelope are kept as fallbacks for older shapes.
-        items = payload.get("vulnerabilities")
-        if not isinstance(items, list):
-            items = payload.get("cves")
-        if not isinstance(items, list):
-            items = _affected_items(payload)
-        return [_normalize_cve(c) for c in (items or [])], None
-    return None, "bad shape"
 
 
 def fetch_vulnerabilities_summary():
@@ -172,27 +143,58 @@ def fetch_vulnerabilities_summary():
     return payload, None
 
 
-def fetch_device_vulnerabilities(agent_id, with_first_seen=True):
-    """GET /api/v1/me/vulnerabilities/{agent_id}. Returns the full per-device
-    CVE list in the UI's normalized shape (see _normalize_cve).
+def _device_vulnerabilities_page(agent_id, severity=None, limit=500, offset=0):
+    """Single page of /me/vulnerabilities/{agent_id}. Returns (raw_items, err).
 
-    `with_first_seen=True` (default) asks the server to enrich each CVE with
-    `first_detected_at` from the alerts index — the immutable first sighting
-    on this device, used by both the detail panel and the timeline chart.
-    Costs one extra indexer query per device per the API spec; cheap enough
-    relative to the per-device fetch baseline."""
-    params = {"with_first_seen": "true"} if with_first_seen else None
+    Unwraps the response envelope but does NOT normalize — pagination needs the
+    raw list length to decide whether to fetch another page."""
+    params = {"limit": limit, "offset": offset}
+    if severity:
+        params["severity"] = severity
     payload, err = _get(f"/api/v1/me/vulnerabilities/{agent_id}", params=params)
     if err:
         return None, err
-    if isinstance(payload, dict):
-        items = payload.get("vulnerabilities")
-        if not isinstance(items, list):
-            items = payload.get("cves")
-        if not isinstance(items, list):
-            items = _affected_items(payload)
-        return [_normalize_cve(c) for c in (items or [])], None
-    return None, "bad shape"
+    if not isinstance(payload, dict):
+        return None, "bad shape"
+    items = payload.get("vulnerabilities")
+    if not isinstance(items, list):
+        items = payload.get("cves")
+    if not isinstance(items, list):
+        items = _affected_items(payload)
+    return list(items or []), None
+
+
+def fetch_device_vulnerabilities(agent_id, severity=None, page_size=500, max_cves=5000):
+    """GET /api/v1/me/vulnerabilities/{agent_id}. Returns the full per-device
+    CVE list in the UI's normalized shape (see _normalize_cve).
+
+    Paginates with limit=page_size + offset until the server returns a short
+    page (last page) or the cumulative count hits max_cves (safety cap).
+    Optional `severity` filter (critical/high/medium/low) is forwarded to the
+    server.
+
+    `first_detected_at` is no longer populated by this endpoint — per-CVE
+    first-sighting timestamps now live in /me/vulnerabilities/{agent_id}/events,
+    which this client does not currently call. Consumers that read
+    `first_detected_at` (the timeline chart and the detail-panel row) will
+    see `None` and degrade gracefully."""
+    merged_raw = []
+    offset = 0
+    while True:
+        page, err = _device_vulnerabilities_page(
+            agent_id, severity=severity, limit=page_size, offset=offset,
+        )
+        if err:
+            return None, err
+        if not page:
+            break
+        merged_raw.extend(page)
+        if len(page) < page_size:
+            break
+        if len(merged_raw) >= max_cves:
+            break
+        offset += page_size
+    return [_normalize_cve(c) for c in merged_raw], None
 
 
 def fetch_all_vulnerabilities(devices=None):
@@ -252,6 +254,124 @@ def fetch_all_vulnerabilities(devices=None):
     return merged, None
 
 
+_EVENT_SEVERITIES = ("critical", "high", "medium", "low")
+
+
+def fetch_device_vulnerability_events_page(
+    agent_id, severity=None, limit=50, offset=0, hours=0,
+):
+    """Single page of GET /api/v1/me/vulnerabilities/{agent_id}/events.
+
+    `hours` controls the server-side time window (default in the API is the
+    last 24h). Pass 0 here to disable the cap and pull every event the API
+    will return — the timeline chart wants the full history, not a 1-day
+    slice.
+
+    Returns (events_list, err). Defensive envelope unwrap: the events live
+    under "events" in the live API; OpenSearch-shaped `hits.hits` and the
+    Wazuh `data.affected_items` envelope are kept as fallbacks for shape
+    variants."""
+    params = {"limit": limit, "offset": offset, "hours": hours}
+    if severity:
+        params["severity"] = severity
+    payload, err = _get(
+        f"/api/v1/me/vulnerabilities/{agent_id}/events",
+        params=params,
+    )
+    if err:
+        return None, err
+    if not isinstance(payload, dict):
+        return None, "bad shape"
+    items = payload.get("events")
+    if not isinstance(items, list):
+        hits = payload.get("hits")
+        if isinstance(hits, dict):
+            inner = hits.get("hits")
+            if isinstance(inner, list):
+                items = inner
+    if not isinstance(items, list):
+        items = _affected_items(payload)
+    return list(items or []), None
+
+
+def _paginate_events_for_severity(
+    agent_id, severity, page_size=50, max_events=2000, hours=0,
+):
+    """Walk every page of one severity for one device. Returns (events, err).
+
+    Stops when: the response is empty, a page returns fewer than page_size
+    rows (last page), or the cumulative count hits max_events (safety cap
+    against a runaway server response). Newest-first ordering is preserved
+    end-to-end — the API returns newest-first; pages are concatenated in
+    request order, so the merged list stays sorted by timestamp desc.
+
+    `hours` is forwarded to every page request — see
+    fetch_device_vulnerability_events_page."""
+    out = []
+    offset = 0
+    while True:
+        page, err = fetch_device_vulnerability_events_page(
+            agent_id, severity=severity, limit=page_size, offset=offset, hours=hours,
+        )
+        if err:
+            return None, err
+        if not page:
+            break
+        out.extend(page)
+        if len(page) < page_size:
+            break
+        if len(out) >= max_events:
+            break
+        offset += page_size
+    return out, None
+
+
+def fetch_device_vulnerability_events(
+    agent_id, page_size=50, max_per_severity=2000, hours=0,
+):
+    """All vulnerability detection events for ONE device, across all four
+    severity buckets fetched IN PARALLEL.
+
+    The endpoint requires both `agent_id` (path) and accepts a `severity`
+    filter; splitting by severity lets us run four parallel pagination
+    streams instead of one long serial walk. Each severity stream paginates
+    with limit=page_size + offset until exhausted (see
+    `_paginate_events_for_severity`).
+
+    `hours` is the server-side time window. Default is 0 (unlimited) because
+    the timeline chart wants the full history; pass a positive int to
+    constrain to the last N hours.
+
+    Partial-success contract mirrors `fetch_all_vulnerabilities`: if ≥1
+    severity succeeded, return success with the merged list; only when
+    every severity failed do we return (None, "all severities failed")."""
+    workers = min(len(_EVENT_SEVERITIES), MAX_PARALLEL_FETCHES)
+    merged = []
+    failures = 0
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        future_to_sev = {
+            ex.submit(
+                _paginate_events_for_severity,
+                agent_id, sev, page_size, max_per_severity, hours,
+            ): sev
+            for sev in _EVENT_SEVERITIES
+        }
+        for future in as_completed(future_to_sev):
+            sev = future_to_sev[future]
+            events, derr = future.result()
+            if derr:
+                failures += 1
+                logger.warning(
+                    f"Vuln-events: {sev} fetch for agent {agent_id} failed: {derr}"
+                )
+                continue
+            merged.extend(events or [])
+
+    if failures == len(_EVENT_SEVERITIES):
+        return None, "all severities failed"
+    return merged, None
+
+
 def fetch_sca():
     """GET /api/v1/me/sca. Returns the list of SCA policy items.
 
@@ -275,6 +395,27 @@ def fetch_sca():
                 it["invalid"] = it["not_applicable"]
         return items, None
     return None, "bad shape"
+
+
+def fetch_device_sca(agent_id):
+    """GET /api/v1/me/sca/{agent_id}. Returns the SCA policy list for ONE
+    device with the same `not_applicable` -> `invalid` rename applied by
+    `fetch_sca`, so per-device and group cards render identically."""
+    payload, err = _get(f"/api/v1/me/sca/{agent_id}")
+    if err:
+        return None, err
+    if not isinstance(payload, dict):
+        return None, "bad shape"
+    items = payload.get("policies")
+    if not isinstance(items, list):
+        items = payload.get("affected_items")
+    if not isinstance(items, list):
+        items = _affected_items(payload)
+    items = list(items or [])
+    for it in items:
+        if isinstance(it, dict) and "invalid" not in it and "not_applicable" in it:
+            it["invalid"] = it["not_applicable"]
+    return items, None
 
 
 def fetch_inventory_summary():
@@ -366,6 +507,22 @@ def fetch_device_inventory(agent_id):
 def fetch_hotfixes():
     """GET /api/v1/me/hotfixes. Returns the list of hotfix dicts (empty on non-Windows)."""
     payload, err = _get("/api/v1/me/hotfixes")
+    if err:
+        return None, err
+    if isinstance(payload, list):
+        return list(payload), None
+    if isinstance(payload, dict):
+        items = payload.get("hotfixes")
+        if not isinstance(items, list):
+            items = _affected_items(payload)
+        return list(items or []), None
+    return None, "bad shape"
+
+
+def fetch_device_hotfixes(agent_id):
+    """GET /api/v1/me/hotfixes/{agent_id}. Returns the KB list for ONE device,
+    or an empty list for non-Windows agents."""
+    payload, err = _get(f"/api/v1/me/hotfixes/{agent_id}")
     if err:
         return None, err
     if isinstance(payload, list):
