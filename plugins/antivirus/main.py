@@ -365,11 +365,18 @@ class Plugin(BasePlugin):
         )
         # Compute a reasonable initial content width so the first frame
         # isn't squeezed to 100px while _do_layout hasn't fired yet.
+        # _init_w is LOGICAL; winfo_width() is PHYSICAL, so normalize via CTk's
+        # widget scaling (1.0 on macOS, real OS ratio on Windows/HiDPI) and
+        # re-scale when setting minsize (which wants physical px).
+        try:
+            _s = customtkinter.ScalingTracker.get_widget_scaling(self.app) or 1.0
+        except Exception:
+            _s = getattr(self.app, "_hidpi_factor", 1.0) or 1.0
         _init_w = 750
         try:
-            _app_w = self.app.winfo_width()
+            _app_w = self.app.winfo_width() / _s
             _nav = getattr(self.app, "navigation_frame", None)
-            _nav_w = _nav.winfo_width() if (_nav and _nav.winfo_exists()) else 250
+            _nav_w = (_nav.winfo_width() / _s) if (_nav and _nav.winfo_exists()) else 250
             _nav_w = max(_nav_w, 250)
             _avail = _app_w - _nav_w
             _breathing = 60 if platform.system() == "Windows" else 40
@@ -380,7 +387,7 @@ class Plugin(BasePlugin):
         except Exception:
             pass
         self.main_container.grid_columnconfigure(0, weight=1)
-        self.main_container.grid_columnconfigure(1, weight=0, minsize=_init_w)
+        self.main_container.grid_columnconfigure(1, weight=0, minsize=int(_init_w * _s))
         self.main_container.grid_columnconfigure(2, weight=1)
         self.main_container.grid_rowconfigure(0, weight=1)
 
@@ -470,9 +477,16 @@ class Plugin(BasePlugin):
                 pass
             # --- End Auto-hide ---
 
-            # winfo_width() returns PHYSICAL px; MAX_CONTENT_WIDTH is LOGICAL,
-            # so convert via _hidpi_factor and re-scale the minsize at the end.
-            _scale = getattr(self.app, "_hidpi_factor", 1.0)
+            # winfo_width() returns PHYSICAL px; MAX_CONTENT_WIDTH is LOGICAL, so
+            # convert via CTk's widget scaling (the real OS-DPI ratio: 2.0 at
+            # 200% on Windows, 1.0 on macOS, == _hidpi_factor on Linux) and
+            # re-scale the minsize at the end. _hidpi_factor alone is 1.0 on
+            # Windows even when CTk scales 2x, which left the content column
+            # sized in physical px and rendered it half-width.
+            try:
+                _scale = customtkinter.ScalingTracker.get_widget_scaling(self.app) or 1.0
+            except Exception:
+                _scale = getattr(self.app, "_hidpi_factor", 1.0) or 1.0
             app_w = self.app.winfo_width() / _scale
             if app_w < 10:
                 return
