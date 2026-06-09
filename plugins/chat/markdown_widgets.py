@@ -395,30 +395,12 @@ class CodeBlockWidget(customtkinter.CTkFrame):
         line_count = code_text.count("\n") + 1
         visible = min(line_count, 25)
         self._code_widget.configure(state="disabled", height=visible)
-        self._code_widget.pack(
-            fill="both", expand=True, padx=0, pady=(0, 0))
 
-        # Set frame height: header(32) + text lines + padding + scrollbar
-        import tkinter.font as tkfont
-        try:
-            line_h = tkfont.Font(font=mono_font).metrics("linespace")
-        except Exception:
-            line_h = 20
-        # header(32) + text(lines*lineheight + pady*2) + scrollbar(14) + buffer
-        frame_h = 32 + visible * line_h + 20 + 14 + 10
-        # frame_h is a PHYSICAL measurement (line_h from raw tkfont metrics);
-        # CTk's configure(height=) multiplies by display scaling, so divide it
-        # out or the code block is scaling-factor times too tall on a Windows
-        # 125% display (which also inflates the bubble height).
-        try:
-            _s = customtkinter.ScalingTracker.get_widget_scaling(self)
-            if _s:
-                frame_h = int(round(frame_h / _s))
-        except Exception:
-            pass
-        self.configure(height=frame_h)
-
-        # -- Horizontal scrollbar (always visible) --------------------------
+        # -- Horizontal scrollbar -------------------------------------------
+        # Packed at the BOTTOM *before* the code body so it always keeps its
+        # row; the body (packed after, expand=True) fills the space above it.
+        # Packing the body first lets its expand swallow the whole frame and
+        # squeeze the scrollbar out of view.
         scrollbar = customtkinter.CTkScrollbar(
             self, orientation="horizontal",
             command=self._code_widget.xview,
@@ -426,9 +408,32 @@ class CodeBlockWidget(customtkinter.CTkFrame):
             fg_color=colors["code_bg"],
             button_color=sb_color,
             button_hover_color=sb_hover)
-        self._code_widget.configure(
-            xscrollcommand=scrollbar.set)
-        scrollbar.pack(fill="x", padx=8, pady=(0, 4))
+        self._code_widget.configure(xscrollcommand=scrollbar.set)
+        scrollbar.pack(side="bottom", fill="x", padx=8, pady=(0, 4))
+
+        self._code_widget.pack(
+            side="top", fill="both", expand=True, padx=0, pady=(0, 0))
+
+        # -- Frame height ---------------------------------------------------
+        import tkinter.font as tkfont
+        try:
+            line_h = tkfont.Font(font=mono_font).metrics("linespace")
+        except Exception:
+            line_h = 20
+        # The code body is a raw tk.Text (physical px, not CTk-scaled). The
+        # header and scrollbar are CTk widgets whose physical height scales with
+        # the display factor, so budget them in LOGICAL units (CTk re-applies the
+        # factor) while converting the physical text height to logical. Using
+        # fixed physical constants for the header/scrollbar under-budgeted them
+        # on HiDPI (Windows >=125%) and clipped the scrollbar off the bottom.
+        try:
+            _s = customtkinter.ScalingTracker.get_widget_scaling(self) or 1.0
+        except Exception:
+            _s = 1.0
+        code_h_physical = visible * line_h + 20       # tk.Text lines + pady*2
+        header_sb_logical = 32 + 14 + 10              # header + scrollbar + buffer
+        frame_h = header_sb_logical + int(round(code_h_physical / _s))
+        self.configure(height=frame_h)
 
     # -- Clipboard ----------------------------------------------------------
 
