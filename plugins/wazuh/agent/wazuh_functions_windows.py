@@ -14,6 +14,7 @@ import re
 import socket
 import subprocess
 import tempfile
+import time
 import winreg
 import zipfile
 
@@ -142,6 +143,11 @@ def get_agent_status():
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
         if "RUNNING" in result.stdout:
+            return "Running"
+        if "START_PENDING" in result.stdout:
+            # Service is mid-startup (common right after install). Treat it as
+            # running so the UI doesn't flash a Stopped/Error state during the
+            # transition; the next poll confirms the real state.
             return "Running"
         if "STOPPED" in result.stdout:
             return "Stopped"
@@ -588,6 +594,16 @@ def full_install(progress_callback=None):
 
     start_cmd = f"NET START {_SERVICE_NAME}"
     _run_privileged(start_cmd)
+
+    # NET START can return while the service is still START_PENDING, so poll
+    # briefly until it actually reports Running. Without this the install
+    # finishes "successfully" while the status (and the agent toggle) still
+    # show Stopped, until the user navigates away and back. Runs on the
+    # install worker thread, so the UI stays responsive.
+    for _ in range(15):
+        if get_agent_status() == "Running":
+            break
+        time.sleep(1)
 
     # Verify
     if get_agent_status() == "Running":
