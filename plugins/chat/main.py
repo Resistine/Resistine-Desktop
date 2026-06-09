@@ -55,7 +55,14 @@ class Plugin(ChatUIMixin, BasePlugin):
                 self.conversation_history = saved
 
     def check_status(self):
-        return "OK" if self.client else "Warning"
+        # Chat is only usable when the client is configured AND the same gate
+        # that unlocks the chat screen is satisfied (VPN connected + endpoint
+        # agent installed). Mirror that here so the dashboard tile isn't "OK"
+        # while chat is actually locked.
+        if not self.client:
+            return "Warning"
+        vpn_on, agent_installed = self._chat_access_status()
+        return "OK" if (vpn_on and agent_installed) else "Warning"
 
     def reinitialize_client(self, notify: bool = False):
         """Rebuild the OpenAI client from the current settings."""
