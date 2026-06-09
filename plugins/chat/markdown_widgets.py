@@ -380,7 +380,9 @@ class CodeBlockWidget(customtkinter.CTkFrame):
         self._copy_btn.pack(side="right", padx=(0, 10), pady=5)
 
         # -- Code body ------------------------------------------------------
-        mono_font = fonts["code"]
+        # code_block font is ~20% smaller than prose so the monospace text
+        # doesn't visually dominate the conversation.
+        mono_font = fonts["code_block"]
         self.pack_propagate(False)
 
         self._code_widget = tk.Text(
@@ -508,10 +510,11 @@ class TableWidget(customtkinter.CTkFrame):
                 for j in range(self._num_cols))
             for cells, _h in all_rows)
 
-        # Shared chat body/bold fonts so table text matches the conversation.
+        # Dedicated table fonts (~20% smaller than prose, matching code blocks)
+        # so tabular content doesn't render larger than the conversation text.
         _tbl_fonts = get_fonts(is_dark)
-        header_font = _tbl_fonts["bold"]
-        body_font = _tbl_fonts["body"]
+        header_font = _tbl_fonts["table_bold"]
+        body_font = _tbl_fonts["table"]
 
         # Per-column pixel width: widest cell measured in the font it ACTUALLY
         # renders in (the header is bold and wider). +24 for the gutter.

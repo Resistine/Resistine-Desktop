@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import customtkinter
 
-from plugins.chat.fonts import get_theme_colors, ui_family
+from plugins.chat.fonts import RESISTINE_BLUE, get_theme_colors, ui_family
 from plugins.chat.markdown_renderer import MarkdownRenderer
 from utils.logger import logger
 
@@ -136,13 +136,12 @@ class AssistantBubble(customtkinter.CTkFrame):
     # -- copy whole response ------------------------------------------------
 
     def _build_copy_button(self) -> None:
-        """Subtle 'Copy' affordance below the response that copies the entire
-        message (body text, tables and code) to the clipboard at once."""
-        fg = "#9CA3AF" if self._is_dark else "#6B7280"
-        hover_bg = "#2A2A2C" if self._is_dark else "#E8E8EA"
+        """'Copy' affordance below the response that copies the entire message
+        (body text, tables and code) to the clipboard at once. Uses the app's
+        blue (RESISTINE_BLUE) so it's clearly visible and on-brand."""
         self._copy_btn = customtkinter.CTkButton(
             self, text="Copy", width=58, height=24, corner_radius=6,
-            fg_color="transparent", hover_color=hover_bg, text_color=fg,
+            fg_color=RESISTINE_BLUE, hover_color="#1565B0", text_color="#FFFFFF",
             font=customtkinter.CTkFont(family=ui_family(), size=12),
             command=self._copy_response,
         )
