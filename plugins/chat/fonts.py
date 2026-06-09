@@ -22,6 +22,11 @@ RESISTINE_BLUE = "#0D5394"
 # -- Base metrics (px) --------------------------------------------------------
 # Body text size for AI responses (and, matched in bubble.py, user messages).
 _BASE_SIZE = 18
+# Code blocks and tables render ~20% smaller than body text so their monospace
+# / tabular content doesn't visually dominate the prose (monospace looks larger
+# than the proportional body font at the same point size). Same value for both
+# so code blocks and tables are a uniform size.
+_CODE_BLOCK_SIZE = 14
 _MONO_FAMILY = "Menlo" if sys.platform == "darwin" else "Consolas"
 
 # Heading sizes, kept above/around the body so the hierarchy holds.
@@ -138,6 +143,13 @@ def get_fonts(is_dark: bool = False) -> dict[str, tkFont.Font]:
             "chat_bold_italic", family=fam, size=_BASE_SIZE,
             weight="bold", slant="italic"),
         "code": _named("chat_code", family=_MONO_FAMILY, size=_BASE_SIZE),
+        # Code-block body + table cells: ~20% smaller than prose so they don't
+        # dwarf the conversation text (see _CODE_BLOCK_SIZE).
+        "code_block": _named(
+            "chat_code_block", family=_MONO_FAMILY, size=_CODE_BLOCK_SIZE),
+        "table": _named("chat_table", family=fam, size=_CODE_BLOCK_SIZE),
+        "table_bold": _named(
+            "chat_table_bold", family=fam, size=_CODE_BLOCK_SIZE, weight="bold"),
         "link": _named(
             "chat_link", family=fam, size=_BASE_SIZE, underline=True),
         "strikethrough": _named(
