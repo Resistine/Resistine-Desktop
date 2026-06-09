@@ -190,9 +190,17 @@ def _wazuh_level_to_severity(level):
 def _normalize_wazuh_hit(hit):
     """Flatten a Wazuh alert hit into the dict shape the events UI expects.
 
-    Tolerates both OpenSearch-shaped hits (with `_source` envelope) and
-    pre-flattened payloads returned by the /me/vulnerabilities/{id}/events
-    endpoint — `src` falls back to `hit` itself when `_source` is absent."""
+    Tolerates three shapes:
+      - OpenSearch-shaped hits with `_source` envelope and nested
+        rule.{id,level,description} / agent.{name,ip} objects.
+      - Pre-flattened payloads with the same nested objects but no envelope.
+      - The live /me/vulnerabilities/{id}/events shape, which is flat AND
+        renames fields: top-level `cve` / `severity` (string, capitalized)
+        / `rule_id` / `rule_level` / `title` / `package` / `version`, with
+        no nested `rule` or `agent` objects.
+
+    Live-shape fields are tried first per slot, then the legacy nested
+    accessors as fallbacks, so a future shape change can't blank the UI."""
     src = hit.get("_source") or hit
     rule = src.get("rule") or {}
     agent = src.get("agent") or {}
@@ -208,19 +216,38 @@ def _normalize_wazuh_hit(hit):
                 raw_log = json.dumps(data, indent=2)
             except (TypeError, ValueError):
                 raw_log = str(data)
+        elif src.get("cve"):
+            # Live API events carry flat package/version/title fields instead
+            # of data/full_log. Synthesize a minimal raw_log so the detail
+            # pane still shows package context for the affected CVE.
+            raw_log = json.dumps(
+                {
+                    "cve": src.get("cve"),
+                    "package": src.get("package"),
+                    "version": src.get("version"),
+                    "title": src.get("title"),
+                },
+                indent=2,
+            )
+
+    cve = src.get("cve")
+    severity_str = src.get("severity")
+    rule_level = src.get("rule_level")
+    if rule_level is None:
+        rule_level = rule.get("level")
 
     return {
-        "id": hit.get("_id") or src.get("id") or "",
-        "rule_id": rule.get("id", ""),
-        "level": rule.get("level"),
-        "severity": _wazuh_level_to_severity(rule.get("level")),
-        "description": rule.get("description", ""),
+        "id": hit.get("_id") or src.get("id") or cve or "",
+        "rule_id": src.get("rule_id") or rule.get("id", ""),
+        "level": rule_level,
+        "severity": (severity_str or "").lower() or _wazuh_level_to_severity(rule_level),
+        "description": src.get("title") or rule.get("description", "") or cve or "",
         "timestamp": src.get("timestamp") or "",
         "agent": agent.get("name", ""),
         "host": agent.get("name", ""),
         "ip": agent.get("ip", ""),
         "mitre": mitre,
-        "hash": src.get("id", ""),
+        "hash": src.get("id", "") or cve or "",
         "raw_log": raw_log,
     }
 
@@ -430,6 +457,14 @@ _remote_vuln_events_complete = threading.Event()
 _overview_early_loader_started = False
 _overview_early_loader_lock = threading.Lock()
 
+# Phase 2 of the Events tab loader (per-device fan-out across the group) is
+# the heaviest call sequence in the plugin and is consumed only by the Events
+# pane. We kick it lazily on the first Events-tab open instead of eagerly at
+# plugin load, so users who never visit Events don't pay the cost. Same
+# one-shot lock pattern as the overview preloader.
+_vuln_events_phase2_started = False
+_vuln_events_phase2_lock = threading.Lock()
+
 
 def _wait_for_vpn(poll_interval=2.0):
     """Block until the VPN tunnel reports connected. The /api/v1/me/* host
@@ -551,22 +586,20 @@ def _load_overview_early_async():
                 logger.error(f"[WAZUH-OVERVIEW] preloader thread crashed: {e}")
 
 
-def _load_vuln_events_async():
-    """Two-phase loader for the Events tab.
+def _load_vuln_events_phase1_async():
+    """Eager Phase 1 loader for the Events tab.
 
-    Phase 1: wait for the agent fetch, then pull every vulnerability detection
-    event for the LOCAL device across all four severity buckets (in parallel
-    internally — see api_client.fetch_device_vulnerability_events). As soon as
-    that finishes, set _remote_vuln_events_ready so the Events tab can render.
+    Waits for the agent fetch, then pulls every vulnerability detection event
+    for the LOCAL device in a single pagination stream (see
+    api_client.fetch_device_vulnerability_events). As soon as that finishes,
+    sets _remote_vuln_events_ready so the Events tab can render the moment
+    the user opens it.
 
-    Phase 2: wait for inventory, then fan out to the rest of the group's
-    devices via a ThreadPoolExecutor. Each device's result is merged into
-    _REMOTE_VULN_EVENTS by ATOMIC REBIND of the global — no lock needed
-    because all rebinds happen on this single coordinator thread. The Events
-    pane's id(_REMOTE_VULN_EVENTS)-keyed caches naturally invalidate on each
-    rebind, and the pane's poll callback (_schedule_events_ready_check)
-    rebuilds the list whenever the identity changes."""
-    global _REMOTE_VULN_EVENTS, _REMOTE_VULN_EVENTS_ERROR
+    Does NOT set _remote_vuln_events_complete — group-device events are now
+    fetched lazily by _load_vuln_events_phase2_async, which fires only when
+    the user actually opens the Events tab. The early-exit branch sets both
+    events because there's no Phase 2 work to wait for in that case."""
+    global _REMOTE_VULN_EVENTS, _REMOTE_VULN_EVENTS_ERROR, _vuln_events_phase2_started
 
     _remote_agent_ready.wait()
     local_id = (_REMOTE_AGENT or {}).get("id") if isinstance(_REMOTE_AGENT, dict) else None
@@ -574,6 +607,10 @@ def _load_vuln_events_async():
         _REMOTE_VULN_EVENTS_ERROR = "no local agent"
         _remote_vuln_events_ready.set()
         _remote_vuln_events_complete.set()
+        # No Phase 2 will ever run; suppress the lazy kicker so the Events
+        # tab open doesn't try to spin up a fan-out we can't complete.
+        with _vuln_events_phase2_lock:
+            _vuln_events_phase2_started = True
         return
 
     local_events, err = api_client.fetch_device_vulnerability_events(local_id)
@@ -585,7 +622,25 @@ def _load_vuln_events_async():
         _REMOTE_VULN_EVENTS = normalized
     _remote_vuln_events_ready.set()
 
+
+def _load_vuln_events_phase2_async():
+    """Lazy Phase 2 loader for the Events tab.
+
+    Waits for inventory, then fans out to the rest of the group's devices via
+    a ThreadPoolExecutor. Each device's result is merged into
+    _REMOTE_VULN_EVENTS by ATOMIC REBIND of the global — no lock needed
+    because all rebinds happen on this single coordinator thread. The Events
+    pane's id(_REMOTE_VULN_EVENTS)-keyed caches naturally invalidate on each
+    rebind, and the pane's poll callback (_schedule_events_ready_check)
+    rebuilds the list whenever the identity changes.
+
+    Kicked by _kick_vuln_events_phase2_loader from _build_events_pane the
+    first time the user opens the Events tab — so users who never visit
+    Events don't pay the per-device fan-out cost on plugin load."""
+    global _REMOTE_VULN_EVENTS
+
     _remote_inventory_ready.wait()
+    local_id = (_REMOTE_AGENT or {}).get("id") if isinstance(_REMOTE_AGENT, dict) else None
     items = _REMOTE_INVENTORY.get("items") if isinstance(_REMOTE_INVENTORY, dict) else []
     other_ids = [
         d.get("agent_id")
@@ -633,8 +688,25 @@ def _kick_overview_early_loader():
         daemon=True,
     ).start()
     threading.Thread(
-        target=_load_vuln_events_async,
-        name="endpoint2-vuln-events-loader",
+        target=_load_vuln_events_phase1_async,
+        name="endpoint2-vuln-events-phase1",
+        daemon=True,
+    ).start()
+
+
+def _kick_vuln_events_phase2_loader():
+    """Idempotent: spawn the Events-tab Phase 2 fan-out at most once per
+    process. Called from _build_events_pane on first tab open, so the
+    per-device events fan-out (the heaviest sequence in the plugin) only
+    runs when the user actually wants to see Events."""
+    global _vuln_events_phase2_started
+    with _vuln_events_phase2_lock:
+        if _vuln_events_phase2_started:
+            return
+        _vuln_events_phase2_started = True
+    threading.Thread(
+        target=_load_vuln_events_phase2_async,
+        name="endpoint2-vuln-events-phase2",
         daemon=True,
     ).start()
 
@@ -854,12 +926,18 @@ class Plugin(BasePlugin):
         self._event_row_frames = {}
         self._event_search_var = None
         self._event_count_label = None
+        # Severity pill count labels, keyed by level. Stashed by
+        # _build_severity_pills so _update_severity_pills can rewrite the
+        # numbers in place during Phase 2 rebinds without tearing down the
+        # pill row (which would otherwise force a full pane rebuild — see
+        # _refresh_events_content for the rebind path).
+        self._severity_count_labels = {}
         self._event_chart_canvas = None
         self._event_chart_figure = None
         self._chart_ax = None
         self._chart_buckets = []
         self._chart_counts = {}
-        self._selected_bucket = None  # datetime of the active 30-min bucket filter, or None
+        self._selected_bucket = None  # datetime of the active 1-hour bucket filter, or None
         self._events_ready_after_id = None  # poll handle for the background events loader
         self._events_last_seen_id = None    # id(_REMOTE_VULN_EVENTS) at last rebuild; used to detect incremental merges
         self._prebuild_after_id = None  # handle for the inactive-tab pre-build chain
@@ -2044,6 +2122,11 @@ class Plugin(BasePlugin):
             except Exception:
                 pass
 
+        # First open of the Events tab kicks the per-device group fan-out.
+        # Idempotent — subsequent rebuilds (polling, manual rebind) short-
+        # circuit on the started flag.
+        _kick_vuln_events_phase2_loader()
+
         if not _remote_vuln_events_ready.is_set():
             self._render_events_loading(parent)
             self._schedule_events_ready_check(parent)
@@ -2077,11 +2160,40 @@ class Plugin(BasePlugin):
             font=customtkinter.CTkFont(size=14),
         ).grid(row=0, column=0, sticky="nsew", padx=20, pady=40)
 
+    def _refresh_events_content(self):
+        """Update Events pane content in place after a Phase 2 rebind.
+
+        The pane skeleton (pills row, matplotlib Figure + canvas, scrollable
+        list wrapper, detail frame) was built once by _build_events_pane and
+        is reused here. Allocating a new Figure every 250ms during Phase 2
+        merging was the dominant cost of the old polling path, which called
+        _build_events_pane on each rebind — full teardown + matplotlib
+        Figure realloc + selection/scroll wipe. This path leaves widgets in
+        place and only rewrites text/data:
+
+          - severity pills: in-place .configure(text=...) on cached labels
+          - bar chart: ax.clear() + redraw bars on the existing Figure
+          - row list: tear down children of _event_list_frame only (the
+            ScrollableFrame keeps its scroll position) and rebuild rows
+
+        _render_event_list (the existing helper) already preserves the
+        selection across refreshes by checking if _selected_event_id still
+        exists in the filtered list, so the user's click survives the
+        merge."""
+        self._update_severity_pills()
+        # Rebucket and repaint the chart. _bucket_events_24h_hourly is keyed on
+        # (id(_REMOTE_VULN_EVENTS), right_edge) so the walk is skipped when
+        # neither the event list nor the wall-clock hour changed.
+        self._chart_buckets, self._chart_counts = self._bucket_events_24h_hourly()
+        self._render_event_chart()
+        query = self._event_search_var.get() if self._event_search_var else ""
+        self._render_event_list(query)
+
     def _schedule_events_ready_check(self, parent):
         # Tight pre-ready cadence so the placeholder→content handoff feels
         # instant the moment the local-device fetch completes. Once we've
         # rendered, fall back to a slower poll: the loader keeps appending
-        # group-device events behind the scenes, and the pane has to rebuild
+        # group-device events behind the scenes, and the pane has to update
         # whenever the global is rebound (id(_REMOTE_VULN_EVENTS) changes).
         # Stop polling entirely once _remote_vuln_events_complete fires.
         pre_ready_poll_ms = 20
@@ -2097,7 +2209,14 @@ class Plugin(BasePlugin):
             current_id = id(_REMOTE_VULN_EVENTS)
             if self._events_last_seen_id != current_id:
                 self._events_last_seen_id = current_id
-                self._build_events_pane(parent)
+                # Refresh-in-place when the skeleton is alive; full rebuild
+                # only if the user tabbed away and the list frame was torn
+                # down. The fast path skips the matplotlib Figure realloc
+                # that used to fire on every Phase 2 device merge.
+                if self._event_list_frame and self._event_list_frame.winfo_exists():
+                    self._refresh_events_content()
+                else:
+                    self._build_events_pane(parent)
             if _remote_vuln_events_complete.is_set():
                 return
             self._events_ready_after_id = self.app.after(post_ready_poll_ms, check)
@@ -2126,6 +2245,10 @@ class Plugin(BasePlugin):
 
     def _build_severity_pills(self, parent, row):
         counts = self._severity_counts()
+        # Fresh build: prior count labels (if any) belonged to a destroyed
+        # parent. Reset the cache so _update_severity_pills doesn't try to
+        # .configure() into freed widgets after a tab tear-down/rebuild.
+        self._severity_count_labels = {}
 
         bar = customtkinter.CTkFrame(parent, fg_color="transparent")
         bar.grid(row=row, column=0, sticky="ew", pady=(0, 12))
@@ -2154,27 +2277,59 @@ class Plugin(BasePlugin):
                 font=customtkinter.CTkFont(size=11, weight="bold"),
             ).grid(row=0, column=1, sticky="w", pady=10)
 
-            customtkinter.CTkLabel(
+            count_label = customtkinter.CTkLabel(
                 pill,
                 text=str(counts[level]),
                 text_color=fg,
                 font=customtkinter.CTkFont(family="Inter", size=20, weight="bold"),
-            ).grid(row=0, column=2, sticky="e", padx=(0, 14), pady=10)
+            )
+            count_label.grid(row=0, column=2, sticky="e", padx=(0, 14), pady=10)
+            self._severity_count_labels[level] = count_label
 
-    # ----- 30-min stacked bar chart -----
+    def _update_severity_pills(self):
+        """Rewrite pill count text without rebuilding the pill row.
 
-    def _bucket_events_30min(self):
-        """Group events into 30-minute bucket dicts keyed by datetime."""
+        Called from _refresh_events_content on every Phase 2 rebind so the
+        numbers reflect the merged group totals. No-op when the pills haven't
+        been built yet (e.g. the Events tab was never opened in this session)
+        or after a tear-down — in either case the next _build_severity_pills
+        call will repopulate the cache."""
+        counts = self._severity_counts()
+        for level, label in self._severity_count_labels.items():
+            try:
+                if label.winfo_exists():
+                    label.configure(text=str(counts[level]))
+            except Exception:
+                pass
+
+    # ----- 24h hourly stacked bar chart -----
+
+    def _bucket_events_24h_hourly(self):
+        """Group events into a fixed 24-slot hourly window ending at the next
+        upcoming hour boundary.
+
+        Window is anchored to wall clock: right edge = next hour mark above
+        `now` (UTC), left edge = right edge − 24h. Each bucket's key is the
+        LOWER bound of its hour slot; bucket i covers [key, key+1h). Events
+        outside the window are silently dropped — the chart is a rolling
+        24-hour view by design.
+
+        Cache key includes the window right-edge so we regenerate when the
+        wall clock rolls past an hour boundary even if _REMOTE_VULN_EVENTS
+        identity hasn't changed."""
+        now = datetime.now(timezone.utc)
+        right_edge = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        left_edge = right_edge - timedelta(hours=24)
+
         events_id = id(_REMOTE_VULN_EVENTS)
+        cache_key = (events_id, right_edge)
         cache = self._bucket_events_cache
-        if cache is not None and cache[0] == events_id:
+        if cache is not None and cache[0] == cache_key:
             return cache[1]
-        if not _REMOTE_VULN_EVENTS:
-            self._bucket_events_cache = (events_id, ([], {}))
-            return [], {}
 
-        timestamps = []
-        per_event = []
+        buckets = [left_edge + timedelta(hours=i) for i in range(24)]
+        counts = {b: {lvl: 0 for lvl in _SEVERITY_LEVELS} for b in buckets}
+
         for ev in _REMOTE_VULN_EVENTS:
             try:
                 dt = datetime.fromisoformat(ev["timestamp"].replace("Z", "+00:00"))
@@ -2183,29 +2338,12 @@ class Plugin(BasePlugin):
             sev = (ev.get("severity") or "").lower()
             if sev not in _SEVERITY_LEVELS:
                 continue
-            # Floor to nearest :00 / :30
-            floored = dt.replace(
-                minute=0 if dt.minute < 30 else 30, second=0, microsecond=0
-            )
-            timestamps.append(floored)
-            per_event.append((floored, sev))
+            if dt < left_edge or dt >= right_edge:
+                continue
+            idx = int((dt - left_edge).total_seconds() // 3600)
+            counts[buckets[idx]][sev] += 1
 
-        if not timestamps:
-            self._bucket_events_cache = (events_id, ([], {}))
-            return [], {}
-
-        start = min(timestamps)
-        end = max(timestamps)
-        buckets = []
-        cursor = start
-        while cursor <= end:
-            buckets.append(cursor)
-            cursor += timedelta(minutes=30)
-
-        counts = {b: {lvl: 0 for lvl in _SEVERITY_LEVELS} for b in buckets}
-        for floored, sev in per_event:
-            counts[floored][sev] += 1
-        self._bucket_events_cache = (events_id, (buckets, counts))
+        self._bucket_events_cache = (cache_key, (buckets, counts))
         return buckets, counts
 
     def _chart_theme(self):
@@ -2252,7 +2390,7 @@ class Plugin(BasePlugin):
 
         # Compute the bucket data once per page render. Click-to-filter mutates
         # self._selected_bucket and triggers _render_event_chart for repaint.
-        self._chart_buckets, self._chart_counts = self._bucket_events_30min()
+        self._chart_buckets, self._chart_counts = self._bucket_events_24h_hourly()
 
         fig = Figure(figsize=(8, 1.7), dpi=100, facecolor=chart_theme["bg"])
         ax = fig.add_subplot(111)
@@ -2283,50 +2421,47 @@ class Plugin(BasePlugin):
         counts = self._chart_counts
         sel = self._selected_bucket
 
-        if buckets:
-            import matplotlib.colors as mcolors
-            x = list(range(len(buckets)))
-            bottoms = [0] * len(buckets)
-            for level in _SEVERITY_LEVELS:
-                heights = [counts[b][level] for b in buckets]
-                base = self._resolve_severity_color(level, chart_theme["is_dark"])
-                rgb = mcolors.to_rgb(base)
-                # Per-bar alpha: full when no filter, full for the selected
-                # bucket, dim for the rest while a filter is active.
-                colors = [
-                    (rgb[0], rgb[1], rgb[2], 1.0 if (sel is None or b == sel) else 0.25)
-                    for b in buckets
-                ]
-                ax.bar(
-                    x,
-                    heights,
-                    bottom=bottoms,
-                    width=0.85,
-                    color=colors,
-                    edgecolor="none",
-                    label=level.capitalize(),
-                )
-                bottoms = [a + b for a, b in zip(bottoms, heights)]
-
-            tick_step = max(1, len(buckets) // 6)
-            tick_positions = list(range(0, len(buckets), tick_step))
-            tick_labels = [buckets[i].strftime("%H:%M") for i in tick_positions]
-            ax.set_xticks(tick_positions)
-            ax.set_xticklabels(tick_labels, fontsize=8, color=chart_theme["text"])
-
-            max_h = max(bottoms) if bottoms else 1
-            ax.set_ylim(0, max_h + 1)
-            ax.set_yticks(range(0, max_h + 2, max(1, (max_h + 1) // 4)))
-        else:
-            ax.text(
-                0.5, 0.5, "No events",
-                transform=ax.transAxes,
-                ha="center", va="center",
-                color=chart_theme["text"],
-                fontsize=11,
+        import matplotlib.colors as mcolors
+        x = list(range(24))
+        bottoms = [0] * 24
+        for level in _SEVERITY_LEVELS:
+            heights = [counts[b][level] for b in buckets]
+            base = self._resolve_severity_color(level, chart_theme["is_dark"])
+            rgb = mcolors.to_rgb(base)
+            # Per-bar alpha: full when no filter, full for the selected
+            # bucket, dim for the rest while a filter is active.
+            colors = [
+                (rgb[0], rgb[1], rgb[2], 1.0 if (sel is None or b == sel) else 0.25)
+                for b in buckets
+            ]
+            ax.bar(
+                x,
+                heights,
+                bottom=bottoms,
+                width=0.9,
+                color=colors,
+                edgecolor="none",
+                label=level.capitalize(),
             )
-            ax.set_xticks([])
-            ax.set_yticks([])
+            bottoms = [a + b for a, b in zip(bottoms, heights)]
+
+        # Fixed 24-slot window: tick at every hour, label every 3rd so
+        # labels don't overlap on a narrow chart. Hourly vertical gridlines
+        # give the user a visible mark at every bar boundary.
+        ax.set_xlim(-0.5, 23.5)
+        ax.set_xticks(x)
+        labels = [
+            buckets[i].strftime("%H:%M") if i % 3 == 0 else ""
+            for i in range(24)
+        ]
+        ax.set_xticklabels(labels, fontsize=8, color=chart_theme["text"])
+        ax.xaxis.grid(True, color=chart_theme["grid"], linewidth=0.4, alpha=0.5)
+
+        max_h = max(bottoms) if bottoms else 1
+        if max_h < 1:
+            max_h = 1
+        ax.set_ylim(0, max_h + 1)
+        ax.set_yticks(range(0, max_h + 2, max(1, (max_h + 1) // 4)))
 
         ax.tick_params(colors=chart_theme["text"], labelsize=8)
         ax.spines["top"].set_visible(False)
@@ -2457,7 +2592,9 @@ class Plugin(BasePlugin):
         q = (query or "").lower().strip()
         out = []
         for ev in _REMOTE_VULN_EVENTS:
-            # Bucket filter (from clicking a bar in the chart)
+            # Bucket filter (from clicking a bar in the chart). Chart bars
+            # are now 1-hour buckets; floor to the hour and compare against
+            # the selected bucket's hour-aligned datetime.
             if sel is not None:
                 ts = ev.get("timestamp")
                 if not ts:
@@ -2466,11 +2603,7 @@ class Plugin(BasePlugin):
                     dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                 except ValueError:
                     continue
-                floored = dt.replace(
-                    minute=0 if dt.minute < 30 else 30,
-                    second=0,
-                    microsecond=0,
-                )
+                floored = dt.replace(minute=0, second=0, microsecond=0)
                 if floored != sel:
                     continue
             # Search-text filter
@@ -2506,7 +2639,7 @@ class Plugin(BasePlugin):
             text = f"{shown} events" if shown == total else f"{shown}/{total} events"
             sel = self._selected_bucket
             if sel is not None:
-                end = sel + timedelta(minutes=30)
+                end = sel + timedelta(hours=1)
                 text += f" · {sel.strftime('%H:%M')}–{end.strftime('%H:%M')}"
             self._event_count_label.configure(text=text)
 

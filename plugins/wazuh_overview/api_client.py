@@ -18,6 +18,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
+from requests.adapters import HTTPAdapter
 
 from plugins.wazuh_overview.config import (
     API_BASE_URL,
@@ -27,12 +28,23 @@ from plugins.wazuh_overview.config import (
 from utils.logger import logger
 
 
+# Module-level Session so every _get() reuses TCP connections via Keep-Alive
+# instead of opening a fresh socket per request. Pool sized for our actual
+# peak fan-out: the eager preloader's per-device CVE fetch caps at
+# MAX_PARALLEL_FETCHES=8 (plus a handful of sibling tasks), and the lazy
+# events Phase 2 caps at another 8. 16 covers either path with headroom.
+_SESSION = requests.Session()
+_ADAPTER = HTTPAdapter(pool_connections=16, pool_maxsize=16)
+_SESSION.mount("http://", _ADAPTER)
+_SESSION.mount("https://", _ADAPTER)
+
+
 def _get(path, params=None):
     """Shared GET. Returns (parsed_json, error_str)."""
     url = f"{API_BASE_URL}{path}"
     try:
         logger.info(f"[WAZUH-OVERVIEW] GET {url} params={params}")
-        resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+        resp = _SESSION.get(url, params=params, timeout=REQUEST_TIMEOUT)
     except requests.exceptions.Timeout:
         return None, "timeout"
     except requests.exceptions.RequestException as e:
@@ -83,16 +95,22 @@ def fetch_agent(agent_id=None):
     return payload, None
 
 
-def _normalize_cve(raw):
+def _normalize_cve(raw, detected_at=None):
     """Map a raw /me/vulnerabilities CVE record to the UI's expected shape.
 
     The live API uses Wazuh-Indexer-shaped fields (cve / cvss3_score / package
-    / version / published / updated / first_detected_at). The Vulnerabilities
-    pane reads id / cvss_score / package_name / package_version /
-    first_detected_at / published_date / modified_date / severity (lowercase)
-    — so remap here once instead of touching every UI call site. Each fallback
-    also accepts the UI-name so a future API change to those names keeps
-    working without a client update."""
+    / version / published / updated). The Vulnerabilities pane reads id /
+    cvss_score / package_name / package_version / first_detected_at /
+    published_date / modified_date / severity (lowercase) — so remap here
+    once instead of touching every UI call site. Each fallback also accepts
+    the UI-name so a future API change to those names keeps working without
+    a client update.
+
+    `detected_at` is the scan-time timestamp the per-device endpoint reports
+    at the top level (it's no longer repeated on every CVE). Caller passes
+    the page-level value so it lands on each CVE as `first_detected_at` —
+    the timeline chart buckets on that key. It's scan-time, not true
+    first-sighting; true first-sighting only lives in /events."""
     if not isinstance(raw, dict):
         return {}
     score = raw.get("cvss3_score")
@@ -111,10 +129,11 @@ def _normalize_cve(raw):
         "status": raw.get("status"),
         "published_date": raw.get("published"),
         "modified_date": raw.get("updated") or raw.get("modified_date"),
+        "first_detected_at": raw.get("first_detected_at") or detected_at,
     }
 
 
-def fetch_vulnerabilities_summary():
+def fetch_vulnerabilities_summary(severity=None, top=5):
     """GET /api/v1/me/vulnerabilities (group-level summary).
 
     Returns the raw response dict — kept un-normalized because consumers
@@ -122,6 +141,9 @@ def fetch_vulnerabilities_summary():
     Vulnerabilities card and the donut. Single indexer aggregation
     server-side; cheap (~370ms vs ~1.5s for the full per-device fan-out)
     so the Overview card can paint long before per-device data lands.
+
+    `severity` filters the aggregation server-side (critical/high/medium/low).
+    `top` sets the per-device preview size for `top_cves` (API default 5).
 
     Caveats baked into the response:
       - per-device `top_cves` is capped at 50 even when `top` is larger,
@@ -135,7 +157,10 @@ def fetch_vulnerabilities_summary():
       total_vulnerabilities: int
       by_severity: {critical, high, medium, low: int}
       devices: [{agent_id, total, by_severity, top_cves: [...]}]"""
-    payload, err = _get("/api/v1/me/vulnerabilities", params={"top": 5})
+    params = {"top": top}
+    if severity:
+        params["severity"] = severity
+    payload, err = _get("/api/v1/me/vulnerabilities", params=params)
     if err:
         return None, err
     if not isinstance(payload, dict):
@@ -144,24 +169,27 @@ def fetch_vulnerabilities_summary():
 
 
 def _device_vulnerabilities_page(agent_id, severity=None, limit=500, offset=0):
-    """Single page of /me/vulnerabilities/{agent_id}. Returns (raw_items, err).
+    """Single page of /me/vulnerabilities/{agent_id}. Returns
+    (raw_items, detected_at, err).
 
     Unwraps the response envelope but does NOT normalize — pagination needs the
-    raw list length to decide whether to fetch another page."""
+    raw list length to decide whether to fetch another page. `detected_at` is
+    the top-level scan timestamp the API reports once per response (it's no
+    longer per-CVE); we surface it so the caller can stamp every CVE with it."""
     params = {"limit": limit, "offset": offset}
     if severity:
         params["severity"] = severity
     payload, err = _get(f"/api/v1/me/vulnerabilities/{agent_id}", params=params)
     if err:
-        return None, err
+        return None, None, err
     if not isinstance(payload, dict):
-        return None, "bad shape"
+        return None, None, "bad shape"
     items = payload.get("vulnerabilities")
     if not isinstance(items, list):
         items = payload.get("cves")
     if not isinstance(items, list):
         items = _affected_items(payload)
-    return list(items or []), None
+    return list(items or []), payload.get("detected_at"), None
 
 
 def fetch_device_vulnerabilities(agent_id, severity=None, page_size=500, max_cves=5000):
@@ -173,19 +201,23 @@ def fetch_device_vulnerabilities(agent_id, severity=None, page_size=500, max_cve
     Optional `severity` filter (critical/high/medium/low) is forwarded to the
     server.
 
-    `first_detected_at` is no longer populated by this endpoint — per-CVE
-    first-sighting timestamps now live in /me/vulnerabilities/{agent_id}/events,
-    which this client does not currently call. Consumers that read
-    `first_detected_at` (the timeline chart and the detail-panel row) will
-    see `None` and degrade gracefully."""
+    Top-level `detected_at` (scan time) is stamped onto every CVE as
+    `first_detected_at` — that's what the timeline chart buckets on. It's
+    scan-time, not true first-sighting; the true per-CVE first-sighting
+    timestamps live in /me/vulnerabilities/{agent_id}/events. We keep the
+    first non-null `detected_at` we see across pages, since the field is
+    response-level and should match across pages of the same scan."""
     merged_raw = []
+    detected_at = None
     offset = 0
     while True:
-        page, err = _device_vulnerabilities_page(
+        page, page_detected_at, err = _device_vulnerabilities_page(
             agent_id, severity=severity, limit=page_size, offset=offset,
         )
         if err:
             return None, err
+        if detected_at is None and page_detected_at:
+            detected_at = page_detected_at
         if not page:
             break
         merged_raw.extend(page)
@@ -194,7 +226,7 @@ def fetch_device_vulnerabilities(agent_id, severity=None, page_size=500, max_cve
         if len(merged_raw) >= max_cves:
             break
         offset += page_size
-    return [_normalize_cve(c) for c in merged_raw], None
+    return [_normalize_cve(c, detected_at=detected_at) for c in merged_raw], None
 
 
 def fetch_all_vulnerabilities(devices=None):
@@ -254,18 +286,15 @@ def fetch_all_vulnerabilities(devices=None):
     return merged, None
 
 
-_EVENT_SEVERITIES = ("critical", "high", "medium", "low")
-
-
 def fetch_device_vulnerability_events_page(
-    agent_id, severity=None, limit=50, offset=0, hours=0,
+    agent_id, severity=None, limit=50, offset=0, hours=24,
 ):
     """Single page of GET /api/v1/me/vulnerabilities/{agent_id}/events.
 
-    `hours` controls the server-side time window (default in the API is the
-    last 24h). Pass 0 here to disable the cap and pull every event the API
-    will return — the timeline chart wants the full history, not a 1-day
-    slice.
+    `hours` controls the server-side time window. Default matches the API's
+    own default (24h); pass 0 to disable the cap and pull every event the
+    API will return — that's what the timeline chart wants when it's drawing
+    full history.
 
     Returns (events_list, err). Defensive envelope unwrap: the events live
     under "events" in the live API; OpenSearch-shaped `hits.hits` and the
@@ -294,24 +323,32 @@ def fetch_device_vulnerability_events_page(
     return list(items or []), None
 
 
-def _paginate_events_for_severity(
-    agent_id, severity, page_size=50, max_events=2000, hours=0,
+def fetch_device_vulnerability_events(
+    agent_id, page_size=50, max_events=2000, hours=24,
 ):
-    """Walk every page of one severity for one device. Returns (events, err).
+    """All vulnerability detection events for ONE device, paginated.
 
-    Stops when: the response is empty, a page returns fewer than page_size
-    rows (last page), or the cumulative count hits max_events (safety cap
-    against a runaway server response). Newest-first ordering is preserved
-    end-to-end — the API returns newest-first; pages are concatenated in
-    request order, so the merged list stays sorted by timestamp desc.
+    Calls the endpoint without a `severity` filter so a single pagination
+    stream returns events of every severity (the API returns newest-first
+    regardless). Previously this fanned out four severity-filtered streams
+    in parallel, which cost 4× the request count and pushed concurrent
+    requests past urllib3's pool_maxsize when combined with the per-device
+    fan-out in main.py's _load_vuln_events_phase2_async.
 
-    `hours` is forwarded to every page request — see
-    fetch_device_vulnerability_events_page."""
+    `hours` is the server-side time window. Defaults to 24 to match the API
+    spec and the Events tab's fixed 24-hour timeline chart. Pass a larger
+    value (or 0 for unlimited) for historical investigation that needs to
+    look beyond the visible chart window.
+
+    All-or-nothing per device: any page error fails the whole fetch. The
+    outer fan-out (main.py) already tolerates per-device failures, so this
+    is acceptable — and the previous per-severity partial-success contract
+    rarely fired anyway, since all severities hit the same backend index."""
     out = []
     offset = 0
     while True:
         page, err = fetch_device_vulnerability_events_page(
-            agent_id, severity=severity, limit=page_size, offset=offset, hours=hours,
+            agent_id, limit=page_size, offset=offset, hours=hours,
         )
         if err:
             return None, err
@@ -324,52 +361,6 @@ def _paginate_events_for_severity(
             break
         offset += page_size
     return out, None
-
-
-def fetch_device_vulnerability_events(
-    agent_id, page_size=50, max_per_severity=2000, hours=0,
-):
-    """All vulnerability detection events for ONE device, across all four
-    severity buckets fetched IN PARALLEL.
-
-    The endpoint requires both `agent_id` (path) and accepts a `severity`
-    filter; splitting by severity lets us run four parallel pagination
-    streams instead of one long serial walk. Each severity stream paginates
-    with limit=page_size + offset until exhausted (see
-    `_paginate_events_for_severity`).
-
-    `hours` is the server-side time window. Default is 0 (unlimited) because
-    the timeline chart wants the full history; pass a positive int to
-    constrain to the last N hours.
-
-    Partial-success contract mirrors `fetch_all_vulnerabilities`: if ≥1
-    severity succeeded, return success with the merged list; only when
-    every severity failed do we return (None, "all severities failed")."""
-    workers = min(len(_EVENT_SEVERITIES), MAX_PARALLEL_FETCHES)
-    merged = []
-    failures = 0
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        future_to_sev = {
-            ex.submit(
-                _paginate_events_for_severity,
-                agent_id, sev, page_size, max_per_severity, hours,
-            ): sev
-            for sev in _EVENT_SEVERITIES
-        }
-        for future in as_completed(future_to_sev):
-            sev = future_to_sev[future]
-            events, derr = future.result()
-            if derr:
-                failures += 1
-                logger.warning(
-                    f"Vuln-events: {sev} fetch for agent {agent_id} failed: {derr}"
-                )
-                continue
-            merged.extend(events or [])
-
-    if failures == len(_EVENT_SEVERITIES):
-        return None, "all severities failed"
-    return merged, None
 
 
 def fetch_sca():
