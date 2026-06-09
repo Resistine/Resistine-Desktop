@@ -553,6 +553,10 @@ def _generate_system_freshclam_conf() -> str:
         "LogTime yes\n"
         "DatabaseMirror database.clamav.net\n"
         f"NotifyClamd {_SYSTEM_CLAMD_CONF}\n"
+        # Run by the root LaunchDaemon. Without this, freshclam drops to the
+        # default "clamav" user (absent on macOS) and fails to open the
+        # root-owned UpdateLogFile, so signatures silently never update.
+        "DatabaseOwner root\n"
     )
     certs_dir = find_certs_dir()
     if certs_dir:

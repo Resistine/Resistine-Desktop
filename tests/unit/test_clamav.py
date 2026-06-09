@@ -1643,3 +1643,67 @@ class TestFreshclamDaemon:
         ran.assert_not_called()  # never falls through to osascript on enable
 
 
+class TestGetDbInfo:
+    """get_db_info reports sig count + a TRUTHFUL last-updated date.
+
+    Regression guard: the date must come from the build date inside the CVD
+    header, not the file mtime. freshclam applies .cld diffs without touching
+    the base .cvd, so mtime reads stale even when signatures are fresh — and
+    a touch-on-copy during install can make mtime read *newer* than the real
+    signatures. Both directions mislead the user; the header date is truth.
+    """
+
+    @staticmethod
+    def _write_cvd(path, date_field, sigs):
+        # CVD header: ClamAV-VDB:DD Mon YYYY HH-MM ±ZZZZ:ver:sigs:... padded
+        # to 512 bytes, exactly as ClamAV writes it.
+        header = f"ClamAV-VDB:{date_field}:58:{sigs}:60:x:x:x:x:x:x"
+        path.write_bytes(header.encode("ascii").ljust(512, b" "))
+
+    def test_uses_header_build_date_not_mtime(self, tmp_path, monkeypatch):
+        # daily is the newer signature build; main is older. The file written
+        # last (main) has the newer mtime — so if the code used mtime it would
+        # wrongly report main's date.
+        self._write_cvd(tmp_path / "daily.cld", "04 Jun 2026 06-24 +0000", 3_000_000)
+        self._write_cvd(tmp_path / "main.cvd", "16 Dec 2025 23-18 +0000", 600_000)
+        monkeypatch.setattr(
+            clamav_common, "_effective_db_dir", lambda **kw: str(tmp_path),
+        )
+
+        info = clamav_common.get_db_info()
+
+        assert info["signatures"] == "3,600,000"
+        # 04 Jun 2026 06-24 UTC, rendered in local time — assert the date part
+        # survives regardless of the runner's timezone by checking it's the
+        # newer of the two build dates, not Dec 2025.
+        assert "2026-06-0" in info["last_updated"]
+        assert "2025-12" not in info["last_updated"]
+
+    def test_falls_back_to_mtime_on_unparseable_header(self, tmp_path, monkeypatch):
+        self._write_cvd(tmp_path / "daily.cld", "not-a-date", 3_000_000)
+        monkeypatch.setattr(
+            clamav_common, "_effective_db_dir", lambda **kw: str(tmp_path),
+        )
+
+        info = clamav_common.get_db_info()
+
+        # Still reports a date (from mtime) rather than the em-dash placeholder.
+        assert info["signatures"] == "3,000,000"
+        assert info["last_updated"] != "—"
+
+    def test_no_db_files_returns_placeholders(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            clamav_common, "_effective_db_dir", lambda **kw: str(tmp_path),
+        )
+
+        info = clamav_common.get_db_info()
+
+        assert info == {"signatures": "—", "last_updated": "—"}
+
+    def test_parse_cvd_build_date_roundtrip(self):
+        ts = clamav_common._parse_cvd_build_date("09 Jun 2026 09-00 -0400")
+        # 2026-06-09 09:00 -0400 == 2026-06-09 13:00 UTC == 1781010000.
+        assert ts == 1781010000.0
+        assert clamav_common._parse_cvd_build_date("garbage") == 0.0
+
+

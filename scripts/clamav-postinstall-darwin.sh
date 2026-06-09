@@ -147,6 +147,11 @@ LogFileMaxSize 2M
 LogTime yes
 DatabaseMirror database.clamav.net
 NotifyClamd $CLAMD_CONF
+# Run by the root LaunchDaemon. Without this, freshclam drops privileges to
+# the default "clamav" user (which does not exist on macOS) and fails to open
+# the root-owned UpdateLogFile — "Problem with internal logger / libfreshclam
+# init failed" — so signatures silently never update. Pin to root.
+DatabaseOwner root
 FRESHCLAM_EOF
 
 # Append CVDCertsDirectory if certs exist in app bundle
