@@ -66,6 +66,23 @@ class Plugin(BasePlugin):
         mode = customtkinter.get_appearance_mode()
         return mode
 
+    def _widget_scale(self):
+        """Physical→logical scale factor for the app window.
+
+        winfo_width() returns *physical* pixels under CTk's DPI scaling, so it
+        must be divided by the real OS-DPI ratio before being compared against
+        the logical 480/680 column thresholds. CTk's widget scaling gives that
+        ratio on every platform (2.0 at 200% on Windows, 1.0 on macOS, and
+        == _hidpi_factor on Linux). Using _hidpi_factor alone was wrong on
+        Windows, where it stays 1.0 while CTk still scales the UI 2x — so
+        physical px leaked into the thresholds and over-counted columns,
+        squishing the plugin cards.
+        """
+        try:
+            return customtkinter.ScalingTracker.get_widget_scaling(self.app)
+        except Exception:
+            return getattr(self.app, "_hidpi_factor", 1.0) or 1.0
+
     def create_main_screen(self):
         # Use a ScrollableFrame for the dashboard to prevent clipping on smaller screens
         self.main_frame = customtkinter.CTkScrollableFrame(
@@ -152,12 +169,13 @@ class Plugin(BasePlugin):
         
         # Responsive layout: determine max columns based on content width.
         # Use absolute pixel thresholds (not screen percentages) so the layout
-        # is consistent regardless of screen size or DPI reporting differences
-        # between winfo_screenwidth() (physical) and winfo_width() (logical).
+        # is consistent regardless of screen size. winfo_width() is physical px
+        # under CTk DPI scaling, so normalize it to logical units via
+        # _widget_scale() before comparing against the logical 480/680 cutoffs.
         import platform as _plat
         _sidebar = 250
         _padding = 60 if _plat.system() == "Windows" else 40
-        _scale = getattr(self.app, "_hidpi_factor", 1.0)
+        _scale = self._widget_scale()
         # Force pending geometry to be applied so winfo_width() returns the
         # actual window size rather than a stale pre-layout value.
         self.app.update_idletasks()
@@ -238,6 +256,12 @@ class Plugin(BasePlugin):
         import platform as _plat
         _sidebar = 250
         _padding = 60 if _plat.system() == "Windows" else 40
+        # Match create_main_screen/on_resize: winfo_width() is physical px, so
+        # normalize to logical units before comparing against the logical 480/680
+        # thresholds. Without this, the cache signature uses the wrong column
+        # count on any HiDPI display (Windows 200%, HiDPI Linux) and makes stale
+        # keep/rebuild decisions.
+        _scale = self._widget_scale()
         window_width = self.app.winfo_width()
         if window_width <= 1:
             window_width = int(self.app.winfo_screenwidth() * 0.7)
@@ -302,7 +326,7 @@ class Plugin(BasePlugin):
             except Exception:
                 return
 
-            _scale = getattr(self.app, "_hidpi_factor", 1.0)
+            _scale = self._widget_scale()
             window_width = int(self.app.winfo_width() / _scale)
             content_width = max(1, window_width - 250 - self._padding_offset)
 
@@ -399,7 +423,7 @@ class Plugin(BasePlugin):
         # Without this, create_grid would walk up to find the stale hint that
         # was set during the initial dashboard load (when winfo_width hadn't
         # been applied yet), giving wrong target_height on the rebuilt grid.
-        _scale = getattr(self.app, "_hidpi_factor", 1.0)
+        _scale = self._widget_scale()
         window_width = int(self.app.winfo_width() / _scale)
         content_width = max(1, window_width - 250 - self._padding_offset)
         self.app._content_width_hint = content_width

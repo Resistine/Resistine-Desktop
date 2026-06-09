@@ -464,7 +464,15 @@ class AppUI(customtkinter.CTk):
             try:
                 if not container.winfo_exists():
                     return
-                _scale = getattr(container.winfo_toplevel(), "_hidpi_factor", 1.0)
+                # CTk's widget scaling is the real OS-DPI ratio on every
+                # platform (2.0 at 200% on Windows, 1.0 on macOS, == _hidpi_factor
+                # on Linux). _hidpi_factor alone is 1.0 on Windows even when CTk
+                # scales 2x, which left card heights mis-proportioned there.
+                try:
+                    _scale = customtkinter.ScalingTracker.get_widget_scaling(container)
+                except Exception:
+                    _scale = getattr(
+                        container.winfo_toplevel(), "_hidpi_factor", 1.0) or 1.0
                 # force_width (from hint) is already in logical units;
                 # winfo_width() is physical pixels — normalise to logical.
                 if force_width:
