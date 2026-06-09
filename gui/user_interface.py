@@ -1245,6 +1245,7 @@ class AppUI(customtkinter.CTk):
         state = {"vel": 0.0, "job": None}
 
         _is_mac = platform.system() == "Darwin"
+        _is_win = platform.system() == "Windows"
 
         def _step():
             try:
@@ -1260,6 +1261,15 @@ class AppUI(customtkinter.CTk):
                 before = canvas.yview()
                 scroll_px = int(round(v)) or (1 if v > 0 else -1)
                 canvas.yview_scroll(-scroll_px, "units")
+                # Windows leaves ghost/smear trails when a Tk canvas with
+                # embedded windows is scrolled (CTkScrollableFrame's content is
+                # one embedded window, itself full of nested CTk canvases): Tk
+                # repositions them but doesn't repaint the exposed regions during
+                # the move. Force a synchronous repaint each step so they redraw
+                # cleanly. macOS/Linux repaint correctly on their own, so this is
+                # Windows-only to avoid the per-step flush cost elsewhere.
+                if _is_win:
+                    canvas.update_idletasks()
                 after = canvas.yview()
 
                 # Hit boundary — stop
