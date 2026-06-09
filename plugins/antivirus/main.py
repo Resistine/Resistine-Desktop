@@ -41,7 +41,11 @@ _PLUGIN_DIR = os.path.dirname(os.path.realpath(__file__))
 
 
 def _send_notification(title: str, body: str):
-    """Send a native OS notification (macOS, Windows, Linux)."""
+    """Send a native OS notification (macOS + Windows).
+
+    Linux/macOS real-time detections go through utils.notifications instead
+    (see _handle_rtd_on_main); this path is the Windows Defender RTD poll.
+    """
     import platform as _platform
 
     system = _platform.system()
@@ -49,8 +53,6 @@ def _send_notification(title: str, body: str):
         _send_notification_darwin(title, body)
     elif system == "Windows":
         _send_notification_windows(title, body)
-    elif system == "Linux":
-        _send_notification_linux(title, body)
 
 
 def _send_notification_darwin(title: str, body: str):
@@ -81,83 +83,6 @@ def _send_notification_darwin(title: str, body: str):
             )
         except Exception:
             pass
-
-
-def _notification_icon() -> str:
-    """Absolute path to the app icon, or a themed-icon name fallback."""
-    icon = os.path.join(
-        os.path.dirname(os.path.dirname(_PLUGIN_DIR)),
-        "resources", "icons", "app_icon.png",
-    )
-    return icon if os.path.isfile(icon) else "security-high"
-
-
-def _send_notification_linux(title: str, body: str):
-    """Linux: a freedesktop.org desktop notification.
-
-    Primary path is the ``org.freedesktop.Notifications`` D-Bus service via
-    jeepney (a pure-Python D-Bus client we already depend on) — this is the
-    cross-desktop standard, so it works on GNOME/KDE/XFCE/etc. with whatever
-    notification daemon is running, no extra binary required. Falls back to the
-    ``notify-send`` CLI if D-Bus isn't reachable (e.g. no session bus).
-
-    Runs off the UI thread because opening the bus + waiting for the reply
-    blocks briefly (macOS/Windows use a fire-and-forget subprocess instead).
-    """
-    icon = _notification_icon()
-
-    def _via_dbus() -> bool:
-        try:
-            from jeepney import DBusAddress, new_method_call
-            from jeepney.io.blocking import open_dbus_connection
-        except Exception:
-            return False
-        try:
-            addr = DBusAddress(
-                "/org/freedesktop/Notifications",
-                bus_name="org.freedesktop.Notifications",
-                interface="org.freedesktop.Notifications",
-            )
-            # Notify(app_name, replaces_id, app_icon, summary, body,
-            #        actions, hints, expire_timeout). urgency=2 (critical) so
-            #        threat alerts persist until dismissed; -1 = daemon default.
-            msg = new_method_call(
-                addr, "Notify", "susssasa{sv}i",
-                ("Resistine", 0, icon, title, body, [],
-                 {"urgency": ("y", 2)}, -1),
-            )
-            conn = open_dbus_connection(bus="SESSION")
-            try:
-                conn.send_and_get_reply(msg)
-            finally:
-                conn.close()
-            return True
-        except Exception:
-            return False
-
-    def _via_notify_send() -> bool:
-        import shutil
-        import subprocess
-
-        if shutil.which("notify-send") is None:
-            return False
-        try:
-            subprocess.Popen(
-                ["notify-send", "-u", "critical", "-i", icon, title, body],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            return True
-        except Exception:
-            return False
-
-    def _run():
-        if not _via_dbus():
-            _via_notify_send()
-
-    import threading
-
-    threading.Thread(target=_run, daemon=True).start()
 
 
 _TOAST_COUNTER = 0
