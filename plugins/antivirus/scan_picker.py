@@ -80,8 +80,23 @@ class _ScanPickerDialog(customtkinter.CTkToplevel):
 
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
-        # grab_set after UI is built — avoids Wayland grab issues
-        self.grab_set()
+        # grab_set() requires the window to be mapped/viewable, but the window
+        # manager maps it asynchronously (notably on Linux/X11/Wayland). Calling
+        # it immediately races the WM and intermittently raises "grab failed:
+        # window not viewable". Try now and, if it's not viewable yet, retry on
+        # the event loop until it is.
+        self._grab_when_viewable()
+
+    def _grab_when_viewable(self, attempts: int = 0):
+        """Acquire the modal grab once the window is actually mapped."""
+        if not self.winfo_exists():
+            return
+        try:
+            self.grab_set()
+        except Exception:
+            if attempts < 50:  # ~1s of 20 ms retries, then give up (non-modal)
+                self.after(
+                    20, lambda: self._grab_when_viewable(attempts + 1))
 
     def _build_ui(self):
         self.grid_columnconfigure(0, weight=1)
