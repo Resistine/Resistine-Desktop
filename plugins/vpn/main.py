@@ -810,9 +810,16 @@ class Plugin(BasePlugin):
             # Content area = total window width minus the fixed sidebar.
             # Using app.winfo_width() is reliable; main_container.winfo_width()
             # can be stale or wrong depending on when Configure fires.
-            # winfo_width() returns PHYSICAL px; MAX_CONTENT_WIDTH is LOGICAL,
-            # so convert via _hidpi_factor and re-scale the minsize at the end.
-            _scale = getattr(self.app, "_hidpi_factor", 1.0)
+            # winfo_width() returns PHYSICAL px; MAX_CONTENT_WIDTH is LOGICAL, so
+            # convert via CTk's widget scaling (the real OS-DPI ratio: 2.0 at
+            # 200% on Windows, 1.0 on macOS, == _hidpi_factor on Linux) and
+            # re-scale the minsize at the end. _hidpi_factor alone is 1.0 on
+            # Windows even when CTk scales 2x, which left the content column
+            # sized in physical px and rendered it half-width.
+            try:
+                _scale = customtkinter.ScalingTracker.get_widget_scaling(self.app) or 1.0
+            except Exception:
+                _scale = getattr(self.app, "_hidpi_factor", 1.0) or 1.0
             app_w = self.app.winfo_width() / _scale
             if app_w < 10:
                 return
