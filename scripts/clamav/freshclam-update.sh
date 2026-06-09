@@ -39,8 +39,13 @@ if [ ! -x "$FRESHCLAM" ] || [ ! -f "$CONF" ]; then
 fi
 
 # Initial jitter (0-15min) so a fleet of machines booting/logging in together
-# doesn't hammer the mirrors at the same instant.
-sleep $((RANDOM % 900))
+# doesn't hammer the mirrors at the same instant. Skipped when
+# RESISTINE_FRESHCLAM_INTERVAL is set, which only happens during testing —
+# there "run now" is the whole point, and the opening sleep otherwise makes
+# the daemon look broken (silent for up to 15min) when it is working fine.
+if [ -z "${RESISTINE_FRESHCLAM_INTERVAL:-}" ]; then
+    sleep $((RANDOM % 900))
+fi
 
 while true; do
     if "$FRESHCLAM" --config-file="$CONF"; then
