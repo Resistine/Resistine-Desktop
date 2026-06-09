@@ -188,7 +188,7 @@ class Plugin(BasePlugin):
             text_color=("#0D5394", "#3a7ebf"),
             font=customtkinter.CTkFont(family="Inter", size=15, weight="bold"),
             command=lambda: __import__("webbrowser").open(
-                "https://resistine-main2-v3-31646764.dev.odoo.com/web/signup?redirect=%2Fodoo%3F"
+                "https://resistine-main2-v3-33249814.dev.odoo.com/web/signup?redirect=%2Fodoo%3F"
             ),
         )
         self.create_account_btn.grid(row=4, column=0, pady=(0, 40))
@@ -377,7 +377,7 @@ class Plugin(BasePlugin):
             text_color=("#0D5394", "#3a7ebf"),
             font=customtkinter.CTkFont(family="Inter", size=15, weight="bold"),
             command=lambda: __import__("webbrowser").open(
-                "https://resistine-main2-v3-31646764.dev.odoo.com/web/signup?redirect=%2Fodoo%3F"
+                "https://resistine-main2-v3-33249814.dev.odoo.com/web/signup?redirect=%2Fodoo%3F"
             ),
         )
         self.create_account_btn.grid(row=4, column=0, pady=(0, 40))
