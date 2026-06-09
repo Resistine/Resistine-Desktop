@@ -1145,15 +1145,27 @@ class Plugin(BasePlugin):
         self._scan_log.delete("1.0", "end")
         self._scan_log.configure(state="disabled")
 
+    # Muted fill for a disabled scan button so it reads as inactive instead of
+    # keeping its highlighted blue look while a scan is running.
+    _SCAN_BTN_DISABLED_FG = ("#D1D5DB", "#3A3A3C")
+
     def _set_scan_buttons_state(self, state: str):
-        btn = self._action_buttons.get("scan")
-        if btn:
-            btn.configure(state=state)
-        # scan_computer is gated separately on real-time protection — only
-        # re-enable it if the last poll said clamonacc is running.
-        computer_btn = self._action_buttons.get("scan_computer")
-        if computer_btn:
-            computer_btn.configure(state=state)
+        for key in ("scan", "scan_computer"):
+            btn = self._action_buttons.get(key)
+            if not btn:
+                continue
+            # Remember the enabled (themed blue) fill once so it can be restored.
+            if not hasattr(btn, "_enabled_fg"):
+                btn._enabled_fg = btn.cget("fg_color")
+            if state == "disabled":
+                btn.configure(
+                    state="disabled", hover=False,
+                    fg_color=self._SCAN_BTN_DISABLED_FG,
+                )
+            else:
+                btn.configure(
+                    state="normal", hover=True, fg_color=btn._enabled_fg,
+                )
 
     def _restore_scan_ui(self):
         """Rebuild scan UI state after navigating back during an active scan."""
