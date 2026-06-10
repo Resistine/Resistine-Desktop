@@ -74,7 +74,10 @@ Root: HKLM64; Subkey: "Software\Resistine"; ValueType: string; ValueName: "Versi
 Root: HKLM64; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Resistine"; ValueData: """{app}\Resistine.exe"""; Tasks: startup; Flags: uninsdeletevalue
 
 [Run]
-Filename: "{app}\Resistine.exe"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent; Check: ShouldPerformInstallAction
+; No 'skipifsilent': WinSparkle runs this installer with /SILENT during an
+; auto-update, and we still want the app relaunched afterward (otherwise the
+; update applies but "nothing happens" — the app just stays closed).
+Filename: "{app}\Resistine.exe"; Description: "Launch {#AppName}"; Flags: nowait postinstall; Check: ShouldPerformInstallAction
 
 [UninstallDelete]
 ; Inno Setup only removes files recorded in its install manifest. Python
