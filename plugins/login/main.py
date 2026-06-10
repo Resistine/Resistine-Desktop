@@ -129,11 +129,14 @@ class Plugin(BasePlugin):
         shield_path = get_resource_path(os.path.join("resources", "icons", "ResistineShield.png"))
         try:
             shield_img = Image.open(shield_path)
-            shield_ctk = customtkinter.CTkImage(shield_img, size=(250, 250))
+            shield_ctk = customtkinter.CTkImage(shield_img, size=(200, 200))
             self.shield_label = customtkinter.CTkLabel(
                 self.content_frame, text="", image=shield_ctk
             )
-            self.shield_label.grid(row=0, column=0, pady=(0, 30))
+            # Smaller shield + tighter padding so the content plus the footer
+            # (Privacy / Terms of Use) fit in the window and the terms text is
+            # visible on open without scrolling.
+            self.shield_label.grid(row=0, column=0, pady=(0, 16))
         except OSError as e:
             logger.warning(f"Shield logo load failed: {e}")
 
