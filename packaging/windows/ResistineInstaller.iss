@@ -749,6 +749,16 @@ begin
   DependencyInstallWarnings := DependencyInstallWarnings + WarningText;
 end;
 
+{ Update the wizard's status line during the post-extraction phase and force an
+  immediate repaint, so the blocking dependency/service installs below read as
+  real progress instead of a frozen full bar. Inno pumps the message loop during
+  Exec(...ewWaitUntilTerminated), so this caption stays visible while they run. }
+procedure SetInstallStatus(const Msg: string);
+begin
+  WizardForm.StatusLabel.Caption := Msg;
+  WizardForm.StatusLabel.Update;
+end;
+
 function RunWingetDependencyInstall(const FriendlyName, PackageId, DetectPath, DownloadUrl: string): Boolean;
 var
   ResultCode: Integer;
@@ -774,6 +784,7 @@ begin
     exit;
   end;
 
+  SetInstallStatus('Installing ' + FriendlyName + '...');
   if not RunHiddenCmd(
     'winget install -e --id ' + QuotePath(PackageId) +
     ' --accept-package-agreements --accept-source-agreements --silent --disable-interactivity',
@@ -809,6 +820,7 @@ begin
     exit;
   end;
 
+  SetInstallStatus('Installing Python runtime (this can take a minute)...');
   Log('Installing bundled Python 3.13...');
   if Exec(InstallerPath,
     '/quiet InstallAllUsers=1 PrependPath=1 Include_pip=1 Include_launcher=1',
@@ -844,6 +856,7 @@ begin
     exit;
   end;
 
+  SetInstallStatus('Installing WireGuard...');
   Log('Installing bundled WireGuard...');
   if Exec('msiexec.exe',
     '/i "' + InstallerPath + '" /qn /norestart DO_NOT_LAUNCH=1',
@@ -935,6 +948,7 @@ begin
     exit;
   end;
 
+  SetInstallStatus('Registering the Resistine VPN service...');
   if not Exec(ExpandConstant('{cmd}'),
     '/D /C call ' + QuotePath(ScriptPath) + ' /quiet',
     ExpandConstant('{app}'),
@@ -1777,10 +1791,22 @@ begin
   if not ShouldPerformInstallAction then
     exit;
 
-  RestoreDataAfterReinstallIfNeeded;
-  ApplyStartupTaskSelection;
-  InstallMissingDependenciesWithFeedback;
-  RunVpnServiceSetupRequired;
+  { File extraction is done (the bar is full), but the steps below still run for
+    several seconds — installing missing prerequisites and registering the VPN
+    service. Switch the bar to an animated marquee and show a status caption for
+    each step so the wizard clearly reads as "working" instead of frozen. }
+  WizardForm.ProgressGauge.Style := npbstMarquee;
+  try
+    SetInstallStatus('Finishing setup...');
+    RestoreDataAfterReinstallIfNeeded;
+    ApplyStartupTaskSelection;
+    InstallMissingDependenciesWithFeedback;
+    RunVpnServiceSetupRequired;
+  finally
+    WizardForm.ProgressGauge.Style := npbstNormal;
+    WizardForm.ProgressGauge.Position := WizardForm.ProgressGauge.Max;
+    SetInstallStatus('Finishing installation...');
+  end;
 end;
 
 function InitializeUninstall(): Boolean;
