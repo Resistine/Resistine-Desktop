@@ -354,6 +354,7 @@ class Plugin(BasePlugin):
             self.app.after(0, self._refresh_whitelist)
             self.app.after(0, self._refresh_exclusions)
             self.app.after(0, self._update_realtime_status)
+            self.app.after(0, self._refresh_siem_switch)
         except Exception:
             pass
 
@@ -562,6 +563,9 @@ class Plugin(BasePlugin):
         self.main_frame.grid_remove()
         self._settings_frame.grid()
         self._current_view = "settings"
+        # Re-sync the SIEM forwarding switch every time the (cached) settings
+        # view is shown, so it reflects a Wazuh agent installed since it built.
+        self._refresh_siem_switch()
         if first_build:
             # Populate live data into the freshly-built whitelist + exclusions
             # cards. Done after the swap so the user sees the static layout
@@ -1092,13 +1096,44 @@ class Plugin(BasePlugin):
         )
         return max(60, (target - now) + jitter)
 
-    def _auto_update_loop(self):
-        """Background loop: sleep until next run, then call freshclam.
+    def _sig_update_stale(self) -> bool:
+        """True if signatures haven't updated in ~a day (or were never recorded)."""
+        last = settings.get("antivirus", "last_sig_update_ts", 0) or 0
+        try:
+            return (time.time() - float(last)) >= 86400
+        except (TypeError, ValueError):
+            return True
 
-        Linux/Windows only. On macOS the OS-level freshclam LaunchDaemon
-        owns auto-updates (runs even when the app is closed), so this
-        in-process loop is never started there.
+    def _run_auto_update(self):
+        """Run the signature update and record the time on success."""
+        ok, msg = clamav.run_freshclam()
+        if ok:
+            settings.set("antivirus", "last_sig_update_ts", time.time())
+            logger.info(f"Antivirus: auto-update succeeded — {msg}")
+        else:
+            logger.warning(f"Antivirus: auto-update failed — {msg}")
+        # Refresh the UI if it's visible
+        try:
+            self.app.after(0, self._refresh_db_info)
+        except Exception:
+            logger.debug("Antivirus: app destroyed during auto-update")
+
+    def _auto_update_loop(self):
+        """Background loop: catch up if stale, then update daily near 4 AM.
+
+        Linux/Windows only. On macOS the OS-level freshclam LaunchDaemon owns
+        auto-updates (runs even when the app is closed), so this in-process
+        loop is never started there.
         """
+        # Catch-up: if signatures are stale (>24h, or never recorded), update
+        # now. The 4 AM schedule alone misses machines that are never running
+        # at that hour, so this is what actually makes "once a day" hold.
+        if (not self._auto_update_stop.is_set() and self._auto_update_on
+                and self._sig_update_stale()):
+            logger.info("Antivirus: signatures stale — running catch-up update")
+            self._run_auto_update()
+
+
         while not self._auto_update_stop.is_set():
             delay = self._seconds_until_next_run()
             logger.info(
@@ -1111,16 +1146,7 @@ class Plugin(BasePlugin):
             if not self._auto_update_on:
                 break
             logger.info("Antivirus: running scheduled signature update")
-            ok, msg = clamav.run_freshclam()
-            if ok:
-                logger.info(f"Antivirus: auto-update succeeded — {msg}")
-            else:
-                logger.warning(f"Antivirus: auto-update failed — {msg}")
-            # Refresh the UI if it's visible
-            try:
-                self.app.after(0, self._refresh_db_info)
-            except Exception:
-                logger.debug("Antivirus: app destroyed during auto-update")
+            self._run_auto_update()
 
     # ── Scan Log Helpers ──────────────────────────────────────
 
@@ -1150,6 +1176,12 @@ class Plugin(BasePlugin):
     _SCAN_BTN_DISABLED_FG = ("#D1D5DB", "#3A3A3C")
 
     def _set_scan_buttons_state(self, state: str):
+        # While a scan is running the buttons must stay nullified. Without this
+        # guard the realtime-status poll (which runs after the screen rebuilds
+        # when you navigate back) would call this with "normal" and re-enable
+        # them mid-scan. Force "disabled" whenever a scan is active.
+        if self._scanning:
+            state = "disabled"
         for key in ("scan", "scan_computer"):
             btn = self._action_buttons.get(key)
             if not btn:
@@ -1788,6 +1820,7 @@ class Plugin(BasePlugin):
             if btn:
                 btn.configure(state="normal", text="Update Now")
             if ok:
+                settings.set("antivirus", "last_sig_update_ts", time.time())
                 self._scan_status_label.configure(text="Signatures updated")
             else:
                 self._scan_status_label.configure(text="Update failed")
@@ -1963,12 +1996,93 @@ class Plugin(BasePlugin):
 
     # ── SIEM Forwarding ───────────────────────────────────────
 
-    def _setup_wazuh_forwarding(self):
-        """Configure Wazuh agent to forward threat logs."""
-        btn = getattr(self, "_siem_btn", None)
-        if btn:
-            btn.configure(state="disabled", text="Configuring...")
+    def _on_forwarding_toggle(self):
+        """SIEM forwarding switch toggled in the AV settings view.
 
+        Forwarding requires the endpoint (Wazuh) agent. If it isn't installed,
+        flipping the switch on bounces the user to the Endpoint page to install
+        it. Once installed, forwarding is already on (the installer enables it),
+        so this mainly keeps the switch in sync.
+        """
+        sw = getattr(self, "_siem_switch", None)
+        if sw is None:
+            return
+        turning_on = bool(sw.get())
+        if not threat_log.is_wazuh_installed():
+            # Can't forward without the agent — revert and route to Endpoint.
+            sw.deselect()
+            self.app.show_notification(
+                "Install the endpoint agent to forward AV detections.",
+                type="info")
+            self._open_endpoint()
+            return
+        if turning_on:
+            if threat_log.is_forwarding_enabled():
+                return  # already on (Windows install auto-enables it)
+            self._setup_wazuh_forwarding()
+        else:
+            # Forwarding is managed by the endpoint agent; keep it on.
+            sw.select()
+            self.app.show_notification(
+                "SIEM forwarding stays on while the endpoint agent is installed.",
+                type="info")
+
+    def _open_endpoint(self):
+        """Navigate to the Endpoint (SIEM agent) plugin screen."""
+        try:
+            p = next((pl for pl in self.app.plugin_list
+                      if pl.get_name() == "Endpoint"), None)
+            if p is not None:
+                self.app.select_frame_by_name(
+                    "frame_Endpoint", button=p.get_button())
+        except Exception:
+            logger.debug("Antivirus: could not navigate to Endpoint")
+
+    def _refresh_siem_switch(self):
+        """Re-sync the SIEM forwarding switch with the live agent state.
+
+        The settings view is built once and cached, so without this the switch
+        keeps its build-time state and never reflects a Wazuh agent installed
+        afterwards (which auto-enables forwarding on Windows). Safe to call when
+        the switch doesn't exist (settings view not built yet).
+        """
+        sw = getattr(self, "_siem_switch", None)
+        if sw is None:
+            return
+        try:
+            if not sw.winfo_exists():
+                return
+        except Exception:
+            return
+        installed = threat_log.is_wazuh_installed()
+        on = threat_log.is_forwarding_enabled()
+        if on:
+            sw.select()
+        else:
+            sw.deselect()
+        lbl = getattr(self, "_siem_status_label", None)
+        if lbl is not None:
+            try:
+                if on:
+                    lbl.configure(text="Forwarding active",
+                                  text_color=("#1E8E3E", "#2CC985"))
+                elif installed:
+                    lbl.configure(
+                        text="Ready — turn on to forward AV detections",
+                        text_color=("#666666", "#aaaaaa"))
+                else:
+                    lbl.configure(
+                        text="Install the endpoint agent to enable forwarding",
+                        text_color=("#666666", "#aaaaaa"))
+            except Exception:
+                pass
+
+    def _setup_wazuh_forwarding(self):
+        """Configure the Wazuh agent to forward AV detections (macOS/Linux path).
+
+        On Windows the endpoint installer already injects the Defender localfile,
+        so this is only the manual fallback for platforms that don't.
+        """
         def _run():
             ok, msg = threat_log.setup_wazuh_forwarding()
             self.app.after(0, self._handle_wazuh_setup, ok, msg)
@@ -1978,18 +2092,20 @@ class Plugin(BasePlugin):
     def _handle_wazuh_setup(self, ok: bool, msg: str):
         if not hasattr(self, "main_frame") or not self.main_frame:
             return
-        btn = getattr(self, "_siem_btn", None)
+        sw = getattr(self, "_siem_switch", None)
         lbl = getattr(self, "_siem_status_label", None)
         if ok:
             self._log_append(f"SIEM: {msg}")
-            if btn:
-                btn.configure(text="Configured", state="disabled")
+            if sw:
+                sw.select()
             if lbl:
                 lbl.configure(text="Forwarding active")
         else:
             self._log_append(f"SIEM setup failed: {msg}")
-            if btn:
-                btn.configure(state="normal", text="Configure Forwarding")
+            if sw:
+                sw.deselect()
+            if lbl:
+                lbl.configure(text="Could not enable forwarding")
 
     # ── Quarantine ─────────────────────────────────────────────
 

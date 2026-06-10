@@ -21,6 +21,7 @@ import subprocess
 import threading
 import time
 
+from utils import settings
 from utils.logger import logger
 
 _PROGRAM = "resistine-av"
@@ -154,6 +155,22 @@ def is_wazuh_installed() -> bool:
     return bool(d and os.path.isdir(d))
 
 
+def is_forwarding_enabled() -> bool:
+    """True if AV log forwarding to the SIEM is configured and the agent is present.
+
+    On Windows the endpoint installer always injects the Defender eventchannel
+    localfile during full_install, so a present agent means forwarding is
+    already on. On macOS/Linux forwarding is configured only via
+    setup_wazuh_forwarding(), so it's tracked with a settings flag (ossec.conf
+    is root-only and can't be read to verify directly).
+    """
+    if not is_wazuh_installed():
+        return False
+    if platform.system() == "Windows":
+        return True
+    return bool(settings.get("antivirus", "siem_forwarding", False))
+
+
 def get_ossec_snippet() -> str:
     """Return the XML localfile block for ossec.conf."""
     return (
@@ -167,11 +184,9 @@ def get_ossec_snippet() -> str:
 def setup_wazuh_forwarding() -> tuple[bool, str]:
     """Add our localfile entry to ossec.conf (requires admin).
 
-    Returns (success, message).
+    Returns (success, message). On success the forwarding flag is recorded so
+    the UI can reflect it without re-reading the root-only ossec.conf.
     """
-    if not is_wazuh_installed():
-        return False, "Wazuh agent not installed."
-
     if not is_wazuh_installed():
         return False, "Wazuh agent not installed."
 
@@ -181,15 +196,22 @@ def setup_wazuh_forwarding() -> tuple[bool, str]:
 
     # ossec.conf is root-only — skip unprivileged checks,
     # the privileged script validates everything itself.
-
     system = platform.system()
     if system == "Darwin":
-        return _inject_darwin(conf)
-    if system == "Linux":
-        return _inject_linux(conf)
-    if system == "Windows":
-        return _inject_windows()
-    return False, f"Unknown platform: {system}"
+        ok, msg = _inject_darwin(conf)
+    elif system == "Linux":
+        ok, msg = _inject_linux(conf)
+    elif system == "Windows":
+        ok, msg = _inject_windows()
+    else:
+        return False, f"Unknown platform: {system}"
+
+    if ok:
+        try:
+            settings.set("antivirus", "siem_forwarding", True)
+        except Exception:
+            pass
+    return ok, msg
 
 
 def _inject_darwin(conf: str) -> tuple[bool, str]:
