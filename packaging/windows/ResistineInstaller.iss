@@ -42,6 +42,15 @@ SolidCompression=yes
   ArchitecturesInstallIn64BitMode=x64compatible
 #endif
 PrivilegesRequired=admin
+; Auto-update robustness: an older build's in-app updater only hides to the
+; tray instead of quitting, leaving its files locked. CloseApplications=force
+; makes Setup forcibly terminate the running app (via RestartManager, then a
+; hard kill) so the update can proceed without a "files in use" prompt — which
+; is what lets already-deployed buggy versions auto-update without a manual
+; reinstall. RestartApplications=no leaves the relaunch to the single [Run]
+; entry (runasoriginaluser, no 'skipifsilent') so we don't double-launch.
+CloseApplications=force
+RestartApplications=no
 WizardStyle=modern
 DisableDirPage=auto
 DisableReadyPage=yes
@@ -77,7 +86,7 @@ Root: HKLM64; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType
 ; No 'skipifsilent': WinSparkle runs this installer with /SILENT during an
 ; auto-update, and we still want the app relaunched afterward (otherwise the
 ; update applies but "nothing happens" — the app just stays closed).
-Filename: "{app}\Resistine.exe"; Description: "Launch {#AppName}"; Flags: nowait postinstall; Check: ShouldPerformInstallAction
+Filename: "{app}\Resistine.exe"; Description: "Launch {#AppName}"; Flags: nowait postinstall runasoriginaluser; Check: ShouldPerformInstallAction
 
 [UninstallDelete]
 ; Inno Setup only removes files recorded in its install manifest. Python
