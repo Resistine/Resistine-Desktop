@@ -1,10 +1,11 @@
 """
-Endpoint 2 Plugin (placeholder)
-A second Endpoint sidebar entry, used as a starting point for a redesigned
-endpoint-page architecture. The Overview tab renders content derived from the
-sample data file at plugins/endpoint2/data/agent.013.json. Sections without a
-data source in the sample (vulnerabilities, syscheck, MITRE, etc.) render as
-"No data available" rather than fabricating numbers.
+Wazuh Overview Plugin
+A sidebar entry that renders agent, vulnerability, SCA, hotfix, inventory,
+and detection-event data from the IP-identified /api/v1/me/* endpoints (see
+plugins/wazuh_overview/api_client.py). Eager preload populates the always-
+visible Overview cards; the Vulnerabilities and Events tabs lazy-load their
+heavier per-device fan-outs on first open. Sections without backing data
+render as "No data available" rather than fabricating numbers.
 Author: Resistine Team
 Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
@@ -79,8 +80,12 @@ def _ensure_matplotlib():
 
 _PLUGIN_DIR = os.path.dirname(os.path.realpath(__file__))
 _WAZUH_DIR = os.path.join(os.path.dirname(_PLUGIN_DIR), "wazuh")
-_DATA_FILE = os.path.join(_PLUGIN_DIR, "data", "agent.013.json")
-_VULNS_FILE = os.path.join(_PLUGIN_DIR, "data", "vulnerabilities.json")
+
+# TEMPORARY: dev-only refresh button visibility. Hardcoded True while debug
+# mode (`python main.py -d`) is broken; flip to False (or replace the
+# Plugin._build_modules_header gate with `hasattr(self.app, "inspector")`)
+# before shipping to production.
+_SHOW_DEV_REFRESH_BUTTON = True
 
 _TAB_NAMES = ("Overview", "Events", "Vulnerabilities", "Inventory")
 _LEGEND_KEYS = ("critical", "error", "warning", "info")
@@ -128,48 +133,6 @@ _VULN_STATUS_BADGE = {
     "fixed": "ok",
     "mitigated": "info",
 }
-
-
-def _load_agent_data():
-    try:
-        with open(_DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error(f"Endpoint 2: failed to load sample data ({_DATA_FILE}): {e}")
-        return {}
-
-
-# Agent + vuln data are loaded on first use rather than at module import so
-# plugin discovery doesn't pay the JSON-parse cost when the user never opens
-# the Wazuh plugin (or opens it but never visits Vulnerabilities/Overview).
-_AGENT_DATA_CACHE = None
-
-
-def _get_agent_data():
-    global _AGENT_DATA_CACHE
-    if _AGENT_DATA_CACHE is None:
-        _AGENT_DATA_CACHE = _load_agent_data()
-    return _AGENT_DATA_CACHE
-
-
-def _load_vulns():
-    try:
-        with open(_VULNS_FILE, "r", encoding="utf-8") as f:
-            payload = json.load(f) or {}
-        return list(payload.get("cves") or [])
-    except Exception as e:
-        logger.error(f"Endpoint 2: failed to load vulns sample ({_VULNS_FILE}): {e}")
-        return []
-
-
-_VULNS_CACHE = None
-
-
-def _get_vulns():
-    global _VULNS_CACHE
-    if _VULNS_CACHE is None:
-        _VULNS_CACHE = _load_vulns()
-    return _VULNS_CACHE
 
 
 def _wazuh_level_to_severity(level):
@@ -465,6 +428,16 @@ _overview_early_loader_lock = threading.Lock()
 _vuln_events_phase2_started = False
 _vuln_events_phase2_lock = threading.Lock()
 
+# Per-device vulnerability fan-out is consumed only by the Vulnerabilities
+# tab. Overview's vuln card paints from _REMOTE_VULNS_SUMMARY (the cheap
+# ~370ms group aggregation), so paying for N per-device CVE fetches at
+# preload is pure waste for users who never open Vulnerabilities. Same
+# one-shot lock pattern as Events Phase 2 — fires from
+# _build_vulnerabilities_pane the first time the tab is opened (or from
+# the pre-build chain if the user lingers on Overview).
+_vulns_loader_started = False
+_vulns_loader_lock = threading.Lock()
+
 
 def _wait_for_vpn(poll_interval=2.0):
     """Block until the VPN tunnel reports connected. The /api/v1/me/* host
@@ -548,17 +521,6 @@ def _load_overview_early_async():
         _REMOTE_HOTFIXES_ERROR = err
         _remote_hotfixes_ready.set()
 
-    def _do_vulns():
-        global _REMOTE_VULNS, _REMOTE_VULNS_ERROR
-        # Pass the cached device list so fetch_all_vulnerabilities skips the
-        # duplicate /me/inventory call. Per-device CVE fetches inside are
-        # also parallel — see api_client.fetch_all_vulnerabilities.
-        data, err = api_client.fetch_all_vulnerabilities(devices=devices)
-        if data is not None:
-            _REMOTE_VULNS = data
-        _REMOTE_VULNS_ERROR = err
-        _remote_vulns_ready.set()
-
     def _do_vulns_summary():
         global _REMOTE_VULNS_SUMMARY, _REMOTE_VULNS_SUMMARY_ERROR
         # Fast group-level aggregation (~370 ms). Drives the Overview vuln
@@ -569,12 +531,11 @@ def _load_overview_early_async():
         _REMOTE_VULNS_SUMMARY_ERROR = err
         _remote_vulns_summary_ready.set()
 
-    with ThreadPoolExecutor(max_workers=5) as ex:
+    with ThreadPoolExecutor(max_workers=4) as ex:
         futures = [
             ex.submit(_do_agent),
             ex.submit(_do_sca),
             ex.submit(_do_hotfixes),
-            ex.submit(_do_vulns),
             ex.submit(_do_vulns_summary),
         ]
         for f in as_completed(futures):
@@ -711,13 +672,92 @@ def _kick_vuln_events_phase2_loader():
     ).start()
 
 
+def _load_vulns_async():
+    """Lazy loader for the Vulnerabilities tab's per-device CVE fan-out.
+
+    Waits for inventory (the device list seeds the fan-out) and runs
+    fetch_all_vulnerabilities with that cached list so the client doesn't
+    re-fetch /me/inventory. Result lands in _REMOTE_VULNS and arrival is
+    signalled via _remote_vulns_ready — the Vulnerabilities pane's existing
+    poll (_schedule_vuln_ready_check) swaps from the loading placeholder
+    to the populated table as soon as this fires.
+
+    Overview's vuln card is driven by _REMOTE_VULNS_SUMMARY (cheap group
+    aggregation, still eager), so this lazy path doesn't affect the
+    always-visible Overview paint."""
+    global _REMOTE_VULNS, _REMOTE_VULNS_ERROR
+
+    _remote_inventory_ready.wait()
+    items = _REMOTE_INVENTORY.get("items") if isinstance(_REMOTE_INVENTORY, dict) else []
+    data, err = api_client.fetch_all_vulnerabilities(devices=items)
+    if data is not None:
+        _REMOTE_VULNS = data
+    _REMOTE_VULNS_ERROR = err
+    _remote_vulns_ready.set()
+
+
+def _kick_vulns_loader():
+    """Idempotent: spawn the Vulnerabilities-tab CVE fan-out at most once
+    per process. Called from _build_vulnerabilities_pane on first tab open
+    (which the pre-build chain may also trigger if the user lingers on
+    Overview), so the N per-device /me/vulnerabilities/{id} calls only fire
+    when the user actually wants to see the Vulnerabilities table."""
+    global _vulns_loader_started
+    with _vulns_loader_lock:
+        if _vulns_loader_started:
+            return
+        _vulns_loader_started = True
+    threading.Thread(
+        target=_load_vulns_async,
+        name="endpoint2-vulns-loader",
+        daemon=True,
+    ).start()
+
+
 def _kick_overview_api_loader():
     """Back-compat alias for the Wazuh Overview + Vulnerabilities panes' tab-
     entry kicks. Delegates to the preloader's idempotent kick — a no-op when
-    the Dashboard's end-of-build hook already started the fetch. A future
-    "Refresh" button can reset _overview_early_loader_started + the readiness
-    events to force a fresh fetch."""
+    the Dashboard's end-of-build hook already started the fetch."""
     _kick_overview_early_loader()
+
+
+def refresh_all_remote_data():
+    """Trigger a full re-fetch of every cached /me/* endpoint.
+
+    Resets the four one-shot loader guards (overview-early, vulns,
+    vuln-events-phase2, agents) and re-kicks them. The kickers spawn fresh
+    daemon threads which rebind their respective globals atomically when
+    new data lands; readiness events stay SET and module globals stay
+    populated throughout, so the UI keeps showing stale values until each
+    rebind — no "Loading…" flash.
+
+    Decoupled from any UI surface: safe to call from a button handler, an
+    auto-refresh timer, a settings toggle, a hotkey, or the debug
+    inspector. For UI repaint after the rebinds land, see
+    Plugin.request_refresh.
+
+    Caveat: lazy loaders that haven't been kicked yet in this process
+    (e.g. the user never opened the Vulnerabilities or Events tab) WILL
+    be kicked by this call. That's "refresh + warm" rather than strict
+    "refresh only what's already loaded." Acceptable for a dev gesture;
+    a stricter variant would snapshot the four flags first and only
+    re-kick the ones that were True."""
+    global _overview_early_loader_started, _vulns_loader_started
+    global _vuln_events_phase2_started, _agents_loader_started
+
+    with _overview_early_loader_lock:
+        _overview_early_loader_started = False
+    with _vulns_loader_lock:
+        _vulns_loader_started = False
+    with _vuln_events_phase2_lock:
+        _vuln_events_phase2_started = False
+    with _agents_loader_lock:
+        _agents_loader_started = False
+
+    _kick_overview_early_loader()
+    _kick_vulns_loader()
+    _kick_vuln_events_phase2_loader()
+    _kick_agents_loader()
 
 
 def _ready_mask():
@@ -1358,6 +1398,41 @@ class Plugin(BasePlugin):
         self._build_alert_bar(parent, row=1)
         self._populate_module_grid()
 
+    def request_refresh(self):
+        """Fire a data refresh and schedule best-effort UI repaints.
+
+        The data half (refresh_all_remote_data) is decoupled — anything
+        that wants to re-fetch without touching the UI can call that
+        module-level function directly. This wrapper exists for the dev
+        refresh button (and any future UI surface) so the panes pick up
+        the rebinds without waiting for a tab switch."""
+        refresh_all_remote_data()
+        # The eager preload's fast endpoints land within ~500ms; lazy
+        # fan-outs (CVEs, Phase 2 events, per-device inventory) finish
+        # by ~2-4s. A handful of repaint ticks across that window pick
+        # up rebinds without polling forever. Each tick is cheap when
+        # nothing changed — the renderers re-read the globals and reapply
+        # text/data.
+        for delay_ms in (200, 500, 1000, 2000, 4000, 6000):
+            self.app.after(delay_ms, self._refresh_visible_panes)
+
+    def _refresh_visible_panes(self):
+        """Best-effort repaint of every pane that's currently alive."""
+        # Overview cards
+        if self._module_wrapper is not None and self._module_wrapper.winfo_exists():
+            self._refresh_overview_section()
+        # Events pane (uses the in-place refresh helper added earlier)
+        if self._event_list_frame is not None and self._event_list_frame.winfo_exists():
+            self._refresh_events_content()
+        # Vulnerabilities pane — _build_vulnerabilities_pane is idempotent
+        # and reads _REMOTE_VULNS fresh; its readiness-check path keeps the
+        # loading state if the rebind hasn't landed yet.
+        if (
+            self._vuln_pane_parent is not None
+            and self._vuln_pane_parent.winfo_exists()
+        ):
+            self._build_vulnerabilities_pane(self._vuln_pane_parent)
+
     # ----- section 1: top device widget --------------------------------------
 
     def _build_top_device_widget(self, parent, row):
@@ -1621,6 +1696,7 @@ class Plugin(BasePlugin):
         header.grid(row=row, column=0, sticky="ew", pady=(0, 8))
         header.grid_columnconfigure(0, weight=1)
         header.grid_columnconfigure(1, weight=0)
+        header.grid_columnconfigure(2, weight=0)
 
         title_row = customtkinter.CTkFrame(header, fg_color="transparent")
         title_row.grid(row=0, column=0, sticky="w")
@@ -1648,6 +1724,31 @@ class Plugin(BasePlugin):
                 text_color=color,
                 font=customtkinter.CTkFont(size=11, weight="bold"),
             ).grid(row=0, column=i, sticky="w", padx=(0, 10))
+
+        # Dev-only refresh button. TEMPORARY gate: hardcoded True until
+        # debug mode is fixed and we can switch back to
+        # `hasattr(self.app, "inspector")`. Flip _SHOW_DEV_REFRESH_BUTTON
+        # to False (or restore the inspector check) when shipping. The
+        # button does nothing but call request_refresh — the refresh
+        # logic itself lives in the decoupled refresh_all_remote_data()
+        # module function.
+        #
+        # Styled with a solid accent fill so it's easy to spot while it's
+        # a temporary dev gesture. Drop back to a subtle transparent style
+        # when this gets promoted to a normal user-facing feature.
+        if _SHOW_DEV_REFRESH_BUTTON:
+            customtkinter.CTkButton(
+                header,
+                text="↻ Refresh data",
+                fg_color=["#2563EB", "#3B82F6"],
+                hover_color=["#1D4ED8", "#2563EB"],
+                text_color=["#FFFFFF", "#FFFFFF"],
+                corner_radius=8,
+                width=120,
+                height=30,
+                font=customtkinter.CTkFont(size=12, weight="bold"),
+                command=self.request_refresh,
+            ).grid(row=0, column=2, sticky="e", padx=(16, 0))
 
     # ----- section 3 (b): module card grid -----------------------------------
 
@@ -2959,6 +3060,10 @@ class Plugin(BasePlugin):
         # opening the Vulnerabilities tab directly (without visiting Overview
         # first) still triggers the /me/* fetch.
         _kick_overview_api_loader()
+        # Per-device CVE fan-out is no longer eager — it fires here so the
+        # ~1.5s N-device walk only runs for users who actually open the tab.
+        # Same one-shot pattern as Events Phase 2.
+        _kick_vulns_loader()
 
         if not _remote_vulns_ready.is_set():
             self._render_vuln_loading(parent)
@@ -4011,15 +4116,18 @@ class Plugin(BasePlugin):
         return out
 
     def _vulns_threat_for_name(self, target_name):
-        """Highest vuln severity for the device whose basic_info.name matches
-        the loaded single-agent sample (vulnerabilities.json has no agent_id
-        field, so vulns are scoped implicitly to this one device). Returns
-        None if no match or no vulns."""
-        ref = (_get_agent_data().get("basic_info", {}) or {}).get("name")
-        if not ref or ref != target_name:
+        """Highest CVE severity in _REMOTE_VULNS for the device whose
+        `agent_name` matches `target_name`. Returns None when the device has
+        no CVEs — including the legitimate pre-fan-out state where the
+        Vulnerabilities tab hasn't been opened yet and _REMOTE_VULNS is
+        empty (see _kick_vulns_loader). The Inventory tab's threat indicator
+        falls back to events-only severity in that case."""
+        if not target_name:
             return None
         best = None
-        for v in _get_vulns():
+        for v in _REMOTE_VULNS:
+            if v.get("agent_name") != target_name:
+                continue
             sev = (v.get("severity") or "").lower()
             if sev not in _THREAT_RANK:
                 continue
