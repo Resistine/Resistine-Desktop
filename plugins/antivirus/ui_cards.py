@@ -276,6 +276,8 @@ def _build_db_info_rows(plugin, card, start_row):
 
 
 def _build_auto_update_toggle(plugin, card, row):
+    import platform
+
     auto_row = customtkinter.CTkFrame(card, fg_color="transparent")
     auto_row.grid(
         row=row, column=0, columnspan=2, sticky="ew", padx=16, pady=(6, 0),
@@ -288,6 +290,23 @@ def _build_auto_update_toggle(plugin, card, row):
     customtkinter.CTkLabel(
         left, text="Auto-update signatures", font=font(12),
     ).grid(row=0, column=0, sticky="w")
+
+    if platform.system() == "Darwin":
+        # macOS: a root LaunchDaemon updates signatures even when the app is
+        # closed, so auto-update is always on \u2014 no toggle to defeat its
+        # purpose. Show a read-only "Automatic" status instead of a switch.
+        customtkinter.CTkLabel(
+            left, text="Checks every ~4 hours, even when the app is closed",
+            font=font(11), text_color=_muted(),
+        ).grid(row=1, column=0, sticky="w")
+        customtkinter.CTkLabel(
+            auto_row, text="Automatic", font=font(12), text_color=_muted(),
+        ).grid(row=0, column=1, sticky="e", pady=4)
+        plugin._auto_update_switch = None
+        return row + 1
+
+    # Linux/Windows: the in-process scheduler is the only updater, and the
+    # user-facing toggle is retained unchanged.
     customtkinter.CTkLabel(
         left, text="Daily around 4:00 AM (\u00b12 hrs)",
         font=font(11), text_color=_muted(),

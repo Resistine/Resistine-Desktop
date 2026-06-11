@@ -193,6 +193,7 @@ class Plugin(BasePlugin):
         self._last_status = None
         self._auto_update_timer = None
         self._auto_update_stop = threading.Event()
+        self._auto_update_switch = None
         self._rtd_watcher = None
         self._settings_gear_btn = None
         self._settings_frame = None
@@ -236,8 +237,13 @@ class Plugin(BasePlugin):
         # Waits for daemon registration to finish first.
         threading.Thread(target=self._poll_initial_status, daemon=True).start()
 
-        # Start the auto-update scheduler if enabled
-        if self._auto_update_on:
+        # Start the auto-update scheduler if enabled.
+        # On macOS, signature auto-updates are owned by the OS-level freshclam
+        # LaunchDaemon (registered via ensure_daemons_registered() in
+        # _darwin_daemon_init above), not an in-process thread — so we do NOT
+        # start the scheduler here. On Linux/Windows the in-process scheduler
+        # remains the only updater and starts exactly as before.
+        if platform.system() != "Darwin" and self._auto_update_on:
             self._start_auto_update_scheduler()
 
         # Start the Windows RTD watcher at init so threat notifications
@@ -879,6 +885,14 @@ class Plugin(BasePlugin):
             logger.warning(f"Antivirus RTD: {name} at {path}")
 
     def _toggle_auto_update(self):
+        # macOS has no auto-update toggle: signature updates are always on,
+        # owned by the OS-level freshclam LaunchDaemon (registered in
+        # _darwin_daemon_init). The settings card shows a read-only
+        # "Automatic" status there, so this handler is only wired to the
+        # Linux/Windows switch. Guard defensively in case it's ever called
+        # without a switch widget.
+        if platform.system() == "Darwin" or self._auto_update_switch is None:
+            return
         self._auto_update_on = bool(self._auto_update_switch.get())
         settings.set("antivirus", "auto_update_enabled", self._auto_update_on)
         logger.info(
@@ -994,7 +1008,12 @@ class Plugin(BasePlugin):
         return max(60, (target - now) + jitter)
 
     def _auto_update_loop(self):
-        """Background loop: sleep until next run, then call freshclam."""
+        """Background loop: sleep until next run, then call freshclam.
+
+        Linux/Windows only. On macOS the OS-level freshclam LaunchDaemon
+        owns auto-updates (runs even when the app is closed), so this
+        in-process loop is never started there.
+        """
         while not self._auto_update_stop.is_set():
             delay = self._seconds_until_next_run()
             logger.info(
@@ -1258,7 +1277,10 @@ class Plugin(BasePlugin):
             )
         if not targets:
             return
-        self._run_multi_scan(targets, label="Scan")
+        if len(targets) == 1:
+            self._run_scan(targets[0])
+        else:
+            self._run_multi_scan(targets, label="Scan")
 
     def _computer_scan_targets(self) -> list[str]:
         """Return the fixed list of directories scanned by 'Scan Computer'.
@@ -1353,6 +1375,7 @@ class Plugin(BasePlugin):
         }
 
         def _worker():
+            start = time.monotonic()
             for idx, target in enumerate(targets, 1):
                 if agg["cancelled"] or self._cancel_requested:
                     agg["cancelled"] = True
@@ -1421,11 +1444,19 @@ class Plugin(BasePlugin):
                 with self._scan_lock:
                     self._scan_handle = None
 
+            elapsed = time.monotonic() - start
+            mins, secs = divmod(int(elapsed), 60)
+            duration = (
+                f"{elapsed:.3f} sec ({mins} m {secs} s)"
+                if mins
+                else f"{elapsed:.3f} sec ({secs} s)"
+            )
             final = ScanResult(
                 target=label,
                 scanned=agg["scanned"],
                 infected=agg["infected"],
                 infections=agg["infections"],
+                duration=duration,
                 error="Scan cancelled." if agg["cancelled"] else "",
             )
             self.app.after(0, self._handle_scan_complete, final)

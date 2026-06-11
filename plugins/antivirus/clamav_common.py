@@ -25,6 +25,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from datetime import datetime
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -227,16 +228,24 @@ def get_db_info() -> dict[str, str]:
         return info
 
     total_sigs = 0
-    latest_mtime = 0.0
+    latest_build = 0.0  # newest signature build time (epoch), from CVD headers
+    latest_mtime = 0.0  # fallback: newest file mtime if no header parses
 
     for cvd in cvd_files:
         try:
             with open(cvd, "rb") as f:
                 header = f.read(512).decode("ascii", errors="replace")
-            # CVD header format: ClamAV-VDB:date:ver:sigs:...
+            # CVD header format: ClamAV-VDB:DD Mon YYYY HH-MM ±ZZZZ:ver:sigs:...
             parts = header.split(":")
             if len(parts) >= 4:
                 total_sigs += int(parts[3])
+            # Prefer the signature build date baked into the header over file
+            # mtime: freshclam applies incremental .cld diffs without touching
+            # the base .cvd, so mtime can read stale even when sigs are fresh.
+            if len(parts) >= 2:
+                build = _parse_cvd_build_date(parts[1])
+                if build and build > latest_build:
+                    latest_build = build
         except (OSError, ValueError):
             pass
         mtime = os.path.getmtime(cvd)
@@ -245,12 +254,27 @@ def get_db_info() -> dict[str, str]:
 
     if total_sigs > 0:
         info["signatures"] = f"{total_sigs:,}"
-    if latest_mtime > 0:
+    stamp = latest_build or latest_mtime
+    if stamp > 0:
         info["last_updated"] = time.strftime(
-            "%Y-%m-%d %H:%M", time.localtime(latest_mtime),
+            "%Y-%m-%d %H:%M", time.localtime(stamp),
         )
 
     return info
+
+
+def _parse_cvd_build_date(field: str) -> float:
+    """Parse a CVD header date field into an epoch timestamp.
+
+    The field looks like ``09 Jun 2026 09-00 -0400`` (time uses ``HH-MM``
+    because ``:`` is the header's own delimiter). Returns 0.0 if it can't be
+    parsed, so callers fall back to file mtime.
+    """
+    try:
+        dt = datetime.strptime(field.strip(), "%d %b %Y %H-%M %z")
+        return dt.timestamp()
+    except (ValueError, TypeError):
+        return 0.0
 
 
 def has_database() -> bool:
