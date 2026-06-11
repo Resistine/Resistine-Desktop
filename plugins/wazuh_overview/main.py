@@ -1033,6 +1033,10 @@ class Plugin(BasePlugin):
         # the click handler to match a click to a slice and to re-skin alpha
         # without rebuilding the chart.
         self._vuln_donut_wedges = []
+        # Refresh button reference. Stashed by _build_modules_header so
+        # request_refresh can disable it for the duration of the redraw
+        # window. None until the Overview pane builds.
+        self._refresh_button = None
 
     def check_status(self):
         return None
@@ -1407,6 +1411,15 @@ class Plugin(BasePlugin):
         refresh button (and any future UI surface) so the panes pick up
         the rebinds without waiting for a tab switch."""
         refresh_all_remote_data()
+        # Disable the refresh button for the duration of the redraw window
+        # — visual feedback that the refresh is running, plus debounce so
+        # rapid clicks don't queue overlapping repaint cycles.
+        if self._refresh_button is not None:
+            try:
+                if self._refresh_button.winfo_exists():
+                    self._refresh_button.configure(state="disabled")
+            except Exception:
+                pass
         # The eager preload's fast endpoints land within ~500ms; lazy
         # fan-outs (CVEs, Phase 2 events, per-device inventory) finish
         # by ~2-4s. A handful of repaint ticks across that window pick
@@ -1415,23 +1428,55 @@ class Plugin(BasePlugin):
         # text/data.
         for delay_ms in (200, 500, 1000, 2000, 4000, 6000):
             self.app.after(delay_ms, self._refresh_visible_panes)
+        # Re-enable the button once the redraw window closes.
+        self.app.after(6000, self._restore_refresh_button)
+
+    def _restore_refresh_button(self):
+        """Re-enable the refresh button at the end of the redraw window.
+        Tolerates the button having been destroyed (e.g. modules header
+        was rebuilt mid-refresh) — the new button created by the next
+        _build_modules_header call is already in its normal state."""
+        if self._refresh_button is None:
+            return
+        try:
+            if self._refresh_button.winfo_exists():
+                self._refresh_button.configure(state="normal")
+        except Exception:
+            pass
 
     def _refresh_visible_panes(self):
-        """Best-effort repaint of every pane that's currently alive."""
-        # Overview cards
+        """Best-effort repaint of every pane that's currently alive. Routes
+        through the narrow refresh paths so static widgets (Overview's top
+        device card + alert bar + modules header; Vulns' donut + CVSS
+        Figures) don't flicker on every tick."""
+        # Overview: only the module-grid cards. The top device widget,
+        # alert bar, and modules header are left alone — their data is
+        # effectively static for the local device.
         if self._module_wrapper is not None and self._module_wrapper.winfo_exists():
-            self._refresh_overview_section()
-        # Events pane (uses the in-place refresh helper added earlier)
+            self._refresh_overview_data_only()
+        # Events pane: in-place via the existing helper (chart axes/Figure
+        # preserved; only bars + rows + detail re-render).
         if self._event_list_frame is not None and self._event_list_frame.winfo_exists():
             self._refresh_events_content()
-        # Vulnerabilities pane — _build_vulnerabilities_pane is idempotent
-        # and reads _REMOTE_VULNS fresh; its readiness-check path keeps the
-        # loading state if the rebind hasn't landed yet.
+        # Vulnerabilities pane: in-place via the new helper (donut + CVSS
+        # Figures preserved; only rows + detail card refresh).
         if (
             self._vuln_pane_parent is not None
             and self._vuln_pane_parent.winfo_exists()
         ):
-            self._build_vulnerabilities_pane(self._vuln_pane_parent)
+            self._refresh_vulns_content()
+
+    def _refresh_overview_data_only(self):
+        """Refresh just the module-grid cards. Skips the top device widget
+        and alert bar — their data is effectively static for the local
+        device and rebuilding them on every refresh tick causes visible
+        flicker without changing anything the user sees. The initial-load
+        polling loop still uses _refresh_overview_section, which DOES
+        rebuild those widgets, to swap their loading placeholders for
+        populated content as each endpoint lands."""
+        if self._module_wrapper is None or not self._module_wrapper.winfo_exists():
+            return
+        self._populate_module_grid()
 
     # ----- section 1: top device widget --------------------------------------
 
@@ -1737,7 +1782,7 @@ class Plugin(BasePlugin):
         # a temporary dev gesture. Drop back to a subtle transparent style
         # when this gets promoted to a normal user-facing feature.
         if _SHOW_DEV_REFRESH_BUTTON:
-            customtkinter.CTkButton(
+            self._refresh_button = customtkinter.CTkButton(
                 header,
                 text="↻ Refresh data",
                 fg_color=["#2563EB", "#3B82F6"],
@@ -1748,7 +1793,8 @@ class Plugin(BasePlugin):
                 height=30,
                 font=customtkinter.CTkFont(size=12, weight="bold"),
                 command=self.request_refresh,
-            ).grid(row=0, column=2, sticky="e", padx=(16, 0))
+            )
+            self._refresh_button.grid(row=0, column=2, sticky="e", padx=(16, 0))
 
     # ----- section 3 (b): module card grid -----------------------------------
 
@@ -3703,6 +3749,26 @@ class Plugin(BasePlugin):
         # Sort by CVSS desc so the worst CVEs surface first.
         out.sort(key=lambda x: float(x.get("cvss_score") or 0.0), reverse=True)
         return out
+
+    def _refresh_vulns_content(self):
+        """In-place data refresh for the Vulnerabilities pane. Rebuilds the
+        table rows + detail card from the current _REMOTE_VULNS via
+        _render_vuln_list — children of _vuln_list_frame are torn down but
+        the frame itself, the scrollable container, the search bar, the
+        device dropdown, and the donut + CVSS Figures all stay alive.
+
+        Trade-off: the donut + CVSS charts keep showing whatever severity
+        breakdown they last rendered until a full pane rebuild (device
+        dropdown change or tab reopen). Acceptable per the redraw-
+        minimization brief — only the data-bearing rows + detail card are
+        cleared and refilled. A future iteration that wants the charts to
+        also reflect fresh data without a full rebuild should factor out
+        render-only helpers from _build_vuln_donut_card and
+        _build_vuln_cvss_card (mirroring the _render_event_chart pattern)."""
+        if self._vuln_list_frame is None or not self._vuln_list_frame.winfo_exists():
+            return
+        query = self._vuln_search_var.get() if self._vuln_search_var else ""
+        self._render_vuln_list(query)
 
     def _render_vuln_list(self, query=""):
         if not self._vuln_list_frame or not self._vuln_list_frame.winfo_exists():
