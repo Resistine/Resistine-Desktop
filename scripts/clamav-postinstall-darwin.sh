@@ -87,7 +87,7 @@ CURRENT_STEP="init"
 # ProgramArguments and CVD_CERTS_DIR hardcode /Applications/Resistine.app. We
 # cannot rewrite a signed plist at install time, so refuse to set up the
 # daemons from any other location rather than register a daemon pointing at a
-# path that does not exist (it would KeepAlive-throttle-loop forever). Most
+# path that does not exist (every StartInterval would fail to exec). Most
 # signed macOS security apps require /Applications for the same reason. This
 # runs after write_status() is defined so the UI sees the failure reason.
 if [ "$APP_CONTENTS" != "/Applications/Resistine.app/Contents" ]; then

@@ -1,14 +1,15 @@
 """Tests for scripts/clamav/freshclam-update.sh — the macOS freshclam
 auto-update wrapper run by the LaunchDaemon.
 
-Drives the real bash script with PATH-shimmed `freshclam`/`sleep` so the
-jitter cadence and the missing-binary guard are exercised without waiting
-4 hours or needing a real ClamAV install. macOS/Linux only (needs bash).
+The wrapper runs freshclam ONCE and exits; the ~4h cadence is owned by
+launchd's StartInterval, not a sleep-loop here. These drive the real bash
+script with a PATH-shimmed `freshclam` so the run-once behavior, the
+pre-update jitter, and the missing-binary guard are exercised without a real
+ClamAV install. macOS/Linux only (needs bash).
 """
 
 import os
 import platform
-import re
 import stat
 import subprocess
 
@@ -35,13 +36,17 @@ def _write_exec(path, body):
 # subprocess by default — see tests/conftest.py:_block_real_subprocess).
 
 
-def _run_wrapper(tmp_path, env_extra, *, freshclam_body, conf_exists=True):
-    """Run the wrapper with FRESHCLAM/CONF pointed at tmp shims.
+def _run_wrapper(tmp_path, env_extra, *, freshclam_body, conf_exists=True,
+                 stamp_age=None):
+    """Run the wrapper with FRESHCLAM/CONF/STAMP pointed at tmp shims.
 
     The wrapper hardcodes absolute /Applications paths, so we run a patched
-    copy with FRESHCLAM/CONF redefined to our shims. `sleep` is shimmed to
-    record its argument and exit non-zero, which breaks the wrapper's
-    infinite loop after exactly one cycle.
+    copy with FRESHCLAM/CONF/STAMP redefined to our shims. `sleep` is shimmed
+    to record its argument and return instantly so the pre-update jitter never
+    actually waits. The wrapper runs once and exits on its own.
+
+    stamp_age: if set, seed the last-run stamp file to (now - stamp_age)
+    seconds, to exercise the once-per-hour CDN rate-limit guard.
     """
     bindir = tmp_path / "bin"
     bindir.mkdir()
@@ -53,23 +58,20 @@ def _run_wrapper(tmp_path, env_extra, *, freshclam_body, conf_exists=True):
     if conf_exists:
         conf.write_text("# test conf\n")
 
+    stamp = tmp_path / "freshclam-last-run"
+    if stamp_age is not None:
+        import time
+        stamp.write_text(str(int(time.time()) - stamp_age))
+
     sleep_log = tmp_path / "sleep.log"
-    # sleep shim: log the requested seconds (instantly, never actually
-    # sleeping). The wrapper's `while true` loop only ends when the process
-    # dies, so after logging the SECOND sleep (initial jitter = 1st, cadence
-    # = 2nd) we kill the wrapper ($PPID) to stop after exactly one cycle.
-    # The missing-conf guard records only one sleep (3600) and exits on its
-    # own, so killing on the 2nd never triggers there.
+    # sleep shim: record the requested seconds and return instantly (never
+    # actually sleep). The wrapper runs once and exits, so no kill needed.
     _write_exec(
         bindir / "sleep",
-        f'#!/bin/bash\n'
-        f'echo "$1" >> {sleep_log!s}\n'
-        f'n=$(wc -l < {sleep_log!s})\n'
-        f'if [ "$n" -ge 2 ]; then kill "$PPID" 2>/dev/null; fi\n'
-        f'exit 0\n',
+        f'#!/bin/bash\necho "$1" >> {sleep_log!s}\nexit 0\n',
     )
 
-    # Patch the two hardcoded constants to point at our shims.
+    # Patch the three hardcoded constants to point at our shims.
     src = open(_WRAPPER).read()
     src = src.replace(
         'FRESHCLAM="/Applications/Resistine.app/Contents/Helpers/freshclam"',
@@ -78,6 +80,10 @@ def _run_wrapper(tmp_path, env_extra, *, freshclam_body, conf_exists=True):
     src = src.replace(
         'CONF="/Library/Application Support/Resistine/clamav/freshclam.conf"',
         f'CONF="{conf!s}"',
+    )
+    src = src.replace(
+        'STAMP="/Library/Application Support/Resistine/clamav/run/freshclam-last-run"',
+        f'STAMP="{stamp!s}"',
     )
     patched = tmp_path / "wrapper.sh"
     patched.write_text(src)
@@ -94,72 +100,137 @@ def _run_wrapper(tmp_path, env_extra, *, freshclam_body, conf_exists=True):
         [int(x) for x in sleep_log.read_text().split()]
         if sleep_log.exists() else []
     )
-    return proc, intervals
+    return proc, intervals, stamp
 
 
 @pytest.mark.unit
-class TestFreshclamWrapperCadence:
-    def test_jitter_within_base_to_base_plus_3600(self, tmp_path, allow_subprocess):
-        # With a small base interval the first (and only) loop sleep must be
-        # in [base, base+3600). Initial 0-15min jitter sleep also goes to the
-        # log, so we take the LAST recorded value (the cadence sleep).
-        proc, intervals = _run_wrapper(
+class TestFreshclamWrapperRunOnce:
+    def test_runs_once_and_exits_zero(self, tmp_path, allow_subprocess):
+        # The wrapper performs a single update and exits cleanly — launchd
+        # (StartInterval) owns the cadence, so there is no loop here.
+        proc, _, _ = _run_wrapper(
             tmp_path,
             {"RESISTINE_FRESHCLAM_INTERVAL": "1"},
             freshclam_body='#!/bin/bash\nexit 0\n',
         )
-        assert intervals, f"wrapper never slept; stdout={proc.stdout}"
-        cadence = intervals[-1]
-        assert 1 <= cadence < 1 + 3600
+        assert proc.returncode == 0
+        assert "freshclam update OK" in proc.stdout
+        # Exactly one update attempt — no loop, so only one OK line.
+        assert proc.stdout.count("freshclam update OK") == 1
 
-    def test_default_base_interval_is_14400(self, tmp_path, allow_subprocess):
-        # No override → cadence sleep is 14400 + [0,3600).
-        proc, intervals = _run_wrapper(
-            tmp_path, {},
-            freshclam_body='#!/bin/bash\nexit 0\n',
-        )
-        assert intervals, f"wrapper never slept; stdout={proc.stdout}"
-        cadence = intervals[-1]
-        assert 14400 <= cadence < 14400 + 3600
-
-    def test_runs_freshclam_with_config_file(self, tmp_path, allow_subprocess):
-        # The wrapper must call freshclam by absolute path WITH the conf,
+    def test_invokes_freshclam_once_with_config_file(self, tmp_path, allow_subprocess):
+        # Must call freshclam by absolute path WITH the conf, exactly once,
         # never a bare `freshclam`.
+        count = tmp_path / "count"
         marker = tmp_path / "ran"
-        proc, _ = _run_wrapper(
+        proc, _, _ = _run_wrapper(
             tmp_path,
             {"RESISTINE_FRESHCLAM_INTERVAL": "1"},
             freshclam_body=(
-                f'#!/bin/bash\necho "$@" > {marker!s}\nexit 0\n'
+                f'#!/bin/bash\necho "$@" > {marker!s}\necho x >> {count!s}\nexit 0\n'
             ),
         )
         assert marker.exists(), f"freshclam never invoked; stdout={proc.stdout}"
         assert "--config-file=" in marker.read_text()
+        assert count.read_text().count("x") == 1, "freshclam called more than once"
 
-    def test_continues_on_freshclam_failure(self, tmp_path, allow_subprocess):
-        # A non-zero freshclam exit must NOT stop the loop — the wrapper
-        # logs FAILED and still computes the next sleep.
-        proc, intervals = _run_wrapper(
+    def test_jitter_skipped_in_test_mode(self, tmp_path, allow_subprocess):
+        # With RESISTINE_FRESHCLAM_INTERVAL set (test mode), the pre-update
+        # jitter sleep is skipped entirely — nothing recorded.
+        _, intervals, _ = _run_wrapper(
+            tmp_path,
+            {"RESISTINE_FRESHCLAM_INTERVAL": "1"},
+            freshclam_body='#!/bin/bash\nexit 0\n',
+        )
+        assert intervals == [], f"jitter should be skipped in test mode; got {intervals}"
+
+    def test_jitter_present_and_bounded_in_production(self, tmp_path, allow_subprocess):
+        # No override → exactly one pre-update jitter sleep in [0, 60).
+        _, intervals, _ = _run_wrapper(
+            tmp_path, {},
+            freshclam_body='#!/bin/bash\nexit 0\n',
+        )
+        assert len(intervals) == 1, f"expected one jitter sleep; got {intervals}"
+        assert 0 <= intervals[0] < 60
+
+    def test_exits_zero_on_freshclam_failure(self, tmp_path, allow_subprocess):
+        # A non-zero freshclam exit must still exit 0 (a hiccup is not a
+        # crash); launchd retries on the next interval. A non-zero exit would
+        # invite throttling/backoff.
+        proc, _, _ = _run_wrapper(
             tmp_path,
             {"RESISTINE_FRESHCLAM_INTERVAL": "1"},
             freshclam_body='#!/bin/bash\nexit 47\n',
         )
+        assert proc.returncode == 0
         assert "FAILED" in proc.stdout
-        assert intervals, "wrapper should still sleep after a failed update"
+
+    def test_stamps_last_run_before_invoking_freshclam(self, tmp_path, allow_subprocess):
+        # The attempt must be recorded so the once-per-hour guard can see it.
+        proc, _, stamp = _run_wrapper(
+            tmp_path,
+            {"RESISTINE_FRESHCLAM_INTERVAL": "1"},
+            freshclam_body='#!/bin/bash\nexit 0\n',
+        )
+        assert proc.returncode == 0
+        assert stamp.exists(), "last-run stamp not written"
+        assert int(stamp.read_text().strip()) > 0
+
+
+@pytest.mark.unit
+class TestFreshclamWrapperRateLimit:
+    """Guards against ClamAV's CDN 'once per hour' rule (429/cool-down)."""
+
+    def test_skips_when_last_run_under_one_hour_ago(self, tmp_path, allow_subprocess):
+        # Stamp says we ran 10 min ago → must skip without touching freshclam.
+        marker = tmp_path / "ran"
+        proc, _, _ = _run_wrapper(
+            tmp_path, {},  # production mode (guard active)
+            freshclam_body=f'#!/bin/bash\necho ran > {marker!s}\nexit 0\n',
+            stamp_age=600,
+        )
+        assert proc.returncode == 0
+        assert not marker.exists(), "freshclam ran despite <1h since last run"
+        assert "skipping" in proc.stdout.lower()
+
+    def test_runs_when_last_run_over_one_hour_ago(self, tmp_path, allow_subprocess):
+        # Stamp says we ran 2h ago → guard passes, freshclam runs.
+        marker = tmp_path / "ran"
+        proc, _, _ = _run_wrapper(
+            tmp_path, {},
+            freshclam_body=f'#!/bin/bash\necho ran > {marker!s}\nexit 0\n',
+            stamp_age=7200,
+        )
+        assert proc.returncode == 0
+        assert marker.exists(), "freshclam should run when >1h since last run"
+        assert "freshclam update OK" in proc.stdout
+
+    def test_rate_limit_bypassed_in_test_mode(self, tmp_path, allow_subprocess):
+        # Even a fresh stamp (1 min ago) must NOT block when the test override
+        # is set — testing needs "run now".
+        marker = tmp_path / "ran"
+        proc, _, _ = _run_wrapper(
+            tmp_path,
+            {"RESISTINE_FRESHCLAM_INTERVAL": "1"},
+            freshclam_body=f'#!/bin/bash\necho ran > {marker!s}\nexit 0\n',
+            stamp_age=60,
+        )
+        assert marker.exists(), "test mode must bypass the rate-limit guard"
 
 
 @pytest.mark.unit
 class TestFreshclamWrapperGuard:
-    def test_missing_conf_long_sleeps_and_exits_clean(self, tmp_path, allow_subprocess):
-        # No conf → guard branch: log + sleep 3600 + exit 0 (no hot-loop,
-        # never enters the update loop).
-        proc, intervals = _run_wrapper(
+    def test_missing_conf_exits_nonzero_without_running(self, tmp_path, allow_subprocess):
+        # No conf → guard branch: log + exit non-zero so launchd retries next
+        # interval. Never invokes freshclam, never sleeps.
+        marker = tmp_path / "ran"
+        proc, intervals, _ = _run_wrapper(
             tmp_path,
             {"RESISTINE_FRESHCLAM_INTERVAL": "1"},
-            freshclam_body='#!/bin/bash\nexit 0\n',
+            freshclam_body=f'#!/bin/bash\necho ran > {marker!s}\nexit 0\n',
             conf_exists=False,
         )
-        assert proc.returncode == 0
-        # The only sleep recorded is the 3600s retry from the guard.
-        assert intervals == [3600], f"intervals={intervals}"
-        assert re.search(r"missing|retry", proc.stdout, re.I)
+        assert proc.returncode == 1
+        assert not marker.exists(), "freshclam must not run when conf is missing"
+        assert intervals == [], f"guard must not sleep; got {intervals}"
+        assert "missing" in proc.stdout.lower()

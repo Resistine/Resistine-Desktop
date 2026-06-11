@@ -2,6 +2,33 @@
 
 Branch: `feat/mac-antivirus-freshclam-updater`
 
+## Revision (post-implementation): scheduling redesign
+
+The sections below describe the ORIGINAL design — a wrapper that loops forever,
+sleeping a jittered interval, kept alive by launchd `KeepAlive`. That shipped,
+then was revised after real-world testing revealed two problems:
+
+1. **Missed overnight updates.** A `sleep`-loop pauses during system sleep and
+   launchd never re-fires an always-running job, so a laptop closed overnight
+   did not update until something restarted the daemon. Fixed by letting
+   **launchd own the cadence** via `StartInterval` (14400s = 4h): the wrapper
+   now runs freshclam **once and exits**, and launchd coalesces intervals
+   missed during sleep into a single run on wake. `KeepAlive` is removed.
+
+2. **CDN rate-limit (HTTP 429).** App-launch kickstarts, daemon relaunches, and
+   manual runs each fired freshclam immediately, stacking many requests within
+   an hour and tripping ClamAV's "no more than once per hour" CDN limit (a
+   multi-hour cool-down). Fixed with a **once-per-hour floor** in the wrapper:
+   it stamps `…/clamav/run/freshclam-last-run` on every attempt and exits early
+   if the last attempt was < 3600s ago, regardless of what triggered it.
+
+Net cadence: **~4h** (StartInterval) with a **hard 1h floor** enforced
+independently of the trigger. Jitter shrank from 0–60min (loop spacing) to
+0–60s (pre-run fleet de-sync), since launchd now owns spacing.
+`RESISTINE_FRESHCLAM_INTERVAL` still bypasses jitter AND the rate-limit floor
+for testing ("run now"). See `scripts/clamav/freshclam-update.sh` and
+`com.resistine.desktop.freshclam.plist` for the shipped behavior.
+
 ## Scope guarantees (per user)
 
 - **macOS only.** Every new/changed file is a macOS-only path EXCEPT the shared `plugins/antivirus/main.py`.

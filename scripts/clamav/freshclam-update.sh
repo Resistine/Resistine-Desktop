@@ -3,9 +3,12 @@
 # freshclam-update.sh — Resistine ClamAV signature auto-updater (macOS)
 #
 # Run by the root LaunchDaemon com.resistine.desktop.freshclam via /bin/bash.
-# Updates ClamAV signature databases on a rolling "since last check" cadence
-# of 4h + random(0-60min), so signatures stay fresh even when the app is
-# closed. launchd KeepAlive relaunches this script if it ever exits.
+# Runs freshclam exactly ONCE and exits. The cadence (~4h) is owned by launchd
+# via the plist's StartInterval, NOT by a sleep-loop in this script. launchd
+# coalesces intervals missed while the Mac is asleep and fires the job once on
+# wake, so signatures stay fresh across overnight sleep — which a self-managed
+# sleep-loop could not do (the sleep pauses during system sleep and launchd
+# never re-fires an always-running job).
 #
 # This script is bundled (SIP-protected, code-signed) at
 # Contents/Helpers/freshclam-update.sh and invoked by absolute path — it must
@@ -20,42 +23,58 @@ set -u
 
 FRESHCLAM="/Applications/Resistine.app/Contents/Helpers/freshclam"
 CONF="/Library/Application Support/Resistine/clamav/freshclam.conf"
-
-# Base interval between update cycles, in seconds (4 hours). Overridable via
-# RESISTINE_FRESHCLAM_INTERVAL for testing only — production uses 14400.
-BASE_INTERVAL="${RESISTINE_FRESHCLAM_INTERVAL:-14400}"
+# Records the epoch of the last attempt. Used to enforce ClamAV's CDN rule of
+# "no more than once per hour" — exceeding it earns an HTTP 429/403 block and
+# a multi-hour cool-down, regardless of our own cadence.
+STAMP="/Library/Application Support/Resistine/clamav/run/freshclam-last-run"
+MIN_SPACING=3600  # seconds; ClamAV CDN hard limit is once per hour
 
 log() {
     # Timestamped line to stdout (captured by the daemon's StandardOutPath).
     printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1"
 }
 
-# Bail out gracefully (no hot-loop) until postinstall has set things up.
-# Sleep ~1h then exit 0; KeepAlive relaunches us to retry.
+# Not yet seeded by postinstall — exit non-zero so launchd retries on its next
+# StartInterval rather than us holding the process open.
 if [ ! -x "$FRESHCLAM" ] || [ ! -f "$CONF" ]; then
-    log "freshclam binary or conf missing — retrying in 1h ($FRESHCLAM / $CONF)"
-    sleep 3600
-    exit 0
+    log "freshclam binary or conf missing — will retry next interval ($FRESHCLAM / $CONF)"
+    exit 1
 fi
 
-# Initial jitter (0-15min) so a fleet of machines booting/logging in together
-# doesn't hammer the mirrors at the same instant. Skipped when
-# RESISTINE_FRESHCLAM_INTERVAL is set, which only happens during testing —
-# there "run now" is the whole point, and the opening sleep otherwise makes
-# the daemon look broken (silent for up to 15min) when it is working fine.
-if [ -z "${RESISTINE_FRESHCLAM_INTERVAL:-}" ]; then
-    sleep $((RANDOM % 900))
-fi
-
-while true; do
-    if "$FRESHCLAM" --config-file="$CONF"; then
-        log "freshclam update OK"
-    else
-        # Never exit on failure — network/cert hiccups self-heal next cycle.
-        log "freshclam update FAILED (will retry next cycle)"
+# Rate-limit guard: refuse to hit the CDN more than once an hour. StartInterval
+# is 4h, but app-launch kickstarts, daemon relaunches, or manual runs can stack
+# up and trip ClamAV's 429 rate limit (observed: a multi-hour CDN cool-down).
+# launchd treats our early exit 0 as a normal completion and simply waits for
+# the next interval. Skipped in test mode (RESISTINE_FRESHCLAM_INTERVAL set).
+if [ -z "${RESISTINE_FRESHCLAM_INTERVAL:-}" ] && [ -f "$STAMP" ]; then
+    last=$(cat "$STAMP" 2>/dev/null || echo 0)
+    now=$(date +%s)
+    if [ "$((now - last))" -lt "$MIN_SPACING" ]; then
+        log "skipping: last run $((now - last))s ago (< ${MIN_SPACING}s CDN limit)"
+        exit 0
     fi
-    # Rolling cadence: base + 0-60min jitter, always >= base spacing.
-    INTERVAL=$((BASE_INTERVAL + RANDOM % 3600))
-    log "next freshclam update in ${INTERVAL}s"
-    sleep "$INTERVAL"
-done
+fi
+
+# Pre-update jitter (0-60s) so a fleet of machines whose intervals align don't
+# hit the mirrors at the same instant. Small because launchd now spawns us per
+# interval — we are not the long-lived process anymore. Skipped when
+# RESISTINE_FRESHCLAM_INTERVAL is set, which only happens during testing where
+# "run now" is the point.
+if [ -z "${RESISTINE_FRESHCLAM_INTERVAL:-}" ]; then
+    sleep $((RANDOM % 60))
+fi
+
+# Stamp the attempt BEFORE running: the CDN rate limit counts every request,
+# success or not, so a failed run must still hold off the next one for an hour.
+mkdir -p "$(dirname "$STAMP")" 2>/dev/null || true
+date +%s > "$STAMP" 2>/dev/null || true
+
+if "$FRESHCLAM" --config-file="$CONF"; then
+    log "freshclam update OK"
+else
+    # Exit 0 anyway: a network/cert hiccup is not a crash. launchd retries on
+    # the next StartInterval; a non-zero exit would invite throttling/backoff.
+    log "freshclam update FAILED (will retry next interval)"
+fi
+
+exit 0
