@@ -29,6 +29,24 @@ independently of the trigger. Jitter shrank from 0–60min (loop spacing) to
 for testing ("run now"). See `scripts/clamav/freshclam-update.sh` and
 `com.resistine.desktop.freshclam.plist` for the shipped behavior.
 
+## Revision 2 (2026-06-15): StartInterval → StartCalendarInterval
+
+Revision 1's claim that "launchd coalesces intervals missed during sleep into a
+single run on wake" turned out to be **false for `StartInterval`**. Field
+evidence: a laptop closed for ~2 days (confirmed via `pmset -g log`: only
+DarkWakes, no full wakes, between the runs) had freshclam run exactly **once**
+(`RunAtLoad`) and never again across multiple lid-open wakes — `launchctl print`
+showed `runs = 1`, leaving `daily` ~3 versions / ~2 days stale. An
+`StartInterval` whose entire interval elapses while the Mac is asleep is simply
+dropped; launchd does **not** re-fire it on wake.
+
+Fix: switch the plist to **`StartCalendarInterval`** at fixed 4h wall-clock
+marks (00/04/08/12/16/20). `StartCalendarInterval` *does* run the most recent
+missed occurrence once on wake, which is the behavior Revision 1 wanted. The
+once-per-hour CDN floor (Revision 1, item 2) still guards the catch-up fire from
+tripping the 429 limit. The wrapper is unchanged behaviorally — only its
+comments were updated to say "scheduled mark" instead of "StartInterval."
+
 ## Scope guarantees (per user)
 
 - **macOS only.** Every new/changed file is a macOS-only path EXCEPT the shared `plugins/antivirus/main.py`.

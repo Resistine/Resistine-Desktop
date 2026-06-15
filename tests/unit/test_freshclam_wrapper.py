@@ -1,8 +1,8 @@
 """Tests for scripts/clamav/freshclam-update.sh — the macOS freshclam
 auto-update wrapper run by the LaunchDaemon.
 
-The wrapper runs freshclam ONCE and exits; the ~4h cadence is owned by
-launchd's StartInterval, not a sleep-loop here. These drive the real bash
+The wrapper runs freshclam ONCE and exits; the 4h cadence is owned by
+launchd's StartCalendarInterval, not a sleep-loop here. These drive the real bash
 script with a PATH-shimmed `freshclam` so the run-once behavior, the
 pre-update jitter, and the missing-binary guard are exercised without a real
 ClamAV install. macOS/Linux only (needs bash).
@@ -107,7 +107,7 @@ def _run_wrapper(tmp_path, env_extra, *, freshclam_body, conf_exists=True,
 class TestFreshclamWrapperRunOnce:
     def test_runs_once_and_exits_zero(self, tmp_path, allow_subprocess):
         # The wrapper performs a single update and exits cleanly — launchd
-        # (StartInterval) owns the cadence, so there is no loop here.
+        # (StartCalendarInterval) owns the cadence, so there is no loop here.
         proc, _, _ = _run_wrapper(
             tmp_path,
             {"RESISTINE_FRESHCLAM_INTERVAL": "1"},

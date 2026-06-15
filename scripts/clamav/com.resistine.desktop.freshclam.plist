@@ -4,11 +4,21 @@
   LaunchDaemon for freshclam (ClamAV signature auto-updater).
 
   Runs Contents/Helpers/freshclam-update.sh, a wrapper that updates the
-  signature DBs ONCE and exits. The ~4h cadence is owned by launchd via
-  StartInterval, not by a sleep-loop in the wrapper: launchd coalesces
-  intervals missed while the Mac is asleep and fires the job once on wake, so
-  signatures refresh on the next wake instead of staying stale overnight (a
-  self-managed sleep-loop pauses during system sleep and is never re-fired).
+  signature DBs ONCE and exits. The cadence is owned by launchd via
+  StartCalendarInterval (every 4h at fixed wall-clock times), not by a
+  sleep-loop in the wrapper.
+
+  StartCalendarInterval — NOT StartInterval — is deliberate. StartInterval
+  whose whole interval elapses while the Mac is asleep is simply dropped:
+  launchd does not run it on the next wake. Observed in the field — a laptop
+  closed for ~2 days had freshclam run exactly once (RunAtLoad) and never
+  again across multiple lid-open wakes, leaving signatures days stale.
+  StartCalendarInterval fires the most recent missed occurrence once on wake,
+  so signatures refresh on the next wake instead of staying stale overnight.
+
+  The wrapper's once-per-hour CDN guard prevents the catch-up fire (or an
+  app-launch kickstart) from tripping ClamAV's rate limit.
+
   Registered at runtime via SMAppService from Contents/Library/LaunchDaemons/
   in the app bundle.
 
@@ -27,15 +37,23 @@
         <string>/Applications/Resistine.app/Contents/Helpers/freshclam-update.sh</string>
     </array>
 
-    <!-- Run once at load, then every StartInterval seconds (4h). launchd
-         fires the run-once-and-exit wrapper on this cadence and coalesces
-         intervals missed during system sleep into a single run on wake. No
+    <!-- Run once at load, then at fixed 4h wall-clock marks (00/04/08/12/
+         16/20). launchd fires the run-once-and-exit wrapper on these marks
+         and, unlike StartInterval, runs the most recent missed mark once on
+         wake — so a closed laptop catches up instead of staying stale. No
          KeepAlive: the wrapper is meant to exit after one update, and
-         relaunching it immediately would defeat the interval. -->
+         relaunching it immediately would defeat the cadence. -->
     <key>RunAtLoad</key>
     <true/>
-    <key>StartInterval</key>
-    <integer>14400</integer>
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Hour</key><integer>0</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>4</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>16</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>20</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
 
     <key>UserName</key>
     <string>root</string>

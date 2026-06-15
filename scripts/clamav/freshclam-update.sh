@@ -3,12 +3,12 @@
 # freshclam-update.sh — Resistine ClamAV signature auto-updater (macOS)
 #
 # Run by the root LaunchDaemon com.resistine.desktop.freshclam via /bin/bash.
-# Runs freshclam exactly ONCE and exits. The cadence (~4h) is owned by launchd
-# via the plist's StartInterval, NOT by a sleep-loop in this script. launchd
-# coalesces intervals missed while the Mac is asleep and fires the job once on
-# wake, so signatures stay fresh across overnight sleep — which a self-managed
-# sleep-loop could not do (the sleep pauses during system sleep and launchd
-# never re-fires an always-running job).
+# Runs freshclam exactly ONCE and exits. The cadence (every 4h) is owned by
+# launchd via the plist's StartCalendarInterval, NOT by a sleep-loop here.
+# StartCalendarInterval runs the most recent missed occurrence once on wake,
+# so signatures stay fresh across overnight sleep — which neither a self-
+# managed sleep-loop (pauses during sleep) nor StartInterval (silently dropped
+# when its whole interval elapses while asleep) could do.
 #
 # This script is bundled (SIP-protected, code-signed) at
 # Contents/Helpers/freshclam-update.sh and invoked by absolute path — it must
@@ -35,17 +35,18 @@ log() {
 }
 
 # Not yet seeded by postinstall — exit non-zero so launchd retries on its next
-# StartInterval rather than us holding the process open.
+# scheduled mark rather than us holding the process open.
 if [ ! -x "$FRESHCLAM" ] || [ ! -f "$CONF" ]; then
     log "freshclam binary or conf missing — will retry next interval ($FRESHCLAM / $CONF)"
     exit 1
 fi
 
-# Rate-limit guard: refuse to hit the CDN more than once an hour. StartInterval
-# is 4h, but app-launch kickstarts, daemon relaunches, or manual runs can stack
-# up and trip ClamAV's 429 rate limit (observed: a multi-hour CDN cool-down).
-# launchd treats our early exit 0 as a normal completion and simply waits for
-# the next interval. Skipped in test mode (RESISTINE_FRESHCLAM_INTERVAL set).
+# Rate-limit guard: refuse to hit the CDN more than once an hour. The cadence
+# is 4h, but a catch-up fire on wake, app-launch kickstarts, daemon relaunches,
+# or manual runs can stack up and trip ClamAV's 429 rate limit (observed: a
+# multi-hour CDN cool-down). launchd treats our early exit 0 as a normal
+# completion and simply waits for the next scheduled mark. Skipped in test mode
+# (RESISTINE_FRESHCLAM_INTERVAL set).
 if [ -z "${RESISTINE_FRESHCLAM_INTERVAL:-}" ] && [ -f "$STAMP" ]; then
     last=$(cat "$STAMP" 2>/dev/null || echo 0)
     now=$(date +%s)
@@ -73,7 +74,7 @@ if "$FRESHCLAM" --config-file="$CONF"; then
     log "freshclam update OK"
 else
     # Exit 0 anyway: a network/cert hiccup is not a crash. launchd retries on
-    # the next StartInterval; a non-zero exit would invite throttling/backoff.
+    # the next scheduled mark; a non-zero exit would invite throttling/backoff.
     log "freshclam update FAILED (will retry next interval)"
 fi
 
