@@ -1644,26 +1644,25 @@ class TestFreshclamDaemon:
 
 
 class TestGetDbInfo:
-    """get_db_info reports sig count + a TRUTHFUL last-updated date.
+    """get_db_info reports sig count + "when this machine last updated".
 
-    Regression guard: the date must come from the build date inside the CVD
-    header, not the file mtime. freshclam applies .cld diffs without touching
-    the base .cvd, so mtime reads stale even when signatures are fresh — and
-    a touch-on-copy during install can make mtime read *newer* than the real
-    signatures. Both directions mislead the user; the header date is truth.
+    "Last updated" must answer the user's question "when did MY computer last
+    pull an update", so it reports the newest DB file's mtime -- the most
+    recent successful freshclam write -- NOT the CVD header build date (which
+    is when ClamAV *published* the sigs, hours-to-days before download, in
+    UTC, and reads as confusingly off even when everything is working).
+    Taking the *max* mtime across files means an untouched base main.cvd
+    (older mtime) never masks a freshly written daily.
     """
 
     @staticmethod
     def _write_cvd(path, date_field, sigs):
-        # CVD header: ClamAV-VDB:DD Mon YYYY HH-MM ±ZZZZ:ver:sigs:... padded
+        # CVD header: ClamAV-VDB:DD Mon YYYY HH-MM +ZZZZ:ver:sigs:... padded
         # to 512 bytes, exactly as ClamAV writes it.
         header = f"ClamAV-VDB:{date_field}:58:{sigs}:60:x:x:x:x:x:x"
         path.write_bytes(header.encode("ascii").ljust(512, b" "))
 
-    def test_uses_header_build_date_not_mtime(self, tmp_path, monkeypatch):
-        # daily is the newer signature build; main is older. The file written
-        # last (main) has the newer mtime — so if the code used mtime it would
-        # wrongly report main's date.
+    def test_reports_sig_count_from_headers(self, tmp_path, monkeypatch):
         self._write_cvd(tmp_path / "daily.cld", "04 Jun 2026 06-24 +0000", 3_000_000)
         self._write_cvd(tmp_path / "main.cvd", "16 Dec 2025 23-18 +0000", 600_000)
         monkeypatch.setattr(
@@ -1673,13 +1672,40 @@ class TestGetDbInfo:
         info = clamav_common.get_db_info()
 
         assert info["signatures"] == "3,600,000"
-        # 04 Jun 2026 06-24 UTC, rendered in local time — assert the date part
-        # survives regardless of the runner's timezone by checking it's the
-        # newer of the two build dates, not Dec 2025.
-        assert "2026-06-0" in info["last_updated"]
-        assert "2025-12" not in info["last_updated"]
 
-    def test_falls_back_to_mtime_on_unparseable_header(self, tmp_path, monkeypatch):
+    def test_last_updated_uses_newest_mtime_not_build_date(
+        self, tmp_path, monkeypatch,
+    ):
+        # daily has an OLD build date in its header but is the freshly written
+        # file (newest mtime); main has a stale mtime. The card must report
+        # daily's download time, not main's, and not either header build date.
+        import os
+        import time as _time
+
+        main = tmp_path / "main.cvd"
+        daily = tmp_path / "daily.cld"
+        self._write_cvd(main, "16 Dec 2025 23-18 +0000", 600_000)
+        self._write_cvd(daily, "04 Jun 2026 06-24 +0000", 3_000_000)
+        # Force main's mtime far in the past; daily is "just downloaded" (now).
+        old = _time.time() - 90 * 24 * 3600  # 90 days ago
+        os.utime(main, (old, old))
+        now = _time.time()
+        os.utime(daily, (now, now))
+        monkeypatch.setattr(
+            clamav_common, "_effective_db_dir", lambda **kw: str(tmp_path),
+        )
+
+        info = clamav_common.get_db_info()
+
+        expected = _time.strftime("%Y-%m-%d %H:%M", _time.localtime(now))
+        assert info["last_updated"] == expected
+        # And specifically NOT either header build date.
+        assert "2025-12" not in info["last_updated"]
+        assert "2026-06-04" not in info["last_updated"]
+
+    def test_reports_date_even_with_unparseable_header(self, tmp_path, monkeypatch):
+        # mtime is independent of header parsing, so a junk header still yields
+        # a real last-updated date (never the em-dash placeholder).
         self._write_cvd(tmp_path / "daily.cld", "not-a-date", 3_000_000)
         monkeypatch.setattr(
             clamav_common, "_effective_db_dir", lambda **kw: str(tmp_path),
@@ -1687,9 +1713,8 @@ class TestGetDbInfo:
 
         info = clamav_common.get_db_info()
 
-        # Still reports a date (from mtime) rather than the em-dash placeholder.
         assert info["signatures"] == "3,000,000"
-        assert info["last_updated"] != "—"
+        assert info["last_updated"] != "\u2014"
 
     def test_no_db_files_returns_placeholders(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
@@ -1698,12 +1723,4 @@ class TestGetDbInfo:
 
         info = clamav_common.get_db_info()
 
-        assert info == {"signatures": "—", "last_updated": "—"}
-
-    def test_parse_cvd_build_date_roundtrip(self):
-        ts = clamav_common._parse_cvd_build_date("09 Jun 2026 09-00 -0400")
-        # 2026-06-09 09:00 -0400 == 2026-06-09 13:00 UTC == 1781010000.
-        assert ts == 1781010000.0
-        assert clamav_common._parse_cvd_build_date("garbage") == 0.0
-
-
+        assert info == {"signatures": "\u2014", "last_updated": "\u2014"}

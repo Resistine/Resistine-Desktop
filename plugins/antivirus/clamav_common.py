@@ -25,7 +25,6 @@ import subprocess
 import tempfile
 import threading
 import time
-from datetime import datetime
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -217,7 +216,18 @@ def ensure_config():
 
 
 def get_db_info() -> dict[str, str]:
-    """Return signature count and last-updated date from local DB files."""
+    """Return signature count and last-checked date from local DB files.
+
+    "Last updated" answers the user's question "when did MY computer last
+    pull an update", so it reports the newest DB *file mtime* \u2014 i.e. the most
+    recent successful freshclam write. freshclam rewrites daily.(cld|cvd) on
+    every successful check, so the newest mtime always tracks the real
+    download, and taking the *max* across files sidesteps the stale base-.cvd
+    problem (an untouched main.cvd just has an older mtime than daily, so it
+    never wins). This is deliberately NOT the CVD header build date, which is
+    when ClamAV *published* the sigs (UTC, hours-to-days before download) and
+    reads as confusingly off even when everything is working.
+    """
     info: dict[str, str] = {"signatures": "\u2014", "last_updated": "\u2014"}
 
     db_dir = _effective_db_dir()
@@ -228,53 +238,33 @@ def get_db_info() -> dict[str, str]:
         return info
 
     total_sigs = 0
-    latest_build = 0.0  # newest signature build time (epoch), from CVD headers
-    latest_mtime = 0.0  # fallback: newest file mtime if no header parses
+    latest_mtime = 0.0  # newest file mtime = most recent successful update
 
     for cvd in cvd_files:
         try:
             with open(cvd, "rb") as f:
                 header = f.read(512).decode("ascii", errors="replace")
-            # CVD header format: ClamAV-VDB:DD Mon YYYY HH-MM ±ZZZZ:ver:sigs:...
+            # CVD header: ClamAV-VDB:DD Mon YYYY HH-MM +ZZZZ:ver:sigs:...
             parts = header.split(":")
             if len(parts) >= 4:
                 total_sigs += int(parts[3])
-            # Prefer the signature build date baked into the header over file
-            # mtime: freshclam applies incremental .cld diffs without touching
-            # the base .cvd, so mtime can read stale even when sigs are fresh.
-            if len(parts) >= 2:
-                build = _parse_cvd_build_date(parts[1])
-                if build and build > latest_build:
-                    latest_build = build
         except (OSError, ValueError):
             pass
-        mtime = os.path.getmtime(cvd)
+        try:
+            mtime = os.path.getmtime(cvd)
+        except OSError:
+            continue
         if mtime > latest_mtime:
             latest_mtime = mtime
 
     if total_sigs > 0:
         info["signatures"] = f"{total_sigs:,}"
-    stamp = latest_build or latest_mtime
-    if stamp > 0:
+    if latest_mtime > 0:
         info["last_updated"] = time.strftime(
-            "%Y-%m-%d %H:%M", time.localtime(stamp),
+            "%Y-%m-%d %H:%M", time.localtime(latest_mtime),
         )
 
     return info
-
-
-def _parse_cvd_build_date(field: str) -> float:
-    """Parse a CVD header date field into an epoch timestamp.
-
-    The field looks like ``09 Jun 2026 09-00 -0400`` (time uses ``HH-MM``
-    because ``:`` is the header's own delimiter). Returns 0.0 if it can't be
-    parsed, so callers fall back to file mtime.
-    """
-    try:
-        dt = datetime.strptime(field.strip(), "%d %b %Y %H-%M %z")
-        return dt.timestamp()
-    except (ValueError, TypeError):
-        return 0.0
 
 
 def has_database() -> bool:
