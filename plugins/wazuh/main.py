@@ -97,23 +97,40 @@ class Plugin(BasePlugin):
         self.app = app
         self._status_poll_id = None
         self._installing = False
-        self.status = self.get_status()
+        # Status is resolved off the UI thread to keep startup/navigation snappy.
+        self.status = None
+        if _platform_supported:
+            threading.Thread(target=self._init_status_probe, daemon=True).start()
 
     # --- Status ---
 
-    def check_status(self):
+    def _probe_status(self):
+        """Live status probe (spawns a subprocess). Call only off the UI thread."""
         if not _platform_supported:
             return None
         try:
             state = get_agent_status()
         except Exception as e:
-            logger.warning(f"SIEM check_status failed: {e}")
+            logger.warning(f"SIEM status probe failed: {e}")
             return "Warning"
         if state == "Running":
             return "OK"
         if state == "Stopped":
             return "Error"
         return "Warning"
+
+    def _init_status_probe(self):
+        """Populate the cached status at startup without blocking the UI thread."""
+        self.status = self._probe_status()
+
+    def check_status(self):
+        """Return the last known status instantly (no subprocess).
+
+        The sidebar/header badge calls this on the UI thread, so it must not
+        block. Live status is refreshed off-thread by the snapshot loader and
+        the status poller, which update ``self.status``.
+        """
+        return self.status
 
     # --- Main Screen ---
 
@@ -147,8 +164,6 @@ class Plugin(BasePlugin):
 
     def _agent_screen(self):
         corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
-        installed = is_agent_installed()
-        logger.info(f"SIEM _agent_screen: is_agent_installed={installed}")
 
         self.main_container = customtkinter.CTkFrame(
             self.app, corner_radius=0, fg_color="transparent"
@@ -162,36 +177,100 @@ class Plugin(BasePlugin):
         scroll.grid(row=0, column=0, sticky="nsew", padx=20, pady=10)
         scroll.grid_columnconfigure(0, weight=1)
 
-        card = customtkinter.CTkFrame(
+        self._card = customtkinter.CTkFrame(
             scroll,
             corner_radius=corner_radius,
             fg_color=_COLOR_CARD_BG,
             border_width=1,
             border_color=_COLOR_CARD_BORDER,
         )
-        card.grid(row=0, column=0, sticky="ew", pady=(10, 10))
-        card.grid_columnconfigure(1, weight=1)
+        self._card.grid(row=0, column=0, sticky="ew", pady=(10, 10))
+        self._card.grid_columnconfigure(1, weight=1)
+
+        # Show the card frame instantly with a placeholder, then resolve the
+        # (subprocess-backed) agent status off the UI thread so navigation to
+        # this page never blocks.
+        self._loading_label = customtkinter.CTkLabel(
+            self._card,
+            text="Loading status…",
+            text_color=_COLOR_MUTED,
+            font=customtkinter.CTkFont(**_FONT_LABEL),
+        )
+        self._loading_label.grid(row=0, column=0, columnspan=2, padx=20, pady=30)
+
+        threading.Thread(target=self._load_agent_snapshot, daemon=True).start()
+
+        return self.main_container
+
+    def _load_agent_snapshot(self):
+        """Gather every blocking probe once, off the UI thread, then render."""
+        snap = None
+        try:
+            installed = is_agent_installed()
+            if installed:
+                reenroll = needs_reenrollment()
+                state = get_agent_status()
+            else:
+                reenroll = False
+                state = "Not Installed"
+            snap = {
+                "installed": installed,
+                "reenroll": reenroll,
+                "state": state,
+                "name": get_agent_name(),
+                "group": get_agent_group(),
+                "vpn": is_vpn_connected(),
+            }
+            # Keep the cached status (used by the header badge) in sync without
+            # an extra subprocess call.
+            self.status = (
+                {"Running": "OK", "Stopped": "Error"}.get(state, "Warning")
+                if installed
+                else "Warning"
+            )
+            logger.info(f"SIEM snapshot: installed={installed} state={state}")
+        except Exception as e:
+            logger.warning(f"SIEM snapshot failed: {e}")
+        self.app.after(0, lambda: self._render_snapshot(snap))
+
+    def _render_snapshot(self, snap):
+        """Populate the card from a resolved snapshot (UI thread)."""
+        if not hasattr(self, "_card") or not self._card.winfo_exists():
+            return
+
+        if hasattr(self, "_loading_label") and self._loading_label.winfo_exists():
+            self._loading_label.destroy()
+
+        card = self._card
+        if snap is None:
+            customtkinter.CTkLabel(
+                card,
+                text="Could not read agent status.",
+                text_color=_COLOR_ERROR,
+                font=customtkinter.CTkFont(**_FONT_LABEL),
+            ).grid(row=0, column=0, columnspan=2, padx=20, pady=30)
+            return
 
         row = 0
-        if installed and needs_reenrollment():
+        if snap["installed"] and snap["reenroll"]:
             row = self._build_reenroll_section(card, row)
-        elif installed:
-            row = self._build_status_section(card, row)
+        elif snap["installed"]:
+            row = self._build_status_section(card, row, snap)
         else:
-            row = self._build_install_section(card, row)
+            row = self._build_install_section(card, row, snap)
 
         customtkinter.CTkLabel(card, text="", height=8).grid(
             row=row, column=0, columnspan=2
         )
 
-        if installed and not needs_reenrollment():
+        if snap["installed"] and not snap["reenroll"]:
             self._start_status_polling()
             # If the agent is stopped, try restoring client.keys from backup
             # (covers the case where the app was reinstalled and the key was lost).
-            if get_agent_status() != "Running":
-                threading.Thread(target=restore_client_key_if_needed, daemon=True).start()
-
-        return self.main_container
+            if snap["state"] != "Running":
+                threading.Thread(
+                    target=restore_client_key_if_needed, daemon=True
+                ).start()
 
     # --- UI Helpers ---
 
@@ -271,7 +350,7 @@ class Plugin(BasePlugin):
 
     # --- Card: Not Installed ---
 
-    def _build_install_section(self, card, row):
+    def _build_install_section(self, card, row, snap):
         customtkinter.CTkLabel(
             card,
             text="SIEM Agent",
@@ -295,12 +374,12 @@ class Plugin(BasePlugin):
         row = self._add_separator(card, row)
 
         row = self._add_detail_rows(card, row, {
-            "Agent Name": get_agent_name(),
-            "Agent Group": get_agent_group(),
+            "Agent Name": snap["name"],
+            "Agent Group": snap["group"],
             "Manager": WAZUH_MANAGER,
         })
 
-        vpn_ok = is_vpn_connected()
+        vpn_ok = snap["vpn"]
         if not vpn_ok:
             customtkinter.CTkLabel(
                 card,
@@ -335,8 +414,8 @@ class Plugin(BasePlugin):
 
     # --- Card: Installed (status + controls) ---
 
-    def _build_status_section(self, card, row):
-        state = get_agent_status()
+    def _build_status_section(self, card, row, snap):
+        state = snap["state"]
         is_running = state == "Running"
         status_color = _COLOR_OK if is_running else _COLOR_ERROR
 
@@ -375,7 +454,7 @@ class Plugin(BasePlugin):
         self._agent_toggle.grid(row=row, column=0, columnspan=2, padx=20, pady=(4, 12), sticky="w")
         row += 1
 
-        if not is_vpn_connected():
+        if not snap["vpn"]:
             customtkinter.CTkLabel(
                 card,
                 text="VPN disconnected \u2014 agent cannot reach the manager",
@@ -388,8 +467,8 @@ class Plugin(BasePlugin):
 
         row = self._add_detail_rows(card, row, {
             "Status": state,
-            "Agent Name": get_agent_name(),
-            "Agent Group": get_agent_group(),
+            "Agent Name": snap["name"],
+            "Agent Group": snap["group"],
             "Manager": WAZUH_MANAGER,
             "Platform": f"{_PLATFORM} {platform.release()}",
         })
@@ -473,14 +552,22 @@ class Plugin(BasePlugin):
             if not hasattr(self, "main_container") or not self.main_container.winfo_exists():
                 self._status_poll_id = None
                 return
+            # Run the subprocess-backed probe off the UI thread, then apply.
+            threading.Thread(target=_probe_and_apply, daemon=True).start()
 
-            new_status = self.check_status()
+        def _probe_and_apply():
+            new_status = self._probe_status()
+            self.app.after(0, lambda: _apply(new_status))
+
+        def _apply(new_status):
+            if not hasattr(self, "main_container") or not self.main_container.winfo_exists():
+                self._status_poll_id = None
+                return
             if new_status != self.status:
                 logger.info(f"SIEM agent status changed: {self.status} -> {new_status}")
                 self.status = new_status
                 self._refresh_screen()
                 return
-
             self._status_poll_id = self.app.after(_POLL_INTERVAL_MS, poll)
 
         self._status_poll_id = self.app.after(_POLL_INTERVAL_MS, poll)
