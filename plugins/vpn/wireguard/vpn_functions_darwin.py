@@ -73,7 +73,23 @@ class HelperToolManager:
                 logger.warning("⚠️ Using legacy CLI path - please rebuild for full VPN support")
                 return old_cli_path
 
-        # Development mode: VPN features require the built app bundle
+        # Development mode (running from source, not frozen): fall back to the
+        # helper inside an installed Resistine.app so VPN status detection and
+        # control work when testing with `python main.py` / run.sh. Without this
+        # the helper is never found from source, my_vpn_status stays "Stopped",
+        # and gates like wazuh_overview._wait_for_vpn() block forever even when
+        # the tunnel is actually up.
+        for dev_cli in (
+            "/Applications/Resistine.app/Contents/MacOS/resistine-vpn-cli",
+            os.path.expanduser(
+                "~/Applications/Resistine.app/Contents/MacOS/resistine-vpn-cli"
+            ),
+        ):
+            if os.path.exists(dev_cli):
+                logger.info(f"Using installed-app CLI helper for dev run: {dev_cli}")
+                return dev_cli
+
+        # Still nothing — VPN features require the built app bundle.
         # Run ./build-installer.sh first, then test from dist/Resistine.app
         logger.warning("VPN CLI not found - run ./build-installer.sh to build the app")
         return None

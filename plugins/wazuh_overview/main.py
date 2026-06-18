@@ -439,17 +439,22 @@ _vulns_loader_started = False
 _vulns_loader_lock = threading.Lock()
 
 
-def _wait_for_vpn(poll_interval=2.0):
-    """Block until the VPN tunnel reports connected. The /api/v1/me/* host
-    is only reachable through the tunnel, so the preloader has to wait —
-    otherwise every GET errors out and the Overview cards land in their
+def _wait_for_vpn(poll_interval=2.0, timeout=60.0):
+    """Wait (up to `timeout` seconds) for the VPN tunnel to report connected.
+    The /api/v1/me/* host is only reachable through the tunnel, so the preloader
+    waits — otherwise every GET errors out and the Overview cards land in their
     "Couldn't load" state until something refreshes them.
+
+    Bounded by `timeout` so the gate fails SAFE, not HUNG: if VPN state can't be
+    confirmed (e.g. running from source where the status helper is unavailable
+    and is_vpn_connected() never flips True), the preloader proceeds anyway and
+    lets the actual GETs decide. A real disconnect then surfaces as "Couldn't
+    load" instead of leaving 4 of the 5 overview endpoints permanently unfetched.
 
     Lazy-imports `is_vpn_connected` so this module stays usable in stripped
     builds where the VPN plugin isn't shipped (the gate degrades to a no-op).
     plugins.vpn.main exposes no event/observer for state changes, so polling
-    is the only option available today. Runs on the daemon preloader thread,
-    so an indefinite wait is bounded by process lifetime."""
+    is the only option available today."""
     try:
         from plugins.vpn.main import is_vpn_connected
     except ImportError:
@@ -463,8 +468,17 @@ def _wait_for_vpn(poll_interval=2.0):
     logger.info(
         "[WAZUH-OVERVIEW] Preloader waiting for VPN tunnel before fetching /me/* endpoints"
     )
+    waited = 0.0
     while not is_vpn_connected():
+        if waited >= timeout:
+            logger.warning(
+                f"[WAZUH-OVERVIEW] VPN not confirmed after {timeout:.0f}s — preloader "
+                "proceeding anyway; GETs will surface real connectivity errors if the "
+                "tunnel is down"
+            )
+            return
         time.sleep(poll_interval)
+        waited += poll_interval
     logger.info("[WAZUH-OVERVIEW] VPN tunnel up — preloader proceeding")
 
 
