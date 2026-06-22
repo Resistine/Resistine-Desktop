@@ -795,6 +795,25 @@ def _ready_mask():
 _READY_ALL = 31  # all 5 slots set
 
 
+def _overview_has_errors():
+    """True if any of the five Overview /me/* slots completed with an error.
+
+    Used to auto-recover when a prior (typically startup) preload cached a
+    transient failure: the one-shot loader won't retry on its own, and the
+    readiness poll only repaints on a bitmask CHANGE (already maxed once every
+    slot has completed), so without an explicit re-fetch the cards stay stranded
+    on empty/zero until the user manually hits Refresh."""
+    return any(
+        (
+            _REMOTE_AGENT_ERROR,
+            _REMOTE_VULNS_SUMMARY_ERROR,
+            _REMOTE_SCA_ERROR,
+            _REMOTE_INVENTORY_ERROR,
+            _REMOTE_HOTFIXES_ERROR,
+        )
+    )
+
+
 def _format_relative(iso_ts):
     """Return a compact 'X ago' string from an ISO-8601 timestamp."""
     if not iso_ts:
@@ -1370,7 +1389,20 @@ class Plugin(BasePlugin):
         # from the per-endpoint module globals via accessor helpers and
         # render "Loading…" until each event fires.
         _kick_overview_api_loader()
-        if _ready_mask() != _READY_ALL:
+        if _ready_mask() == _READY_ALL and _overview_has_errors():
+            # A prior preload (typically at startup, before the VPN tunnel and
+            # gateway token had settled) cached an error for at least one
+            # endpoint. The one-shot loader won't retry, and the readiness poll
+            # only repaints on a bitmask CHANGE — which is already maxed — so the
+            # cards would stay stranded on empty/zero until a manual Refresh.
+            # Auto-recover by re-fetching and scheduling best-effort repaints,
+            # exactly as the Refresh button does.
+            logger.info(
+                "[WAZUH-OVERVIEW] Cached preload had errors — auto-refreshing on tab open"
+            )
+            refresh_all_remote_data()
+            self._schedule_refresh_repaints()
+        elif _ready_mask() != _READY_ALL:
             self._schedule_overview_data_refresh()
 
     def _schedule_overview_data_refresh(self):
@@ -1434,16 +1466,22 @@ class Plugin(BasePlugin):
                     self._refresh_button.configure(state="disabled")
             except Exception:
                 pass
-        # The eager preload's fast endpoints land within ~500ms; lazy
-        # fan-outs (CVEs, Phase 2 events, per-device inventory) finish
-        # by ~2-4s. A handful of repaint ticks across that window pick
-        # up rebinds without polling forever. Each tick is cheap when
-        # nothing changed — the renderers re-read the globals and reapply
-        # text/data.
-        for delay_ms in (200, 500, 1000, 2000, 4000, 6000):
-            self.app.after(delay_ms, self._refresh_visible_panes)
+        self._schedule_refresh_repaints()
         # Re-enable the button once the redraw window closes.
         self.app.after(6000, self._restore_refresh_button)
+
+    def _schedule_refresh_repaints(self):
+        """Schedule best-effort repaint ticks across the window in which eager +
+        lazy fetches land. The eager preload's fast endpoints arrive within
+        ~500ms; lazy fan-outs (CVEs, Phase 2 events, per-device inventory) finish
+        by ~2-4s. A handful of ticks across that window pick up rebinds without
+        polling forever — each tick is cheap when nothing changed, since the
+        renderers just re-read the globals and reapply text/data.
+
+        Shared by request_refresh (the dev Refresh button) and the auto-recover
+        path in _build_overview_pane, so both repaint identically."""
+        for delay_ms in (200, 500, 1000, 2000, 4000, 6000):
+            self.app.after(delay_ms, self._refresh_visible_panes)
 
     def _restore_refresh_button(self):
         """Re-enable the refresh button at the end of the redraw window.
