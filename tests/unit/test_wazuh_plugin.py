@@ -67,26 +67,36 @@ def wazuh_plugin():
 
 
 @pytest.mark.unit
-class TestCheckStatus:
+class TestProbeStatus:
+    """The live status mapping lives in ``_probe_status`` (runs off the UI
+    thread). ``check_status`` just returns the cached value it produces."""
+
     def test_running_returns_ok(self, wazuh_plugin):
         with patch("plugins.wazuh.main.get_agent_status", return_value="Running"):
-            assert wazuh_plugin.check_status() == "OK"
+            assert wazuh_plugin._probe_status() == "OK"
 
     def test_stopped_returns_error(self, wazuh_plugin):
         with patch("plugins.wazuh.main.get_agent_status", return_value="Stopped"):
-            assert wazuh_plugin.check_status() == "Error"
+            assert wazuh_plugin._probe_status() == "Error"
 
     def test_not_installed_returns_warning(self, wazuh_plugin):
         with patch("plugins.wazuh.main.get_agent_status", return_value="Not Installed"):
-            assert wazuh_plugin.check_status() == "Warning"
+            assert wazuh_plugin._probe_status() == "Warning"
 
     def test_exception_returns_warning(self, wazuh_plugin):
         with patch("plugins.wazuh.main.get_agent_status", side_effect=RuntimeError("fail")):
-            assert wazuh_plugin.check_status() == "Warning"
+            assert wazuh_plugin._probe_status() == "Warning"
 
     def test_unsupported_platform_returns_none(self, wazuh_plugin):
         with patch("plugins.wazuh.main._platform_supported", False):
-            assert wazuh_plugin.check_status() is None
+            assert wazuh_plugin._probe_status() is None
+
+    def test_check_status_returns_cached_value(self, wazuh_plugin):
+        """check_status must not block — it returns the cached status as-is."""
+        wazuh_plugin.status = "OK"
+        with patch("plugins.wazuh.main.get_agent_status", side_effect=AssertionError(
+            "check_status must not call get_agent_status")):
+            assert wazuh_plugin.check_status() == "OK"
 
 
 @pytest.mark.unit

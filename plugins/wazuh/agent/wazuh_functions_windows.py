@@ -119,8 +119,16 @@ def _run_privileged(command, timeout=300):
             pass
 
 
+# Cached MachineGuid — it is stable for the life of the OS install, so the
+# registry read only needs to happen once per process.
+_MACHINE_GUID = None
+
+
 def _get_machine_guid():
-    """Return the Windows MachineGuid from the registry."""
+    """Return the Windows MachineGuid from the registry (cached)."""
+    global _MACHINE_GUID
+    if _MACHINE_GUID is not None:
+        return _MACHINE_GUID
     try:
         key = winreg.OpenKey(
             winreg.HKEY_LOCAL_MACHINE,
@@ -128,6 +136,7 @@ def _get_machine_guid():
         )
         guid, _ = winreg.QueryValueEx(key, "MachineGuid")
         winreg.CloseKey(key)
+        _MACHINE_GUID = guid
         return guid
     except Exception as e:
         logger.warning(f"Could not read MachineGuid: {e}")
