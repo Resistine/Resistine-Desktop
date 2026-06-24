@@ -9,7 +9,7 @@ from loguru import logger
 from opentelemetry import _logs
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider, ReadableLogRecord
-from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, LogExportResult
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.util.instrumentation import InstrumentationScope
 from opentelemetry.trace import get_current_span
@@ -20,6 +20,13 @@ _DEFAULT_OTLP_ENDPOINT = "http://otel.resisti.net:4318"
 
 def _otlp_endpoint():
     return os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", _DEFAULT_OTLP_ENDPOINT)
+
+
+# Loguru level name -> OTEL severity_number per OTEL log data model spec
+_SEVERITY_NUMBER_BY_LEVEL = {
+    "TRACE": 1, "DEBUG": 5, "INFO": 9, "SUCCESS": 10,
+    "WARNING": 13, "ERROR": 17, "CRITICAL": 21,
+}
 
 
 class OTELink:
@@ -98,9 +105,9 @@ class OTELink:
         self.otel_logger.emit(log_record)
 
 
-class BufferedOTLPErrorSink:
-    """Loguru sink: disk-buffers ERROR records, ships them via OTLP when the
-    collector becomes reachable.
+class BufferedOTLPSink:
+    """Loguru sink: disk-buffers records, ships them via OTLP when the
+    collector becomes reachable. Ships whatever level Loguru passes it.
 
     Survives VPN outages and process restarts. Buffer file is capped; on
     overflow the oldest half is dropped. All sink-side failures are
@@ -212,7 +219,11 @@ class BufferedOTLPErrorSink:
             return
 
         try:
-            if self._exporter.export(records) != LogExportResult.SUCCESS:
+            result = self._exporter.export(records)
+            # Compare by name — the public `LogExportResult` enum and the actual
+            # returned `LogRecordExportResult` are distinct classes whose members
+            # don't compare equal, so identity/equality checks always fail.
+            if getattr(result, "name", "") != "SUCCESS":
                 return
         except Exception:
             return  # VPN down, DNS fail, etc. — leave buffer for next attempt
@@ -232,11 +243,12 @@ class BufferedOTLPErrorSink:
                 pass
 
     def _build_readable(self, entry):
+        level = entry.get("level", "INFO")
         log_record = _logs.LogRecord(
             timestamp=entry.get("ts_ns"),
             observed_timestamp=entry.get("ts_ns"),
-            severity_text=entry.get("level", "ERROR"),
-            severity_number=17,  # ERROR
+            severity_text=level,
+            severity_number=_SEVERITY_NUMBER_BY_LEVEL.get(level, 9),
             body=entry.get("body", ""),
             attributes=entry.get("attrs", {}),
         )
@@ -338,8 +350,8 @@ def setup_logging(level="INFO", log_to_file=True):
             format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
         )
 
-    # ERROR sink: disk-buffered, flushed to OTLP collector when reachable.
-    # Errors that happen before the VPN is up are buffered to disk and shipped
+    # OTLP sink: disk-buffered, flushed to the collector when reachable.
+    # Records that happen before the VPN is up are buffered to disk and shipped
     # once the tunnel comes up; survives process restarts too.
     if log_to_file:
         try:
@@ -347,7 +359,7 @@ def setup_logging(level="INFO", log_to_file=True):
             buffer_path = os.path.join(
                 get_config_dir(), "logs", "otlp_buffer.jsonl",
             )
-            logger.add(BufferedOTLPErrorSink(buffer_path), level="ERROR")
+            logger.add(BufferedOTLPSink(buffer_path), level=level)
         except Exception as e:
             logger.warning(f"Failed to initialize buffered OTLP sink: {e}")
 
