@@ -1049,6 +1049,13 @@ class Plugin(BasePlugin):
         self._vuln_cvss_canvas = None
         self._vuln_after_id = None  # poll handle for the Vulnerabilities readiness check
         self._vuln_pane_parent = None  # reference for swapping loading -> table
+        # Charts-row responsive state. The row collapses from 2-up to stacked
+        # below 680px content width; the resize handler rebuilds only that row.
+        self._vuln_charts_wrapper = None
+        self._vuln_charts_row = 0
+        self._vuln_charts_stacked = False
+        self._vuln_resize_after_id = None
+        self._vuln_resize_handler_id = None
         # Active device filter on the Vulnerabilities table dropdown. Resolved
         # lazily by _default_vuln_device() once _REMOTE_VULNS arrives.
         self._vuln_device = None
@@ -1860,7 +1867,12 @@ class Plugin(BasePlugin):
         self._populate_module_grid()
         self._bind_module_resize()
 
-    def _compute_max_cols(self):
+    def _content_width(self):
+        """Usable content width = window width minus the sidebar + padding.
+
+        Matches the Dashboard's formula (winfo_width - 250 sidebar - platform
+        padding) so width-driven breakpoints agree across plugins. Falls back to
+        ~70% of the screen width before the window has been realized."""
         try:
             window_width = self.app.winfo_width()
         except Exception:
@@ -1870,12 +1882,17 @@ class Plugin(BasePlugin):
                 window_width = int(self.app.winfo_screenwidth() * 0.7)
             except Exception:
                 window_width = 1024
-        content_width = max(1, window_width - 250 - self._padding_offset)
+        return max(1, window_width - 250 - self._padding_offset)
+
+    def _compute_max_cols(self):
+        content_width = self._content_width()
+        # Breakpoints mirror the Dashboard (plugins/dashboard/main.py) so the
+        # Wazuh module grid shows the same column count at any given window size.
         if content_width < 480:
             return 1
-        if content_width < 720:
+        if content_width < 680:
             return 2
-        return 3
+        return 4
 
     def _module_cards(self):
         """Compute module-card data from the live /api/v1/me/* responses.
@@ -2125,8 +2142,10 @@ class Plugin(BasePlugin):
         cards_data = self._module_cards()
         max_cols = self._compute_max_cols()
         n = len(cards_data)
-        cols = min(n, max_cols)
-        rows = (n + cols - 1) // cols if cols > 0 else 1
+        # Use the shared grid math (sqrt-then-cap) so the column count matches
+        # the Dashboard exactly for any card count + width.
+        rows_t, cols_t = self.app.calculate_rows_cols(n, max_cols=max_cols)
+        cols, rows = len(cols_t), len(rows_t)
         self._module_current_cols = cols
 
         grid = customtkinter.CTkFrame(self._module_wrapper, fg_color="transparent")
@@ -2194,6 +2213,50 @@ class Plugin(BasePlugin):
             apply(force_width=hint)
         else:
             grid.after(10, apply)
+
+    def _bind_figure_autoresize(self, canvas, fig, use_tight_layout=False):
+        """Make a matplotlib FigureCanvasTkAgg reflow to its widget's real pixel
+        size on resize. Without this the figure keeps its build-time figsize, so
+        a shrinking card just scales the bitmap down and labels crowd/overlap.
+
+        Bound on the canvas's own tk widget (its size IS the drawable area). The
+        widget is recreated on every pane rebuild, so the binding dies with it —
+        no manual unbind needed. Debounced (200ms, matching create_grid) and
+        size-guarded (skip <4px deltas) so it never redraws mid-drag or churns on
+        sub-pixel Configure events — this is what keeps resizing smooth."""
+        widget = canvas.get_tk_widget()
+        job = [None]
+        last = [(-1, -1)]
+
+        def apply():
+            job[0] = None
+            try:
+                if not widget.winfo_exists():
+                    return
+                w, h = widget.winfo_width(), widget.winfo_height()
+                if w <= 1 or h <= 1:
+                    return
+                if abs(w - last[0][0]) < 4 and abs(h - last[0][1]) < 4:
+                    return
+                last[0] = (w, h)
+                fig.set_size_inches(w / fig.dpi, h / fig.dpi, forward=False)
+                # tight_layout fights the donut's set_aspect("equal") (warps the
+                # pie), so callers opt in only for the bar charts.
+                if use_tight_layout:
+                    fig.tight_layout()
+                canvas.draw_idle()
+            except (tk.TclError, AttributeError, RuntimeError, ValueError):
+                pass
+
+        def on_configure(_e=None):
+            if job[0] is not None:
+                try:
+                    widget.after_cancel(job[0])
+                except Exception:
+                    pass
+            job[0] = widget.after(200, apply)
+
+        widget.bind("<Configure>", on_configure)
 
     def _make_module_card(self, parent, row, column, card_data):
         text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
@@ -2281,7 +2344,10 @@ class Plugin(BasePlugin):
                     return
             except Exception:
                 return
-            target_cols = min(len(self._module_cards()), self._compute_max_cols())
+            # Mirror _populate_module_grid's column math so the guard and the
+            # rebuild agree (no missed or redundant rebuilds).
+            target_cols = len(self.app.calculate_rows_cols(
+                len(self._module_cards()), max_cols=self._compute_max_cols())[1])
             if self._module_current_cols == target_cols:
                 return
             self._populate_module_grid()
@@ -2605,6 +2671,7 @@ class Plugin(BasePlugin):
         canvas.mpl_connect("button_press_event", self._on_chart_click)
 
         self._render_event_chart()
+        self._bind_figure_autoresize(canvas, fig, use_tight_layout=True)
 
     def _render_event_chart(self):
         ax = self._chart_ax
@@ -3187,6 +3254,9 @@ class Plugin(BasePlugin):
         self._build_vuln_charts_row(parent, row=0)
         self._build_vuln_table_header(parent, row=1)
         self._build_vuln_table(parent, row=2)
+        # Re-binds after unbinding any prior handler, so device-dropdown rebuilds
+        # don't stack duplicate <Configure> listeners.
+        self._bind_vuln_resize()
 
     def _render_vuln_loading(self, parent):
         parent.grid_columnconfigure(0, weight=1)
@@ -3303,17 +3373,101 @@ class Plugin(BasePlugin):
     def _build_vuln_charts_row(self, parent, row):
         wrapper = customtkinter.CTkFrame(parent, fg_color="transparent")
         wrapper.grid(row=row, column=0, sticky="ew", pady=(0, 12))
-        wrapper.grid_columnconfigure(0, weight=1, uniform="vc")
-        wrapper.grid_columnconfigure(1, weight=1, uniform="vc")
-        wrapper.grid_rowconfigure(0, weight=1)
+        self._vuln_charts_wrapper = wrapper
+        self._vuln_charts_row = row
+
+        # Below the Dashboard's single-column breakpoint, stack the two chart
+        # cards vertically instead of side-by-side. At narrow widths a 2-up row
+        # squeezes each chart into an unreadable, crowded sliver; one full-width
+        # card each gives the bars/labels room to breathe.
+        stacked = self._content_width() < 680
+        self._vuln_charts_stacked = stacked
 
         donut = customtkinter.CTkFrame(wrapper, corner_radius=12, border_width=1)
-        donut.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-        self._build_vuln_donut_card(donut)
-
         cvss = customtkinter.CTkFrame(wrapper, corner_radius=12, border_width=1)
-        cvss.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+
+        if stacked:
+            wrapper.grid_columnconfigure(0, weight=1)
+            wrapper.grid_columnconfigure(1, weight=0)
+            wrapper.grid_rowconfigure(0, weight=1)
+            wrapper.grid_rowconfigure(1, weight=1)
+            donut.grid(row=0, column=0, sticky="nsew", pady=(0, 6))
+            cvss.grid(row=1, column=0, sticky="nsew", pady=(6, 0))
+        else:
+            wrapper.grid_columnconfigure(0, weight=1, uniform="vc")
+            wrapper.grid_columnconfigure(1, weight=1, uniform="vc")
+            wrapper.grid_rowconfigure(0, weight=1)
+            wrapper.grid_rowconfigure(1, weight=0)
+            donut.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+            cvss.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+
+        self._build_vuln_donut_card(donut)
         self._build_vuln_cvss_card(cvss)
+
+    def _bind_vuln_resize(self):
+        """Rebuild ONLY the charts row when the window crosses the stacked↔
+        side-by-side breakpoint. Modeled on _bind_module_resize: 250ms debounce,
+        position-only-event filter, change-detection guard, and leak-prevention
+        unbind of the prior handler. Never rebuilds the whole pane (which would
+        drop the table selection + search), and never fires mid-drag."""
+        last_size = [0, 0]
+
+        def on_resize_settled():
+            self._vuln_resize_after_id = None
+            wrapper = self._vuln_charts_wrapper
+            if not wrapper or not wrapper.winfo_exists():
+                return
+            try:
+                if not wrapper.winfo_ismapped():
+                    return
+            except Exception:
+                return
+            if (self._content_width() < 680) == self._vuln_charts_stacked:
+                return
+            parent = self._vuln_pane_parent
+            if not parent or not parent.winfo_exists():
+                return
+            row = self._vuln_charts_row
+            # Drop the old figures before the wrapper that holds their canvases
+            # is destroyed (mirrors _build_vulnerabilities_pane's leak guard).
+            for attr in ("_vuln_donut_figure", "_vuln_cvss_figure"):
+                fig = getattr(self, attr, None)
+                if fig is not None:
+                    try:
+                        fig.clear()
+                    except Exception:
+                        pass
+                    setattr(self, attr, None)
+            try:
+                wrapper.destroy()
+            except Exception:
+                pass
+            self._vuln_donut_canvas = None
+            self._vuln_cvss_canvas = None
+            self._vuln_donut_wedges = []
+            self._build_vuln_charts_row(parent, row=row)
+
+        def debounced(event=None):
+            if event is not None:
+                if event.width == last_size[0] and event.height == last_size[1]:
+                    return
+                last_size[0] = event.width
+                last_size[1] = event.height
+            if self._vuln_resize_after_id:
+                try:
+                    self.app.after_cancel(self._vuln_resize_after_id)
+                except Exception:
+                    pass
+            self._vuln_resize_after_id = self.app.after(250, on_resize_settled)
+
+        if self._vuln_resize_handler_id:
+            try:
+                self.app.unbind("<Configure>", self._vuln_resize_handler_id)
+            except Exception:
+                pass
+        self._vuln_resize_handler_id = self.app.bind(
+            "<Configure>", debounced, add="+"
+        )
 
     def _build_vuln_donut_card(self, card):
         text_secondary = self._theme(
@@ -3447,6 +3601,7 @@ class Plugin(BasePlugin):
         self._vuln_donut_canvas = canvas
         canvas.mpl_connect("button_press_event", self._on_vuln_donut_click)
         canvas.draw_idle()
+        self._bind_figure_autoresize(canvas, fig)
 
     def _draw_empty_vuln_donut(self, card, card_bg, chart_theme):
         """Zero-data donut placeholder: a flat ring drawn on a tkinter canvas
@@ -3650,6 +3805,7 @@ class Plugin(BasePlugin):
         widget.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 10))
         self._vuln_cvss_canvas = canvas
         canvas.draw_idle()
+        self._bind_figure_autoresize(canvas, fig, use_tight_layout=True)
 
     # ----- table header -----
 
@@ -4916,6 +5072,18 @@ class Plugin(BasePlugin):
             except Exception:
                 pass
             self._module_resize_handler_id = None
+        if self._vuln_resize_after_id:
+            try:
+                self.app.after_cancel(self._vuln_resize_after_id)
+            except Exception:
+                pass
+            self._vuln_resize_after_id = None
+        if self._vuln_resize_handler_id:
+            try:
+                self.app.unbind("<Configure>", self._vuln_resize_handler_id)
+            except Exception:
+                pass
+            self._vuln_resize_handler_id = None
         if self._event_chart_figure is not None:
             try:
                 # See _ensure_matplotlib() — pyplot is never imported here.
