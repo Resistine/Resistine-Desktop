@@ -87,6 +87,19 @@ _WAZUH_DIR = os.path.join(os.path.dirname(_PLUGIN_DIR), "wazuh")
 # before shipping to production.
 _SHOW_DEV_REFRESH_BUTTON = True
 
+class _SimpleResizeEvent:
+    """Minimal stand-in for a Tk <Configure> event. matplotlib's
+    FigureCanvasTkAgg.resize() reads only .width/.height, so this lets us drive
+    a full canvas resize (figure size + backing PhotoImage) from our debounced
+    handler without a real event. See Plugin._bind_figure_autoresize."""
+
+    __slots__ = ("width", "height")
+
+    def __init__(self, width, height):
+        self.width = int(width)
+        self.height = int(height)
+
+
 _TAB_NAMES = ("Overview", "Events", "Vulnerabilities", "Inventory")
 _LEGEND_KEYS = ("critical", "error", "warning", "info")
 _SEVERITY_LEVELS = ("critical", "high", "medium", "low")
@@ -999,6 +1012,13 @@ class Plugin(BasePlugin):
         self._event_row_frames = {}
         self._event_search_var = None
         self._event_count_label = None
+        # Events list/detail split — collapses 2-up -> stacked below 680px.
+        self._events_pane_parent = None
+        self._events_split = None
+        self._events_split_row = 0
+        self._events_split_stacked = False
+        self._events_resize_after_id = None
+        self._events_resize_handler_id = None
         # Severity pill count labels, keyed by level. Stashed by
         # _build_severity_pills so _update_severity_pills can rewrite the
         # numbers in place during Phase 2 rebinds without tearing down the
@@ -1056,6 +1076,11 @@ class Plugin(BasePlugin):
         self._vuln_charts_stacked = False
         self._vuln_resize_after_id = None
         self._vuln_resize_handler_id = None
+        # Table list/detail split — collapses 2-up -> stacked at the same 680px
+        # breakpoint; the same vuln resize handler rebuilds it.
+        self._vuln_table_split = None
+        self._vuln_table_row = 0
+        self._vuln_table_stacked = False
         # Active device filter on the Vulnerabilities table dropdown. Resolved
         # lazily by _default_vuln_device() once _REMOTE_VULNS arrives.
         self._vuln_device = None
@@ -1886,12 +1911,17 @@ class Plugin(BasePlugin):
 
     def _compute_max_cols(self):
         content_width = self._content_width()
-        # Breakpoints mirror the Dashboard (plugins/dashboard/main.py) so the
-        # Wazuh module grid shows the same column count at any given window size.
+        # Width-driven column ladder. The Dashboard's sqrt-then-cap math pins a
+        # 9-card grid at 3 columns for any width >=680, so the count rarely
+        # changed as the window resized. Stepping 1/2/3/4 directly by width
+        # makes the layout visibly adapt across the usable range (and reach a
+        # fuller 4-wide arrangement on large monitors).
         if content_width < 480:
             return 1
         if content_width < 680:
             return 2
+        if content_width < 1000:
+            return 3
         return 4
 
     def _module_cards(self):
@@ -2140,12 +2170,13 @@ class Plugin(BasePlugin):
                 pass
 
         cards_data = self._module_cards()
-        max_cols = self._compute_max_cols()
         n = len(cards_data)
-        # Use the shared grid math (sqrt-then-cap) so the column count matches
-        # the Dashboard exactly for any card count + width.
-        rows_t, cols_t = self.app.calculate_rows_cols(n, max_cols=max_cols)
-        cols, rows = len(cols_t), len(rows_t)
+        # Width-driven column count: the breakpoint value IS the column count
+        # (capped only by the card count). Unlike sqrt-then-cap this actually
+        # reaches the wide-window column counts instead of being silently
+        # re-capped, so the grid visibly steps 1->2->3->4 with the window.
+        cols = max(1, min(self._compute_max_cols(), n))
+        rows = (n + cols - 1) // cols
         self._module_current_cols = cols
 
         grid = customtkinter.CTkFrame(self._module_wrapper, fg_color="transparent")
@@ -2214,47 +2245,109 @@ class Plugin(BasePlugin):
         else:
             grid.after(10, apply)
 
-    def _bind_figure_autoresize(self, canvas, fig, use_tight_layout=False):
-        """Make a matplotlib FigureCanvasTkAgg reflow to its widget's real pixel
-        size on resize. Without this the figure keeps its build-time figsize, so
-        a shrinking card just scales the bitmap down and labels crowd/overlap.
+    def _bind_figure_autoresize(self, canvas, fig, use_tight_layout=False, settle_ms=150):
+        """Make a matplotlib FigureCanvasTkAgg track its widget size on resize,
+        cheaply and smoothly — the "freeze-and-scale" technique.
 
-        Bound on the canvas's own tk widget (its size IS the drawable area). The
-        widget is recreated on every pane rebuild, so the binding dies with it —
-        no manual unbind needed. Debounced (200ms, matching create_grid) and
-        size-guarded (skip <4px deltas) so it never redraws mid-drag or churns on
-        sub-pixel Configure events — this is what keeps resizing smooth."""
+        Re-rastering matplotlib on every <Configure> is expensive (jank); only
+        re-rendering after the drag stops leaves the chart frozen mid-drag. So we
+        REPLACE matplotlib's native <Configure>->resize with a handler that, during
+        the drag, just stretches the LAST crisp render (a cached PIL snapshot) to
+        the live widget size — near-zero cost, so the chart visibly tracks the
+        window — and does the single real re-render once the drag settles
+        (`settle_ms` debounce).
+
+        The crisp render goes through canvas.resize() (reads only event.width/
+        height; stable across mpl versions), which also grows the backing Tk
+        PhotoImage and recreates the canvas image item — automatically replacing
+        our scaled bitmap with the sharp render.
+
+        Degrades gracefully: if PIL or the mpl canvas internals are unavailable,
+        the scale path is skipped and it behaves as a plain debounced crisp resize.
+
+        Bound on the canvas's own tk widget; the widget is recreated on every pane
+        rebuild, so the binding dies with it (no manual unbind)."""
         widget = canvas.get_tk_widget()
         job = [None]
-        last = [(-1, -1)]
+        snap = [None]        # cached PIL snapshot of the last crisp render
+        photo_ref = [None]   # keep the ImageTk ref alive (Tk holds only a weak one)
+        dragging = [False]
+
+        try:
+            from PIL import Image, ImageTk
+        except Exception:
+            Image = ImageTk = None
+
+        def _capture_snapshot():
+            # Grab the current crisp raster from the Agg buffer as a PIL image.
+            if Image is None:
+                return
+            try:
+                w0, h0 = canvas.get_width_height()
+                snap[0] = Image.frombuffer(
+                    "RGBA", (w0, h0), canvas.buffer_rgba(), "raw", "RGBA", 0, 1
+                ).copy()
+            except Exception:
+                snap[0] = None
+
+        def _show_scaled(w, h):
+            # Stretch the cached snapshot onto the canvas image item for cheap
+            # live feedback during the drag. Read the item id fresh — canvas
+            # .resize() recreates it after every crisp render.
+            if snap[0] is None or Image is None:
+                return
+            try:
+                tkc = getattr(canvas, "_tkcanvas", None)
+                item = getattr(canvas, "_tkcanvas_image_region", None)
+                if tkc is None or item is None:
+                    return
+                scaled = snap[0].resize((max(1, w), max(1, h)), Image.BILINEAR)
+                photo_ref[0] = ImageTk.PhotoImage(scaled, master=widget)
+                tkc.itemconfigure(item, image=photo_ref[0])
+                tkc.coords(item, w // 2, h // 2)
+            except Exception:
+                pass
 
         def apply():
             job[0] = None
+            dragging[0] = False
             try:
                 if not widget.winfo_exists():
                     return
                 w, h = widget.winfo_width(), widget.winfo_height()
                 if w <= 1 or h <= 1:
                     return
-                if abs(w - last[0][0]) < 4 and abs(h - last[0][1]) < 4:
-                    return
-                last[0] = (w, h)
-                fig.set_size_inches(w / fig.dpi, h / fig.dpi, forward=False)
-                # tight_layout fights the donut's set_aspect("equal") (warps the
-                # pie), so callers opt in only for the bar charts.
+                # tight_layout recomputes axis/label margins for the new size so
+                # bar labels don't crowd. Size must be current first; skip it for
+                # the donut (it fights set_aspect("equal") and warps the pie).
                 if use_tight_layout:
+                    fig.set_size_inches(w / fig.dpi, h / fig.dpi, forward=False)
                     fig.tight_layout()
-                canvas.draw_idle()
+                # Crisp render incl. the Tk PhotoImage; recreates the image item,
+                # replacing any scaled bitmap shown during the drag.
+                canvas.resize(_SimpleResizeEvent(w, h))
             except (tk.TclError, AttributeError, RuntimeError, ValueError):
                 pass
 
         def on_configure(_e=None):
+            try:
+                w, h = widget.winfo_width(), widget.winfo_height()
+            except Exception:
+                return
+            # First event of a drag: snapshot the current crisp render, then
+            # scale it for the rest of the drag.
+            if not dragging[0]:
+                dragging[0] = True
+                _capture_snapshot()
+            if w > 1 and h > 1:
+                _show_scaled(w, h)
+            # Debounce the crisp re-render to the end of the drag.
             if job[0] is not None:
                 try:
                     widget.after_cancel(job[0])
                 except Exception:
                     pass
-            job[0] = widget.after(200, apply)
+            job[0] = widget.after(settle_ms, apply)
 
         widget.bind("<Configure>", on_configure)
 
@@ -2344,10 +2437,10 @@ class Plugin(BasePlugin):
                     return
             except Exception:
                 return
-            # Mirror _populate_module_grid's column math so the guard and the
-            # rebuild agree (no missed or redundant rebuilds).
-            target_cols = len(self.app.calculate_rows_cols(
-                len(self._module_cards()), max_cols=self._compute_max_cols())[1])
+            # Mirror _populate_module_grid's width-driven column math so the
+            # guard and the rebuild agree (no missed or redundant rebuilds).
+            target_cols = max(1, min(
+                self._compute_max_cols(), len(self._module_cards())))
             if self._module_current_cols == target_cols:
                 return
             self._populate_module_grid()
@@ -2374,6 +2467,49 @@ class Plugin(BasePlugin):
             "<Configure>", debounced, add="+"
         )
 
+    def _bind_breakpoint_rebuild(self, after_attr, handler_attr, on_settled):
+        """Shared responsive-rebuild plumbing for panes whose layout flips at a
+        width breakpoint (the chart row + the list/detail splits). Binds the app
+        window's <Configure> with a 250ms debounce (never mid-drag — matches the
+        Dashboard), filters position-only events, and unbinds any handler left
+        from a previous build (leak prevention). `on_settled()` runs once the
+        drag pauses; it owns its own change-detection and does the rebuild.
+
+        `after_attr`/`handler_attr` are the instance-attribute NAMES holding this
+        binding's pending-after id and bound-handler id, so each pane gets an
+        independent, separately-cancellable binding."""
+        last_size = [0, 0]
+
+        def settled():
+            setattr(self, after_attr, None)
+            try:
+                on_settled()
+            except (tk.TclError, AttributeError, RuntimeError):
+                pass
+
+        def debounced(event=None):
+            if event is not None:
+                if event.width == last_size[0] and event.height == last_size[1]:
+                    return
+                last_size[0] = event.width
+                last_size[1] = event.height
+            pending = getattr(self, after_attr, None)
+            if pending:
+                try:
+                    self.app.after_cancel(pending)
+                except Exception:
+                    pass
+            setattr(self, after_attr, self.app.after(250, settled))
+
+        prior = getattr(self, handler_attr, None)
+        if prior:
+            try:
+                self.app.unbind("<Configure>", prior)
+            except Exception:
+                pass
+        setattr(self, handler_attr,
+                self.app.bind("<Configure>", debounced, add="+"))
+
     # ----- cleanup -----------------------------------------------------------
 
     # ----- Events pane -------------------------------------------------------
@@ -2397,6 +2533,7 @@ class Plugin(BasePlugin):
             self._schedule_events_ready_check(parent)
             return
 
+        self._events_pane_parent = parent
         parent.grid_columnconfigure(0, weight=1)
         parent.grid_rowconfigure(0, weight=0)  # severity pills
         parent.grid_rowconfigure(1, weight=0)  # bar chart
@@ -2411,6 +2548,10 @@ class Plugin(BasePlugin):
         # Default selection: most recent event (already sorted newest-first)
         if _REMOTE_VULN_EVENTS:
             self._select_event(_REMOTE_VULN_EVENTS[0]["id"])
+
+        # Re-binds after unbinding any prior handler, so re-renders don't stack
+        # duplicate <Configure> listeners.
+        self._bind_events_resize()
 
     def _render_events_loading(self, parent):
         parent.grid_columnconfigure(0, weight=1)
@@ -2807,17 +2948,39 @@ class Plugin(BasePlugin):
     def _build_event_stream(self, parent, row):
         split = customtkinter.CTkFrame(parent, fg_color="transparent")
         split.grid(row=row, column=0, sticky="nsew")
-        split.grid_columnconfigure(0, weight=3, uniform="stream")
-        split.grid_columnconfigure(1, weight=2, uniform="stream")
-        split.grid_rowconfigure(0, weight=1)
+        self._events_split = split
+        self._events_split_row = row
+        # Below 680px, stack list-over-detail so neither is squeezed to a sliver.
+        stacked = self._content_width() < 680
+        self._events_split_stacked = stacked
 
         # Left: scrollable list
         list_wrapper = customtkinter.CTkFrame(
             split, corner_radius=12, border_width=1
         )
-        list_wrapper.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
         list_wrapper.grid_columnconfigure(0, weight=1)
         list_wrapper.grid_rowconfigure(1, weight=1)
+
+        # Right: detail panel
+        self._event_detail_frame = customtkinter.CTkFrame(
+            split, corner_radius=12, border_width=1
+        )
+        self._event_detail_frame.grid_columnconfigure(0, weight=1)
+
+        if stacked:
+            split.grid_columnconfigure(0, weight=1)
+            split.grid_columnconfigure(1, weight=0)
+            split.grid_rowconfigure(0, weight=1)
+            split.grid_rowconfigure(1, weight=1)
+            list_wrapper.grid(row=0, column=0, sticky="nsew", pady=(0, 6))
+            self._event_detail_frame.grid(row=1, column=0, sticky="nsew", pady=(6, 0))
+        else:
+            split.grid_columnconfigure(0, weight=3, uniform="stream")
+            split.grid_columnconfigure(1, weight=2, uniform="stream")
+            split.grid_rowconfigure(0, weight=1)
+            split.grid_rowconfigure(1, weight=0)
+            list_wrapper.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+            self._event_detail_frame.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
 
         self._build_event_list_header(list_wrapper, row=0)
 
@@ -2827,14 +2990,39 @@ class Plugin(BasePlugin):
         self._event_list_frame.grid(row=1, column=0, sticky="nsew", padx=4, pady=(0, 4))
         self._event_list_frame.grid_columnconfigure(0, weight=1)
 
-        # Right: detail panel
-        self._event_detail_frame = customtkinter.CTkFrame(
-            split, corner_radius=12, border_width=1
-        )
-        self._event_detail_frame.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
-        self._event_detail_frame.grid_columnconfigure(0, weight=1)
-
         self._render_event_list("")
+
+    def _bind_events_resize(self):
+        """At the 680px breakpoint, rebuild ONLY the list/detail split (flip
+        2-up↔stacked) — never the whole pane, so chart selection + search and
+        the running events loader are untouched."""
+        def on_settled():
+            parent = self._events_pane_parent
+            if not parent or not parent.winfo_exists():
+                return
+            split = self._events_split
+            try:
+                if not split or not split.winfo_exists() or not split.winfo_ismapped():
+                    return
+            except Exception:
+                return
+            if (self._content_width() < 680) == self._events_split_stacked:
+                return
+            # Preserve selection + search; only the split frame is recreated.
+            prev_id = self._selected_event_id
+            query = self._event_search_var.get() if self._event_search_var else ""
+            try:
+                split.destroy()
+            except Exception:
+                pass
+            self._selected_event_id = prev_id
+            self._build_event_stream(parent, row=self._events_split_row)
+            # _render_event_list re-anchors selection if prev_id filtered out,
+            # highlights the row, and repaints the (freshly rebuilt) detail.
+            self._render_event_list(query)
+
+        self._bind_breakpoint_rebuild(
+            "_events_resize_after_id", "_events_resize_handler_id", on_settled)
 
     def _build_event_list_header(self, parent, row):
         text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
@@ -3405,69 +3593,72 @@ class Plugin(BasePlugin):
         self._build_vuln_cvss_card(cvss)
 
     def _bind_vuln_resize(self):
-        """Rebuild ONLY the charts row when the window crosses the stacked↔
-        side-by-side breakpoint. Modeled on _bind_module_resize: 250ms debounce,
-        position-only-event filter, change-detection guard, and leak-prevention
-        unbind of the prior handler. Never rebuilds the whole pane (which would
-        drop the table selection + search), and never fires mid-drag."""
-        last_size = [0, 0]
-
-        def on_resize_settled():
-            self._vuln_resize_after_id = None
-            wrapper = self._vuln_charts_wrapper
-            if not wrapper or not wrapper.winfo_exists():
-                return
-            try:
-                if not wrapper.winfo_ismapped():
-                    return
-            except Exception:
-                return
-            if (self._content_width() < 680) == self._vuln_charts_stacked:
-                return
+        """At the 680px breakpoint, rebuild ONLY the charts row and the table
+        split (both flip 2-up↔stacked) — never the whole pane, so the table
+        selection + search survive. Both share the same threshold, so one
+        settled handler drives both."""
+        def on_settled():
             parent = self._vuln_pane_parent
             if not parent or not parent.winfo_exists():
                 return
-            row = self._vuln_charts_row
-            # Drop the old figures before the wrapper that holds their canvases
-            # is destroyed (mirrors _build_vulnerabilities_pane's leak guard).
-            for attr in ("_vuln_donut_figure", "_vuln_cvss_figure"):
-                fig = getattr(self, attr, None)
-                if fig is not None:
-                    try:
-                        fig.clear()
-                    except Exception:
-                        pass
-                    setattr(self, attr, None)
+            wrapper = self._vuln_charts_wrapper
             try:
-                wrapper.destroy()
-            except Exception:
-                pass
-            self._vuln_donut_canvas = None
-            self._vuln_cvss_canvas = None
-            self._vuln_donut_wedges = []
-            self._build_vuln_charts_row(parent, row=row)
-
-        def debounced(event=None):
-            if event is not None:
-                if event.width == last_size[0] and event.height == last_size[1]:
+                if not wrapper or not wrapper.winfo_exists() or not wrapper.winfo_ismapped():
                     return
-                last_size[0] = event.width
-                last_size[1] = event.height
-            if self._vuln_resize_after_id:
+            except Exception:
+                return
+            stacked = self._content_width() < 680
+            if stacked != self._vuln_charts_stacked:
+                self._rebuild_vuln_charts_row(parent)
+            if stacked != self._vuln_table_stacked:
+                self._rebuild_vuln_table_split(parent)
+
+        self._bind_breakpoint_rebuild(
+            "_vuln_resize_after_id", "_vuln_resize_handler_id", on_settled)
+
+    def _rebuild_vuln_charts_row(self, parent):
+        wrapper = self._vuln_charts_wrapper
+        row = self._vuln_charts_row
+        # Drop the old figures before the wrapper that holds their canvases is
+        # destroyed (mirrors _build_vulnerabilities_pane's leak guard).
+        for attr in ("_vuln_donut_figure", "_vuln_cvss_figure"):
+            fig = getattr(self, attr, None)
+            if fig is not None:
                 try:
-                    self.app.after_cancel(self._vuln_resize_after_id)
+                    fig.clear()
                 except Exception:
                     pass
-            self._vuln_resize_after_id = self.app.after(250, on_resize_settled)
+                setattr(self, attr, None)
+        try:
+            if wrapper:
+                wrapper.destroy()
+        except Exception:
+            pass
+        self._vuln_donut_canvas = None
+        self._vuln_cvss_canvas = None
+        self._vuln_donut_wedges = []
+        self._build_vuln_charts_row(parent, row=row)
 
-        if self._vuln_resize_handler_id:
-            try:
-                self.app.unbind("<Configure>", self._vuln_resize_handler_id)
-            except Exception:
-                pass
-        self._vuln_resize_handler_id = self.app.bind(
-            "<Configure>", debounced, add="+"
-        )
+    def _rebuild_vuln_table_split(self, parent):
+        # Preserve the selected CVE + current search across the rebuild — only
+        # the split frame is recreated, so the search entry (a sibling row) and
+        # its var persist; re-applying the query repaints the filtered list.
+        prev_key = self._selected_vuln_key
+        query = self._vuln_search_var.get() if self._vuln_search_var else ""
+        try:
+            if self._vuln_table_split:
+                self._vuln_table_split.destroy()
+        except Exception:
+            pass
+        self._selected_vuln_key = prev_key
+        self._build_vuln_table(parent, row=self._vuln_table_row)
+        self._render_vuln_list(query)
+        # _render_vuln_list highlights the preserved row but only repaints the
+        # detail panel when nothing was selected; force it for the restored key
+        # (the detail frame was just recreated, so it's empty otherwise).
+        if self._selected_vuln_key:
+            self._render_vuln_detail(
+                self._find_vuln_by_key(self._selected_vuln_key))
 
     def _build_vuln_donut_card(self, card):
         text_secondary = self._theme(
@@ -3874,16 +4065,37 @@ class Plugin(BasePlugin):
     def _build_vuln_table(self, parent, row):
         # 3:2 split — bordered list card on the left, bordered detail card on
         # the right. Mirrors _build_event_stream so both panes feel uniform.
+        # Below 680px, stack list-over-detail so neither is squeezed to a sliver.
         split = customtkinter.CTkFrame(parent, fg_color="transparent")
         split.grid(row=row, column=0, sticky="nsew")
-        split.grid_columnconfigure(0, weight=3, uniform="vstream")
-        split.grid_columnconfigure(1, weight=2, uniform="vstream")
-        split.grid_rowconfigure(0, weight=1)
+        self._vuln_table_split = split
+        self._vuln_table_row = row
+        stacked = self._content_width() < 680
+        self._vuln_table_stacked = stacked
 
         wrapper = customtkinter.CTkFrame(split, corner_radius=12, border_width=1)
-        wrapper.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
         wrapper.grid_columnconfigure(0, weight=1)
         wrapper.grid_rowconfigure(1, weight=1)
+
+        self._vuln_detail_frame = customtkinter.CTkFrame(
+            split, corner_radius=12, border_width=1
+        )
+        self._vuln_detail_frame.grid_columnconfigure(0, weight=1)
+
+        if stacked:
+            split.grid_columnconfigure(0, weight=1)
+            split.grid_columnconfigure(1, weight=0)
+            split.grid_rowconfigure(0, weight=1)
+            split.grid_rowconfigure(1, weight=1)
+            wrapper.grid(row=0, column=0, sticky="nsew", pady=(0, 6))
+            self._vuln_detail_frame.grid(row=1, column=0, sticky="nsew", pady=(6, 0))
+        else:
+            split.grid_columnconfigure(0, weight=3, uniform="vstream")
+            split.grid_columnconfigure(1, weight=2, uniform="vstream")
+            split.grid_rowconfigure(0, weight=1)
+            split.grid_rowconfigure(1, weight=0)
+            wrapper.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+            self._vuln_detail_frame.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
 
         self._build_vuln_table_columns(wrapper, row=0)
 
@@ -3892,12 +4104,6 @@ class Plugin(BasePlugin):
         )
         self._vuln_list_frame.grid(row=1, column=0, sticky="nsew", padx=4, pady=(0, 4))
         self._vuln_list_frame.grid_columnconfigure(0, weight=1)
-
-        self._vuln_detail_frame = customtkinter.CTkFrame(
-            split, corner_radius=12, border_width=1
-        )
-        self._vuln_detail_frame.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
-        self._vuln_detail_frame.grid_columnconfigure(0, weight=1)
 
         self._render_vuln_list("")
 
@@ -3973,7 +4179,25 @@ class Plugin(BasePlugin):
         also reflect fresh data without a full rebuild should factor out
         render-only helpers from _build_vuln_donut_card and
         _build_vuln_cvss_card (mirroring the _render_event_chart pattern)."""
-        if self._vuln_list_frame is None or not self._vuln_list_frame.winfo_exists():
+        table_built = (
+            self._vuln_list_frame is not None
+            and self._vuln_list_frame.winfo_exists()
+        )
+        if not table_built:
+            # The pane is still showing the loading / error placeholder — the
+            # table was never built because data wasn't ready or errored on the
+            # initial open (e.g. a transient 403). The vuln readiness poll stops
+            # once _remote_vulns_ready is set (even on error), so it won't
+            # recover on its own. If a refresh has since landed good data, do a
+            # FULL rebuild to swap the placeholder for the real table (the
+            # in-place row refresh below only works once the table exists).
+            if (
+                self._vuln_pane_parent is not None
+                and self._vuln_pane_parent.winfo_exists()
+                and _remote_vulns_ready.is_set()
+                and not _REMOTE_VULNS_ERROR
+            ):
+                self._build_vulnerabilities_pane(self._vuln_pane_parent)
             return
         query = self._vuln_search_var.get() if self._vuln_search_var else ""
         self._render_vuln_list(query)
@@ -5084,6 +5308,18 @@ class Plugin(BasePlugin):
             except Exception:
                 pass
             self._vuln_resize_handler_id = None
+        if self._events_resize_after_id:
+            try:
+                self.app.after_cancel(self._events_resize_after_id)
+            except Exception:
+                pass
+            self._events_resize_after_id = None
+        if self._events_resize_handler_id:
+            try:
+                self.app.unbind("<Configure>", self._events_resize_handler_id)
+            except Exception:
+                pass
+            self._events_resize_handler_id = None
         if self._event_chart_figure is not None:
             try:
                 # See _ensure_matplotlib() — pyplot is never imported here.

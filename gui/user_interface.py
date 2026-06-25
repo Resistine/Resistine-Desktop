@@ -1122,8 +1122,28 @@ class AppUI(customtkinter.CTk):
         # NOTE: simply replacing scrollable._mouse_wheel_all does NOT work
         # because bind_all stores a reference to the original bound method.
         # We must patch the original method to redirect to ours.
+        def _in_scroll(widget):
+            # customtkinter <6.0 exposed check_if_master_is_canvas(); 6.0 renamed
+            # it to _check_if_valid_scroll(). Prefer whichever exists, then fall
+            # back to a manual master-chain walk against the parent canvas so the
+            # mouse wheel only scrolls the frame the pointer is actually over.
+            fn = getattr(scrollable, "check_if_master_is_canvas", None) or \
+                getattr(scrollable, "_check_if_valid_scroll", None)
+            if fn is not None:
+                try:
+                    return fn(widget)
+                except Exception:
+                    pass
+            target = getattr(scrollable, "_parent_canvas", None)
+            w = widget
+            while w is not None:
+                if w == target:
+                    return True
+                w = getattr(w, "master", None)
+            return False
+
         def _patched_mouse_wheel_all(event):
-            if scrollable.check_if_master_is_canvas(event.widget):
+            if _in_scroll(event.widget):
                 return _on_mousewheel(event)
 
         # Monkey-patch the bound method's __func__ won't work, so we
@@ -1139,11 +1159,11 @@ class AppUI(customtkinter.CTk):
         # bind_all for <Button-4>/<Button-5> on Linux so child widgets are covered
         if _is_linux:
             def _bind_all_button4(event):
-                if scrollable.check_if_master_is_canvas(event.widget):
+                if _in_scroll(event.widget):
                     return _on_linux_scroll_up(event)
 
             def _bind_all_button5(event):
-                if scrollable.check_if_master_is_canvas(event.widget):
+                if _in_scroll(event.widget):
                     return _on_linux_scroll_down(event)
 
             scrollable.bind_all("<Button-4>", _bind_all_button4, add="+")
