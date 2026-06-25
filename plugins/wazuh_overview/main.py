@@ -114,6 +114,26 @@ _SEV_TO_STATUS = {
 }
 # Sort priority for composite threat ranking. Higher is more severe.
 _THREAT_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "ok": 0}
+# Reverse map (rank → severity name) so _device_threat_level can index instead
+# of linear-scanning _THREAT_RANK per device.
+_RANK_TO_SEV = {v: k for k, v in _THREAT_RANK.items()}
+
+# Responsive layout constants (shared so a breakpoint change is one edit).
+# _content_width = window width − sidebar − platform padding; the column ladder
+# steps 1/2/3/4 at the _COL_BREAKPOINTS, and the chart rows / list-detail splits
+# collapse to a single stacked column below _STACK_BREAKPOINT.
+_SIDEBAR_WIDTH = 250
+_COL_BREAKPOINTS = (480, 680, 1000)
+_STACK_BREAKPOINT = 680
+# Card aspect-ratio row-height clamp (matches create_grid's 160..300).
+_CARD_MIN_H = 160
+_CARD_MAX_H = 300
+
+# Default theme color pairs [light, dark] used as _theme(...) fallbacks. Pulled
+# out so the same literal pair isn't retyped at every call site.
+_DEFAULT_TEXT_SECONDARY = ["#6B7280", "#9CA3AF"]
+_DEFAULT_ACTIVE_BG = ["#EBF0FF", "#1A2744"]
+_DEFAULT_HOVER_BG = ["#F0F0F5", "#1F1F22"]
 # Severity name → status_badge_* theme key.
 # Color scheme:
 #   critical  → violet
@@ -135,18 +155,6 @@ _SEVERITY_SHORT = {
     "medium": "MED",
     "low": "LOW",
 }
-
-# Maps vuln status strings to a theme key recognized by _badge_colors.
-# "detected" is not a status_badge_* key in the theme JSON; without this
-# mapping the badge falls back to the muted default and the color reads
-# as a missed lookup. Aliasing it to "warning" gives the orange severity
-# treatment from the image.
-_VULN_STATUS_BADGE = {
-    "detected": "warning",
-    "fixed": "ok",
-    "mitigated": "info",
-}
-
 
 def _wazuh_level_to_severity(level):
     """Map a Wazuh rule.level (0–15) to one of the page's four severity buckets."""
@@ -420,7 +428,6 @@ _remote_hotfixes_ready = threading.Event()
 # Identity of _REMOTE_VULN_EVENTS changes on each merge — the Events pane's
 # id(...)-keyed caches treat that as cache invalidation automatically.
 _REMOTE_VULN_EVENTS = []
-_REMOTE_VULN_EVENTS_ERROR = None
 _remote_vuln_events_ready = threading.Event()
 _remote_vuln_events_complete = threading.Event()
 
@@ -587,12 +594,11 @@ def _load_vuln_events_phase1_async():
     fetched lazily by _load_vuln_events_phase2_async, which fires only when
     the user actually opens the Events tab. The early-exit branch sets both
     events because there's no Phase 2 work to wait for in that case."""
-    global _REMOTE_VULN_EVENTS, _REMOTE_VULN_EVENTS_ERROR, _vuln_events_phase2_started
+    global _REMOTE_VULN_EVENTS, _vuln_events_phase2_started
 
     _remote_agent_ready.wait()
     local_id = (_REMOTE_AGENT or {}).get("id") if isinstance(_REMOTE_AGENT, dict) else None
     if not local_id:
-        _REMOTE_VULN_EVENTS_ERROR = "no local agent"
         _remote_vuln_events_ready.set()
         _remote_vuln_events_complete.set()
         # No Phase 2 will ever run; suppress the lazy kicker so the Events
@@ -602,9 +608,7 @@ def _load_vuln_events_phase1_async():
         return
 
     local_events, err = api_client.fetch_device_vulnerability_events(local_id)
-    if err:
-        _REMOTE_VULN_EVENTS_ERROR = err
-    else:
+    if not err:
         normalized = [_normalize_wazuh_hit(h) for h in (local_events or [])]
         normalized.sort(key=lambda e: e.get("timestamp") or "", reverse=True)
         _REMOTE_VULN_EVENTS = normalized
@@ -882,41 +886,31 @@ def _short_benchmark_name(name):
 # only writes the loaded-state shape.
 
 
-def _unavailable_card(title, description, target_tab=None):
-    """Card stub for modules that have no /me/* endpoint yet."""
+def _status_card(title, description, stat_text, target_tab=None):
+    """Shared module-card stub: an INFO card whose single muted stat line is
+    `stat_text`. The three named variants below differ only in that text."""
     card = {
         "title": title,
         "status": "INFO",
         "description": description,
-        "stats": (("Data unavailable", "muted"),),
+        "stats": ((stat_text, "muted"),),
     }
     if target_tab:
         card["target_tab"] = target_tab
     return card
+
+
+def _unavailable_card(title, description, target_tab=None):
+    """Card stub for modules that have no /me/* endpoint yet."""
+    return _status_card(title, description, "Data unavailable", target_tab)
 
 
 def _loading_card(title, description, target_tab=None):
-    card = {
-        "title": title,
-        "status": "INFO",
-        "description": description,
-        "stats": (("Loading…", "muted"),),
-    }
-    if target_tab:
-        card["target_tab"] = target_tab
-    return card
+    return _status_card(title, description, "Loading…", target_tab)
 
 
 def _error_card(title, description, target_tab=None):
-    card = {
-        "title": title,
-        "status": "INFO",
-        "description": description,
-        "stats": (("Couldn't load", "muted"),),
-    }
-    if target_tab:
-        card["target_tab"] = target_tab
-    return card
+    return _status_card(title, description, "Couldn't load", target_tab)
 
 
 def _bucket_by_severity(items):
@@ -1005,12 +999,20 @@ class Plugin(BasePlugin):
         self._bucket_events_cache = None    # (id(_REMOTE_VULN_EVENTS), result) or None
         self._vuln_severity_cache = None    # (id(vulns), result) or None
         self._bucket_vulns_cache = None     # (id(vulns), result) or None
+        # (key, sorted-filtered list) — key = (id(vulns), device, sev, query)
+        self._filter_vulns_cache = None
+        self._chart_theme_cache = None      # (is_dark, theme dict) or None
+        # Inventory row caches — the threat path scans _REMOTE_VULNS per device,
+        # so paging/group changes shouldn't re-derive it. Keyed on data identity.
+        self._inventory_rows_cache = None   # (key, rows) or None
+        self._inventory_counts_cache = None  # (key, rows) or None
         # Events pane state
         self._selected_event_id = None
         self._event_list_frame = None
         self._event_detail_frame = None
         self._event_row_frames = {}
         self._event_search_var = None
+        self._event_search_after_id = None  # debounce handle for the search box
         self._event_count_label = None
         # Events list/detail split — collapses 2-up -> stacked below 680px.
         self._events_pane_parent = None
@@ -1061,6 +1063,7 @@ class Plugin(BasePlugin):
         self._inventory_pagination_frame = None  # right-aligned pager; rebuilt on each body render
         # Vulnerabilities pane state
         self._vuln_search_var = None
+        self._vuln_search_after_id = None  # debounce handle for the search box
         self._vuln_count_label = None
         self._vuln_list_frame = None
         self._vuln_donut_figure = None
@@ -1102,6 +1105,12 @@ class Plugin(BasePlugin):
         # request_refresh can disable it for the duration of the redraw
         # window. None until the Overview pane builds.
         self._refresh_button = None
+        # Refresh repaint bookkeeping: pending tick after-ids (for cancel),
+        # the button-restore after-id, and the per-pane content fingerprints
+        # so a tick that finds nothing changed is a no-op.
+        self._refresh_repaint_after_ids = []
+        self._refresh_button_after_id = None
+        self._refresh_seen_ids = {}
 
     def check_status(self):
         return None
@@ -1499,8 +1508,10 @@ class Plugin(BasePlugin):
             except Exception:
                 pass
         self._schedule_refresh_repaints()
-        # Re-enable the button once the redraw window closes.
-        self.app.after(6000, self._restore_refresh_button)
+        # Re-enable the button once the redraw window closes. Tracked so
+        # destroy() can cancel it if the user navigates away mid-window.
+        self._refresh_button_after_id = self.app.after(
+            6000, self._restore_refresh_button)
 
     def _schedule_refresh_repaints(self):
         """Schedule best-effort repaint ticks across the window in which eager +
@@ -1511,9 +1522,20 @@ class Plugin(BasePlugin):
         renderers just re-read the globals and reapply text/data.
 
         Shared by request_refresh (the dev Refresh button) and the auto-recover
-        path in _build_overview_pane, so both repaint identically."""
-        for delay_ms in (200, 500, 1000, 2000, 4000, 6000):
+        path in _build_overview_pane, so both repaint identically. Each tick is a
+        no-op when nothing changed (the content-identity guard in
+        _refresh_visible_panes). Three ticks cover the eager (~500ms) and lazy
+        (~2-4s) landing windows; the after-ids are tracked for destroy() cleanup."""
+        # Cancel any ticks still pending from a previous refresh press.
+        for aid in self._refresh_repaint_after_ids:
+            try:
+                self.app.after_cancel(aid)
+            except Exception:
+                pass
+        self._refresh_repaint_after_ids = [
             self.app.after(delay_ms, self._refresh_visible_panes)
+            for delay_ms in (500, 2000, 6000)
+        ]
 
     def _restore_refresh_button(self):
         """Re-enable the refresh button at the end of the redraw window.
@@ -1528,27 +1550,51 @@ class Plugin(BasePlugin):
         except Exception:
             pass
 
+    def _overview_data_fingerprint(self):
+        """Identity of the data the module-grid cards render: the readiness
+        bitmask plus the id() of each source global. A refresh rebinds those
+        globals (new ids) even when readiness stays set, so both parts are
+        needed to detect 'something actually changed since the last tick'."""
+        return (
+            _ready_mask(),
+            id(_REMOTE_AGENT), id(_REMOTE_VULNS_SUMMARY), id(_REMOTE_SCA),
+            id(_REMOTE_INVENTORY), id(_REMOTE_HOTFIXES),
+        )
+
     def _refresh_visible_panes(self):
         """Best-effort repaint of every pane that's currently alive. Routes
-        through the narrow refresh paths so static widgets (Overview's top
-        device card + alert bar + modules header; Vulns' donut + CVSS
-        Figures) don't flicker on every tick."""
-        # Overview: only the module-grid cards. The top device widget,
-        # alert bar, and modules header are left alone — their data is
-        # effectively static for the local device.
+        through the narrow refresh paths so static widgets don't flicker. Each
+        pane is guarded by a content-identity check (_refresh_seen_ids) so a
+        repaint tick that finds nothing changed since the last one is a no-op —
+        the data globals are rebound (new id) only when fresh data lands."""
+        seen = self._refresh_seen_ids
+        # Overview module-grid cards.
         if self._module_wrapper is not None and self._module_wrapper.winfo_exists():
-            self._refresh_overview_data_only()
-        # Events pane: in-place via the existing helper (chart axes/Figure
-        # preserved; only bars + rows + detail re-render).
+            fp = self._overview_data_fingerprint()
+            if seen.get("overview") != fp:
+                seen["overview"] = fp
+                self._refresh_overview_data_only()
+        # Events pane (in-place: chart Figure preserved; rows + detail re-render).
         if self._event_list_frame is not None and self._event_list_frame.winfo_exists():
-            self._refresh_events_content()
-        # Vulnerabilities pane: in-place via the new helper (donut + CVSS
-        # Figures preserved; only rows + detail card refresh).
+            eid = id(_REMOTE_VULN_EVENTS)
+            if seen.get("events") != eid:
+                seen["events"] = eid
+                self._refresh_events_content()
+        # Vulnerabilities pane (in-place: donut + CVSS Figures preserved). Also
+        # run when the table isn't built yet so the error->table recovery path
+        # gets a chance to rebuild once good data lands.
         if (
             self._vuln_pane_parent is not None
             and self._vuln_pane_parent.winfo_exists()
         ):
-            self._refresh_vulns_content()
+            vid = id(_REMOTE_VULNS)
+            table_built = (
+                self._vuln_list_frame is not None
+                and self._vuln_list_frame.winfo_exists()
+            )
+            if seen.get("vulns") != vid or not table_built:
+                seen["vulns"] = vid
+                self._refresh_vulns_content()
 
     def _refresh_overview_data_only(self):
         """Refresh just the module-grid cards. Skips the top device widget
@@ -1907,7 +1953,51 @@ class Plugin(BasePlugin):
                 window_width = int(self.app.winfo_screenwidth() * 0.7)
             except Exception:
                 window_width = 1024
-        return max(1, window_width - 250 - self._padding_offset)
+        return max(1, window_width - _SIDEBAR_WIDTH - self._padding_offset)
+
+    def _debounce(self, after_attr, delay_ms, fn):
+        """Coalesce rapid callbacks (e.g. per-keystroke search) into one call
+        after `delay_ms` of quiet. `after_attr` is the instance-attribute name
+        holding this debounce's pending `after` id so it can be cancelled here
+        and in destroy(). The trailing call sees the latest state."""
+        pending = getattr(self, after_attr, None)
+        if pending:
+            try:
+                self.app.after_cancel(pending)
+            except Exception:
+                pass
+        setattr(self, after_attr, self.app.after(delay_ms, fn))
+
+    @staticmethod
+    def _bind_row_hover(row_frame, hover_bg, idle="transparent"):
+        """Highlight a list row (and all its children) on hover, reverting to
+        `idle` on leave. Shared by the event / vuln / inventory row builders —
+        callers gate the call on `not is_selected` where a selected row keeps a
+        persistent highlight."""
+        def on_enter(_e=None):
+            try:
+                row_frame.configure(fg_color=hover_bg)
+            except Exception:
+                pass
+
+        def on_leave(_e=None):
+            try:
+                row_frame.configure(fg_color=idle)
+            except Exception:
+                pass
+
+        for w in (row_frame, *row_frame.winfo_children()):
+            w.bind("<Enter>", on_enter)
+            w.bind("<Leave>", on_leave)
+
+    @staticmethod
+    def _matches_query(q, fields):
+        """True if `q` (already lowercased + stripped) is a substring of the
+        space-joined, lowercased `fields`. Empty `q` always matches and skips
+        building the haystack."""
+        if not q:
+            return True
+        return q in " ".join(str(f) for f in fields).lower()
 
     def _compute_max_cols(self):
         content_width = self._content_width()
@@ -1916,11 +2006,12 @@ class Plugin(BasePlugin):
         # changed as the window resized. Stepping 1/2/3/4 directly by width
         # makes the layout visibly adapt across the usable range (and reach a
         # fuller 4-wide arrangement on large monitors).
-        if content_width < 480:
+        c1, c2, c3 = _COL_BREAKPOINTS
+        if content_width < c1:
             return 1
-        if content_width < 680:
+        if content_width < c2:
             return 2
-        if content_width < 1000:
+        if content_width < c3:
             return 3
         return 4
 
@@ -2217,7 +2308,7 @@ class Plugin(BasePlugin):
                 card_w = max(1, col_w - 16)  # 8px padx per side
                 # Same clamp + formula as create_grid(aspect_ratio=1.0):
                 # square-ish, with a 160px floor and 300px ceiling.
-                target_h = max(160, min(300, int(card_w) + 20))
+                target_h = max(_CARD_MIN_H, min(_CARD_MAX_H, int(card_w) + 20))
                 for r in range(rows):
                     grid.grid_rowconfigure(r, minsize=target_h)
             except (tk.TclError, AttributeError, RuntimeError):
@@ -2553,18 +2644,35 @@ class Plugin(BasePlugin):
         # duplicate <Configure> listeners.
         self._bind_events_resize()
 
-    def _render_events_loading(self, parent):
+    def _render_centered_message(self, parent, text, detail=None):
+        """Center a single message in `parent` (used for the per-tab loading
+        placeholders and the vulnerabilities error pane). When `detail` is given
+        the primary line is bold and the detail renders muted beneath it."""
         parent.grid_columnconfigure(0, weight=1)
         parent.grid_rowconfigure(0, weight=1)
-        text_secondary = self._theme(
-            "text_secondary", default=["#6B7280", "#9CA3AF"]
-        )
+        text_secondary = self._theme("text_secondary", default=_DEFAULT_TEXT_SECONDARY)
+        if detail is None:
+            customtkinter.CTkLabel(
+                parent,
+                text=text,
+                text_color=text_secondary,
+                font=customtkinter.CTkFont(size=14),
+            ).grid(row=0, column=0, sticky="nsew", padx=20, pady=40)
+            return
+        container = customtkinter.CTkFrame(parent, fg_color="transparent")
+        container.grid(row=0, column=0, sticky="nsew", padx=20, pady=40)
+        container.grid_columnconfigure(0, weight=1)
         customtkinter.CTkLabel(
-            parent,
-            text="Loading events…",
-            text_color=text_secondary,
-            font=customtkinter.CTkFont(size=14),
-        ).grid(row=0, column=0, sticky="nsew", padx=20, pady=40)
+            container, text=text,
+            font=customtkinter.CTkFont(size=14, weight="bold"),
+        ).grid(row=0, column=0, sticky="n")
+        customtkinter.CTkLabel(
+            container, text=str(detail), text_color=text_secondary,
+            font=customtkinter.CTkFont(size=12),
+        ).grid(row=1, column=0, sticky="n", pady=(6, 0))
+
+    def _render_events_loading(self, parent):
+        self._render_centered_message(parent, "Loading events…")
 
     def _refresh_events_content(self):
         """Update Events pane content in place after a Phase 2 rebind.
@@ -2602,7 +2710,9 @@ class Plugin(BasePlugin):
         # group-device events behind the scenes, and the pane has to update
         # whenever the global is rebound (id(_REMOTE_VULN_EVENTS) changes).
         # Stop polling entirely once _remote_vuln_events_complete fires.
-        pre_ready_poll_ms = 20
+        # 120ms still feels instant on the handoff but wakes the Tk main thread
+        # ~6x less often than the old 20ms spin while the loader is network-bound.
+        pre_ready_poll_ms = 120
         post_ready_poll_ms = 250
 
         def check():
@@ -2633,7 +2743,7 @@ class Plugin(BasePlugin):
         """Return (bg, text) tuple for a severity level, theme-resolved."""
         key = _SEVERITY_THEME_KEY.get(level, "info")
         bg = self._theme("status_badge_bg", key, default=["#F3F4F6", "#1F2937"])
-        fg = self._theme("status_badge_text", key, default=["#6B7280", "#9CA3AF"])
+        fg = self._theme("status_badge_text", key, default=_DEFAULT_TEXT_SECONDARY)
         return bg, fg
 
     def _severity_counts(self):
@@ -2641,11 +2751,7 @@ class Plugin(BasePlugin):
         cache = self._severity_counts_cache
         if cache is not None and cache[0] == events_id:
             return cache[1]
-        counts = {lvl: 0 for lvl in _SEVERITY_LEVELS}
-        for ev in _REMOTE_VULN_EVENTS:
-            sev = (ev.get("severity") or "").lower()
-            if sev in counts:
-                counts[sev] += 1
+        counts = _bucket_by_severity(_REMOTE_VULN_EVENTS)
         self._severity_counts_cache = (events_id, counts)
         return counts
 
@@ -2754,13 +2860,19 @@ class Plugin(BasePlugin):
 
     def _chart_theme(self):
         is_dark = customtkinter.get_appearance_mode() == "Dark"
+        # Memoize per appearance mode — this is read on every chart render.
+        cache = self._chart_theme_cache
+        if cache is not None and cache[0] == is_dark:
+            return cache[1]
         # Match the page background ["gray92","gray14"] so the chart blends in.
-        return {
+        theme = {
             "bg": "#242424" if is_dark else "#EBEBEB",
             "text": "#E5E7EB" if is_dark else "#1F2937",
             "grid": "#3A3A3A" if is_dark else "#D1D5DB",
             "is_dark": is_dark,
         }
+        self._chart_theme_cache = (is_dark, theme)
+        return theme
 
     def _card_bg(self, card):
         """Resolve a CTkFrame's current fg_color to a #RRGGBB hex string."""
@@ -2778,10 +2890,10 @@ class Plugin(BasePlugin):
         )
 
     def _resolve_severity_color(self, level, is_dark):
-        # Pull text color (more saturated than the badge bg) for the bar fill.
-        key = _SEVERITY_THEME_KEY.get(level, "info")
-        pair = self._theme("status_badge_text", key, default=["#6B7280", "#9CA3AF"])
-        return pair[1] if is_dark else pair[0]
+        # The bar fill is the badge TEXT color (more saturated than the bg).
+        # Reuse _severity_palette so the key/default live in one place.
+        _bg, fg = self._severity_palette(level)
+        return fg[1] if is_dark else fg[0]
 
     def _build_event_chart(self, parent, row):
         Figure, FigureCanvasTkAgg = _ensure_matplotlib()
@@ -2924,9 +3036,11 @@ class Plugin(BasePlugin):
         ).grid(row=0, column=0, sticky="w", padx=(0, 16))
 
         self._event_search_var = tk.StringVar()
-        self._event_search_var.trace_add("write", lambda *a: self._render_event_list(
-            self._event_search_var.get()
-        ))
+        # Debounce so filtering runs once after the user pauses, not on every
+        # keystroke (each render tears down + rebuilds the whole row list).
+        self._event_search_var.trace_add("write", lambda *a: self._debounce(
+            "_event_search_after_id", 150,
+            lambda: self._render_event_list(self._event_search_var.get())))
         customtkinter.CTkEntry(
             header,
             placeholder_text="Search rule, IP, description…",
@@ -2951,7 +3065,7 @@ class Plugin(BasePlugin):
         self._events_split = split
         self._events_split_row = row
         # Below 680px, stack list-over-detail so neither is squeezed to a sliver.
-        stacked = self._content_width() < 680
+        stacked = self._content_width() < _STACK_BREAKPOINT
         self._events_split_stacked = stacked
 
         # Left: scrollable list
@@ -3006,7 +3120,7 @@ class Plugin(BasePlugin):
                     return
             except Exception:
                 return
-            if (self._content_width() < 680) == self._events_split_stacked:
+            if (self._content_width() < _STACK_BREAKPOINT) == self._events_split_stacked:
                 return
             # Preserve selection + search; only the split frame is recreated.
             prev_id = self._selected_event_id
@@ -3053,24 +3167,30 @@ class Plugin(BasePlugin):
                 ts = ev.get("timestamp")
                 if not ts:
                     continue
-                try:
-                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                except ValueError:
-                    continue
-                floored = dt.replace(minute=0, second=0, microsecond=0)
-                if floored != sel:
+                # Cache the hour-floored datetime on the event dict so repeated
+                # renders don't re-parse the ISO string. Event dicts are rebuilt
+                # (new objects) when data rebinds, so the cache can't go stale.
+                # False marks an unparseable timestamp so we skip the retry.
+                floored = ev.get("_ts_floored")
+                if floored is None:
+                    try:
+                        floored = datetime.fromisoformat(
+                            ts.replace("Z", "+00:00")
+                        ).replace(minute=0, second=0, microsecond=0)
+                    except ValueError:
+                        floored = False
+                    ev["_ts_floored"] = floored
+                if floored is False or floored != sel:
                     continue
             # Search-text filter
-            if q:
-                haystack = " ".join((
-                    str(ev.get("rule_id", "")),
-                    ev.get("description", ""),
-                    ev.get("ip", ""),
-                    (ev.get("severity") or ""),
-                    " ".join(ev.get("mitre", []) or []),
-                )).lower()
-                if q not in haystack:
-                    continue
+            if not self._matches_query(q, (
+                ev.get("rule_id", ""),
+                ev.get("description", ""),
+                ev.get("ip", ""),
+                (ev.get("severity") or ""),
+                " ".join(ev.get("mitre", []) or []),
+            )):
+                continue
             out.append(ev)
         return out
 
@@ -3176,21 +3296,7 @@ class Plugin(BasePlugin):
 
         # Hover effect for non-selected rows
         if not is_selected:
-            def on_enter(_e=None, rf=row_frame):
-                try:
-                    rf.configure(fg_color=hover_bg)
-                except Exception:
-                    pass
-
-            def on_leave(_e=None, rf=row_frame):
-                try:
-                    rf.configure(fg_color="transparent")
-                except Exception:
-                    pass
-
-            for w in (row_frame, *row_frame.winfo_children()):
-                w.bind("<Enter>", on_enter)
-                w.bind("<Leave>", on_leave)
+            self._bind_row_hover(row_frame, hover_bg)
 
         self._event_row_frames[ev["id"]] = row_frame
 
@@ -3447,39 +3553,16 @@ class Plugin(BasePlugin):
         self._bind_vuln_resize()
 
     def _render_vuln_loading(self, parent):
-        parent.grid_columnconfigure(0, weight=1)
-        parent.grid_rowconfigure(0, weight=1)
-        text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
-        customtkinter.CTkLabel(
-            parent,
-            text="Loading vulnerabilities…",
-            text_color=text_secondary,
-            font=customtkinter.CTkFont(size=14),
-        ).grid(row=0, column=0, sticky="nsew", padx=20, pady=40)
+        self._render_centered_message(parent, "Loading vulnerabilities…")
 
     def _render_vuln_error(self, parent, err):
-        parent.grid_columnconfigure(0, weight=1)
-        parent.grid_rowconfigure(0, weight=1)
-        text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
-        container = customtkinter.CTkFrame(parent, fg_color="transparent")
-        container.grid(row=0, column=0, sticky="nsew", padx=20, pady=40)
-        container.grid_columnconfigure(0, weight=1)
-        customtkinter.CTkLabel(
-            container,
-            text="Couldn't load vulnerabilities",
-            font=customtkinter.CTkFont(size=14, weight="bold"),
-        ).grid(row=0, column=0, sticky="n")
-        customtkinter.CTkLabel(
-            container,
-            text=str(err),
-            text_color=text_secondary,
-            font=customtkinter.CTkFont(size=12),
-        ).grid(row=1, column=0, sticky="n", pady=(6, 0))
+        self._render_centered_message(
+            parent, "Couldn't load vulnerabilities", detail=err)
 
     def _schedule_vuln_ready_check(self, parent):
-        # 20 ms matches the inventory + events poll cadence — tight enough to
-        # feel instant when the loader thread finishes.
-        poll_ms = 20
+        # 120 ms still feels instant on the loader-thread handoff while waking
+        # the Tk main thread far less than the old 20 ms spin.
+        poll_ms = 120
 
         def check():
             self._vuln_after_id = None
@@ -3546,13 +3629,11 @@ class Plugin(BasePlugin):
         cache = self._vuln_severity_cache
         if cache is not None and cache[0] == cache_key:
             return cache[1]
-        counts = {lvl: 0 for lvl in _SEVERITY_LEVELS}
-        for v in vulns:
-            if device and device != self._VULN_DEVICE_ALL and v.get("agent_name") != device:
-                continue
-            sev = (v.get("severity") or "").lower()
-            if sev in counts:
-                counts[sev] += 1
+        if device and device != self._VULN_DEVICE_ALL:
+            filtered = [v for v in vulns if v.get("agent_name") == device]
+        else:
+            filtered = vulns
+        counts = _bucket_by_severity(filtered)
         self._vuln_severity_cache = (cache_key, counts)
         return counts
 
@@ -3568,7 +3649,7 @@ class Plugin(BasePlugin):
         # cards vertically instead of side-by-side. At narrow widths a 2-up row
         # squeezes each chart into an unreadable, crowded sliver; one full-width
         # card each gives the bars/labels room to breathe.
-        stacked = self._content_width() < 680
+        stacked = self._content_width() < _STACK_BREAKPOINT
         self._vuln_charts_stacked = stacked
 
         donut = customtkinter.CTkFrame(wrapper, corner_radius=12, border_width=1)
@@ -3607,7 +3688,7 @@ class Plugin(BasePlugin):
                     return
             except Exception:
                 return
-            stacked = self._content_width() < 680
+            stacked = self._content_width() < _STACK_BREAKPOINT
             if stacked != self._vuln_charts_stacked:
                 self._rebuild_vuln_charts_row(parent)
             if stacked != self._vuln_table_stacked:
@@ -3826,7 +3907,20 @@ class Plugin(BasePlugin):
                 cx, cy, text="No CVEs", fill=text_color, font=("Inter", 11)
             )
 
-        canvas.bind("<Configure>", redraw)
+        # Debounce the redraw so a window drag (a storm of <Configure> events)
+        # doesn't clear+repaint the ring on every pixel — matches the debounce
+        # used by the matplotlib charts and the module-grid aspect handler.
+        job = [None]
+
+        def on_configure(_e=None):
+            if job[0] is not None:
+                try:
+                    canvas.after_cancel(job[0])
+                except Exception:
+                    pass
+            job[0] = canvas.after(80, redraw)
+
+        canvas.bind("<Configure>", on_configure)
 
     def _on_vuln_donut_click(self, event):
         """Resolve a matplotlib click to a donut wedge and toggle the
@@ -4018,9 +4112,13 @@ class Plugin(BasePlugin):
         ).grid(row=0, column=0, sticky="w", padx=(0, 16))
 
         self._vuln_search_var = tk.StringVar()
+        # Debounce — see _build_event_stream_header. Filter+sort over the full
+        # CVE list per keystroke was a typing-lag source.
         self._vuln_search_var.trace_add(
             "write",
-            lambda *a: self._render_vuln_list(self._vuln_search_var.get()),
+            lambda *a: self._debounce(
+                "_vuln_search_after_id", 150,
+                lambda: self._render_vuln_list(self._vuln_search_var.get())),
         )
         customtkinter.CTkEntry(
             header,
@@ -4070,7 +4168,7 @@ class Plugin(BasePlugin):
         split.grid(row=row, column=0, sticky="nsew")
         self._vuln_table_split = split
         self._vuln_table_row = row
-        stacked = self._content_width() < 680
+        stacked = self._content_width() < _STACK_BREAKPOINT
         self._vuln_table_stacked = stacked
 
         wrapper = customtkinter.CTkFrame(split, corner_radius=12, border_width=1)
@@ -4140,6 +4238,13 @@ class Plugin(BasePlugin):
         q = (query or "").lower().strip()
         device_filter = self._vuln_device
         sev_filter = self._vuln_severity_filter
+        # Memoize the filter+sort: re-running O(n log n) over the full CVE list
+        # on every keystroke / refresh tick was a typing-lag source. _REMOTE_VULNS
+        # is rebound (new id) when fresh data lands, which invalidates the key.
+        key = (id(_REMOTE_VULNS), device_filter, sev_filter, q)
+        cache = self._filter_vulns_cache
+        if cache is not None and cache[0] == key:
+            return cache[1]
         out = []
         for v in _REMOTE_VULNS:
             if device_filter and device_filter != self._VULN_DEVICE_ALL \
@@ -4147,21 +4252,20 @@ class Plugin(BasePlugin):
                 continue
             if sev_filter and (v.get("severity") or "").lower() != sev_filter:
                 continue
-            if q:
-                haystack = " ".join((
-                    str(v.get("id", "")),
-                    str(v.get("package_name", "")),
-                    str(v.get("package_version", "")),
-                    str(v.get("severity", "")),
-                    str(v.get("status", "")),
-                    str(v.get("description", "")),
-                    str(v.get("agent_name", "")),
-                )).lower()
-                if q not in haystack:
-                    continue
+            if not self._matches_query(q, (
+                v.get("id", ""),
+                v.get("package_name", ""),
+                v.get("package_version", ""),
+                v.get("severity", ""),
+                v.get("status", ""),
+                v.get("description", ""),
+                v.get("agent_name", ""),
+            )):
+                continue
             out.append(v)
         # Sort by CVSS desc so the worst CVEs surface first.
         out.sort(key=lambda x: float(x.get("cvss_score") or 0.0), reverse=True)
+        self._filter_vulns_cache = (key, out)
         return out
 
     def _refresh_vulns_content(self):
@@ -4352,21 +4456,7 @@ class Plugin(BasePlugin):
         # Hover effect for non-selected rows only — mirrors _event_row so the
         # active row's highlight isn't blown away by a Leave event.
         if not is_selected:
-            def on_enter(_e=None, rf=row_frame):
-                try:
-                    rf.configure(fg_color=hover_bg)
-                except Exception:
-                    pass
-
-            def on_leave(_e=None, rf=row_frame):
-                try:
-                    rf.configure(fg_color="transparent")
-                except Exception:
-                    pass
-
-            for w in (row_frame, *row_frame.winfo_children()):
-                w.bind("<Enter>", on_enter)
-                w.bind("<Leave>", on_leave)
+            self._bind_row_hover(row_frame, hover_bg)
 
     def _find_vuln_by_key(self, key):
         for v in _REMOTE_VULNS:
@@ -4573,20 +4663,12 @@ class Plugin(BasePlugin):
         self._render_inventory_list(parent)
 
     def _render_inventory_loading(self, parent):
-        parent.grid_columnconfigure(0, weight=1)
-        parent.grid_rowconfigure(0, weight=1)
-        text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
-        customtkinter.CTkLabel(
-            parent,
-            text="Loading devices…",
-            text_color=text_secondary,
-            font=customtkinter.CTkFont(size=14),
-        ).grid(row=0, column=0, sticky="nsew", padx=20, pady=40)
+        self._render_centered_message(parent, "Loading devices…")
 
     def _schedule_inventory_ready_check(self, parent):
-        # 20 ms matches the events-pane poll cadence — tight enough to feel
-        # instant when the loader thread finishes.
-        poll_ms = 20
+        # 120 ms still feels instant on the loader-thread handoff while waking
+        # the Tk main thread far less than the old 20 ms spin.
+        poll_ms = 120
 
         def check():
             self._inventory_after_id = None
@@ -4642,65 +4724,67 @@ class Plugin(BasePlugin):
         for sev in (ev_sev, vuln_sev):
             if sev and _THREAT_RANK.get(sev, 0) > best_rank:
                 best_rank = _THREAT_RANK[sev]
-        if best_rank == 0:
-            return "ok"
-        for sev, rank in _THREAT_RANK.items():
-            if rank == best_rank:
-                return sev
-        return "ok"
+        return _RANK_TO_SEV.get(best_rank, "ok")
+
+    def _base_agent_row(self, agent):
+        """The fields common to every inventory row (device views and count
+        views). The view-specific lead field (`threat` / `count`) is added by
+        the caller. Group list feeds the group-filter dropdown."""
+        bi = agent.get("basic_info") or {}
+        return {
+            "name": bi.get("name") or "(unknown)",
+            # status drives the row's "Active now" label vs. a relative
+            # last-seen time (see _inventory_row).
+            "status": (bi.get("status") or "").lower(),
+            "last_keep": bi.get("lastKeepAlive"),
+            "agent_id": bi.get("id") or "—",
+            "ip": bi.get("ip") or "—",
+            "groups": self._agent_groups(bi),
+        }
 
     def _inventory_rows(self):
-        """Build sorted device row data. Returns list of dicts."""
+        """Build sorted device row data. Returns list of dicts. Memoized: the
+        threat lead scans _REMOTE_VULNS per device, so paging/group changes
+        shouldn't re-derive it — keyed on the source-data identities."""
+        key = (id(_AGENTS), id(_REMOTE_VULN_EVENTS), id(_REMOTE_VULNS))
+        cache = self._inventory_rows_cache
+        if cache is not None and cache[0] == key:
+            return cache[1]
         events_by_agent = self._events_threat_by_agent()
         rows = []
         for agent in _AGENTS:
-            bi = agent.get("basic_info") or {}
-            name = bi.get("name") or "(unknown)"
-            threat = self._device_threat_level(name, events_by_agent)
-            rows.append({
-                "name": name,
-                # status drives the row's "Active now" label vs. a relative
-                # last-seen time (see _inventory_row).
-                "status": (bi.get("status") or "").lower(),
-                "last_keep": bi.get("lastKeepAlive"),
-                "agent_id": bi.get("id") or "—",
-                "ip": bi.get("ip") or "—",
-                "threat": threat,
-                # groups feeds the group-filter dropdown; the Overview
-                # Inventory card ignores this field.
-                "groups": self._agent_groups(bi),
-            })
+            row = self._base_agent_row(agent)
+            row["threat"] = self._device_threat_level(row["name"], events_by_agent)
+            rows.append(row)
         # threat desc, then name asc — stable
         rows.sort(key=lambda r: (-_THREAT_RANK.get(r["threat"], 0), r["name"].lower()))
+        self._inventory_rows_cache = (key, rows)
         return rows
 
     def _inventory_counts_rows(self, field_path):
         """Per-device row data for the count-based views (Processes/Ports/
         Network). `field_path` is a tuple of keys into each agent dict
         leading to a syscollector object that has `affected_items`. Sort:
-        count desc, name asc. Devices with no syscollector data show 0."""
+        count desc, name asc. Devices with no syscollector data show 0.
+        Memoized on (agents identity, field_path) so paging doesn't recount."""
+        key = (id(_AGENTS), field_path)
+        cache = self._inventory_counts_cache
+        if cache is not None and cache[0] == key:
+            return cache[1]
         rows = []
         for agent in _AGENTS:
-            bi = agent.get("basic_info") or {}
-            name = bi.get("name") or "(unknown)"
             node = agent
-            for key in field_path:
+            for fkey in field_path:
                 if not isinstance(node, dict):
                     node = None
                     break
-                node = node.get(key)
+                node = node.get(fkey)
             items = (node or {}).get("affected_items") if isinstance(node, dict) else None
-            count = len(items) if isinstance(items, list) else 0
-            rows.append({
-                "name": name,
-                "status": (bi.get("status") or "").lower(),
-                "last_keep": bi.get("lastKeepAlive"),
-                "agent_id": bi.get("id") or "—",
-                "ip": bi.get("ip") or "—",
-                "count": count,
-                "groups": self._agent_groups(bi),
-            })
+            row = self._base_agent_row(agent)
+            row["count"] = len(items) if isinstance(items, list) else 0
+            rows.append(row)
         rows.sort(key=lambda r: (-r["count"], r["name"].lower()))
+        self._inventory_counts_cache = (key, rows)
         return rows
 
     # Maps the dropdown's view name → the syscollector path used to count
@@ -4738,14 +4822,7 @@ class Plugin(BasePlugin):
         seen = set()
         has_empty = False
         for agent in _AGENTS:
-            bi = agent.get("basic_info") or {}
-            raw = bi.get("group")
-            if isinstance(raw, list):
-                groups = [g for g in raw if g]
-            elif raw:
-                groups = [raw]
-            else:
-                groups = []
+            groups = self._agent_groups(agent.get("basic_info") or {})
             if not groups:
                 has_empty = True
             else:
@@ -5095,9 +5172,37 @@ class Plugin(BasePlugin):
         frame.grid_columnconfigure(3, weight=0, minsize=80)   # agent id
         frame.grid_columnconfigure(4, weight=0, minsize=140)  # ip
 
+    def _inventory_common_columns(self, row_frame, dev, fonts, text_secondary):
+        """Render the shared DEVICE / LAST SEEN / AGENT ID / IP columns (cols
+        1-4) of an inventory row. Col 0 (threat badge or count) is rendered by
+        the caller first."""
+        # Device name — col 1 (stretches)
+        customtkinter.CTkLabel(
+            row_frame, text=dev["name"], font=fonts["inter_bold_13"], anchor="w",
+        ).grid(row=0, column=1, sticky="w", padx=(0, 12), pady=8)
+        # Last seen — col 2. The /me/inventory status field is authoritative for
+        # connectivity: an "active"/"connected" agent shows "Active now",
+        # otherwise the relative last-scan time.
+        is_connected = dev["status"] in ("active", "connected")
+        last_seen_text = "Active now" if is_connected else _format_relative(dev["last_keep"])
+        customtkinter.CTkLabel(
+            row_frame, text=last_seen_text, text_color=text_secondary,
+            font=fonts["size_12"], anchor="w",
+        ).grid(row=0, column=2, sticky="w", padx=(0, 12), pady=8)
+        # Agent ID — col 3
+        customtkinter.CTkLabel(
+            row_frame, text=str(dev["agent_id"]), text_color=text_secondary,
+            font=fonts["size_12"], anchor="w",
+        ).grid(row=0, column=3, sticky="w", padx=(0, 12), pady=8)
+        # IP — col 4
+        customtkinter.CTkLabel(
+            row_frame, text=dev["ip"], text_color=text_secondary,
+            font=fonts["size_12"], anchor="w",
+        ).grid(row=0, column=4, sticky="w", pady=8)
+
     def _inventory_row(self, parent, dev, row, fonts, divider_color):
         hover_bg = self._hover_bg
-        text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
+        text_secondary = self._theme("text_secondary", default=_DEFAULT_TEXT_SECONDARY)
 
         row_frame = customtkinter.CTkFrame(parent, fg_color="transparent", corner_radius=6)
         # No padx — the parent list_frame already sits 16 px in from the
@@ -5120,70 +5225,15 @@ class Plugin(BasePlugin):
             font=customtkinter.CTkFont(size=11, weight="bold"),
         ).grid(row=0, column=0, sticky="w", padx=(0, 12), pady=8)
 
-        # Device name — col 1 (stretches)
-        customtkinter.CTkLabel(
-            row_frame,
-            text=dev["name"],
-            font=fonts["inter_bold_13"],
-            anchor="w",
-        ).grid(row=0, column=1, sticky="w", padx=(0, 12), pady=8)
-
-        # Last seen — col 2. The /me/inventory status field is authoritative
-        # for connectivity: an "active" agent is connected right now, so show
-        # "Active now". Otherwise show the relative last-scan time.
-        is_connected = dev["status"] in ("active", "connected")
-        if is_connected:
-            last_seen_text = "Active now"
-        else:
-            last_seen_text = _format_relative(dev["last_keep"])
-        customtkinter.CTkLabel(
-            row_frame,
-            text=last_seen_text,
-            text_color=text_secondary,
-            font=fonts["size_12"],
-            anchor="w",
-        ).grid(row=0, column=2, sticky="w", padx=(0, 12), pady=8)
-
-        # Agent ID — col 3
-        customtkinter.CTkLabel(
-            row_frame,
-            text=str(dev["agent_id"]),
-            text_color=text_secondary,
-            font=fonts["size_12"],
-            anchor="w",
-        ).grid(row=0, column=3, sticky="w", padx=(0, 12), pady=8)
-
-        # IP — col 4
-        customtkinter.CTkLabel(
-            row_frame,
-            text=dev["ip"],
-            text_color=text_secondary,
-            font=fonts["size_12"],
-            anchor="w",
-        ).grid(row=0, column=4, sticky="w", pady=8)
-
-        def on_enter(_e=None, rf=row_frame):
-            try:
-                rf.configure(fg_color=hover_bg)
-            except Exception:
-                pass
-
-        def on_leave(_e=None, rf=row_frame):
-            try:
-                rf.configure(fg_color="transparent")
-            except Exception:
-                pass
-
-        for w in (row_frame, *row_frame.winfo_children()):
-            w.bind("<Enter>", on_enter)
-            w.bind("<Leave>", on_leave)
+        self._inventory_common_columns(row_frame, dev, fonts, text_secondary)
+        self._bind_row_hover(row_frame, hover_bg)
 
     def _inventory_counts_row(self, parent, dev, row, fonts):
         """Row renderer for Processes/Ports/Network views. Same DEVICE /
         LAST SEEN / IP columns as _inventory_row, but the lead column is
         a bold count instead of a severity badge."""
         hover_bg = self._hover_bg
-        text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
+        text_secondary = self._theme("text_secondary", default=_DEFAULT_TEXT_SECONDARY)
 
         row_frame = customtkinter.CTkFrame(parent, fg_color="transparent", corner_radius=6)
         row_frame.grid(row=row, column=0, sticky="ew", pady=1)
@@ -5201,61 +5251,8 @@ class Plugin(BasePlugin):
             anchor="w",
         ).grid(row=0, column=0, sticky="w", padx=(0, 12), pady=8)
 
-        # Device name — col 1 (stretches)
-        customtkinter.CTkLabel(
-            row_frame,
-            text=dev["name"],
-            font=fonts["inter_bold_13"],
-            anchor="w",
-        ).grid(row=0, column=1, sticky="w", padx=(0, 12), pady=8)
-
-        # Last seen — col 2 (same status-driven handling as Devices)
-        is_connected = dev["status"] in ("active", "connected")
-        if is_connected:
-            last_seen_text = "Active now"
-        else:
-            last_seen_text = _format_relative(dev["last_keep"])
-        customtkinter.CTkLabel(
-            row_frame,
-            text=last_seen_text,
-            text_color=text_secondary,
-            font=fonts["size_12"],
-            anchor="w",
-        ).grid(row=0, column=2, sticky="w", padx=(0, 12), pady=8)
-
-        # Agent ID — col 3
-        customtkinter.CTkLabel(
-            row_frame,
-            text=str(dev["agent_id"]),
-            text_color=text_secondary,
-            font=fonts["size_12"],
-            anchor="w",
-        ).grid(row=0, column=3, sticky="w", padx=(0, 12), pady=8)
-
-        # IP — col 4
-        customtkinter.CTkLabel(
-            row_frame,
-            text=dev["ip"],
-            text_color=text_secondary,
-            font=fonts["size_12"],
-            anchor="w",
-        ).grid(row=0, column=4, sticky="w", pady=8)
-
-        def on_enter(_e=None, rf=row_frame):
-            try:
-                rf.configure(fg_color=hover_bg)
-            except Exception:
-                pass
-
-        def on_leave(_e=None, rf=row_frame):
-            try:
-                rf.configure(fg_color="transparent")
-            except Exception:
-                pass
-
-        for w in (row_frame, *row_frame.winfo_children()):
-            w.bind("<Enter>", on_enter)
-            w.bind("<Leave>", on_leave)
+        self._inventory_common_columns(row_frame, dev, fonts, text_secondary)
+        self._bind_row_hover(row_frame, hover_bg)
 
     # ----- cleanup -----------------------------------------------------------
 
@@ -5284,6 +5281,26 @@ class Plugin(BasePlugin):
             except Exception:
                 pass
             self._vuln_after_id = None
+        # Refresh repaint ticks, button-restore, prebuild chain, and the two
+        # search debounces — these fire on the app window and would otherwise
+        # run against destroyed widgets after teardown.
+        for _aid_attr in (
+            "_prebuild_after_id", "_refresh_button_after_id",
+            "_event_search_after_id", "_vuln_search_after_id",
+        ):
+            _aid = getattr(self, _aid_attr, None)
+            if _aid:
+                try:
+                    self.app.after_cancel(_aid)
+                except Exception:
+                    pass
+                setattr(self, _aid_attr, None)
+        for _aid in self._refresh_repaint_after_ids:
+            try:
+                self.app.after_cancel(_aid)
+            except Exception:
+                pass
+        self._refresh_repaint_after_ids = []
         if self._module_resize_after_id:
             try:
                 self.app.after_cancel(self._module_resize_after_id)

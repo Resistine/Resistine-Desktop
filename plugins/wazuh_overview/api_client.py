@@ -388,27 +388,6 @@ def fetch_sca():
     return None, "bad shape"
 
 
-def fetch_device_sca(agent_id):
-    """GET /api/v1/me/sca/{agent_id}. Returns the SCA policy list for ONE
-    device with the same `not_applicable` -> `invalid` rename applied by
-    `fetch_sca`, so per-device and group cards render identically."""
-    payload, err = _get(f"/api/v1/me/sca/{agent_id}")
-    if err:
-        return None, err
-    if not isinstance(payload, dict):
-        return None, "bad shape"
-    items = payload.get("policies")
-    if not isinstance(items, list):
-        items = payload.get("affected_items")
-    if not isinstance(items, list):
-        items = _affected_items(payload)
-    items = list(items or [])
-    for it in items:
-        if isinstance(it, dict) and "invalid" not in it and "not_applicable" in it:
-            it["invalid"] = it["not_applicable"]
-    return items, None
-
-
 def fetch_inventory_summary():
     """GET /api/v1/me/inventory. Returns {"total": int, "items": list}."""
     payload, err = _get("/api/v1/me/inventory", params={"limit": 1, "offset": 0})
@@ -498,22 +477,6 @@ def fetch_device_inventory(agent_id):
 def fetch_hotfixes():
     """GET /api/v1/me/hotfixes. Returns the list of hotfix dicts (empty on non-Windows)."""
     payload, err = _get("/api/v1/me/hotfixes")
-    if err:
-        return None, err
-    if isinstance(payload, list):
-        return list(payload), None
-    if isinstance(payload, dict):
-        items = payload.get("hotfixes")
-        if not isinstance(items, list):
-            items = _affected_items(payload)
-        return list(items or []), None
-    return None, "bad shape"
-
-
-def fetch_device_hotfixes(agent_id):
-    """GET /api/v1/me/hotfixes/{agent_id}. Returns the KB list for ONE device,
-    or an empty list for non-Windows agents."""
-    payload, err = _get(f"/api/v1/me/hotfixes/{agent_id}")
     if err:
         return None, err
     if isinstance(payload, list):
