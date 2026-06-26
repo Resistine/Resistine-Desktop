@@ -70,6 +70,16 @@ class ChatUIMixin:
             on_new_chat=self._new_chat,
             on_delete=self._delete_chat,
             is_dark=is_dark)
+        # Same fix as the chat-area caches above. The screen isn't cached
+        # (no screen_signature), so navigation away+back builds a new
+        # ChatSidebar — but _drawer_placed=True from the dead instance
+        # would skip the .place() call in _sync_drawer_geometry, leaving
+        # the fresh drawer constructed-but-never-positioned. Same for
+        # _last_drawer_h: a height match against the new chat-area would
+        # gate out the configure() call and the drawer would render
+        # short or zero-height.
+        self._drawer_placed = False
+        self._last_drawer_h = None
         # Keep the open drawer sized to the chat area as the window resizes.
         self.second_frame.bind(
             "<Configure>", self._on_second_frame_configure, add="+")
@@ -136,27 +146,34 @@ class ChatUIMixin:
             pass
 
     def _on_chat_unmapped(self, _event=None) -> None:
-        # Navigated away (or minimized): fully collapse the history drawer so
-        # returning to chat doesn't greet the user with the dimmed overlay still
-        # up. _hide_sidebar withdraws the dim layer and forgets the drawer; we
-        # also clear the open-state so the rebuild/remap doesn't re-open it.
-        if getattr(self, "_sidebar_visible", False):
+        # <Unmap> fires for the second_frame on real navigation away from
+        # chat, but ALSO bubbles up from any descendant being unmapped
+        # (CTk briefly unmaps widgets during reparent/restack). Filter to
+        # the second_frame itself, and skip transient unmaps where the
+        # frame is still viewable.
+        if _event is not None and _event.widget is not self.second_frame:
+            return
+        try:
+            if self.second_frame.winfo_viewable():
+                return
+        except Exception:
+            pass
+        # Real navigation away: hide the dim Toplevel so it doesn't linger
+        # on top of the dashboard. Preserve _sidebar_visible so returning
+        # to chat restores the drawer in its previous state.
+        if getattr(self, "_ov_mapped", False):
             try:
-                self._hide_sidebar()
-            except Exception:
-                pass
-            self._sidebar_visible = False
-        else:
-            ov = getattr(self, "_dim_overlay", None)
-            try:
-                if ov is not None:
-                    ov.withdraw()
+                self._dim_overlay.withdraw()
+                self._ov_mapped = False
             except Exception:
                 pass
 
     def _on_chat_mapped(self, _event=None) -> None:
-        # The drawer is collapsed on unmap, so there's nothing to restore here;
-        # kept as a no-op guard in case the open-state is set some other way.
+        # Mirror filter on _on_chat_unmapped.
+        if _event is not None and _event.widget is not self.second_frame:
+            return
+        # If the drawer was open before navigation, re-show the dim layer
+        # to match. _set_chat_dim is idempotent.
         if getattr(self, "_sidebar_visible", False):
             try:
                 self._set_chat_dim(True)
@@ -164,17 +181,39 @@ class ChatUIMixin:
                 pass
 
     def _on_second_frame_configure(self, _event=None) -> None:
+        # Only react when our own frame resizes — bubble / child <Configure>
+        # events bubble up here through bindtags and would otherwise re-fire
+        # the layout cascade O(bubble_count) times per resize pixel.
+        if _event is not None and _event.widget is not self.second_frame:
+            return
+        if not self._sidebar_visible:
+            return
+        # Debounce: window-edge drag fires Configure at 60Hz. Coalesce to one
+        # drawer-resize per ~16ms so we don't spam configure()/place() calls.
+        prev = getattr(self, "_sf_cfg_after", None)
+        if prev is not None:
+            try:
+                self.second_frame.after_cancel(prev)
+            except Exception:
+                pass
         try:
-            if self._sidebar is not None and self._sidebar.winfo_ismapped():
-                self._sync_drawer_geometry()
-                # Keep the dim overlay aligned to the chat as it resizes, and
-                # ensure it's shown (covers the case where the chat wasn't sized
-                # yet when the drawer first opened).
-                if self._position_dim_overlay():
-                    ov = getattr(self, "_dim_overlay", None)
-                    if ov is not None:
-                        ov.deiconify()
-                        ov.lift()
+            self._sf_cfg_after = self.second_frame.after(
+                16, self._apply_drawer_layout)
+        except Exception:
+            self._sf_cfg_after = None
+
+    def _apply_drawer_layout(self) -> None:
+        self._sf_cfg_after = None
+        try:
+            if self._sidebar is None or not self._sidebar.winfo_ismapped():
+                return
+            self._sync_drawer_geometry()
+            # Re-size + reposition the dim Toplevel for the new chat-area
+            # bounds. _position_dim_overlay short-circuits if nothing
+            # actually changed since the last call, so the Configure burst
+            # of a window-edge drag still costs at most one WM round-trip
+            # per ~16ms.
+            self._position_dim_overlay()
         except Exception:
             pass
 
@@ -194,6 +233,15 @@ class ChatUIMixin:
             row=0, column=0, padx=(14, 0), pady=(50, 76), sticky="nsew")
         # Hide scrollbar initially; show only when content overflows
         self._hide_scrollbar()
+        # Reset every cache that's keyed on the prior widget instances.
+        # These live on the Plugin (not on second_frame), so navigation
+        # away+back would otherwise let stale state from the destroyed
+        # CTkScrollableFrame block visibility / sizing in the fresh one:
+        # _scrollbar_currently_shown=True would gate out _show_scrollbar
+        # on the next overflow, _last_avail==N would gate out the bubble
+        # walk if the new chat happens to land at the same width.
+        self._scrollbar_currently_shown = False
+        self._last_avail = None
 
         self._bubble_rows.clear()
         self._welcome_frame = None
@@ -207,11 +255,15 @@ class ChatUIMixin:
         self.chat_scroll.bind("<Configure>", self._on_resize, add="+")
         try:
             canvas = self.chat_scroll._parent_canvas
+            # Debounced scroll-button check on wheel: cancel the previous
+            # scheduled call so a 10-notch burst fires _check_scroll_btn
+            # ONCE (100 ms after the last notch), not 10 times.
             canvas.bind(
-                "<MouseWheel>",
-                lambda _e: self.chat_scroll.after(
-                    100, self._check_scroll_btn),
-                add="+")
+                "<MouseWheel>", self._schedule_scroll_btn_check, add="+")
+            canvas.bind(
+                "<Button-4>", self._schedule_scroll_btn_check, add="+")
+            canvas.bind(
+                "<Button-5>", self._schedule_scroll_btn_check, add="+")
             if sys.platform.startswith("win"):
                 # CTk sets yscrollincrement=1 on Windows, so the wheel only
                 # moves ~20px per notch (delta/6 units * 1px) — too slow, and
@@ -359,15 +411,16 @@ class ChatUIMixin:
         # so it can never go stale. Closing via the overlay used to leave this
         # True, which re-opened the drawer on the next chat rebuild (+ New).
         self._sidebar_visible = True
-        # Place + size the drawer FIRST so the dim overlay can measure its real
-        # width and position itself to the drawer's right (not over its buttons).
+        # Place the drawer first — the dim overlay is sized to the full app
+        # window (see _position_dim_overlay), so no need to wait on drawer
+        # geometry. Avoid update_idletasks() here: it re-enters the event
+        # loop in the middle of a toggle and can crash mid-rebuild.
         self._sync_drawer_geometry()
-        try:
-            self._sidebar.update_idletasks()
-        except Exception:
-            pass
         self._set_chat_dim(True)
-        self._sync_drawer_geometry()
+        # Raise the drawer above the dim layer on every show. CTk's place()
+        # alone doesn't guarantee a Toplevel ends up below — explicit lift
+        # makes the drawer the topmost widget within the App window, while
+        # the dim Toplevel sits above the chat content.
         try:
             self._sidebar.lift()
         except Exception:
@@ -376,28 +429,35 @@ class ChatUIMixin:
     def _set_chat_dim(self, dim: bool) -> None:
         """Show/hide the dim layer over the chat while the drawer is open.
 
-        Instead of recoloring every widget (which Tk can't repaint atomically —
-        it BitBlts each canvas one at a time), we lay a single borderless,
-        semi-transparent top-level window over the chat, to the RIGHT of the
-        drawer so the drawer stays bright. It darkens everything beneath it in
-        one OS-composited frame (truly atomic), and being on top it also
-        swallows hover and clicks — a click collapses the drawer.
+        We use a borderless alpha Toplevel positioned to cover the chat to
+        the RIGHT of the drawer (NOT the drawer area itself). Toplevels
+        always render above in-process Frames regardless of .lift() calls,
+        so an overlay positioned over the drawer would block clicks on it
+        and visually dim it. Sizing the overlay to exclude the drawer
+        sidesteps the z-order limitation entirely.
         """
         ov = self._ensure_dim_overlay()
         if ov is None:
             return
         if dim:
             if self._position_dim_overlay():
+                # Only deiconify on the False→True transition. deiconify is
+                # a WM round-trip that on Windows triggers extra paints when
+                # called on an already-mapped window.
+                if not getattr(self, "_ov_mapped", False):
+                    try:
+                        ov.deiconify()
+                        ov.lift()
+                        self._ov_mapped = True
+                    except Exception:
+                        pass
+        else:
+            if getattr(self, "_ov_mapped", False):
                 try:
-                    ov.deiconify()
-                    ov.lift()
+                    ov.withdraw()
+                    self._ov_mapped = False
                 except Exception:
                     pass
-        else:
-            try:
-                ov.withdraw()
-            except Exception:
-                pass
 
     def _ensure_dim_overlay(self):
         """Create the dim layer once (borderless, alpha). Returns it or None."""
@@ -420,17 +480,18 @@ class ChatUIMixin:
             except Exception:
                 pass
             ov.withdraw()
+            self._ov_mapped = False
             # Clicking the dimmed area collapses the drawer; being on top, the
             # overlay also blocks hover on everything beneath it.
             ov.bind("<Button-1>", lambda _e: self._hide_sidebar())
             self._dim_overlay = ov
-            # second_frame <Configure> fires on resize but not on a window move,
-            # so also track the top-level window's geometry. Bind ONCE — the
-            # overlay can be recreated across chat rebuilds, and stacking
-            # duplicate handlers would slow every resize.
+            self._last_ov_geom = None
+            # second_frame <Configure> fires on resize but not on a window
+            # move, so also track the top-level window's geometry. Bind ONCE
+            # (across chat rebuilds) and let _on_app_configure debounce.
             if not getattr(self, "_app_cfg_bound", False):
                 try:
-                    self.app.bind(
+                    self._app_cfg_bid = self.app.bind(
                         "<Configure>", self._on_app_configure, add="+")
                     self._app_cfg_bound = True
                 except Exception:
@@ -439,40 +500,75 @@ class ChatUIMixin:
             self._dim_overlay = None
         return self._dim_overlay
 
-    def _on_app_configure(self, _event=None) -> None:
-        ov = getattr(self, "_dim_overlay", None)
-        try:
-            if ov is not None and ov.winfo_ismapped():
-                self._position_dim_overlay()
-                ov.lift()
-        except Exception:
-            pass
-
     def _position_dim_overlay(self) -> bool:
-        """Size the overlay to the visible chat right of the drawer.
+        """Size the overlay to cover the chat area to the RIGHT of the
+        drawer (not the drawer itself). Returns False if not yet laid out.
 
-        Returns False if the chat isn't laid out yet (can't size).
+        Both winfo_rootx/y/width/height and Toplevel.geometry() use the
+        same coordinate system on every platform — Tk's logical pixel
+        space, which Tk itself maps to OS pixels via tk scaling. No
+        manual rescaling needed: a verified empirical check on macOS
+        Retina (tk_scaling ≈ 1.0), Linux HiDPI (CTk window_scaling=1.5
+        with winfo already reporting the post-scaling number), and
+        Windows DPI-aware (tk_scaling ≈ 1.33+) all show geometry()
+        accepting the same units winfo_* reports. The prior multiplier
+        produced a 33-78% overshoot, leaving the chat top-and-left
+        undimmed (the exact symptom this method was meant to cure).
         """
         ov = getattr(self, "_dim_overlay", None)
         if ov is None:
             return False
         try:
-            # NOTE: never call update_idletasks() here — this runs inside
-            # <Configure> handlers, and forcing idle processing mid-resize
-            # re-enters the event loop and crashes. winfo_* is already current
-            # during a Configure.
+            # winfo_* is already current inside <Configure> handlers — do
+            # NOT call update_idletasks() here (re-entry hazard).
             sf = self.second_frame
-            x, y = sf.winfo_rootx(), sf.winfo_rooty()
-            w, h = sf.winfo_width(), sf.winfo_height()
-            drawer_w = getattr(self._sidebar, "_WIDTH", 220)
+            x = sf.winfo_rootx()
+            y = sf.winfo_rooty()
+            w = sf.winfo_width()
+            h = sf.winfo_height()
+            # Drawer width: actual mapped width if available, else its
+            # advertised _WIDTH constant.
+            sb = getattr(self, "_sidebar", None)
+            try:
+                drawer_w = (sb.winfo_width() if sb and sb.winfo_ismapped()
+                            else getattr(sb, "_WIDTH", 220))
+            except Exception:
+                drawer_w = getattr(sb, "_WIDTH", 220) if sb else 220
             ox = x + drawer_w
             ow = w - drawer_w
             if ow <= 1 or h <= 1:
                 return False
-            ov.geometry(f"{int(ow)}x{int(h)}+{int(ox)}+{int(y)}")
+            geom = (ow, h, ox, y)
+            # Skip the WM round-trip if nothing changed since last call.
+            if getattr(self, "_last_ov_geom", None) == geom:
+                return True
+            self._last_ov_geom = geom
+            ov.geometry(f"{ow}x{h}+{ox}+{y}")
             return True
         except Exception:
             return False
+
+    def _on_app_configure(self, _event=None) -> None:
+        # Only react to the App top-level itself moving — every descendant
+        # Configure bubbles through here too (bindtag includes toplevel
+        # pathname), which on a long chat fires O(bubble_count) times per
+        # drag pixel. Filter aggressively.
+        if _event is None or _event.widget is not self.app:
+            return
+        if not getattr(self, "_ov_mapped", False):
+            return
+        # Debounce to one reposition per ~16ms frame instead of per drag pixel.
+        prev = getattr(self, "_app_cfg_after", None)
+        if prev is not None:
+            try:
+                self.app.after_cancel(prev)
+            except Exception:
+                pass
+        try:
+            self._app_cfg_after = self.app.after(
+                16, self._position_dim_overlay)
+        except Exception:
+            self._app_cfg_after = None
 
     def _sync_drawer_geometry(self) -> None:
         """Size + place the drawer to fill the chat area below the header.
@@ -480,11 +576,20 @@ class ChatUIMixin:
         CTk's place() refuses an absolute height (it must be set via the
         constructor / configure()), so we configure() the height and only pass
         x/y to place(). Width comes from the ChatSidebar constructor.
+
+        Idempotent: skip the configure() round-trip when the height hasn't
+        actually changed (e.g. window moved but didn't resize).
         """
         try:
-            h = self.second_frame.winfo_height() - self._DRAWER_TOP
-            self._sidebar.configure(height=max(1, h))
-            self._sidebar.place(x=0, y=self._DRAWER_TOP)
+            h = max(1, self.second_frame.winfo_height() - self._DRAWER_TOP)
+            if getattr(self, "_last_drawer_h", None) != h:
+                self._sidebar.configure(height=h)
+                self._last_drawer_h = h
+            # place() is a no-op when x/y unchanged but Tk still issues a
+            # WM placement command; call it only on the first show.
+            if not getattr(self, "_drawer_placed", False):
+                self._sidebar.place(x=0, y=self._DRAWER_TOP)
+                self._drawer_placed = True
         except Exception:
             pass
 
@@ -499,6 +604,8 @@ class ChatUIMixin:
                 self._sidebar.place_forget()
         except Exception:
             pass
+        # Reset the place-once latch so the next show re-places the drawer.
+        self._drawer_placed = False
 
     def _toggle_sidebar(self) -> None:
         # _show_sidebar / _hide_sidebar own _sidebar_visible now, so don't flip
@@ -507,6 +614,25 @@ class ChatUIMixin:
             self._hide_sidebar()
         else:
             self._show_sidebar()
+
+    def _schedule_scroll_btn_check(self, _event=None) -> None:
+        """Debounce wrapper for _check_scroll_btn — fires 100 ms after the
+        last wheel notch instead of once per notch."""
+        prev = getattr(self, "_scroll_btn_after", None)
+        if prev is not None:
+            try:
+                self.chat_scroll.after_cancel(prev)
+            except Exception:
+                pass
+        try:
+            self._scroll_btn_after = self.chat_scroll.after(
+                100, self._check_scroll_btn_fire)
+        except Exception:
+            self._scroll_btn_after = None
+
+    def _check_scroll_btn_fire(self) -> None:
+        self._scroll_btn_after = None
+        self._check_scroll_btn()
 
     def _check_scroll_btn(self) -> None:
         if not hasattr(self, "_scroll_btn") or self._scroll_btn is None:
@@ -539,9 +665,17 @@ class ChatUIMixin:
 
     # -- Bubble helpers ----------------------------------------------------
 
-    def _available_width(self) -> int:
+    def _available_width(self, *, force_idle: bool = False) -> int:
         try:
-            self.chat_scroll.update_idletasks()
+            # update_idletasks() inside a <Configure> handler re-enters the
+            # event loop and can crash. winfo_* is already current during
+            # a Configure event; only force idle when called from a
+            # non-resize site (initial layout, after a bubble add).
+            if force_idle:
+                try:
+                    self.chat_scroll.update_idletasks()
+                except Exception:
+                    pass
             # The scrollable INNER frame width is inflated by a wide wrap="none"
             # code block on Windows; the parent canvas is the true viewport and
             # is never inflated by content. Prefer it; fall back to the frame.
@@ -568,7 +702,7 @@ class ChatUIMixin:
     def _add_user_bubble(self, text: str, is_dark: bool) -> BubbleRow:
         row = self._make_row()
         UserBubble(row, text, is_dark=is_dark,
-                   max_width=user_width(self._available_width()))
+                   max_width=user_width(self._available_width(force_idle=True)))
         return row
 
     def _add_assistant_bubble(
@@ -577,7 +711,7 @@ class ChatUIMixin:
         row = self._make_row()
         ab = AssistantBubble(
             row, is_dark=is_dark,
-            max_width=assistant_width(self._available_width()))
+            max_width=assistant_width(self._available_width(force_idle=True)))
         if md is not None:
             ab.finalize_markdown(md)
         return ab
@@ -604,18 +738,38 @@ class ChatUIMixin:
             self._scroll_btn_visible = False
 
     def _on_resize(self, _event=None) -> None:
-        # Re-entry guard. _on_resize itself triggers a cascade — set_width on
-        # emoji bubbles enters _layout_emoji which calls self.configure() and
-        # self.update_idletasks(); _update_scrollbar_visibility() toggles the
-        # scrollbar's grid which changes the canvas's effective width. Either
-        # path fires another <Configure> on chat_scroll, which re-enters
-        # _on_resize before the current call has returned, eventually busting
-        # Python's recursion limit.
+        # Window-edge drag fires <Configure> at 60+ Hz. Coalesce to one
+        # bubble-resize pass per ~30ms so each drag pixel doesn't iterate
+        # every bubble. The earlier _in_on_resize re-entry guard is
+        # preserved against scrollbar-toggle echoes inside _do_resize.
+        prev = getattr(self, "_resize_after", None)
+        if prev is not None:
+            try:
+                self.chat_scroll.after_cancel(prev)
+            except Exception:
+                pass
+        try:
+            self._resize_after = self.chat_scroll.after(
+                30, self._do_resize)
+        except Exception:
+            self._resize_after = None
+
+    def _do_resize(self) -> None:
+        self._resize_after = None
+        # winfo_* is current after the post-Configure tick — safe without
+        # update_idletasks(), and force_idle would re-enter here.
+        avail = self._available_width()
+        # Short-circuit when width didn't actually change — scrollbar
+        # auto-hide can echo <Configure> events that don't change the
+        # available width, and walking every bubble per echo is wasted.
+        if avail == getattr(self, "_last_avail", None):
+            self._check_scroll_btn()
+            return
+        self._last_avail = avail
         if getattr(self, "_in_on_resize", False):
             return
         self._in_on_resize = True
         try:
-            avail = self._available_width()
             uw, aw = user_width(avail), assistant_width(avail)
             for row in self._bubble_rows:
                 for child in row.winfo_children():
@@ -647,14 +801,23 @@ class ChatUIMixin:
     def _update_scrollbar_visibility(self) -> None:
         try:
             canvas = self.chat_scroll._parent_canvas
-            canvas.update_idletasks()
+            # No update_idletasks() here — runs inside <Configure>; bbox is
+            # already current. The forced flush was the source of an echo
+            # <Configure> that re-fired _on_resize twice per drag pixel.
             bbox = canvas.bbox("all")
             if not bbox:
-                self._hide_scrollbar()
+                desired = False
+            else:
+                content_h = bbox[3] - bbox[1]
+                visible_h = canvas.winfo_height()
+                desired = content_h > visible_h
+            # Idempotent: skip grid()/grid_remove() (and the <Configure>
+            # echo they cause on the canvas) when state is unchanged.
+            cur = getattr(self, "_scrollbar_currently_shown", None)
+            if desired == cur:
                 return
-            content_h = bbox[3] - bbox[1]
-            visible_h = canvas.winfo_height()
-            if content_h > visible_h:
+            self._scrollbar_currently_shown = desired
+            if desired:
                 self._show_scrollbar()
             else:
                 self._hide_scrollbar()

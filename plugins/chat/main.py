@@ -41,8 +41,14 @@ class Plugin(ChatUIMixin, BasePlugin):
         self._stream_ctrl: StreamController | None = None
         self._welcome_frame: object | None = None
         self._history = ChatHistoryManager()
+        # One-shot cleanup: removes "New Chat"-titled empty sessions left
+        # over from previous runs. Used to fire on every list_sessions()
+        # call from inside the sidebar refresh (load_messages per orphan
+        # = N disk reads per refresh).
+        self._history.cleanup_empty()
         self._sidebar_visible = False
         self._accumulated_text = ""
+        self._response_persisted = False
         self.reinitialize_client()
         self.status = self.get_status()
         active_id = self._history.get_active_id()
@@ -101,10 +107,63 @@ class Plugin(ChatUIMixin, BasePlugin):
         if not self._history.get_active_id():
             self._history.create_session()
 
+    def _finalize_in_flight_response(self, *, persist: bool = True) -> None:
+        """Centralized cancel-and-persist for any code path that interrupts
+        a stream.
+
+        Without this, _new_chat / _select_chat / _delete_chat /
+        _clear_conversation called .cancel() but never finalized the
+        bubble or flushed _accumulated_text into history — silent token
+        loss + leaked HTTP socket. Now every nav path runs through one
+        helper that:
+
+        1. Cancels the controller (which closes the HTTP response).
+        2. If we have any accumulated text, finalizes the bubble to
+           rendered markdown and appends to conversation_history,
+           gated by _response_persisted so finalize / stop / cancel
+           paths can't double-persist.
+        3. Otherwise destroys the empty thinking bubble so it doesn't
+           linger when the user navigates away mid-prompt.
+        """
+        ctrl = self._stream_ctrl
+        if ctrl is not None and ctrl.is_active:
+            ctrl.cancel()
+        if not getattr(self, "_response_persisted", False):
+            text = self._accumulated_text.strip()
+            if persist and text and self._current_asst_bubble is not None:
+                try:
+                    self._current_asst_bubble.finalize_markdown(
+                        self._accumulated_text)
+                except Exception:
+                    pass
+                self.conversation_history.append(
+                    {"role": "assistant",
+                     "content": self._accumulated_text})
+                self._response_persisted = True
+            elif self._current_asst_bubble is not None:
+                try:
+                    self._current_asst_bubble._stop_thinking()
+                    self._current_asst_bubble.destroy()
+                except Exception:
+                    pass
+        self._current_asst_bubble = None
+        # Reset the per-turn buffers and the idempotency latch. The
+        # in-flight stream is drained either way at this point; without
+        # the reset, a follow-up _clear_conversation -> _new_chat path
+        # would see _response_persisted=True from the prior turn and
+        # short-circuit incorrectly.
+        self._accumulated_text = ""
+        self._response_persisted = False
+        # Unlock the send button so the next screen rebuild doesn't
+        # leave it stuck in the "Stop" state.
+        try:
+            self._unlock_input()
+        except Exception:
+            pass
+
     def _clear_conversation(self) -> None:
         """Reset conversation and rebuild."""
-        if self._stream_ctrl and self._stream_ctrl.is_active:
-            self._stream_ctrl.cancel()
+        self._finalize_in_flight_response(persist=True)
         self.conversation_history = (
             [] if self.base_url else [dict(_SYS_MSG)])
         self.session_id = None
@@ -115,9 +174,18 @@ class Plugin(ChatUIMixin, BasePlugin):
             row=0, column=1, sticky="nsew")
 
     def _new_chat(self) -> None:
-        self._save_current_session()
-        if self._stream_ctrl and self._stream_ctrl.is_active:
-            self._stream_ctrl.cancel()
+        self._finalize_in_flight_response(persist=True)
+        # If the user is mashing "+ New" without sending any messages,
+        # don't manufacture an empty-session orphan every click. Discard
+        # the current session if it has no user message; otherwise
+        # persist it.
+        active_id = self._history.get_active_id()
+        if active_id and not any(
+                m.get("role") == "user"
+                for m in self.conversation_history):
+            self._history.delete_session(active_id)
+        else:
+            self._save_current_session()
         self.conversation_history = (
             [] if self.base_url else [dict(_SYS_MSG)])
         self.session_id = None
@@ -127,9 +195,8 @@ class Plugin(ChatUIMixin, BasePlugin):
     def _select_chat(self, session_id: str) -> None:
         if session_id == self._history.get_active_id():
             return
+        self._finalize_in_flight_response(persist=True)
         self._save_current_session()
-        if self._stream_ctrl and self._stream_ctrl.is_active:
-            self._stream_ctrl.cancel()
         messages = self._history.load_messages(session_id)
         self.conversation_history = messages if messages else (
             [] if self.base_url else [dict(_SYS_MSG)])
@@ -138,6 +205,8 @@ class Plugin(ChatUIMixin, BasePlugin):
 
     def _delete_chat(self, session_id: str) -> None:
         was_active = session_id == self._history.get_active_id()
+        if was_active:
+            self._finalize_in_flight_response(persist=False)
         self._history.delete_session(session_id)
         if was_active:
             self.conversation_history = (
@@ -150,10 +219,14 @@ class Plugin(ChatUIMixin, BasePlugin):
         self._rebuild_chat()
 
     def _rebuild_chat(self) -> None:
+        # If a stream is still in flight (e.g. _select_chat was called
+        # before _finalize_in_flight_response landed), make a last-ditch
+        # cancel — the helper already runs above this in normal paths.
         if self._stream_ctrl and self._stream_ctrl.is_active:
             self._stream_ctrl.cancel()
         self._current_asst_bubble = None
         self._accumulated_text = ""
+        self._response_persisted = False
         self._bubble_rows.clear()
         if hasattr(self, "_chat_area") and self._chat_area:
             if hasattr(self, "chat_scroll") and self.chat_scroll:
@@ -190,7 +263,6 @@ class Plugin(ChatUIMixin, BasePlugin):
         self._show_header()
         self.chat_entry.delete(0, "end")
         is_dark = _is_dark_mode()
-        was_near = self._is_near_bottom()
         self._add_user_bubble(user_text, is_dark)
         self._current_asst_bubble = self._add_assistant_bubble(is_dark)
         self.chat_scroll.after(50, self._scroll_to_last_user_bubble)
@@ -202,6 +274,10 @@ class Plugin(ChatUIMixin, BasePlugin):
             text="\u25a0", fg_color="#EF4444", hover_color="#DC2626",
             command=self._stop_streaming)
         self._accumulated_text = ""
+        # Idempotency latch: _stop_streaming and _on_stream_done both
+        # try to finalize and append to history. The latch ensures only
+        # the first one wins even if they race.
+        self._response_persisted = False
         self._stream_ctrl = StreamController(
             app=self.app, on_chunk=self._on_stream_chunk,
             on_done=self._on_stream_done, on_error=self._on_stream_error)
@@ -215,6 +291,9 @@ class Plugin(ChatUIMixin, BasePlugin):
             temperature=0.7, extra_body=extra, base_url=self.base_url)
 
     def _stop_streaming(self) -> None:
+        if getattr(self, "_response_persisted", False):
+            self._unlock_input()
+            return
         if self._stream_ctrl and self._stream_ctrl.is_active:
             self._stream_ctrl.cancel()
         if (self._accumulated_text.strip()
@@ -223,6 +302,7 @@ class Plugin(ChatUIMixin, BasePlugin):
                 self._accumulated_text)
             self.conversation_history.append(
                 {"role": "assistant", "content": self._accumulated_text})
+            self._response_persisted = True
         elif self._current_asst_bubble:
             self._current_asst_bubble._stop_thinking()
             self._current_asst_bubble.destroy()
@@ -234,32 +314,66 @@ class Plugin(ChatUIMixin, BasePlugin):
     def _on_stream_chunk(self, chunk_text: str) -> None:
         self._accumulated_text += chunk_text
         if self._current_asst_bubble is not None:
-            self._current_asst_bubble.set_streaming_text(
-                self._accumulated_text)
-        if self._is_near_bottom():
-            self._scroll_to_bottom()
-        self._check_scroll_btn()
+            # Constant-time append per chunk (vs the old O(N^2)
+            # configure(text=full_accumulated)).
+            self._current_asst_bubble.append_streaming_chunk(chunk_text)
+        # Coalesce scroll work to one Tk idle cycle, no matter how many
+        # chunks the poll just dispatched. Two yview() reads + a possible
+        # place()/place_forget() per chunk used to spike CPU on long
+        # responses.
+        self._schedule_scroll_after_chunk()
+
+    def _schedule_scroll_after_chunk(self) -> None:
+        if getattr(self, "_scroll_dirty_pending", False):
+            return
+        self._scroll_dirty_pending = True
+        try:
+            self.chat_scroll.after_idle(self._flush_scroll_after_chunk)
+        except Exception:
+            self._scroll_dirty_pending = False
+
+    def _flush_scroll_after_chunk(self) -> None:
+        self._scroll_dirty_pending = False
+        if self.chat_scroll is None:
+            return
+        try:
+            near = self._is_near_bottom()
+            if near:
+                self._scroll_to_bottom()
+            self._check_scroll_btn()
+        except Exception:
+            pass
 
     def _on_stream_done(self, full_text: str) -> None:
+        if getattr(self, "_response_persisted", False):
+            return
         if self._current_asst_bubble is not None:
             self._current_asst_bubble.finalize_markdown(full_text)
             self._current_asst_bubble = None
             self.conversation_history.append(
                 {"role": "assistant", "content": full_text})
+            self._response_persisted = True
         self._unlock_input()
         self._save_current_session()
         self._refresh_sidebar()
-        self.chat_scroll.after(50, self._scroll_to_last_user_bubble)
-        self.chat_scroll.after(200, self._scroll_to_last_user_bubble)
+        # Only chase the last user bubble if the user is still near the
+        # bottom — otherwise we'd yank them back from wherever they
+        # scrolled to while the response was rendering.
+        if self._is_near_bottom():
+            self.chat_scroll.after(50, self._scroll_to_last_user_bubble)
+            self.chat_scroll.after(200, self._scroll_to_last_user_bubble)
         self.chat_scroll.after(250, self._update_scrollbar_visibility)
 
     def _on_stream_error(self, error_msg: str) -> None:
+        if getattr(self, "_response_persisted", False):
+            return
         if (self._accumulated_text.strip()
                 and self._current_asst_bubble is not None):
             self._current_asst_bubble.finalize_markdown(
                 self._accumulated_text)
             self.conversation_history.append(
                 {"role": "assistant", "content": self._accumulated_text})
+            self._response_persisted = True
             self.app.show_notification(
                 "Response may be incomplete.", type="warning")
         elif self._current_asst_bubble is not None:
