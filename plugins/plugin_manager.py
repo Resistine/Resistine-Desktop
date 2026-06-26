@@ -258,7 +258,7 @@ class PluginManager:
         if os.path.exists(system_plugins_path):
             for d in os.listdir(system_plugins_path):
                 if os.path.isdir(os.path.join(system_plugins_path, d)):
-                    if d.startswith('_') or d == 'login' or d == '__pycache__':
+                    if d.startswith('_') or d == '__pycache__':
                         continue
                     plugins_to_load[d] = "plugins"
 

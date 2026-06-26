@@ -269,8 +269,16 @@ class AppUI(customtkinter.CTk):
             curr = container_frame
             while curr and not hasattr(curr, "select_frame_by_name"):
                 curr = curr.master
-            if curr:
-                curr.select_frame_by_name(f"frame_{plugin.get_name()}")
+            if not curr:
+                return
+            # Login plugin's create_main_screen() does a full-window takeover
+            # (parents to the App root, grids at 0,0). Routing it through
+            # select_frame_by_name would re-grid it into the content column
+            # and produce a broken half-rendered login. Special-case it here.
+            if getattr(plugin, "id", None) == "007" and hasattr(curr, "show_login_screen"):
+                curr.show_login_screen()
+                return
+            curr.select_frame_by_name(f"frame_{plugin.get_name()}")
 
         _hovered = [False]
 
@@ -519,11 +527,14 @@ class AppUI(customtkinter.CTk):
         self.frames = {}
         row = 2
         for plugin in self.plugin_list:
-            frame_name = f"frame_{plugin.get_name()}"
-            self.frames[frame_name] = plugin
-            
+            # Plugins with order <= 0 aren't navigable from the dashboard
+            # (no sidebar button, no card click-through). Login is the
+            # canonical case: its create_main_screen() takes over the whole
+            # window for the auth flow, not a content-column widget.
             if plugin.order <= 0:
                 continue
+            frame_name = f"frame_{plugin.get_name()}"
+            self.frames[frame_name] = plugin
 
             try:
                 # Create sidebar button
@@ -906,8 +917,22 @@ class AppUI(customtkinter.CTk):
         # NOTE: simply replacing scrollable._mouse_wheel_all does NOT work
         # because bind_all stores a reference to the original bound method.
         # We must patch the original method to redirect to ours.
+        # CTk 5.x had .check_if_master_is_canvas; 6.0+ removed it. Inline the
+        # ancestor-walk so this works on both.
+        def _widget_is_inside_scrollable(widget):
+            target = scrollable._parent_canvas
+            cur = widget
+            while cur is not None:
+                if cur == target:
+                    return True
+                try:
+                    cur = cur.master
+                except Exception:
+                    return False
+            return False
+
         def _patched_mouse_wheel_all(event):
-            if scrollable.check_if_master_is_canvas(event.widget):
+            if _widget_is_inside_scrollable(event.widget):
                 return _on_mousewheel(event)
 
         # Monkey-patch the bound method's __func__ won't work, so we
@@ -923,11 +948,11 @@ class AppUI(customtkinter.CTk):
         # bind_all for <Button-4>/<Button-5> on Linux so child widgets are covered
         if _is_linux:
             def _bind_all_button4(event):
-                if scrollable.check_if_master_is_canvas(event.widget):
+                if _widget_is_inside_scrollable(event.widget):
                     return _on_linux_scroll_up(event)
 
             def _bind_all_button5(event):
-                if scrollable.check_if_master_is_canvas(event.widget):
+                if _widget_is_inside_scrollable(event.widget):
                     return _on_linux_scroll_down(event)
 
             scrollable.bind_all("<Button-4>", _bind_all_button4, add="+")

@@ -25,6 +25,7 @@ from customtkinter import ThemeManager
 
 from plugins.base_plugin import BasePlugin
 from plugins.plugin_manager import PluginManager
+from utils import settings as app_settings
 
 
 class Plugin(BasePlugin):
@@ -134,12 +135,16 @@ class Plugin(BasePlugin):
         protection_label.place(relx=0.5, rely=0.5, anchor="center")
 
         # Filter plugins for the grid:
-        # Exclude current plugin (Dashboard)
-        # Exclude hidden plugins using order -1
-        # Order 0 is allowed (e.g. Login)
+        # Exclude Dashboard itself.
+        # Exclude non-navigable plugins (order <= 0) by default — *except*
+        # Login (id "007"), which surfaces here only when the user isn't
+        # signed in, as a clear call-to-action card that opens the
+        # full-screen login when clicked.
+        logged_in = app_settings.get("auth", "logged_in", False)
         plugins = [
-            p for p in plugin_list 
-            if p.get_name() != "Dashboard" and p.order != -1
+            p for p in plugin_list
+            if p.get_name() != "Dashboard"
+            and (p.order > 0 or (not logged_in and getattr(p, "id", None) == "007"))
         ]
         
         # Store plugins for responsive rebuild

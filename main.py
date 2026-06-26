@@ -75,9 +75,15 @@ class App(AppUI):
         )
         self.minsize(min_width, min_height)
 
-        # Check if already logged in
-        if settings.get("auth", "logged_in", False):
-            logger.info("✅ User already logged in.")
+        # Login plugin is uninstallable via the Store; respect that here so
+        # users who removed it don't get the login screen on next launch.
+        login_uninstalled = self._is_login_plugin_uninstalled()
+
+        if settings.get("auth", "logged_in", False) or login_uninstalled:
+            if login_uninstalled:
+                logger.info("ℹ️  Login plugin uninstalled — skipping login screen.")
+            else:
+                logger.info("✅ User already logged in.")
             self.create_dashboard()
             # Resume any pending Wazuh install
             if sys.platform == "darwin":
@@ -92,10 +98,7 @@ class App(AppUI):
             # Always show login screen since we're using Odoo authentication
             logger.info("🔐 Creating login screen...")
             try:
-                from plugins.login.main import Plugin as LoginPlugin
-
-                login_plugin = LoginPlugin(self)
-                login_plugin.show()
+                self.show_login_screen()
                 logger.info("✅ Login screen created")
             except (ImportError, ModuleNotFoundError):
                 logger.warning("⚠️ Login plugin not found. Skipping login screen.")
@@ -234,6 +237,43 @@ class App(AppUI):
             self.withdraw()  # Hide window, keep process alive for tray
         else:
             self._full_quit()
+
+    def show_login_screen(self):
+        """Tear down whatever is visible and show the full-screen login flow.
+
+        Called from the startup bootstrap, the Settings logout/login
+        buttons, and the Login card on the dashboard. Centralizes the
+        destroy → grid-reset → Login.show() sequence.
+        """
+        from plugins.login.main import Plugin as LoginPlugin
+        for w in self.winfo_children():
+            try:
+                w.destroy()
+            except Exception:
+                pass
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=0)
+        LoginPlugin(self).show()
+
+    def _is_login_plugin_uninstalled(self):
+        """Return True if the user uninstalled the Login plugin via the Store.
+
+        Reads plugin_state.json directly so the check works before
+        PluginManager has loaded plugins.
+        """
+        try:
+            from utils.settings import get_config_dir
+            import json
+            state_path = os.path.join(get_config_dir(), "plugin_state.json")
+            if not os.path.exists(state_path):
+                return False
+            with open(state_path, "r", encoding="utf-8") as f:
+                state = json.load(f)
+            return "007" in state.get("uninstalled", [])
+        except Exception as e:
+            logger.warning(f"Could not read plugin state: {e}")
+            return False
 
     def _full_quit(self):
         """Actually exit the application (called from tray Quit or if no tray)."""

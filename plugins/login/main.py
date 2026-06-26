@@ -88,6 +88,12 @@ class Plugin(BasePlugin):
         # Ensure login screen is on top
         self.login_frame.lift()
 
+        # After a teardown-then-recreate (logout -> show login), Tk's focus
+        # default would land on the email CTkEntry, which suppresses its
+        # placeholder text until the user clicks elsewhere. Push focus to the
+        # frame on the next tick so the placeholder renders immediately.
+        self.login_frame.after_idle(self.login_frame.focus_set)
+
     def destroy(self):
         """
         Destroy the login screen and clean up resources.
@@ -143,7 +149,8 @@ class Plugin(BasePlugin):
         # Get theme corner radius
         corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
 
-        # 3. Email Entry
+        # 3. Email Entry — transparent fill so it blends with the page
+        # background; the border alone defines the field.
         self.email_entry = customtkinter.CTkEntry(
             self.content_frame,
             placeholder_text="Enter your email address",
@@ -151,6 +158,8 @@ class Plugin(BasePlugin):
             height=45,
             corner_radius=corner_radius,
             border_width=1,
+            border_color=("#CCCCCC", "#444444"),
+            fg_color="transparent",
             font=customtkinter.CTkFont(family="Inter", size=14),
         )
         self.email_entry.grid(row=2, column=0, pady=(0, 20))
@@ -214,19 +223,21 @@ class Plugin(BasePlugin):
         )
         self.terms_label.pack(side="top", pady=(5, 0))
 
-        # 8. Skip Button (Bottom Right)
+        # 8. "Use without an account" button — bottom-right corner so it sits
+        # outside the centered footer block.
         self.skip_button = customtkinter.CTkButton(
             self.login_frame,
-            text="Skip",
+            text="Use without an account",
             command=self.skip_login,
-            width=80,
-            height=30,
+            width=220,
+            height=34,
             corner_radius=corner_radius,
             fg_color="transparent",
             border_width=1,
-            border_color=("#CCCCCC", "#444444"),
-            text_color=("#666666", "#AAAAAA"),
-            font=customtkinter.CTkFont(family="Inter", size=12),
+            border_color=("#999999", "#555555"),
+            text_color=("#333333", "#DDDDDD"),
+            hover_color=("#EEEEEE", "#2A2A2A"),
+            font=customtkinter.CTkFont(family="Inter", size=13),
         )
         self.skip_button.place(relx=0.98, rely=0.98, anchor="se")
 
