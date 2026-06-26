@@ -20,22 +20,25 @@ import customtkinter
 RESISTINE_BLUE = "#0D5394"
 
 # -- Base metrics (px) --------------------------------------------------------
-# Body text size for AI responses (and, matched in bubble.py, user messages).
-_BASE_SIZE = 18
-# Code blocks and tables render ~20% smaller than body text so their monospace
-# / tabular content doesn't visually dominate the prose (monospace looks larger
-# than the proportional body font at the same point size). Same value for both
-# so code blocks and tables are a uniform size.
-_CODE_BLOCK_SIZE = 14
-_MONO_FAMILY = "Menlo" if sys.platform == "darwin" else "Consolas"
-
-# Heading sizes, kept above/around the body so the hierarchy holds.
-# Windows gets a small extra bump because its default UI font renders a touch
-# smaller/denser than macOS's system font at the same point size.
+# Body text size for AI responses (matched in bubble.py for user messages).
+# Windows's default UI font renders denser at the same point size, so it gets
+# a +3pt bump to roughly equalize perceived size against macOS's system font.
+# Mac / Linux keep the historical 15pt baseline — bumping them across the
+# board broke chat bubble widths, table reflow, and welcome-screen layout
+# that had been tuned at that size.
+# Code blocks / tables render ~1pt below body so monospace / tabular content
+# doesn't visually dominate the prose.
+# Heading sizes scale around the body so the hierarchy holds at either base.
 if sys.platform.startswith("win"):
+    _BASE_SIZE = 18
+    _CODE_BLOCK_SIZE = 14
     _HEADING_SIZES = {"h1": 25, "h2": 23, "h3": 20, "h4": 19, "h5": 18, "h6": 17}
 else:
-    _HEADING_SIZES = {"h1": 23, "h2": 21, "h3": 19, "h4": 18, "h5": 17, "h6": 16}
+    _BASE_SIZE = 15
+    _CODE_BLOCK_SIZE = 13
+    _HEADING_SIZES = {"h1": 20, "h2": 18, "h3": 16, "h4": 15, "h5": 14, "h6": 13}
+
+_MONO_FAMILY = "Menlo" if sys.platform == "darwin" else "Consolas"
 
 # Resolved once, after a Tk root exists. The chat hard-coded "Inter" everywhere,
 # but Inter is never installed or registered, so on Windows Tk silently falls
