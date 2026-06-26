@@ -1981,7 +1981,7 @@
       "version": "12.2.0"
     },
     {
-      "bom-ref": "pip==25.3",
+      "bom-ref": "pip==26.1.2",
       "description": "The PyPA recommended tool for installing Python packages.",
       "externalReferences": [
         {
@@ -2014,9 +2014,9 @@
         }
       ],
       "name": "pip",
-      "purl": "pkg:pypi/pip@25.3",
+      "purl": "pkg:pypi/pip@26.1.2",
       "type": "library",
-      "version": "25.3"
+      "version": "26.1.2"
     },
     {
       "bom-ref": "pip-requirements-parser==32.0.1",
@@ -9834,7 +9834,7 @@
       "ref": "pip-requirements-parser==32.0.1"
     },
     {
-      "ref": "pip==25.3"
+      "ref": "pip==26.1.2"
     },
     {
       "ref": "protobuf==7.35.1"
@@ -11283,7 +11283,7 @@
         "jaraco.functools==4.5.0",
         "more-itertools==11.1.0",
         "packaging==26.2",
-        "pip==25.3"
+        "pip==26.1.2"
       ],
       "ref": "setuptools==82.0.1"
     },

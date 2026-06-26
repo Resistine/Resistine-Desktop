@@ -16,7 +16,7 @@ How it works
     This walks every installed distribution's metadata and emits a full
     CycloneDX SBOM (one ``component`` per Python package, with name,
     version, PURL, license, hashes, dependency edges).
-2.  Merge in ``scripts/build/sbom-bundled.json`` — hand-maintained
+2.  Merge in ``scripts/sbom/sbom-bundled.json`` — hand-maintained
     CycloneDX components for non-Python things we ship or install
     (ClamAV, WireGuard, Wazuh, ``resistine-vpn-cli``).
 3.  Enforce the license deny-list (AGPL / SSPL / BUSL / Commons Clause)
@@ -30,14 +30,18 @@ How it works
 
 Run me
 ------
-::
+Easy mode (recommended — uses an isolated prod venv at ``.sbom-venv/``)::
 
-    source .venv/bin/activate
+    ./scripts/sbom/run.sh
+
+Direct mode (you handle the venv isolation yourself)::
+
+    source .venv-prod/bin/activate
     pip install "cyclonedx-bom>=7.0.0"
-    python scripts/build/generate_sbom.py
+    python scripts/sbom/generate_sbom.py
 
-CI runs this in the production venv (no test deps) before each release
-artifact is uploaded, and verifies the committed files match.
+CI runs the direct form against a clean venv it provisions per job and
+verifies the committed files match with ``--check``.
 
 Author: Resistine Team
 Copyright (c) Resistine 2026
@@ -220,10 +224,12 @@ def main() -> int:
                 sys.stderr.write(
                     f"ERROR: {path.relative_to(REPO_ROOT)} is out of date.\n"
                     f"       Regenerate locally with:\n"
-                    f"         python scripts/build/generate_sbom.py\n"
+                    f"         ./scripts/sbom/run.sh\n"
                     f"       then commit.\n"
                 )
                 ok = False
+        if ok:
+            print("✓ sbom.cdx.json and LICENSE-3rd-Party.md are up to date.")
         return 0 if ok else 1
 
     SBOM_PATH.write_text(sbom_text, encoding="utf-8")
