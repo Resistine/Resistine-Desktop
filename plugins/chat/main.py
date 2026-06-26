@@ -17,6 +17,16 @@ _ICON_DIR = os.path.dirname(os.path.realpath(__file__))
 _SYS_MSG = {"role": "system", "content": _SYSTEM_PROMPT}
 _DEFAULT_BASE_URL = "http://dashboard.resisti.net:8001/v1"
 
+# Canned assistant message when the user navigates away from a chat
+# (switch chat, + New, delete, leave plugin) while a response is still
+# streaming. The partial response is discarded — only this short message
+# is persisted to history, so revisiting the chat tells the user the
+# response was interrupted instead of leaving a confusing truncated stub.
+_NAV_AWAY_MSG = (
+    "_(You switched chats before this response could finish. "
+    "Please ask your question again.)_"
+)
+
 
 class Plugin(ChatUIMixin, BasePlugin):
     """Chat plugin -- lets users talk to an OpenAI-compatible AI assistant."""
@@ -111,46 +121,49 @@ class Plugin(ChatUIMixin, BasePlugin):
         """Centralized cancel-and-persist for any code path that interrupts
         a stream.
 
-        Without this, _new_chat / _select_chat / _delete_chat /
-        _clear_conversation called .cancel() but never finalized the
-        bubble or flushed _accumulated_text into history — silent token
-        loss + leaked HTTP socket. Now every nav path runs through one
-        helper that:
+        Persistence semantics (per user request): when the user navigates
+        away mid-response, the PARTIAL response is discarded and a fixed
+        canned message ("you switched chats…") is appended to history
+        instead. Revisiting the chat then shows a clear "this was
+        interrupted, ask again" marker instead of a confusing truncated
+        stub.
 
-        1. Cancels the controller (which closes the HTTP response).
-        2. If we have any accumulated text, finalizes the bubble to
-           rendered markdown and appends to conversation_history,
-           gated by _response_persisted so finalize / stop / cancel
-           paths can't double-persist.
-        3. Otherwise destroys the empty thinking bubble so it doesn't
-           linger when the user navigates away mid-prompt.
+        Critically: we do NOT call ``finalize_markdown`` here. Doing so
+        ran ``MarkdownRenderer.render()`` synchronously on the
+        about-to-be-destroyed bubble — a 200–800 ms freeze on the main
+        thread for non-trivial partials. The destroy that follows in
+        _rebuild_chat threw the rendered widget tree away within
+        milliseconds anyway. Skipping the render is the single biggest
+        win for the "freeze on chat-switch mid-stream" complaint.
         """
         ctrl = self._stream_ctrl
         if ctrl is not None and ctrl.is_active:
             ctrl.cancel()
-        if not getattr(self, "_response_persisted", False):
-            text = self._accumulated_text.strip()
-            if persist and text and self._current_asst_bubble is not None:
-                try:
-                    self._current_asst_bubble.finalize_markdown(
-                        self._accumulated_text)
-                except Exception:
-                    pass
-                self.conversation_history.append(
-                    {"role": "assistant",
-                     "content": self._accumulated_text})
-                self._response_persisted = True
-            elif self._current_asst_bubble is not None:
-                try:
-                    self._current_asst_bubble._stop_thinking()
-                    self._current_asst_bubble.destroy()
-                except Exception:
-                    pass
+        if (persist
+                and not getattr(self, "_response_persisted", False)
+                and self._current_asst_bubble is not None
+                and self._accumulated_text.strip()):
+            # Discard the partial; persist the canned marker. No
+            # finalize_markdown — the bubble is about to be destroyed
+            # in _rebuild_chat.
+            self.conversation_history.append(
+                {"role": "assistant", "content": _NAV_AWAY_MSG})
+            self._response_persisted = True
+        # Empty-thinking branch: user navigated away before any tokens
+        # arrived. Drop the placeholder bubble silently — no canned
+        # message to persist (the user's prompt was never answered at
+        # all, but it IS in history as a user message; a canned
+        # assistant reply would be noise).
+        if self._current_asst_bubble is not None:
+            try:
+                self._current_asst_bubble._stop_thinking()
+                self._current_asst_bubble.destroy()
+            except Exception:
+                pass
         self._current_asst_bubble = None
-        # Reset the per-turn buffers and the idempotency latch. The
-        # in-flight stream is drained either way at this point; without
-        # the reset, a follow-up _clear_conversation -> _new_chat path
-        # would see _response_persisted=True from the prior turn and
+        # Reset the per-turn buffers and the idempotency latch. Without
+        # this, a follow-up _clear_conversation -> _new_chat path would
+        # see _response_persisted=True from the prior turn and
         # short-circuit incorrectly.
         self._accumulated_text = ""
         self._response_persisted = False
@@ -218,15 +231,54 @@ class Plugin(ChatUIMixin, BasePlugin):
             self._history.create_session()
         self._rebuild_chat()
 
+    def _cancel_pending_chat_timers(self) -> None:
+        """Cancel every chat-scoped after() timer before rebuilding.
+
+        Each (widget_attr, after_attr) pair: the widget we registered
+        the after on, and the attribute holding the after id. Stale ids
+        in plugin attributes have caused permanent state-machine break
+        (e.g. _scroll_dirty_pending sticking True when the chat_scroll
+        it was scheduled against gets destroyed), plus stale layout
+        passes firing 16 ms into the rebuild on the new widget tree.
+        """
+        pairs = (
+            ("chat_scroll", "_resize_after"),
+            ("chat_scroll", "_scroll_btn_after"),
+            ("chat_scroll", "_scroll_redraw_after"),
+            ("chat_scroll", "_restore_after"),
+            ("second_frame", "_sf_cfg_after"),
+            ("app", "_app_cfg_after"),
+        )
+        for widget_attr, after_attr in pairs:
+            aid = getattr(self, after_attr, None)
+            if aid is None:
+                continue
+            widget = getattr(self, widget_attr, None)
+            if widget is not None:
+                try:
+                    widget.after_cancel(aid)
+                except Exception:
+                    pass
+            setattr(self, after_attr, None)
+
     def _rebuild_chat(self) -> None:
         # If a stream is still in flight (e.g. _select_chat was called
         # before _finalize_in_flight_response landed), make a last-ditch
         # cancel — the helper already runs above this in normal paths.
         if self._stream_ctrl and self._stream_ctrl.is_active:
             self._stream_ctrl.cancel()
+        # Cancel every pending after() timer that's keyed to a widget
+        # we're about to destroy. Without this, the previous
+        # _scroll_dirty_pending flag stays True forever (its widget dies
+        # before the idle pump fires), permanently breaking
+        # auto-scroll-to-bottom in the NEXT chat. Same risk for the
+        # other debounces — stale ids are usually harmless on Tk but
+        # accumulate and noisy on Windows.
+        self._cancel_pending_chat_timers()
         self._current_asst_bubble = None
         self._accumulated_text = ""
         self._response_persisted = False
+        self._scroll_dirty_pending = False
         self._bubble_rows.clear()
         if hasattr(self, "_chat_area") and self._chat_area:
             if hasattr(self, "chat_scroll") and self.chat_scroll:
@@ -402,6 +454,27 @@ class Plugin(ChatUIMixin, BasePlugin):
         self.chat_entry.delete(0, "end")
         self.chat_entry.insert(0, text)
         self.send_message()
+
+    def destroy(self) -> None:
+        """Plugin teardown — cancel any in-flight stream and flush state.
+
+        Called by PluginManager on uninstall/reload, and (if the app
+        teardown is wired through plugin_list, which is the right
+        direction) on app shutdown. Today it at least guarantees a
+        graceful uninstall: the worker thread sees cancel_event, the
+        HTTP socket is released on a daemon thread, and any partial
+        response gets the canned marker so a reopen shows the right
+        state.
+        """
+        try:
+            self._finalize_in_flight_response(persist=True)
+        except Exception:
+            pass
+        try:
+            self._save_current_session()
+        except Exception:
+            pass
+        super().destroy()
 
     def _open_settings(self) -> None:
         try:

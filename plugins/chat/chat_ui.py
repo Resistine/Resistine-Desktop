@@ -89,6 +89,14 @@ class ChatUIMixin:
         # still open.
         self.second_frame.bind("<Unmap>", self._on_chat_unmapped, add="+")
         self.second_frame.bind("<Map>", self._on_chat_mapped, add="+")
+        # CRITICAL: when the user navigates to another plugin,
+        # select_frame_by_name destroys the chat's second_frame. The dim
+        # Toplevel is parented to self.app, NOT to second_frame, so it
+        # survives the destroy as an orphan window — lingering on top of
+        # the next plugin (Help, Settings, etc.). Bind <Destroy> on
+        # second_frame to tear down the Toplevel and unbind the
+        # app-level <Configure> handler that closes over it.
+        self.second_frame.bind("<Destroy>", self._on_chat_destroyed, add="+")
         if self._sidebar_visible:
             self._show_sidebar()
 
@@ -149,24 +157,77 @@ class ChatUIMixin:
         # <Unmap> fires for the second_frame on real navigation away from
         # chat, but ALSO bubbles up from any descendant being unmapped
         # (CTk briefly unmaps widgets during reparent/restack). Filter to
-        # the second_frame itself, and skip transient unmaps where the
-        # frame is still viewable.
+        # the second_frame itself.
         if _event is not None and _event.widget is not self.second_frame:
             return
+        # Withdraw the dim aggressively — winfo_viewable() can lie during a
+        # nav-driven destroy sequence (the frame is being torn down but
+        # winfo_viewable hasn't flipped yet), and lingering dim on top of
+        # the next plugin is much worse than an extra withdraw call on
+        # a transient unmap (cheap, idempotent).
+        for attr in ("_dim_overlay", "_dim_overlay_top"):
+            t = getattr(self, attr, None)
+            if t is not None:
+                try:
+                    t.withdraw()
+                except Exception:
+                    pass
+        self._ov_mapped = False
+
+    def _on_chat_destroyed(self, _event=None) -> None:
+        # Final-line defense: when select_frame_by_name destroys
+        # second_frame on plugin navigation, the Toplevel dim is parented
+        # to self.app and would survive as an orphan. Destroy it
+        # explicitly, clear the cached reference, and unbind the
+        # app-level <Configure> handler so the next chat visit creates
+        # a fresh dim Toplevel cleanly. Guard on widget identity — Tk
+        # bubbles <Destroy> up from children before firing on the
+        # widget itself, so we only act on the second_frame's own event.
+        if _event is not None and _event.widget is not self.second_frame:
+            return
+        # Stream lifecycle: navigation away from chat plugin means the
+        # user is leaving WHILE a response may still be streaming.
+        # Cancel the stream and persist the canned "you switched chats"
+        # message so revisiting the chat shows a clean marker instead
+        # of an unfinished partial. Also flushes the now-clean session
+        # to disk so the canned message survives an app restart.
         try:
-            if self.second_frame.winfo_viewable():
-                return
+            self._finalize_in_flight_response(persist=True)
+            self._save_current_session()
         except Exception:
             pass
-        # Real navigation away: hide the dim Toplevel so it doesn't linger
-        # on top of the dashboard. Preserve _sidebar_visible so returning
-        # to chat restores the drawer in its previous state.
-        if getattr(self, "_ov_mapped", False):
+        for attr in ("_dim_overlay", "_dim_overlay_top"):
+            t = getattr(self, attr, None)
+            if t is not None:
+                try:
+                    t.destroy()
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+        self._ov_mapped = False
+        self._last_ov_geom = None
+        self._last_top_geom = None
+        # Cancel the app-level Configure debounce so it doesn't fire on
+        # the dead dim handler.
+        prev = getattr(self, "_app_cfg_after", None)
+        if prev is not None:
             try:
-                self._dim_overlay.withdraw()
-                self._ov_mapped = False
+                self.app.after_cancel(prev)
             except Exception:
                 pass
+            self._app_cfg_after = None
+        # Unbind the app-level <Configure> handler we registered in
+        # _ensure_dim_overlay. Without this, the bound method holds a
+        # strong reference to the now-dead instance state for the
+        # app's lifetime.
+        bid = getattr(self, "_app_cfg_bid", None)
+        if bid is not None:
+            try:
+                self.app.unbind("<Configure>", bid)
+            except Exception:
+                pass
+            self._app_cfg_bid = None
+            self._app_cfg_bound = False
 
     def _on_chat_mapped(self, _event=None) -> None:
         # Mirror filter on _on_chat_unmapped.
@@ -300,7 +361,31 @@ class ChatUIMixin:
             pass
 
     def _restore_history(self, is_dark: bool) -> None:
+        """Rebuild the chat from conversation_history.
+
+        Renders user bubbles synchronously (cheap — they're just text) and
+        defers each assistant bubble's MarkdownRenderer through after_idle.
+        A 50-message history used to lock the UI for 1–3 seconds while
+        every MarkdownRenderer.render() ran back-to-back during chat
+        switching. Now we add empty AssistantBubble placeholders up front
+        — so the layout is correct — and finalize each one in its own
+        idle tick, yielding to the event loop between renders. The user
+        sees bubbles fill in progressively instead of a hung window.
+        """
         has_history = False
+        # Pending (bubble, markdown_text) pairs to render one-per-idle.
+        # Reset on every rebuild so a switch mid-render doesn't leak the
+        # old queue into the new chat.
+        self._restore_queue: list[tuple[AssistantBubble, str]] = []
+        # Cancel any in-flight restore from a previous chat.
+        prev = getattr(self, "_restore_after", None)
+        if prev is not None:
+            try:
+                self.chat_scroll.after_cancel(prev)
+            except Exception:
+                pass
+            self._restore_after = None
+
         for msg in self.conversation_history:
             role, content = msg.get("role"), msg.get("content", "")
             if role == "system":
@@ -309,9 +394,23 @@ class ChatUIMixin:
             if role == "user":
                 self._add_user_bubble(content, is_dark)
             elif role == "assistant":
-                self._add_assistant_bubble(is_dark, md=content)
+                # Create the bubble in its placeholder/thinking state and
+                # queue the markdown render for later.
+                bubble = self._add_assistant_bubble(is_dark)
+                self._restore_queue.append((bubble, content))
+
         if has_history:
             self._show_header()
+            if self._restore_queue:
+                # Kick the restore pump. after_idle gives every other
+                # pending Tk event (Configure cascade from the rebuild,
+                # the show-screen reveal) priority over the renders, so
+                # the chat-switch transition feels instantaneous.
+                try:
+                    self._restore_after = self.chat_scroll.after_idle(
+                        self._restore_pump)
+                except Exception:
+                    self._restore_after = None
             return
         if self.client is not None:
             self._welcome_frame = WelcomeScreen(
@@ -323,6 +422,32 @@ class ChatUIMixin:
         # 4 suggestion chips were taller than the viewport, pushing the bottom
         # chips behind the input bar. A smaller inset keeps them all visible.
         self._welcome_frame.pack(expand=True, fill="both", pady=(24, 0))
+
+    def _restore_pump(self) -> None:
+        """Render the next pending assistant bubble. Re-schedules itself
+        via after(0, ...) so each iteration yields to the event loop —
+        the user can scroll, click the sidebar, etc., while a long
+        history is still hydrating in the background.
+        """
+        self._restore_after = None
+        queue = getattr(self, "_restore_queue", None)
+        if not queue:
+            return
+        bubble, md = queue.pop(0)
+        try:
+            # Skip if the bubble (or its parent chat_scroll) was destroyed
+            # while we were waiting in the idle queue — happens when the
+            # user switches chats again mid-restore.
+            if bubble.winfo_exists():
+                bubble.finalize_markdown(md)
+        except Exception:
+            pass
+        if queue and self.chat_scroll is not None:
+            try:
+                self._restore_after = self.chat_scroll.after(
+                    0, self._restore_pump)
+            except Exception:
+                self._restore_after = None
 
     def _build_input_bar(self, is_dark: bool) -> None:
         fg = "#ffffff" if is_dark else "#000000"
@@ -429,15 +554,23 @@ class ChatUIMixin:
     def _set_chat_dim(self, dim: bool) -> None:
         """Show/hide the dim layer over the chat while the drawer is open.
 
-        We use a borderless alpha Toplevel positioned to cover the chat to
-        the RIGHT of the drawer (NOT the drawer area itself). Toplevels
-        always render above in-process Frames regardless of .lift() calls,
-        so an overlay positioned over the drawer would block clicks on it
-        and visually dim it. Sizing the overlay to exclude the drawer
-        sidesteps the z-order limitation entirely.
+        Uses TWO borderless alpha Toplevels: one covers the chat to the
+        right of the drawer (most of the area), one covers the small
+        strip above the drawer (x=0..drawer_w, y=0..DRAWER_TOP) so the
+        hamburger button area is dimmed too. Without the second one,
+        the user sees a bright top-left rectangle that's neither drawer
+        nor dim — exactly the symptom reported.
+
+        Two Toplevels rather than one big rectangle because the drawer
+        sits at x=0..drawer_w, y=DRAWER_TOP..h and is bright (the user's
+        focus). A single Toplevel covering both regions would be a
+        rectangle that includes the drawer area, and Toplevels always
+        render above in-process Frames — the drawer would be covered.
         """
-        ov = self._ensure_dim_overlay()
-        if ov is None:
+        self._ensure_dim_overlay()
+        main = getattr(self, "_dim_overlay", None)
+        top = getattr(self, "_dim_overlay_top", None)
+        if main is None or top is None:
             return
         if dim:
             if self._position_dim_overlay():
@@ -446,49 +579,64 @@ class ChatUIMixin:
                 # called on an already-mapped window.
                 if not getattr(self, "_ov_mapped", False):
                     try:
-                        ov.deiconify()
-                        ov.lift()
+                        main.deiconify(); main.lift()
+                        top.deiconify(); top.lift()
                         self._ov_mapped = True
                     except Exception:
                         pass
         else:
             if getattr(self, "_ov_mapped", False):
                 try:
-                    ov.withdraw()
+                    main.withdraw()
+                    top.withdraw()
                     self._ov_mapped = False
                 except Exception:
                     pass
 
     def _ensure_dim_overlay(self):
-        """Create the dim layer once (borderless, alpha). Returns it or None."""
+        """Create the dim Toplevels once (borderless, alpha).
+
+        Two Toplevels: ``_dim_overlay`` covers the chat area right of
+        the drawer; ``_dim_overlay_top`` covers the strip above the
+        drawer (where the hamburger button sits). Returns the main one,
+        or None on failure. _dim_overlay_top is stored on self.
+        """
         ov = getattr(self, "_dim_overlay", None)
+        top = getattr(self, "_dim_overlay_top", None)
         try:
-            if ov is not None and ov.winfo_exists():
+            ov_ok = ov is not None and ov.winfo_exists()
+            top_ok = top is not None and top.winfo_exists()
+            if ov_ok and top_ok:
                 return ov
         except Exception:
-            pass
+            ov_ok = top_ok = False
+
+        def _make() -> "tkinter.Toplevel":
+            t = tkinter.Toplevel(self.app)
+            t.overrideredirect(True)
+            t.configure(bg="#000000")
+            try:
+                t.attributes("-alpha", _DIM_ALPHA)
+            except Exception:
+                pass
+            try:
+                t.transient(self.app)
+            except Exception:
+                pass
+            t.withdraw()
+            # Clicking the dimmed area collapses the drawer.
+            t.bind("<Button-1>", lambda _e: self._hide_sidebar())
+            return t
+
         try:
-            ov = tkinter.Toplevel(self.app)
-            ov.overrideredirect(True)       # borderless; no taskbar/focus steal
-            ov.configure(bg="#000000")
-            try:
-                ov.attributes("-alpha", _DIM_ALPHA)
-            except Exception:
-                pass
-            try:
-                ov.transient(self.app)      # stack + minimize with the main win
-            except Exception:
-                pass
-            ov.withdraw()
+            if not ov_ok:
+                self._dim_overlay = _make()
+            if not top_ok:
+                self._dim_overlay_top = _make()
             self._ov_mapped = False
-            # Clicking the dimmed area collapses the drawer; being on top, the
-            # overlay also blocks hover on everything beneath it.
-            ov.bind("<Button-1>", lambda _e: self._hide_sidebar())
-            self._dim_overlay = ov
             self._last_ov_geom = None
-            # second_frame <Configure> fires on resize but not on a window
-            # move, so also track the top-level window's geometry. Bind ONCE
-            # (across chat rebuilds) and let _on_app_configure debounce.
+            self._last_top_geom = None
+            # Bind once, across chat rebuilds.
             if not getattr(self, "_app_cfg_bound", False):
                 try:
                     self._app_cfg_bid = self.app.bind(
@@ -498,6 +646,7 @@ class ChatUIMixin:
                     pass
         except Exception:
             self._dim_overlay = None
+            self._dim_overlay_top = None
         return self._dim_overlay
 
     def _position_dim_overlay(self) -> bool:
@@ -516,7 +665,8 @@ class ChatUIMixin:
         undimmed (the exact symptom this method was meant to cure).
         """
         ov = getattr(self, "_dim_overlay", None)
-        if ov is None:
+        top = getattr(self, "_dim_overlay_top", None)
+        if ov is None or top is None:
             return False
         try:
             # winfo_* is already current inside <Configure> handlers — do
@@ -536,14 +686,18 @@ class ChatUIMixin:
                 drawer_w = getattr(sb, "_WIDTH", 220) if sb else 220
             ox = x + drawer_w
             ow = w - drawer_w
+            top_h = self._DRAWER_TOP
             if ow <= 1 or h <= 1:
                 return False
-            geom = (ow, h, ox, y)
-            # Skip the WM round-trip if nothing changed since last call.
-            if getattr(self, "_last_ov_geom", None) == geom:
-                return True
-            self._last_ov_geom = geom
-            ov.geometry(f"{ow}x{h}+{ox}+{y}")
+            main_geom = (ow, h, ox, y)
+            top_geom = (drawer_w, top_h, x, y)
+            # Skip the WM round-trip per Toplevel if nothing changed.
+            if getattr(self, "_last_ov_geom", None) != main_geom:
+                self._last_ov_geom = main_geom
+                ov.geometry(f"{ow}x{h}+{ox}+{y}")
+            if getattr(self, "_last_top_geom", None) != top_geom:
+                self._last_top_geom = top_geom
+                top.geometry(f"{drawer_w}x{top_h}+{x}+{y}")
             return True
         except Exception:
             return False

@@ -109,8 +109,20 @@ class StreamController:
             return
         self._active = False
         self._cancel_event.set()
-        self._close_stream(self._stream)
+        # Close the HTTP response on a daemon thread — response.close()
+        # can block on a TCP close handshake (hundreds of ms with a
+        # slow server). Doing it inline on the main thread is exactly
+        # the kind of stall that compounds the "freeze on chat-switch"
+        # complaint. The cancel_event short-circuits the worker so the
+        # iterator will terminate when the OS times out either way;
+        # main thread doesn't have to wait.
+        stream = self._stream
         self._stream = None
+        if stream is not None:
+            threading.Thread(
+                target=self._close_stream, args=(stream,),
+                daemon=True,
+            ).start()
         self._stop_polling()
 
     def _close_stream(self, stream) -> None:

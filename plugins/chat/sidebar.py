@@ -39,7 +39,15 @@ class ChatSidebar(customtkinter.CTkFrame):
         **kwargs: object,
     ) -> None:
         bg = "#161618" if is_dark else "#ECECEE"
-        border = "#2A2A2A" if is_dark else "#D1D1D6"
+        # Right-edge border: must be DARKER than the dimmed-chat color to
+        # the right, otherwise it shows as a bright line at the seam.
+        # In dark mode the dim Toplevel renders at roughly
+        # 0.6 * chat_bg + 0.4 * black ≈ #0E0E0E. The previous #2A2A2A was
+        # MUCH lighter than that — the bright vertical line the user
+        # reported. Drop a couple of stops below the dimmed value so the
+        # edge reads as a subtle inset shadow. Light-mode value
+        # unchanged (the contrast there worked fine).
+        border = "#050505" if is_dark else "#D1D1D6"
         super().__init__(
             master, fg_color=bg, corner_radius=0,
             width=self._WIDTH, **kwargs)
