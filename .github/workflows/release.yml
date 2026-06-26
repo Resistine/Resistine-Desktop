@@ -82,47 +82,54 @@ jobs:
           python3 -m venv .venv
           source .venv/bin/activate
           pip install -r scripts/requirements/requirements-mac.txt
-          pip install "pip-licenses>=4.0.0"
+          pip install "cyclonedx-bom>=7.0.0"
           brew install create-dmg
 
-      # --- Regenerate LICENSE-3rd-Party.md from the exact installed env ---
-      # Runs against the venv we just provisioned so the licenses table
-      # matches what actually ships in this release artifact. Also fails
-      # the build if any AGPL/SSPL/BUSL deps are present (see --fail-on
-      # in the generator script).
-      - name: Generate third-party license file
+      # --- Regenerate SBOM + LICENSE-3rd-Party.md from the installed env ---
+      # cyclonedx-py walks the exact venv we just provisioned, so both
+      # artifacts match what actually ships in this release. The generator
+      # also enforces the AGPL/SSPL/BUSL/Commons-Clause deny-list and aborts
+      # the build if any prod dep ships under one of those licenses.
+      - name: Generate SBOM + third-party license file
         run: |
           source .venv/bin/activate
-          ./scripts/build/generate-license-third-party.sh
+          python scripts/build/generate_sbom.py
 
-      # --- Verify committed LICENSE-3rd-Party.md is up to date ---
+      # --- Verify committed sbom.cdx.json + LICENSE-3rd-Party.md are fresh
       # Forces developers to regenerate and commit before tagging a release.
-      # If this fails, the dev needs to run
-      #   ./scripts/build/generate-license-third-party.sh
-      # locally and commit the result. Catches the "I added a pip dep but
-      # forgot to regenerate" mistake at the latest possible moment.
-      - name: Verify LICENSE-3rd-Party.md is committed and up to date
+      # Catches the "I added a pip dep but forgot to regenerate" mistake at
+      # the latest possible moment.
+      - name: Verify SBOM artifacts are committed and up to date
         run: |
-          if ! git diff --exit-code LICENSE-3rd-Party.md; then
+          if ! git diff --exit-code sbom.cdx.json LICENSE-3rd-Party.md; then
             echo ""
             echo "============================================================"
-            echo "ERROR: LICENSE-3rd-Party.md is out of date."
+            echo "ERROR: SBOM artifacts are out of date."
             echo ""
             echo "A pip dependency was added or changed without regenerating"
-            echo "the third-party license file. Fix this before re-tagging:"
+            echo "the SBOM. Fix this before re-tagging:"
             echo ""
             echo "  source .venv/bin/activate"
             echo "  pip install -r scripts/requirements/requirements-mac.txt"
-            echo "  pip install pip-licenses"
-            echo "  ./scripts/build/generate-license-third-party.sh"
-            echo "  git add LICENSE-3rd-Party.md"
-            echo "  git commit -m 'chore: regenerate third-party license file'"
+            echo "  pip install 'cyclonedx-bom>=7.0.0'"
+            echo "  python scripts/build/generate_sbom.py"
+            echo "  git add sbom.cdx.json LICENSE-3rd-Party.md"
+            echo "  git commit -m 'chore: regenerate SBOM and third-party license file'"
             echo "  git tag -d ${GITHUB_REF_NAME} && git push --delete origin ${GITHUB_REF_NAME}"
             echo "  git tag ${GITHUB_REF_NAME} && git push origin ${GITHUB_REF_NAME}"
             echo "============================================================"
             exit 1
           fi
-          echo "LICENSE-3rd-Party.md matches the freshly-generated version."
+          echo "sbom.cdx.json and LICENSE-3rd-Party.md match the freshly-generated versions."
+
+      # --- Upload SBOM as a release artifact for procurement/security ---
+      - name: Upload SBOM as release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cdx.json
+          if-no-files-found: error
+          retention-days: 90
 
       # --- Build the app + DMG ---
       - name: Build distribution

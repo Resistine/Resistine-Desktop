@@ -566,7 +566,14 @@ else
     # runs, but local dev builds may skip generation. Warn loudly so it's
     # obvious in the build log.
     echo "    Warning: LICENSE-3rd-Party.md not found at repo root."
-    echo "    Run scripts/build/generate-license-third-party.sh to create it."
+    echo "    Run scripts/build/generate_sbom.py to create it."
+fi
+if [ -f "$PYTHON_UI_PATH/sbom.cdx.json" ]; then
+    cp "$PYTHON_UI_PATH/sbom.cdx.json" "$PYTHON_APP/Contents/Resources/sbom.cdx.json"
+    echo "    sbom.cdx.json copied"
+else
+    echo "    Warning: sbom.cdx.json not found at repo root."
+    echo "    Run scripts/build/generate_sbom.py to create it."
 fi
 
 

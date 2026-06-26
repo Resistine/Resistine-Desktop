@@ -75,6 +75,7 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdi
 ; (see LicenseFile= in [Setup] above).
 Source: "..\..\LICENSE.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\LICENSE-3rd-Party.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\..\sbom.cdx.json"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 ; Bundled dependency installers — only extracted when the dep is missing
 Source: "deps\python-3.13.13-amd64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall nocompression; Check: NeedPythonInstall
 Source: "deps\wireguard-amd64.msi"; DestDir: "{tmp}"; Flags: deleteafterinstall nocompression; Check: NeedWireGuardInstall
