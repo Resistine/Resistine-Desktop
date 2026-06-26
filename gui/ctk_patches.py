@@ -19,16 +19,17 @@ import customtkinter.windows.widgets.ctk_scrollable_frame as _sf
 
 
 # ── Cross-platform: CTkScrollableFrame string-widget bugfix ─────────────
-_orig_check = _sf.CTkScrollableFrame.check_if_master_is_canvas
+# CustomTkinter 5.x had a bug where passing a string widget crashed; 6.0+
+# removed the offending method entirely. Guard so this no-ops on newer CTk.
+if hasattr(_sf.CTkScrollableFrame, "check_if_master_is_canvas"):
+    _orig_check = _sf.CTkScrollableFrame.check_if_master_is_canvas
 
+    def _patched_check(self, widget):
+        if isinstance(widget, str):
+            return False
+        return _orig_check(self, widget)
 
-def _patched_check(self, widget):
-    if isinstance(widget, str):
-        return False
-    return _orig_check(self, widget)
-
-
-_sf.CTkScrollableFrame.check_if_master_is_canvas = _patched_check
+    _sf.CTkScrollableFrame.check_if_master_is_canvas = _patched_check
 
 
 # ── Windows: resize performance patch ───────────────────────────────────
