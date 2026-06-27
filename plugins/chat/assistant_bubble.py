@@ -8,6 +8,7 @@ import customtkinter
 
 from plugins.chat.fonts import _BASE_SIZE, RESISTINE_BLUE, get_theme_colors, ui_family
 from plugins.chat.markdown_renderer import MarkdownRenderer
+from plugins.chat.markdown_utils import strip_streaming_md
 from utils.logger import logger
 
 # Streaming widget choice: CTkLabel + wraplength. Earlier this used tk.Text
@@ -141,10 +142,12 @@ class AssistantBubble(customtkinter.CTkFrame):
     def append_streaming_chunk(self, delta: str) -> None:
         """Append a chunk delta to the streaming placeholder.
 
-        Maintains accumulated text on the bubble itself so the label can
-        be re-rendered with the full text (CTkLabel needs the complete
-        string — it doesn't support incremental append). Cheaper than it
-        sounds because StreamController._poll batches.
+        Displays the accumulated text with markdown syntax STRIPPED —
+        so the user sees clean prose during streaming instead of literal
+        ``**bold**`` markers. MarkdownRenderer takes over at finalize
+        and applies the real formatting; the visual transition is a
+        graceful upgrade (plain → bold/italic) rather than the previous
+        jarring "raw → re-rendered" flip the user complained about.
         """
         if self._thinking_label is not None:
             self._stop_thinking()
@@ -154,7 +157,8 @@ class AssistantBubble(customtkinter.CTkFrame):
             return
         self._streamed_text = getattr(self, "_streamed_text", "") + delta
         try:
-            self._streaming_label.configure(text=self._streamed_text)
+            self._streaming_label.configure(
+                text=strip_streaming_md(self._streamed_text))
         except tk.TclError:
             self._streaming_label = None
 
@@ -163,6 +167,7 @@ class AssistantBubble(customtkinter.CTkFrame):
 
         Used by the error path to show 'Error: ...' in place of any
         streamed content. Chunk paths should use append_streaming_chunk.
+        Skips the markdown strip — error messages aren't markdown.
         """
         if self._thinking_label is not None:
             self._stop_thinking()
