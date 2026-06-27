@@ -25,6 +25,40 @@ _HEADING_RE = re.compile(r'^\s*#{1,6}\s+')
 _BLOCKQUOTE_RE = re.compile(r'^\s*>\s?')
 _HRULE_RE = re.compile(r'^\s*(?:---|\*\*\*|___)\s*$')
 _LIST_BULLET_RE = re.compile(r'^(\s*)([*+-])\s+')
+# Markdown table header-separator: `|---|---|` or `|:--:|:--|` (alignment
+# markers allowed). Used to identify and drop the divider line that
+# would otherwise read as ASCII noise in a streaming prose view.
+_TABLE_SEP_CHARS = set("|-: \t")
+
+
+def _is_table_row(line: str) -> bool:
+    """A line that looks like a markdown table row: starts and ends with
+    ``|`` and has at least two cell separators."""
+    stripped = line.strip()
+    return (stripped.startswith('|')
+            and stripped.endswith('|')
+            and stripped.count('|') >= 2)
+
+
+def _is_table_separator(line: str) -> bool:
+    """A line that contains only the separator characters used in a
+    markdown table header divider (``|``, ``-``, ``:``, whitespace)."""
+    stripped = line.strip()
+    return (bool(stripped)
+            and not (set(stripped) - _TABLE_SEP_CHARS)
+            and '-' in stripped)
+
+
+def _strip_table_row(line: str) -> str:
+    """Convert ``| cell | cell |`` to ``cell  cell`` so the row reads as
+    plain text without the pipe noise."""
+    stripped = line.strip()
+    if stripped.startswith('|'):
+        stripped = stripped[1:]
+    if stripped.endswith('|'):
+        stripped = stripped[:-1]
+    cells = [c.strip() for c in stripped.split('|')]
+    return '  '.join(cells)
 
 
 def strip_streaming_md(text: str) -> str:
@@ -71,6 +105,17 @@ def strip_streaming_md(text: str) -> str:
         # Horizontal rules → blank line so the visual break is preserved.
         if _HRULE_RE.match(line):
             out_lines.append("")
+            continue
+        # Markdown table: the divider line (`|---|---|`) is pure noise
+        # in a prose view — drop it. Data + header rows get their
+        # outer pipes stripped and the inner ones collapsed to two
+        # spaces, so the row reads as space-aligned columns rather
+        # than `| 011 | francis_ubuntu | 10.49.64.5 |`. MarkdownRenderer
+        # rebuilds the proper table at finalize.
+        if _is_table_separator(line):
+            continue
+        if _is_table_row(line):
+            out_lines.append(strip_inline_md(_strip_table_row(line)))
             continue
         # Heading hashes → the heading text alone. Loses the size cue
         # (we can't restyle within a single-font CTkLabel) but removes
