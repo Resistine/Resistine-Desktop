@@ -70,8 +70,18 @@ else
     # The previous version swallowed all four into "credentials not
     # found", which was wrong for 3 of the 4 cases.
     echo "  Checking notarization credentials..."
-    notarize_probe="$(xcrun notarytool history --keychain-profile "resistine-notarize" 2>&1)"
-    notarize_rc=$?
+    # `set -e` is active and command substitution propagates non-zero
+    # exits from the inner command — meaning a plain
+    #   notarize_probe="$(xcrun notarytool history ...)"
+    # would kill the entire build script on Apple's 403 / 401 / network
+    # errors before we ever get to print a diagnostic. Wrapping the
+    # assignment in an `if` block catches the failure so `set -e`
+    # doesn't trip, AND lets us record the exit code AND the output.
+    if notarize_probe="$(xcrun notarytool history --keychain-profile "resistine-notarize" 2>&1)"; then
+        notarize_rc=0
+    else
+        notarize_rc=$?
+    fi
     if [ $notarize_rc -eq 0 ]; then
         echo "  Notarization credentials found"
     else
