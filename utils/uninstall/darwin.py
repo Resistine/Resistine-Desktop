@@ -277,8 +277,18 @@ def _remove_clamav_daemons(admin_cmds):
             f"launchctl bootout system/{label} 2>/dev/null || true",
         )
 
-    # Kill running ClamAV processes (root-owned, needs admin)
-    admin_cmds.append("pkill -f freshclam-update.sh 2>/dev/null || true")
+    # Kill running ClamAV processes (root-owned, needs admin).
+    #
+    # `[f]` regex trick — `pkill -f` matches against the full command
+    # line, and our own admin shell script (passed verbatim to
+    # `osascript -e`) contains the literal text we'd otherwise be
+    # searching for. Without the bracket trick, pkill matches its own
+    # parent shell/osascript and SIGKILLs them, surfacing to the user
+    # as `exit code -9` with no output. `[f]reshclam-update.sh`
+    # matches `freshclam-update.sh` in REAL process command lines via
+    # the one-char character class, but the literal string
+    # `[f]reshclam-update.sh` doesn't appear anywhere else.
+    admin_cmds.append("pkill -f '[f]reshclam-update.sh' 2>/dev/null || true")
     admin_cmds.append("pkill -x freshclam 2>/dev/null || true")
     admin_cmds.append("pkill -x clamonacc 2>/dev/null || true")
     admin_cmds.append("pkill -x clamd 2>/dev/null || true")
@@ -346,8 +356,17 @@ def _collect_wazuh_admin_cmds(admin_cmds):
         f"launchctl bootout system '{_sq(WAZUH_LAUNCHD_PLIST)}' 2>/dev/null || true")
     admin_cmds.append(
         f"'{_sq(_WAZUH_CONTROL)}' stop 2>/dev/null || true")
+    # `[w]` regex trick — see _remove_clamav_daemons for the full
+    # explanation. The literal string `/Library/Ossec/bin/wazuh-`
+    # appears in the bundled admin script that osascript runs, so
+    # `pkill -9 -f '/Library/Ossec/bin/wazuh-'` would match its own
+    # parent /bin/sh and osascript, SIGKILL them, and surface as
+    # `Privileged cleanup: exit code -9` with no output. The bracket
+    # form matches `wazuh-` in real Wazuh agent command lines via
+    # the one-char character class, but `[w]azuh-` itself never
+    # appears as a literal substring of any other process.
     admin_cmds.append(
-        "pkill -9 -f '/Library/Ossec/bin/wazuh-' 2>/dev/null || true")
+        "pkill -9 -f '/Library/Ossec/bin/[w]azuh-' 2>/dev/null || true")
     # Identity wipe — same semantics as remove_agent(wipe_keys=True).
     admin_cmds.append(f"rm -f '{_sq(_KEY_BACKUP)}'")
     admin_cmds.append(
