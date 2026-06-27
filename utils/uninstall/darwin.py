@@ -43,8 +43,12 @@ def is_available():
 def run_uninstall(app, progress_callback=None):
     """Execute the full macOS uninstall sequence.
 
-    Collects all commands that need admin privileges and runs them in a
-    single ``osascript`` call so the user only sees one password prompt.
+    SINGLE password prompt: every command that requires admin privileges
+    (Wazuh agent removal, ClamAV cleanup, system-level config, app-bundle
+    removal) is collected into one shell script and run via ONE
+    ``osascript with administrator privileges`` call. Previous versions
+    asked for the password 2-3 times because Wazuh removal and app-bundle
+    removal each had their own prompt — those are now batched in.
     """
 
     def _progress(msg):
@@ -60,14 +64,13 @@ def run_uninstall(app, progress_callback=None):
 
     # -- Phase 1: Non-privileged work + collect admin commands ---------------
 
-    # Wazuh — plugin path triggers its own admin prompt (unavoidable);
-    # fallback path adds commands to admin_cmds instead.
-    _progress("Removing SIEM agent...")
+    # Wazuh — emits commands into admin_cmds (no separate prompt anymore).
+    _progress("Preparing SIEM agent removal...")
     try:
-        _remove_wazuh_agent(admin_cmds)
+        _collect_wazuh_admin_cmds(admin_cmds)
     except Exception as e:
-        logger.error(f"[UNINSTALL] Failed — SIEM agent: {e}")
-        errors.append(f"SIEM agent: {e}")
+        logger.error(f"[UNINSTALL] Failed — SIEM agent prep: {e}")
+        errors.append(f"SIEM agent prep: {e}")
 
     # ClamAV — SMAppService (no admin), then collect admin commands
     _progress("Stopping ClamAV daemons...")
@@ -104,27 +107,38 @@ def run_uninstall(app, progress_callback=None):
         logger.error(f"[UNINSTALL] Failed — App config: {e}")
         errors.append(f"App config: {e}")
 
-    # -- Phase 2: Run all privileged commands in one admin prompt -------------
+    # App bundle removal — append to admin_cmds so it runs in the same
+    # prompt instead of asking for the password again.
+    try:
+        _collect_app_bundle_admin_cmd(admin_cmds)
+    except Exception as e:
+        logger.error(f"[UNINSTALL] Failed — App bundle prep: {e}")
+        errors.append(f"App bundle prep: {e}")
+
+    # -- Phase 2: Run all privileged commands in ONE admin prompt -----------
 
     if admin_cmds:
-        _progress("Running privileged cleanup...")
+        _progress("Authenticating for system cleanup...")
         try:
             _run_privileged(admin_cmds)
+        except _UserCancelled:
+            # User clicked Cancel on the password dialog. Distinguish
+            # from an actual failure — the rest of the uninstall ran
+            # but the privileged steps were skipped at the user's
+            # request, so don't blast a red error label at them.
+            return (False, "Uninstall cancelled at password prompt.")
         except Exception as e:
             logger.error(f"[UNINSTALL] Failed — Privileged cleanup: {e}")
             errors.append(f"Privileged cleanup: {e}")
 
-    # -- Phase 3: Remove app bundle (may need its own admin prompt) ----------
-    _progress("Removing application...")
-    try:
-        _remove_app_bundle()
-    except Exception as e:
-        logger.error(f"[UNINSTALL] Failed — App bundle: {e}")
-        errors.append(f"App bundle: {e}")
-
     if errors:
         return (False, f"Completed with errors: {'; '.join(errors)}")
     return (True, "Resistine has been uninstalled successfully.")
+
+
+class _UserCancelled(Exception):
+    """User clicked Cancel on the admin password prompt."""
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -133,20 +147,40 @@ def run_uninstall(app, progress_callback=None):
 
 
 def _run_privileged(cmds):
-    """Run a list of shell commands in a single admin osascript prompt."""
+    """Run a list of shell commands in a single admin osascript prompt.
+
+    Each command is joined with `;` so a failure in one doesn't abort the
+    rest — every command also has its own `|| true` fallback inside
+    sub-helpers so transient state (e.g. plist already gone) doesn't
+    short-circuit the cleanup.
+
+    On failure, the prior version raised "Privileged cleanup failed: "
+    with an empty message because osascript surfaces error text via
+    stdout, not stderr (and exit code 1 covers everything from "user
+    cancelled" to "execution error"). Capture both streams and the exit
+    code so the UI shows something actionable.
+    """
     script = "; ".join(cmds)
     escaped = script.replace("\\", "\\\\").replace('"', '\\"')
     cmd = [
         "osascript", "-e",
         f'do shell script "{escaped}" with administrator privileges',
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    # 5-minute timeout: a slow Wazuh shutdown + system extension dance
+    # can take 30-60 s; the 60 s ceiling was tight.
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     if result.returncode == 0:
         logger.info("[UNINSTALL] Privileged cleanup completed")
-    else:
-        raise OSError(
-            f"Privileged cleanup failed: {result.stderr.strip()}"
-        )
+        return
+    # osascript exit codes:
+    #   -128 = user clicked Cancel on the password dialog
+    #     1  = generic error (auth failed, shell script returned nonzero, etc.)
+    err = (result.stderr or "").strip() or (result.stdout or "").strip()
+    if "User canceled" in err or "User cancelled" in err or "-128" in err:
+        logger.info("[UNINSTALL] User cancelled the admin prompt")
+        raise _UserCancelled()
+    detail = err or f"exit code {result.returncode}"
+    raise OSError(detail)
 
 
 # ---------------------------------------------------------------------------
@@ -227,46 +261,73 @@ def _remove_clamav_daemons(admin_cmds):
         admin_cmds.append(f"rm -rf '{_SYSTEM_CLAMAV_DIR}'")
 
 
-def _remove_wazuh_agent(admin_cmds):
-    """Stop and remove the Wazuh SIEM agent if installed.
+def _collect_wazuh_admin_cmds(admin_cmds):
+    """Append every Wazuh-agent teardown command into ``admin_cmds``.
 
-    When the Wazuh plugin is available, delegates to its ``remove_agent()``
-    (which triggers its own admin prompt — unavoidable).  The key backup
-    deletion is added to ``admin_cmds`` so it runs in the batched prompt.
-
-    When the plugin is unavailable, all commands go into ``admin_cmds``.
+    Previously delegated to ``plugins.wazuh.agent.wazuh_functions_darwin.
+    remove_agent()`` which ran its OWN ``osascript with administrator
+    privileges`` — that's the second of the user's three password
+    prompts. Now we emit the same commands inline so they batch with
+    the rest of the privileged cleanup. wipe_keys=True semantics
+    (logout-style full identity wipe) is embedded directly: delete
+    /Library/Ossec, the launchd plist, the key backup file, and the
+    System Keychain entry.
     """
+    # Wazuh constants — keep in sync with plugins.wazuh.config /
+    # wazuh_functions_darwin. Imported lazily so an environment without
+    # the Wazuh plugin (e.g. dev/test) still uninstalls cleanly.
     try:
         from plugins.wazuh.agent.wazuh_functions_darwin import (
-            _KEY_BACKUP,
-            remove_agent,
+            _KEY_BACKUP, _KC_ACCOUNT, _KC_SERVICE, _KEYCHAIN,
+            _WAZUH_CONTROL, is_agent_installed, _is_service_loaded,
+            _has_keychain_entry,
         )
-        remove_agent()
-        # Batch key backup deletion with the other admin commands
-        if os.path.exists(_KEY_BACKUP):
-            escaped = _KEY_BACKUP.replace("'", "'\\''")
-            admin_cmds.append(f"rm -f '{escaped}'")
-        return
+        from plugins.wazuh.config import (
+            WAZUH_INSTALL_DIR, WAZUH_LAUNCHD_PLIST,
+        )
+        agent_present = (
+            is_agent_installed()
+            or _is_service_loaded()
+            or os.path.exists(_KEY_BACKUP)
+            or _has_keychain_entry()
+        )
     except ImportError:
-        logger.info("[UNINSTALL] Wazuh plugin not available, using inline removal")
+        # Fallback paths matching the plugin's defaults.
+        _WAZUH_CONTROL = "/Library/Ossec/bin/wazuh-control"
+        WAZUH_LAUNCHD_PLIST = "/Library/LaunchDaemons/com.wazuh.agent.plist"
+        WAZUH_INSTALL_DIR = "/Library/Ossec"
+        _KEY_BACKUP = "/Library/Application Support/Resistine/wazuh_client.keys"
+        _KC_SERVICE = "com.resistine.wazuh.client.keys"
+        _KC_ACCOUNT = "wazuh-agent"
+        _KEYCHAIN = "/Library/Keychains/System.keychain"
+        agent_present = (
+            os.path.exists(WAZUH_INSTALL_DIR)
+            or os.path.exists(WAZUH_LAUNCHD_PLIST)
+            or os.path.exists(_KEY_BACKUP)
+        )
 
-    # Fallback: collect inline removal commands
-    wazuh_control = "/Library/Ossec/bin/wazuh-control"
-    wazuh_plist = "/Library/LaunchDaemons/com.wazuh.agent.plist"
-    ossec_dir = "/Library/Ossec"
-    key_backup = "/Library/Application Support/Resistine/wazuh_client.keys"
-
-    if not os.path.exists(ossec_dir) and not os.path.exists(wazuh_plist):
+    if not agent_present:
         logger.info("[UNINSTALL] Wazuh agent not installed, skipping")
         return
 
-    admin_cmds.append(f"'{wazuh_control}' stop 2>/dev/null || true")
+    # Shell-quote keychain account/service to defend against any future
+    # rename containing a quote.
+    def _sq(s: str) -> str:
+        return s.replace("'", "'\\''")
+
     admin_cmds.append(
-        f"launchctl bootout system '{wazuh_plist}' 2>/dev/null || true",
-    )
-    admin_cmds.append(f"rm -rf '{ossec_dir}'")
-    admin_cmds.append(f"rm -f '{wazuh_plist}'")
-    admin_cmds.append(f"rm -f '{key_backup}'")
+        f"launchctl bootout system '{_sq(WAZUH_LAUNCHD_PLIST)}' 2>/dev/null || true")
+    admin_cmds.append(
+        f"'{_sq(_WAZUH_CONTROL)}' stop 2>/dev/null || true")
+    admin_cmds.append(
+        "pkill -9 -f '/Library/Ossec/bin/wazuh-' 2>/dev/null || true")
+    # Identity wipe — same semantics as remove_agent(wipe_keys=True).
+    admin_cmds.append(f"rm -f '{_sq(_KEY_BACKUP)}'")
+    admin_cmds.append(
+        f"security delete-generic-password -s '{_sq(_KC_SERVICE)}' "
+        f"-a '{_sq(_KC_ACCOUNT)}' '{_sq(_KEYCHAIN)}' 2>/dev/null || true")
+    admin_cmds.append(f"rm -rf '{_sq(WAZUH_INSTALL_DIR)}'")
+    admin_cmds.append(f"rm -f '{_sq(WAZUH_LAUNCHD_PLIST)}'")
 
 
 def _stop_vpn_tunnel():
@@ -490,13 +551,19 @@ def _remove_keychain_items():
         )
 
 
-def _remove_app_bundle():
-    """Remove the Resistine.app bundle.
+def _collect_app_bundle_admin_cmd(admin_cmds):
+    """Append the ``rm -rf /Applications/Resistine.app`` command into
+    ``admin_cmds`` so it runs in the SAME osascript prompt as everything
+    else. Previously the bundle removal had its own prompt — the third
+    of the user's three password requests.
 
-    The bundle in /Applications is typically root-owned, so we use an
-    admin ``osascript`` prompt.  macOS allows deleting files that are in
-    use — the kernel keeps the data until the last file descriptor closes,
-    so the running process won't crash.
+    macOS allows deleting files that are in use — the kernel keeps the
+    data until the last file descriptor closes — so the running process
+    can issue its own deletion and remain alive long enough to display
+    the success message and exit cleanly.
+
+    Returns silently when there's nothing to remove (dev mode / source
+    run / already gone).
     """
     if not getattr(sys, "frozen", False):
         logger.info("[UNINSTALL] Not a frozen app, skipping bundle removal")
@@ -511,32 +578,11 @@ def _remove_app_bundle():
         return
 
     if not os.path.exists(app_bundle):
-        logger.info("[UNINSTALL] App bundle not found")
+        logger.info("[UNINSTALL] App bundle not found, skipping")
         return
 
     escaped = app_bundle.replace("'", "'\\''")
-
-    # Try non-privileged first (works if user-owned)
-    try:
-        shutil.rmtree(app_bundle)
-        logger.info(f"[UNINSTALL] Removed {app_bundle}")
-        return
-    except PermissionError:
-        logger.debug("[UNINSTALL] App bundle requires admin to remove")
-
-    # Fall back to admin removal
-    cmd = [
-        "osascript", "-e",
-        f"do shell script \"rm -rf '{escaped}'\" "
-        f"with administrator privileges",
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    if result.returncode == 0:
-        logger.info(f"[UNINSTALL] Removed {app_bundle} (admin)")
-    else:
-        raise OSError(
-            f"App bundle removal failed: {result.stderr.strip()}"
-        )
+    admin_cmds.append(f"rm -rf '{escaped}'")
 
 
 def _find_cli_path():

@@ -483,7 +483,26 @@ class Plugin(BasePlugin):
             success, message = uninstall.run_uninstall(self.app, progress_callback=_progress)
 
             if success:
-                self.app.destroy()
+                # Fully exit the process — destroy() alone leaves daemon
+                # threads (stream worker, Wazuh installer service,
+                # antivirus auto-update loop) running and on macOS the
+                # tray icon can keep the process alive. Hard-exit so
+                # the user sees the app actually quit and the bundle
+                # rm we just queued has no live FDs to wait on.
+                self.uninstall_status_label.configure(
+                    text="Uninstalled. Closing…", text_color=("#0D5394", "#60A5FA"))
+                self.app.update_idletasks()
+                try:
+                    self.app.destroy()
+                except Exception:
+                    pass
+                # Schedule a hard exit slightly after destroy so any
+                # last Tk callbacks drain. os._exit bypasses atexit
+                # but that's the point — we don't want a stuck thread
+                # holding the process alive after the user said "uninstall".
+                import os as _os
+                import threading as _th
+                _th.Timer(0.3, lambda: _os._exit(0)).start()
             else:
                 self.uninstall_button.configure(state="normal")
                 self.uninstall_status_label.configure(text=message, text_color="red")
