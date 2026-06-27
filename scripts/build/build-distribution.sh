@@ -62,22 +62,48 @@ SKIP_NOTARIZE=${SKIP_NOTARIZE:-false}
 if [ "$SKIP_NOTARIZE" = true ]; then
     echo "  Skipping notarization (SKIP_NOTARIZE=true)"
 else
-    # Verify notarization credentials are stored
+    # Probe notarytool. Capture both streams so we can distinguish:
+    #   (a) credentials genuinely missing       → tell user to store them
+    #   (b) Apple agreement expired (HTTP 403)  → tell user to accept it
+    #   (c) auth failure (bad password/Team ID) → tell user to re-store
+    #   (d) network down                        → suggest retry
+    # The previous version swallowed all four into "credentials not
+    # found", which was wrong for 3 of the 4 cases.
     echo "  Checking notarization credentials..."
-    if ! xcrun notarytool history --keychain-profile "resistine-notarize" > /dev/null 2>&1; then
+    notarize_probe="$(xcrun notarytool history --keychain-profile "resistine-notarize" 2>&1)"
+    notarize_rc=$?
+    if [ $notarize_rc -eq 0 ]; then
+        echo "  Notarization credentials found"
+    else
         echo ""
-        echo "  Warning: Notarization credentials not found."
-        echo "  Store them with:"
-        echo "    xcrun notarytool store-credentials \"resistine-notarize\" \\"
-        echo "      --apple-id \"jackie@resistine.com\" \\"
-        echo "      --team-id \"$TEAM_ID\" \\"
-        echo "      --password \"<your-app-specific-password>\""
+        echo "  ! Notarization pre-check failed:"
+        echo "$notarize_probe" | sed 's/^/      /'
         echo ""
-        echo "  Press Enter to continue without notarization, or Ctrl+C to cancel..."
+        if echo "$notarize_probe" | grep -qiE "agreement is missing or has expired|required agreement"; then
+            echo "  Apple Developer team agreement needs to be (re-)accepted."
+            echo "  An Account Holder / Admin on Team ID $TEAM_ID must:"
+            echo "    1. Sign in to https://developer.apple.com/account"
+            echo "    2. Accept the pending agreement(s) banner at the top"
+            echo "    3. Re-run this script — no credential re-storage needed"
+        elif echo "$notarize_probe" | grep -qiE "could not find|no such keychain|profile not found"; then
+            echo "  Notarization keychain profile is missing. Store it with:"
+            echo "    xcrun notarytool store-credentials \"resistine-notarize\" \\"
+            echo "      --apple-id \"jackie@resistine.com\" \\"
+            echo "      --team-id \"$TEAM_ID\" \\"
+            echo "      --password \"<app-specific-password from appleid.apple.com>\""
+        elif echo "$notarize_probe" | grep -qiE "401|unauthorized|invalid credentials"; then
+            echo "  Stored credentials were rejected by Apple. Re-store with"
+            echo "  a fresh app-specific password from appleid.apple.com."
+        elif echo "$notarize_probe" | grep -qiE "could not connect|network|timeout"; then
+            echo "  Could not reach Apple's notarization service. Check VPN /"
+            echo "  network connectivity and retry."
+        fi
+        echo ""
+        echo "  Press Enter to continue WITHOUT notarization (the resulting"
+        echo "  app will need notarization done manually before distribution),"
+        echo "  or Ctrl+C to cancel and fix the problem first..."
         read -r
         SKIP_NOTARIZE=true
-    else
-        echo "  Notarization credentials found"
     fi
 fi
 
