@@ -623,9 +623,25 @@ class ChatUIMixin:
                 t.transient(self.app)
             except Exception:
                 pass
+            # macOS: a borderless overrideredirect Toplevel steals focus
+            # when clicked. Even after we withdraw() it on click, the
+            # main window never re-receives focus — the user has to
+            # click on the desktop and back into the app to "wake it
+            # up". The standard Tk macOS escape hatch is the
+            # `MacWindowStyle` private call: "noActivates" tells the
+            # window server the panel never activates, so clicks are
+            # received and processed without transferring focus to it.
+            if sys.platform == "darwin":
+                try:
+                    t.tk.call(
+                        "::tk::unsupported::MacWindowStyle",
+                        "style", t._w, "plain", "noActivates",
+                    )
+                except Exception:
+                    pass
             t.withdraw()
             # Clicking the dimmed area collapses the drawer.
-            t.bind("<Button-1>", lambda _e: self._hide_sidebar())
+            t.bind("<Button-1>", lambda _e: self._on_dim_click())
             return t
 
         try:
@@ -746,6 +762,24 @@ class ChatUIMixin:
                 self._drawer_placed = True
         except Exception:
             pass
+
+    def _on_dim_click(self) -> None:
+        """Dim-overlay click handler — closes the drawer and re-anchors
+        focus to the main window on macOS.
+
+        The macOS "noActivates" style we set in _ensure_dim_overlay is
+        normally enough to prevent focus theft, but on some macOS
+        versions / Tk builds the Toplevel still briefly grabs focus
+        when clicked. Re-focusing the app here is a no-cost safety
+        net — without it the user reports that subsequent clicks in
+        the chat go nowhere until they click on the desktop and back.
+        """
+        self._hide_sidebar()
+        if sys.platform == "darwin":
+            try:
+                self.app.focus_force()
+            except Exception:
+                pass
 
     def _hide_sidebar(self) -> None:
         # Single source of truth — see _show_sidebar. Clear it here so closing
