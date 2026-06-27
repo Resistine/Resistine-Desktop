@@ -10,6 +10,21 @@ from plugins.chat.fonts import _BASE_SIZE, RESISTINE_BLUE, get_theme_colors, ui_
 from plugins.chat.markdown_renderer import MarkdownRenderer
 from utils.logger import logger
 
+# Streaming widget choice: CTkLabel + wraplength. Earlier this used tk.Text
+# with insert("end", delta) for O(delta) per-chunk cost, but tk.Text's
+# auto-sizing via count("displaylines") returns wrong values before the
+# widget is mapped/laid out — for the first few chunks the widget thinks
+# every char wraps (because width hasn't been resolved yet), reporting
+# 30+ displaylines for a 30-char message and rendering as a huge empty
+# black rectangle that takes up the entire chat area. CTkLabel handles
+# height through wraplength automatically.
+#
+# The O(N^2) chunk-replay cost is acceptable because StreamController._poll
+# batches every chunk drained in one tick into a single on_chunk call —
+# so we get ~20 Hz updates regardless of token rate, and the total cost
+# over an N-token response is O(N^2 / batch_size), roughly 50x cheaper
+# than per-token at typical 50 tok/s.
+
 # Animated thinking indicator: Braille spinner sequence. Smoother than the
 # old dot-cycle ("Thinking", "Thinking.", "Thinking..", "Thinking...") and
 # only changes one glyph per frame, so each tick is a single configure()
@@ -45,7 +60,7 @@ class AssistantBubble(customtkinter.CTkFrame):
 
         self._is_dark = is_dark
         self._max_width = max_width
-        self._streaming_text: tk.Text | None = None
+        self._streaming_label: customtkinter.CTkLabel | None = None
         self._renderer: MarkdownRenderer | None = None
         self._thinking_label: customtkinter.CTkLabel | None = None
         self._thinking_iter = itertools.cycle(_THINK_SPINNER)
@@ -101,96 +116,64 @@ class AssistantBubble(customtkinter.CTkFrame):
 
     # -- streaming ----------------------------------------------------------
 
-    def _build_streaming_widget(self) -> None:
-        """Use a tk.Text for the streaming placeholder so each new chunk
-        is an O(len(delta)) append instead of an O(len(accumulated))
-        relayout. CTkLabel.configure(text=...) replaces the full string,
-        rewrapping every token boundary every time — the total cost over
-        N chunks is O(N^2). tk.Text supports incremental insert(end, ...)
-        without re-measuring earlier content.
+    def _build_streaming_label(self) -> None:
+        """CTkLabel-based streaming placeholder.
+
+        wraplength auto-heights the label to fit the wrapped text, no
+        manual sizing needed (which is what made the prior tk.Text
+        version render as a huge empty rectangle before the widget was
+        mapped). Each chunk replaces the label text — O(N) per call —
+        but StreamController._poll batches all chunks drained in a tick
+        into a single on_chunk dispatch, so the effective cost over N
+        tokens is O(N^2 / batch_size), ~50x cheaper than per-token at
+        50 tok/s and indistinguishable from native streaming to the eye.
         """
-        is_dark = self._is_dark
-        bg = "#1a1a1a" if is_dark else "#FFFFFF"
-        self._streaming_text = tk.Text(
-            self, bg=bg, fg=self._bubble_fg, wrap="word",
-            font=(ui_family(), _BASE_SIZE),
-            borderwidth=0, highlightthickness=0,
-            insertwidth=0, cursor="arrow",
-            padx=16, pady=8, height=1,
+        self._streaming_label = customtkinter.CTkLabel(
+            self, text="", fg_color="transparent",
+            text_color=self._bubble_fg, wraplength=self._max_width,
+            font=customtkinter.CTkFont(
+                family=ui_family(), size=_BASE_SIZE),
+            justify="left", anchor="nw",
         )
-        # Disable cursor + edit while still allowing tk.Text to autosize
-        # via configure(state="normal") around inserts.
-        self._streaming_text.bind("<Key>", lambda _e: "break")
-        # Force width to the bubble's max so wrap calculations are stable
-        # while chunks stream in.
-        self._streaming_text.configure(width=1)  # let pack() control width
-        self._streaming_text.pack(
-            fill="x", expand=True, padx=0, pady=0, anchor="w")
-        # Pin yview to top so a tall response doesn't auto-scroll itself
-        # out of view inside the bubble.
-        self._streaming_text["yscrollcommand"] = lambda *_a: None
+        self._streaming_label.pack(
+            fill="x", padx=16, pady=(6, 8), anchor="w")
 
     def append_streaming_chunk(self, delta: str) -> None:
-        """Append a single delta to the streaming widget.
+        """Append a chunk delta to the streaming placeholder.
 
-        Constant-time per call regardless of accumulated length. Called
-        once per stream tick by StreamController after chunk-batching.
+        Maintains accumulated text on the bubble itself so the label can
+        be re-rendered with the full text (CTkLabel needs the complete
+        string — it doesn't support incremental append). Cheaper than it
+        sounds because StreamController._poll batches.
         """
         if self._thinking_label is not None:
             self._stop_thinking()
-            self._build_streaming_widget()
-        tw = self._streaming_text
-        if tw is None or not delta:
+            self._build_streaming_label()
+            self._streamed_text = ""
+        if self._streaming_label is None or not delta:
             return
+        self._streamed_text = getattr(self, "_streamed_text", "") + delta
         try:
-            tw.configure(state="normal")
-            tw.insert("end", delta)
-            tw.configure(state="disabled")
-            # Auto-grow the widget to fit the rendered line count. Must
-            # use DISPLAYLINES (wrapped lines visible to the user), not
-            # the logical line count from index("end-1c"). A streamed
-            # single-paragraph answer typically has no newlines until
-            # finalize, so the logical count would stick at 1 and the
-            # widget would clip to one row — only the most recently
-            # streamed text would be visible, the rest scrolled out of
-            # view inside the tk.Text. Cap at 60 to bound bubble height;
-            # past that the chat-scroll takes over.
-            try:
-                dl = tw.count("1.0", "end-1c", "displaylines")
-                lines = (dl[0] if isinstance(dl, (list, tuple)) else dl) or 1
-            except Exception:
-                lines = int(tw.index("end-1c").split(".")[0])
-            tw.configure(height=max(1, min(int(lines), 60)))
+            self._streaming_label.configure(text=self._streamed_text)
         except tk.TclError:
-            self._streaming_text = None
+            self._streaming_label = None
 
-    # Back-compat for callers that still pass full accumulated text.
     def set_streaming_text(self, text: str) -> None:
-        """Replace the streaming placeholder with the full accumulated text.
+        """Replace the streaming placeholder with full text.
 
-        Kept for compatibility with the error path that wants to show
-        "Error: ..." in place of streamed content. Performance-sensitive
-        chunk paths should use append_streaming_chunk() instead.
+        Used by the error path to show 'Error: ...' in place of any
+        streamed content. Chunk paths should use append_streaming_chunk.
         """
         if self._thinking_label is not None:
             self._stop_thinking()
-            self._build_streaming_widget()
-        tw = self._streaming_text
-        if tw is None:
+            self._build_streaming_label()
+        if self._streaming_label is None:
             return
+        self._streamed_text = text
         try:
-            tw.configure(state="normal")
-            tw.delete("1.0", "end")
-            tw.insert("1.0", text)
-            tw.configure(state="disabled")
-            try:
-                dl = tw.count("1.0", "end-1c", "displaylines")
-                lines = (dl[0] if isinstance(dl, (list, tuple)) else dl) or 1
-            except Exception:
-                lines = int(tw.index("end-1c").split(".")[0])
-            tw.configure(height=max(1, min(int(lines), 60)))
+            self._streaming_label.configure(text=text)
         except tk.TclError:
-            self._streaming_text = None
+            self._streaming_label = None
 
     # -- finalize -----------------------------------------------------------
 
@@ -201,12 +184,12 @@ class AssistantBubble(customtkinter.CTkFrame):
         if getattr(self, "_renderer", None) is not None:
             return
         self._stop_thinking()
-        if self._streaming_text is not None:
+        if self._streaming_label is not None:
             try:
-                self._streaming_text.destroy()
+                self._streaming_label.destroy()
             except Exception:
                 pass
-            self._streaming_text = None
+            self._streaming_label = None
         # Keep the raw response so the whole thing (prose + tables + code) can
         # be copied in one click. Selecting across embedded table/code widgets
         # isn't possible in Tk (each is its own widget), so the Copy button is
@@ -290,9 +273,11 @@ class AssistantBubble(customtkinter.CTkFrame):
         if max_width == self._max_width:
             return
         self._max_width = max_width
-        # Streaming text widget wraps via pack(fill="x", expand=True), so its
-        # wrap width follows the bubble width automatically — no per-resize
-        # configure needed (which used to trigger a full re-measure).
+        if self._streaming_label is not None:
+            try:
+                self._streaming_label.configure(wraplength=max_width)
+            except Exception:
+                pass
         if self._renderer is not None \
                 and hasattr(self._renderer, "_update_width"):
             self._renderer._update_width(max_width)
