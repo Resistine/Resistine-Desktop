@@ -172,14 +172,41 @@ def _run_privileged(cmds):
     if result.returncode == 0:
         logger.info("[UNINSTALL] Privileged cleanup completed")
         return
-    # osascript exit codes:
-    #   -128 = user clicked Cancel on the password dialog
-    #     1  = generic error (auth failed, shell script returned nonzero, etc.)
-    err = (result.stderr or "").strip() or (result.stdout or "").strip()
-    if "User canceled" in err or "User cancelled" in err or "-128" in err:
+    # Capture BOTH streams so a future error has actionable detail.
+    err = (result.stderr or "").strip()
+    out = (result.stdout or "").strip()
+    combined = "\n".join(s for s in (err, out) if s).strip()
+    # Distinguish user-cancelled from a real failure. osascript surfaces
+    # the cancel as exit code 1 (or -128 on some macOS versions) with
+    # the phrase "User canceled" / "User cancelled" / "-128".
+    if (result.returncode == -128
+            or "User canceled" in combined
+            or "User cancelled" in combined
+            or "-128" in combined):
         logger.info("[UNINSTALL] User cancelled the admin prompt")
         raise _UserCancelled()
-    detail = err or f"exit code {result.returncode}"
+    # Always include the exit code, even when stderr/stdout is non-empty.
+    # The previous version dropped the code when stderr had any content,
+    # which made signal kills (exit 9 = SIGKILL, exit 137 = OOM-kill) and
+    # other non-textual failures indistinguishable from script errors.
+    if combined:
+        detail = f"{combined} (exit code {result.returncode})"
+    else:
+        # Most useful generic hint when the script returned no output —
+        # tends to be the OS killing osascript, not osascript itself
+        # erroring out. Surface the signal name when we recognize it.
+        sig_names = {
+            1: "SIGHUP", 2: "SIGINT", 9: "SIGKILL", 11: "SIGSEGV",
+            13: "SIGPIPE", 15: "SIGTERM", 137: "SIGKILL (OOM-killed)",
+        }
+        sig = sig_names.get(result.returncode, "")
+        detail = f"exit code {result.returncode}"
+        if sig:
+            detail += f" ({sig})"
+        # Hint at the most common cause when the script died with no
+        # output: the parent process tore down child handles while
+        # osascript was still running. Bug, not user error.
+        detail += " — privileged shell died with no output; this usually means a parent process killed it. Try the uninstall again."
     raise OSError(detail)
 
 
@@ -352,14 +379,71 @@ def _stop_vpn_tunnel():
         )
 
 
+_DEACTIVATOR_CLASS = None
+_DEACTIVATION_STATE = {"done_event": None, "error": None}
+
+
+def _get_deactivator_class():
+    """Cache the ``_Deactivator`` NSObject subclass at module level.
+
+    PyObjC registers a Python class as an Objective-C class the first
+    time it's defined. Re-running the class definition (e.g. on a
+    second uninstall click) logs the warning the user saw —
+    "_Deactivator is overriding existing Objective-C class". That
+    message was being treated as an error by the uninstall flow, so
+    a click that otherwise succeeded showed up red. Define the class
+    ONCE, lazily, and reuse the cached reference forever after.
+    """
+    global _DEACTIVATOR_CLASS
+    if _DEACTIVATOR_CLASS is not None:
+        return _DEACTIVATOR_CLASS
+    from Foundation import NSObject
+
+    class _Deactivator(NSObject):
+        # Talks to module-level _DEACTIVATION_STATE rather than capturing
+        # closures over per-call locals — locals from the first call
+        # would otherwise persist for every subsequent invocation.
+        def request_didFinishWithResult_(self, request, result):
+            logger.info(
+                f"[UNINSTALL] Extension deactivation finished: {result}")
+            ev = _DEACTIVATION_STATE.get("done_event")
+            if ev is not None:
+                ev.set()
+
+        def request_didFailWithError_(self, request, error):
+            msg = error.localizedDescription()
+            logger.error(f"[UNINSTALL] Extension deactivation failed: {msg}")
+            _DEACTIVATION_STATE["error"] = msg
+            ev = _DEACTIVATION_STATE.get("done_event")
+            if ev is not None:
+                ev.set()
+
+        def requestNeedsUserApproval_(self, request):
+            logger.info(
+                "[UNINSTALL] Extension deactivation needs user approval")
+
+        def request_actionForReplacingExtension_withExtension_(
+            self, request, existing, extension
+        ):
+            return 1  # Replace
+
+    _DEACTIVATOR_CLASS = _Deactivator
+    return _Deactivator
+
+
 def _deactivate_system_extension():
     """Deactivate the network extension via SystemExtensions framework.
 
     Blocks up to 15 seconds for the delegate callback, so the uninstall
     doesn't remove the app bundle while deactivation is still in flight.
+
+    If the extension isn't installed (because the app was never run, or
+    a prior uninstall already removed it), the OSSystemExtensionManager
+    returns a "no such extension" error which we treat as success — the
+    end state matches the goal.
     """
     try:
-        from Foundation import NSObject, NSOperationQueue
+        from Foundation import NSOperationQueue
         from SystemExtensions import (
             OSSystemExtensionManager,
             OSSystemExtensionRequest,
@@ -370,26 +454,9 @@ def _deactivate_system_extension():
 
     import threading
     done_event = threading.Event()
-    deactivation_error = []
-
-    class _Deactivator(NSObject):
-        def request_didFinishWithResult_(self, request, result):
-            logger.info(f"[UNINSTALL] Extension deactivation finished: {result}")
-            done_event.set()
-
-        def request_didFailWithError_(self, request, error):
-            msg = error.localizedDescription()
-            logger.error(f"[UNINSTALL] Extension deactivation failed: {msg}")
-            deactivation_error.append(msg)
-            done_event.set()
-
-        def requestNeedsUserApproval_(self, request):
-            logger.info("[UNINSTALL] Extension deactivation needs user approval")
-
-        def request_actionForReplacingExtension_withExtension_(
-            self, request, existing, extension
-        ):
-            return 1  # Replace
+    _DEACTIVATION_STATE["done_event"] = done_event
+    _DEACTIVATION_STATE["error"] = None
+    _Deactivator = _get_deactivator_class()
 
     try:
         deactivator = _Deactivator.alloc().init()
@@ -411,10 +478,23 @@ def _deactivate_system_extension():
                 "[UNINSTALL] Extension deactivation timed out after 15s "
                 "— continuing anyway"
             )
-        elif deactivation_error:
-            raise OSError(
-                f"Extension deactivation failed: {deactivation_error[0]}"
-            )
+            return
+        err = _DEACTIVATION_STATE.get("error")
+        if err:
+            # "no extension installed" is the desired end state, not
+            # an error — happens when the user clicks Uninstall a
+            # second time after the first one already deactivated.
+            low = err.lower()
+            if any(s in low for s in (
+                "no such extension",
+                "not found",
+                "no installed",
+                "is not installed",
+            )):
+                logger.info(
+                    "[UNINSTALL] Extension already deactivated, treating as success")
+                return
+            raise OSError(f"Extension deactivation failed: {err}")
     except OSError:
         raise
     except Exception as e:
