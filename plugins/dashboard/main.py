@@ -264,7 +264,8 @@ class Plugin(BasePlugin):
         _scale = self._widget_scale()
         window_width = self.app.winfo_width()
         if window_width <= 1:
-            window_width = int(self.app.winfo_screenwidth() * 0.7)
+            window_width = int(1344 * _scale)
+        window_width = int(window_width / _scale)
         content_width = max(1, window_width - _sidebar - _padding)
         if content_width < 480:
             return 1

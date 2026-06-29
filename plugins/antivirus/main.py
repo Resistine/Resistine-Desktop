@@ -889,11 +889,20 @@ class Plugin(BasePlugin):
                     and self._settings_frame.winfo_exists()
                 )
             )
-            # Pause the poll entirely when the screen isn't the active one. The
-            # cached screen stays alive, so without this the poll would keep
-            # firing in the background and re-render the banner during/after
-            # navigation. on_screen_shown() restarts it when we return.
-            if alive and self._is_active_screen():
+            # Pause the poll when the screen isn't the active one so it doesn't
+            # re-render the banner in the background during/after navigation.
+            # EXCEPTION: on Windows the poll is the ONLY thing that restarts the
+            # RTD threat watcher when Defender's real-time state flips (see the
+            # start/stop block in _apply_realtime_status), so it must keep running
+            # even while the tab is backgrounded — otherwise a watcher stopped
+            # while hidden never restarts and threat toasts silently stop. The
+            # banner re-render is independently suppressed in
+            # _apply_realtime_status_ui (early-returns when not active), so the
+            # background poll on Windows costs nothing visually. On macOS/Linux
+            # on_screen_shown() restarts the poll when we return to the screen.
+            if alive and (
+                self._is_active_screen() or platform.system() == "Windows"
+            ):
                 setup_active = self._last_status and self._last_status.get(
                     "setup_state", "completed",
                 ) != "completed"
@@ -1132,7 +1141,6 @@ class Plugin(BasePlugin):
                 and self._sig_update_stale()):
             logger.info("Antivirus: signatures stale — running catch-up update")
             self._run_auto_update()
-
 
         while not self._auto_update_stop.is_set():
             delay = self._seconds_until_next_run()

@@ -400,6 +400,17 @@ class Plugin(ChatUIMixin, BasePlugin):
         if getattr(self, "_response_persisted", False):
             return
         if self._current_asst_bubble is not None:
+            if not full_text.strip():
+                # Server returned a 200 SSE stream with no content (e.g. the
+                # inference backend is restarting). Surface it instead of
+                # leaving a blank bubble, and don't store an empty turn.
+                self._current_asst_bubble.finalize_markdown(
+                    "No response received from the server. Please try again in a moment.")
+                self._current_asst_bubble = None
+                self.app.show_notification(
+                    "The server returned an empty response.", type="warning")
+                self._response_persisted = True
+                return
             self._current_asst_bubble.finalize_markdown(full_text)
             self._current_asst_bubble = None
             self.conversation_history.append(
