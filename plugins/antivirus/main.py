@@ -1263,12 +1263,16 @@ class Plugin(BasePlugin):
                     self.app.after(0, self._poll_setup_progress)
                 else:
                     self.app.after(0, self._update_realtime_status)
-        else:
+        elif platform.system() == "Linux":
             from plugins.antivirus.clamav_platform_linux import activate_system_daemons
 
             def _run():
                 ok, _msg = activate_system_daemons()
                 self.app.after(0, self._update_realtime_status)
+        else:
+            # Windows: Defender setup is owned by the OS; nothing to do here.
+            self._update_realtime_status()
+            return
 
         threading.Thread(target=_run, daemon=True).start()
 
