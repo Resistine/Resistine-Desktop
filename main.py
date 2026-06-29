@@ -221,6 +221,13 @@ class App(AppUI):
 
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
 
+        # macOS: route Cmd-Q through our normal shutdown path
+        if sys.platform == "darwin":
+            try:
+                self.tk.createcommand("::tk::mac::Quit", self._on_closing)
+            except Exception:
+                pass
+
         # Start system tray icon in a background thread (Windows only).
         # In dev mode, run.bat launches tray.py as a separate process, but in
         # the frozen .exe there's no standalone python — so we run it in-process.

@@ -44,8 +44,11 @@ def get_config_dir() -> str:
             os.environ.get("APPDATA", os.path.expanduser("~")), "Resistine"
         )
     else:
-        # Linux / WSL
-        return os.path.expanduser("~/.config/resistine")
+        # Linux / WSL — honor XDG_CONFIG_HOME
+        return os.path.join(
+            os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+            "resistine",
+        )
 
 
 def _get_master_key() -> bytes:

@@ -738,7 +738,7 @@ class AppUI(customtkinter.CTk):
                 if nav_w < 100: nav_w = 250  # Fallback for unmapped frame
 
                 # Windows CTkScrollableFrame scrollbar is ~20px wider than macOS overlay scrollbar
-                _scroll_offset = 60 if platform.system() == "Windows" else 40
+                _scroll_offset = 60 if platform.system() in ("Windows", "Linux") else 40
                 self._content_width_hint = total_w - nav_w - _scroll_offset
         except:
             self._content_width_hint = None
