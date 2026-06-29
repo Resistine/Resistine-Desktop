@@ -226,6 +226,41 @@ if [ ! -d "$PYTHON_APP" ]; then
     exit 1
 fi
 
+# ------------------------------------------------------------
+# Bundle consistency gate — fail fast on a broken Python framework.
+#
+# The PyInstaller bootloader loads Frameworks/Python at launch. If that symlink
+# resolves to a missing or mismatched runtime, the app crashes with exit 255
+# ("Failed to load Python shared library"). This check verifies the freshly
+# built bundle is internally consistent BEFORE we sign, notarize, and ship it,
+# so a structurally broken DMG/PKG can never reach users again.
+# ------------------------------------------------------------
+echo "  - Verifying Python framework consistency..."
+_PYLINK="$PYTHON_APP/Contents/Frameworks/Python"
+if [ ! -e "$_PYLINK" ]; then
+    echo "  Error: $_PYLINK is missing — bundle has no Python runtime."
+    exit 1
+fi
+# Resolve the symlink target and confirm the file actually exists.
+if ! _PYREAL=$(cd "$(dirname "$_PYLINK")" && readlink -f "$(readlink "$_PYLINK" 2>/dev/null || echo Python)" 2>/dev/null); then
+    _PYREAL=""
+fi
+if [ ! -f "$_PYLINK" ]; then
+    echo "  Error: Frameworks/Python does not resolve to a real file (dangling symlink)."
+    echo "         Target: $(readlink "$_PYLINK" 2>/dev/null)"
+    ls -la "$PYTHON_APP/Contents/Frameworks/Python.framework/Versions/" 2>/dev/null
+    exit 1
+fi
+# Confirm exactly one Python version directory is present (no stale extras).
+_PYVERS=$(ls -1 "$PYTHON_APP/Contents/Frameworks/Python.framework/Versions/" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+$' | sort -u)
+_PYVCOUNT=$(echo "$_PYVERS" | grep -c . || true)
+if [ "$_PYVCOUNT" -ne 1 ]; then
+    echo "  Error: expected exactly one Python version in the bundle, found:"
+    echo "$_PYVERS" | sed 's/^/         /'
+    exit 1
+fi
+echo "    Python framework OK (version $_PYVERS)"
+
 # Resolve VPN component sources (pre-built artifacts or local archive)
 if [ "$USE_PREBUILT_VPN" = true ]; then
     CLI_SOURCE="$VPN_ARTIFACTS_DIR/resistine-vpn-cli"
@@ -836,9 +871,53 @@ else
     echo "  PKG will not be signed (install one for distribution)"
 fi
 
-# Create postinstall script for LaunchServices + pluginkit registration
+# Create install scripts for the pkg.
 PKG_SCRIPTS_DIR="$DIST_DIR/pkg-scripts"
 mkdir -p "$PKG_SCRIPTS_DIR"
+
+# Preinstall: remove any existing app bundle BEFORE the payload is laid down.
+#
+# CRITICAL: pkgbuild --install-location installs by MERGING the payload onto the
+# destination — it does NOT replace the existing bundle. Files the new payload
+# lacks are left behind. With a versioned framework like Python.framework, an
+# update from a bundle that shipped (e.g.) Python 3.14 to one shipping 3.13
+# leaves the old Versions/3.14 stranded while the Versions/3.13 overwrite can be
+# incomplete, producing a bundle whose Frameworks/Python symlink points at a
+# half-written runtime. The PyInstaller bootloader then fails with
+# "Failed to load Python shared library .../Frameworks/Python" and the app
+# crashes on launch (exit 255).
+#
+# DMG (drag-to-Applications) replaces the bundle atomically, which is why every
+# pre-pkg release updated cleanly. Deleting first restores that guarantee.
+cat > "$PKG_SCRIPTS_DIR/preinstall" << 'PREEOF'
+#!/bin/bash
+# Quit the running app, then remove the previously installed bundle so the new
+# payload fully REPLACES it instead of MERGING onto stale files.
+#
+# Why this exists: pkgbuild --install-location merges the payload file-by-file
+# onto whatever is already at the destination; it never deletes old files the
+# new payload lacks. A versioned framework (Python.framework/Versions/3.X) at a
+# different version than the previous install therefore strands the old version
+# directory, leaving Frameworks/Python pointing at an incomplete runtime and the
+# app crashing on launch. A DMG (Finder drag) replaces the whole .app folder
+# atomically, which is why pre-pkg releases updated cleanly. Deleting first makes
+# the pkg behave the same way.
+#
+# We do NOT relaunch here: Sparkle relaunches the app (as the correct user)
+# after an auto-update, and a manual pkg install shows Installer's own success
+# screen. Launching from this script would run the app as root.
+
+# Quit the app gracefully, then force-kill any stragglers, before removing it.
+osascript -e 'quit app "Resistine"' 2>/dev/null || true
+pkill -x Resistine 2>/dev/null || true
+sleep 1
+
+if [ -d "/Applications/Resistine.app" ]; then
+    rm -rf "/Applications/Resistine.app" 2>/dev/null || true
+fi
+exit 0
+PREEOF
+chmod +x "$PKG_SCRIPTS_DIR/preinstall"
 
 cat > "$PKG_SCRIPTS_DIR/postinstall" << 'POSTEOF'
 #!/bin/bash
