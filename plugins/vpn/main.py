@@ -61,7 +61,26 @@ my_vpn_status = "Stopped"
 
 
 def is_vpn_connected():
-    """Return True if VPN is currently connected."""
+    """Return True if VPN is currently connected.
+
+    Dev escape hatch (macOS only): when running ``./run.sh`` alongside an
+    installed ``.pkg`` whose NetworkExtension already holds the tunnel up,
+    this process's internal ``my_vpn_status`` stays ``"Stopped"`` because
+    the dev instance never toggled the VPN itself — even though traffic is
+    already routing through the system tunnel. Setting
+    ``RESISTINE_DEV_VPN_CONNECTED=1`` forces this gate to True so
+    VPN-gated features (e.g. the chat access gate, wazuh_overview API
+    fetches) work in source mode without the dev instance needing to
+    actually drive the tunnel.
+
+    Gated on ``platform.system() == "Darwin"`` so Linux/Windows behavior
+    is unchanged — those platforms have different VPN backends and the
+    escape hatch is irrelevant there. ``run.sh`` only exports the env
+    var on Darwin too, so this is defense in depth.
+    """
+    if (platform.system() == "Darwin"
+            and os.environ.get("RESISTINE_DEV_VPN_CONNECTED") == "1"):
+        return True
     return my_vpn_status == "Running"
 
 # --- Config Manager (module-level for use in init) ---
