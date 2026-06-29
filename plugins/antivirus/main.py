@@ -100,9 +100,19 @@ _PS_AUMID = (
 
 
 def _send_notification_windows(title: str, body: str):
-    """Windows 10/11: native Action Center toast with Resistine logo."""
+    """Windows 10/11: native Action Center toast with Resistine logo.
+
+    Toast XML is written to a temp file and read by PowerShell via
+    Get-Content -Raw rather than interpolated into the script. The previous
+    inline escape (replacing `"` with backtick-`"`) broke for threat names
+    containing backticks, dollar signs, or backslashes — which would either
+    break out of the PowerShell string or be eaten by PowerShell's parser
+    before LoadXml ever saw the content. The tempfile detour means the
+    notification body travels as bytes, never as PowerShell source.
+    """
     global _TOAST_COUNTER
     import subprocess
+    import tempfile
 
     # Resolve logo path (works for both dev and PyInstaller builds)
     logo = os.path.join(
@@ -111,7 +121,7 @@ def _send_notification_windows(title: str, body: str):
     )
 
     def _esc(s: str) -> str:
-        """Escape for XML content inside a PowerShell double-quoted here-string."""
+        """Escape for XML content."""
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
     esc_title = _esc(title)
@@ -135,19 +145,39 @@ def _send_notification_windows(title: str, body: str):
         "</toast>"
     )
 
-    # Use a here-string (@"..."@) so the XML doesn't need quote escaping
+    # Write XML to a temp file so PowerShell can read it as raw bytes —
+    # avoids any need to escape the threat name / body for the shell.
+    xml_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".xml", prefix="resistine_toast_",
+            encoding="utf-8", delete=False,
+        ) as tf:
+            tf.write(xml_str)
+            xml_path = tf.name
+    except Exception as e:
+        logger.debug(f"Failed to write toast XML tempfile: {e}")
+        return
+
+    # PowerShell loads the XML from disk via Get-Content -Raw, so the only
+    # untrusted-ish value left in the script is the path itself (which we
+    # control) and the AUMID / tag (also controlled).
+    safe_path = xml_path.replace("'", "''")  # PS single-quote escape
     ps_script = (
         "[Windows.UI.Notifications.ToastNotificationManager,"
         " Windows.UI.Notifications, ContentType = WindowsRuntime]"
         " | Out-Null; "
         "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom,"
         " ContentType = WindowsRuntime] | Out-Null; "
+        f"$raw = Get-Content -Raw -LiteralPath '{safe_path}'; "
         "$xml = New-Object Windows.Data.Xml.Dom.XmlDocument; "
-        f'$xml.LoadXml("{xml_str.replace(chr(34), "`" + chr(34))}"); '
+        "$xml.LoadXml($raw); "
         "$toast = [Windows.UI.Notifications.ToastNotification]::new($xml); "
         f"$toast.Tag = '{tag}'; "
         "[Windows.UI.Notifications.ToastNotificationManager]"
-        f"::CreateToastNotifier('{_PS_AUMID}').Show($toast)"
+        f"::CreateToastNotifier('{_PS_AUMID}').Show($toast); "
+        # Best-effort: clean the tempfile from PS once Windows has the toast.
+        f"Remove-Item -LiteralPath '{safe_path}' -ErrorAction SilentlyContinue"
     )
     try:
         subprocess.Popen(
@@ -157,8 +187,13 @@ def _send_notification_windows(title: str, body: str):
             stderr=subprocess.DEVNULL,
             creationflags=0x08000000,
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to spawn toast powershell: {e}")
+        # Fall back to cleaning up the tempfile ourselves on spawn failure.
+        try:
+            os.unlink(xml_path)
+        except OSError:
+            pass
 
 
 

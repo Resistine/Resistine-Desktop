@@ -62,11 +62,43 @@ _IPC_TOKEN_FILE = os.path.join(
 )
 
 
+def _restrict_token_acl(token_path: str) -> None:
+    """Re-apply restrictive ACL on the IPC token file (Windows only).
+
+    The service writes the token first, but if the file was created before
+    the hardening shipped (or somehow inherited broader perms), reading from
+    the GUI side gives us another chance to lock it down. Best-effort:
+    failures are swallowed so notification/IPC keeps working.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import getpass
+
+        user = os.environ.get("USERNAME") or getpass.getuser()
+        subprocess.run(
+            [
+                "icacls", token_path,
+                "/inheritance:r",
+                "/grant", "SYSTEM:F",
+                "/grant", "Administrators:F",
+                "/grant", f"{user}:R",
+            ],
+            check=False,
+            capture_output=True,
+            timeout=5,
+        )
+    except Exception:
+        pass
+
+
 def _load_ipc_token() -> str:
     try:
         with open(_IPC_TOKEN_FILE, "r") as fh:
             token = fh.read().strip()
         if token:
+            # Best-effort harden the file's ACL each time we read it.
+            _restrict_token_acl(_IPC_TOKEN_FILE)
             return token
     except FileNotFoundError:
         pass
