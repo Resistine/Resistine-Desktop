@@ -70,6 +70,22 @@ class App(AppUI):
         """
         super().__init__()
 
+        if sys.platform.startswith('win'):
+            try:
+                import ctypes
+                # Per-monitor v2 (-4) is best; degrade gracefully on older Windows.
+                # Without this, Win10/11 at 150-200% rasterises Tk at logical px
+                # then DWM bitmap-stretches → blurry text on HiDPI laptops.
+                ctypes.windll.shcore.SetProcessDpiAwarenessContext(-4)
+            except (AttributeError, OSError):
+                try:
+                    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+                except (AttributeError, OSError):
+                    try:
+                        ctypes.windll.user32.SetProcessDPIAware()
+                    except Exception:
+                        pass
+
         if sys.platform.startswith("linux"):
             self._apply_hidpi_scaling()
 
