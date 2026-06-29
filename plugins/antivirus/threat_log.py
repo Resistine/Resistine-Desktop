@@ -312,10 +312,21 @@ def _inject_linux(conf: str) -> tuple[bool, str]:
         "print('configured')\n"
     )
     encoded = base64.b64encode(py_script.encode()).decode()
+    # Multi-init dispatcher: try systemd, sysv-init, OpenRC, then wazuh-control
+    # so non-systemd Linux (Alpine, Devuan-sysvinit, WSL1) actually reloads the
+    # agent instead of silently succeeding. Exit code 2 => configured but
+    # restart failed; the caller surfaces that distinctly from a config failure.
+    restart_chain = (
+        "systemctl restart wazuh-agent 2>/dev/null "
+        "|| service wazuh-agent restart 2>/dev/null "
+        "|| rc-service wazuh-agent restart 2>/dev/null "
+        "|| /var/ossec/bin/wazuh-control restart 2>/dev/null "
+        "|| { echo restart_failed; exit 2; }"
+    )
     # Use shlex.quote to safely embed the base64 blob in the shell command.
     shell_cmd = (
-        f"printf '%s' {shlex.quote(encoded)} | base64 -d | python3 && "
-        f"systemctl restart wazuh-agent 2>/dev/null; true"
+        f"printf '%s' {shlex.quote(encoded)} | base64 -d | python3 || exit 1; "
+        f"{restart_chain}"
     )
 
     for cmd in (
@@ -326,12 +337,24 @@ def _inject_linux(conf: str) -> tuple[bool, str]:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=30,
             )
+            output = (result.stdout or "").strip()
             if result.returncode == 0:
-                output = result.stdout.strip()
                 if "already_configured" in output:
                     return True, "Already configured."
                 logger.info("AV: Wazuh forwarding configured")
                 return True, "Configured. Wazuh agent restarted."
+            if result.returncode == 2:
+                # Config injected but no known init system accepted the restart.
+                logger.error(
+                    "AV: Wazuh forwarding configured but agent restart "
+                    "failed under all known init systems (systemd/service/"
+                    "rc-service/wazuh-control). stderr=%s",
+                    (result.stderr or "").strip(),
+                )
+                return True, (
+                    "Configured, but Wazuh agent restart failed. "
+                    "Restart it manually to apply the new config."
+                )
         except (FileNotFoundError, subprocess.TimeoutExpired):
             continue
         except Exception as exc:
