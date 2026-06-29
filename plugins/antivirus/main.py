@@ -40,8 +40,8 @@ from utils.logger import logger
 _PLUGIN_DIR = os.path.dirname(os.path.realpath(__file__))
 
 
-def _send_notification(title: str, body: str):
-    """Send a native OS notification (macOS + Windows)."""
+def _send_notification(title: str, body: str, urgency: str = "critical"):
+    """Send a native OS notification (macOS + Windows + Linux)."""
     import platform as _platform
 
     system = _platform.system()
@@ -49,6 +49,13 @@ def _send_notification(title: str, body: str):
         _send_notification_darwin(title, body)
     elif system == "Windows":
         _send_notification_windows(title, body)
+    elif system == "Linux":
+        try:
+            from utils.notifications import send as _send
+
+            _send(title, body, urgency=urgency)
+        except Exception as e:
+            logger.debug(f"Linux notification failed: {e}")
 
 
 def _send_notification_darwin(title: str, body: str):
