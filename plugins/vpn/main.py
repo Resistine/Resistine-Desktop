@@ -973,7 +973,7 @@ class Plugin(BasePlugin):
             self.app.show_notification("Config file not found", type="error")
             return
 
-        with open(conf_file_path, 'r') as f:
+        with open(conf_file_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
         dialog = customtkinter.CTkToplevel(self.app)
@@ -1133,7 +1133,7 @@ class Plugin(BasePlugin):
         data = {}
 
         if os.path.exists(conf_file_path):
-            with open(conf_file_path, 'r') as conf_file:
+            with open(conf_file_path, 'r', encoding='utf-8') as conf_file:
                 for line in conf_file:
                     if '=' in line:
                         key, value = line.split('=', 1)

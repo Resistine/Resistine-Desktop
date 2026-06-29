@@ -57,7 +57,7 @@ class PluginManager:
         """Load persistent plugin state (e.g., uninstalled plugins, download order)."""
         if os.path.exists(self.state_file):
             try:
-                with open(self.state_file, 'r') as f:
+                with open(self.state_file, 'r', encoding='utf-8') as f:
                     return json.load(f)
             except Exception as e:
                 logger.error(f"Failed to load plugin state: {e}")
@@ -66,8 +66,8 @@ class PluginManager:
     def _save_state(self, state):
         """Save persistent plugin state."""
         try:
-            with open(self.state_file, 'w') as f:
-                json.dump(state, f, indent=4)
+            with open(self.state_file, 'w', encoding='utf-8') as f:
+                json.dump(state, f, indent=4, ensure_ascii=False)
             logger.info(f"PluginManager: State saved. Uninstalled list: {state.get('uninstalled', [])}")
             return True
         except Exception as e:
