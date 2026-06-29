@@ -166,9 +166,20 @@ def is_forwarding_enabled() -> bool:
     """
     if not is_wazuh_installed():
         return False
-    if platform.system() == "Windows":
-        return True
-    return bool(settings.get("antivirus", "siem_forwarding", False))
+    if platform.system() != "Windows":
+        return bool(settings.get("antivirus", "siem_forwarding", False))
+    conf = r"C:\Program Files (x86)\ossec-agent\ossec.conf"
+    if not os.path.exists(conf):
+        return False
+    try:
+        with open(conf, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+        return (
+            "Microsoft-Windows-Windows Defender/Operational" in content
+            and "<localfile>" in content
+        )
+    except (OSError, PermissionError):
+        return bool(settings.get("antivirus", "siem_forwarding", False))
 
 
 def get_ossec_snippet() -> str:
