@@ -88,6 +88,16 @@ if IS_MACOS:
         'objc',
     ])
 
+if sys.platform.startswith('linux'):
+    hiddenimports.extend([
+        'keyring.backends.SecretService', 'secretstorage',
+        'jeepney', 'jeepney.io.blocking',
+        'cairocffi', 'cffi'])
+if IS_WINDOWS:
+    hiddenimports.extend([
+        'keyring.backends.Windows', 'win32ctypes',
+        'win32ctypes.pywin32', 'pystray._win32'])
+
 # Analysis
 a = Analysis(
     [_src('main.py')],

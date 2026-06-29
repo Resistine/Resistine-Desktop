@@ -33,12 +33,21 @@ if sys.platform.startswith("win"):
     _BASE_SIZE = 18
     _CODE_BLOCK_SIZE = 14
     _HEADING_SIZES = {"h1": 25, "h2": 23, "h3": 20, "h4": 19, "h5": 18, "h6": 17}
-else:
+elif sys.platform.startswith("linux"):
+    _BASE_SIZE = 18
+    _CODE_BLOCK_SIZE = 14
+    _HEADING_SIZES = {"h1": 25, "h2": 23, "h3": 20, "h4": 19, "h5": 18, "h6": 17}
+else:  # Darwin
     _BASE_SIZE = 15
     _CODE_BLOCK_SIZE = 13
     _HEADING_SIZES = {"h1": 20, "h2": 18, "h3": 16, "h4": 15, "h5": 14, "h6": 13}
 
-_MONO_FAMILY = "Menlo" if sys.platform == "darwin" else "Consolas"
+if sys.platform.startswith("win"):
+    _MONO_FAMILY = "Consolas"
+elif sys.platform.startswith("linux"):
+    _MONO_FAMILY = "DejaVu Sans Mono"
+else:
+    _MONO_FAMILY = "Menlo"
 
 # Resolved once, after a Tk root exists. The chat hard-coded "Inter" everywhere,
 # but Inter is never installed or registered, so on Windows Tk silently falls
