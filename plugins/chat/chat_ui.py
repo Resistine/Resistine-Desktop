@@ -1,6 +1,8 @@
 """Chat UI construction mixin for the Chat plugin."""
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 import tkinter
 
@@ -13,10 +15,59 @@ from plugins.chat.sidebar import ChatSidebar
 from plugins.chat.welcome_screen import (
     ApiKeyMissingScreen, ChatLockedScreen, WelcomeScreen)
 from utils.emoji_entry import EmojiEntry
+from utils.logger import logger
 
 # Opacity of the layer that dims the chat behind the open history drawer.
 # 0 = invisible, 1 = solid black; this is the "slightly darker" look.
 _DIM_ALPHA = 0.4
+
+# Cached result of the X11 compositor probe (see _linux_has_compositor).
+# None = not yet probed; True/False = cached probe result. Module-level so
+# the subprocess fires at most once per process lifetime.
+_LINUX_COMPOSITOR_CACHE: "bool | None" = None
+
+
+def _linux_has_compositor() -> bool:
+    """Return True if the platform supports translucent overrideredirect Toplevels.
+
+    macOS/Windows always do (Quartz / DWM composite unconditionally).
+    Wayland always does (the protocol mandates a compositor).
+    Plain X11 may or may not — raw i3 / openbox without picom etc. render a
+    `-alpha 0.4` borderless Toplevel as SOLID BLACK, which hides the chat
+    behind the drawer instead of dimming it. We probe with `xprop -root
+    _NET_WM_CM_S0`: the ICCCM-blessed way for a client to discover whether a
+    compositing manager owns the screen. Result is cached module-level so we
+    only fork xprop on first call.
+    """
+    global _LINUX_COMPOSITOR_CACHE
+    if _LINUX_COMPOSITOR_CACHE is not None:
+        return _LINUX_COMPOSITOR_CACHE
+    # Non-Linux: the Toplevel approach is known-good.
+    if not sys.platform.startswith("linux"):
+        _LINUX_COMPOSITOR_CACHE = True
+        return True
+    try:
+        if os.environ.get("XDG_SESSION_TYPE") == "wayland":
+            _LINUX_COMPOSITOR_CACHE = True
+            return True
+        res = subprocess.run(
+            ["xprop", "-root", "_NET_WM_CM_S0"],
+            capture_output=True, text=True, timeout=0.5,
+        )
+        out = (res.stdout or "") + (res.stderr or "")
+        out_lower = out.lower()
+        has_cm = (
+            "_net_wm_cm_s0" in out_lower
+            and "not found" not in out_lower
+        )
+        _LINUX_COMPOSITOR_CACHE = bool(has_cm)
+        return _LINUX_COMPOSITOR_CACHE
+    except Exception:
+        # Safe default: assume composited. Bare-X11-no-compositor is rare;
+        # the opposite default would silently disable dim everywhere xprop
+        # isn't installed (containers, minimal images).
+        _LINUX_COMPOSITOR_CACHE = True
+        return True
 
 
 # Symbol-capable UI font for glyph buttons (send arrow, menu, scroll-down).
@@ -610,6 +661,22 @@ class ChatUIMixin:
                 return ov
         except Exception:
             ov_ok = top_ok = False
+
+        # X11 without a compositing manager renders `-alpha` borderless
+        # Toplevels as opaque solid black instead of translucent, which
+        # would hide the chat behind the drawer rather than dim it. The
+        # drawer's own background already provides adequate visual
+        # separation in that environment, so skip the overlay entirely.
+        # All callers null-check the return value of _ensure_dim_overlay.
+        if (sys.platform.startswith("linux")
+                and not _linux_has_compositor()):
+            if not getattr(self, "_dim_skip_logged", False):
+                logger.info(
+                    "chat dim overlay skipped: X11 without compositor "
+                    "(no _NET_WM_CM_S0); drawer alone provides separation"
+                )
+                self._dim_skip_logged = True
+            return None
 
         def _make() -> "tkinter.Toplevel":
             t = tkinter.Toplevel(self.app)
