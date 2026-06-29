@@ -1021,6 +1021,9 @@ class Plugin(BasePlugin):
         self._events_split_stacked = False
         self._events_resize_after_id = None
         self._events_resize_handler_id = None
+        # Events list pagination (1-based page + its pager frame).
+        self._event_page = 1
+        self._event_pagination_frame = None
         # Severity pill count labels, keyed by level. Stashed by
         # _build_severity_pills so _update_severity_pills can rewrite the
         # numbers in place during Phase 2 rebinds without tearing down the
@@ -1084,6 +1087,9 @@ class Plugin(BasePlugin):
         self._vuln_table_split = None
         self._vuln_table_row = 0
         self._vuln_table_stacked = False
+        # Vuln list pagination (1-based page + its pager frame).
+        self._vuln_page = 1
+        self._vuln_pagination_frame = None
         # Active device filter on the Vulnerabilities table dropdown. Resolved
         # lazily by _default_vuln_device() once _REMOTE_VULNS arrives.
         self._vuln_device = None
@@ -1391,6 +1397,13 @@ class Plugin(BasePlugin):
             "size_10": customtkinter.CTkFont(size=10),
             "inter_bold_14": customtkinter.CTkFont(family="Inter", size=14, weight="bold"),
             "inter_bold_13": customtkinter.CTkFont(family="Inter", size=13, weight="bold"),
+            # Module-card fonts (hoisted out of _make_module_card so they're not
+            # rebuilt per card on every grid populate).
+            "inter_bold_16": customtkinter.CTkFont(family="Inter", size=16, weight="bold"),
+            "bold_11": customtkinter.CTkFont(size=11, weight="bold"),
+            "size_20": customtkinter.CTkFont(size=20),
+            "size_13": customtkinter.CTkFont(size=13),
+            "bold_13": customtkinter.CTkFont(size=13, weight="bold"),
         }
         return self._fonts_cache
 
@@ -2443,7 +2456,8 @@ class Plugin(BasePlugin):
         widget.bind("<Configure>", on_configure)
 
     def _make_module_card(self, parent, row, column, card_data):
-        text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
+        text_secondary = self._theme("text_secondary", default=_DEFAULT_TEXT_SECONDARY)
+        fonts = self._ensure_fonts()
         target_tab = card_data.get("target_tab")
 
         card = customtkinter.CTkFrame(parent, corner_radius=12, border_width=1)
@@ -2455,7 +2469,7 @@ class Plugin(BasePlugin):
         title = customtkinter.CTkLabel(
             card,
             text=card_data["title"],
-            font=customtkinter.CTkFont(family="Inter", size=16, weight="bold"),
+            font=fonts["inter_bold_16"],
             anchor="w",
         )
         title.grid(row=0, column=0, sticky="w", padx=16, pady=(16, 0))
@@ -2468,7 +2482,7 @@ class Plugin(BasePlugin):
             text_color=fg,
             corner_radius=6,
             height=22,
-            font=customtkinter.CTkFont(size=11, weight="bold"),
+            font=fonts["bold_11"],
         )
         badge.grid(row=0, column=1, sticky="ne", padx=(0, 16), pady=(16, 0))
 
@@ -2476,7 +2490,7 @@ class Plugin(BasePlugin):
             card,
             text=card_data["description"],
             text_color=text_secondary,
-            font=customtkinter.CTkFont(size=12),
+            font=fonts["size_12"],
             anchor="w",
         )
         desc.grid(row=1, column=0, columnspan=2, sticky="w", padx=16, pady=(4, 8))
@@ -2486,12 +2500,12 @@ class Plugin(BasePlugin):
         stat_labels = []
         for i, (text, color_key) in enumerate(card_data["stats"]):
             color = self._segment_color(color_key)
-            weight = "bold" if color_key not in ("muted",) else "normal"
+            font = fonts["size_13"] if color_key == "muted" else fonts["bold_13"]
             lbl = customtkinter.CTkLabel(
                 stats,
                 text=text,
                 text_color=color,
-                font=customtkinter.CTkFont(size=13, weight=weight),
+                font=font,
             )
             lbl.grid(row=0, column=i, sticky="w")
             stat_labels.append(lbl)
@@ -2500,7 +2514,7 @@ class Plugin(BasePlugin):
             card,
             text="›",
             text_color=text_secondary,
-            font=customtkinter.CTkFont(size=20),
+            font=fonts["size_20"],
         )
         arrow.grid(row=2, column=1, sticky="se", padx=(0, 16), pady=(0, 16))
 
@@ -3015,6 +3029,8 @@ class Plugin(BasePlugin):
             return  # nothing changed
         self._selected_bucket = new_selection
         self._render_event_chart()
+        # Bucket filter changed → back to page 1 of the new result set.
+        self._event_page = 1
         query = self._event_search_var.get() if self._event_search_var else ""
         self._render_event_list(query)
 
@@ -3039,8 +3055,7 @@ class Plugin(BasePlugin):
         # Debounce so filtering runs once after the user pauses, not on every
         # keystroke (each render tears down + rebuilds the whole row list).
         self._event_search_var.trace_add("write", lambda *a: self._debounce(
-            "_event_search_after_id", 150,
-            lambda: self._render_event_list(self._event_search_var.get())))
+            "_event_search_after_id", 150, self._apply_event_search))
         customtkinter.CTkEntry(
             header,
             placeholder_text="Search rule, IP, description…",
@@ -3103,6 +3118,13 @@ class Plugin(BasePlugin):
         )
         self._event_list_frame.grid(row=1, column=0, sticky="nsew", padx=4, pady=(0, 4))
         self._event_list_frame.grid_columnconfigure(0, weight=1)
+
+        # Pager (row 2) — only the current page of rows is rendered so a 250+
+        # event list doesn't build hundreds of widgets at once.
+        self._event_pagination_frame = customtkinter.CTkFrame(
+            list_wrapper, fg_color="transparent"
+        )
+        self._event_pagination_frame.grid(row=2, column=0, sticky="e", padx=6, pady=(0, 6))
 
         self._render_event_list("")
 
@@ -3222,8 +3244,17 @@ class Plugin(BasePlugin):
         if events and self._selected_event_id not in selected_ids:
             self._selected_event_id = events[0]["id"]
 
-        for r, ev in enumerate(events):
+        # Paginate: render only the current page's rows. Selection + detail
+        # still operate on the full filtered set, so the selected event's detail
+        # shows even when its row is on another page.
+        page_size = self._LIST_PAGE_SIZE
+        total_pages = max(1, (len(events) + page_size - 1) // page_size)
+        self._event_page = max(1, min(self._event_page, total_pages))
+        start = (self._event_page - 1) * page_size
+        for r, ev in enumerate(events[start : start + page_size]):
             self._event_row(self._event_list_frame, ev, r)
+        self._render_pager(self._event_pagination_frame, self._event_page,
+                           total_pages, self._set_event_page)
 
         # Repaint detail in case selection changed
         if events:
@@ -3231,6 +3262,20 @@ class Plugin(BasePlugin):
             self._render_event_detail(ev)
         else:
             self._render_event_detail(None)
+
+    def _set_event_page(self, page):
+        page = max(1, int(page))
+        if page == self._event_page:
+            return
+        self._event_page = page
+        self._render_event_list(
+            self._event_search_var.get() if self._event_search_var else "")
+
+    def _apply_event_search(self):
+        # A new query resets to page 1 so the user sees the top matches.
+        self._event_page = 1
+        self._render_event_list(
+            self._event_search_var.get() if self._event_search_var else "")
 
     def _event_row(self, parent, ev, row):
         fonts = self._ensure_fonts()
@@ -3611,6 +3656,7 @@ class Plugin(BasePlugin):
         if device_name == self._vuln_device:
             return
         self._vuln_device = device_name
+        self._vuln_page = 1  # new device scope → back to page 1
         # Rebuild the whole pane so the donut, severity legend, CVSS chart,
         # table header count, and table rows all re-render against the new
         # device scope. The CTkOptionMenu's `command` fires after the user's
@@ -3954,6 +4000,7 @@ class Plugin(BasePlugin):
         # _vuln_severity_counts cache key only tracks (vulns_id, device); the
         # severity filter doesn't shrink the counts, so no invalidation is
         # needed here. Left as a note for the future.
+        self._vuln_page = 1  # filter changed → back to page 1
         query = self._vuln_search_var.get() if self._vuln_search_var else ""
         self._render_vuln_list(query)
 
@@ -4117,8 +4164,7 @@ class Plugin(BasePlugin):
         self._vuln_search_var.trace_add(
             "write",
             lambda *a: self._debounce(
-                "_vuln_search_after_id", 150,
-                lambda: self._render_vuln_list(self._vuln_search_var.get())),
+                "_vuln_search_after_id", 150, self._apply_vuln_search),
         )
         customtkinter.CTkEntry(
             header,
@@ -4202,6 +4248,12 @@ class Plugin(BasePlugin):
         )
         self._vuln_list_frame.grid(row=1, column=0, sticky="nsew", padx=4, pady=(0, 4))
         self._vuln_list_frame.grid_columnconfigure(0, weight=1)
+
+        # Pager (row 2) — render only the current page of CVE rows.
+        self._vuln_pagination_frame = customtkinter.CTkFrame(
+            wrapper, fg_color="transparent"
+        )
+        self._vuln_pagination_frame.grid(row=2, column=0, sticky="e", padx=6, pady=(0, 6))
 
         self._render_vuln_list("")
 
@@ -4335,13 +4387,35 @@ class Plugin(BasePlugin):
         if self._selected_vuln_key not in visible_keys:
             self._selected_vuln_key = None
 
-        for r, v in enumerate(vulns):
+        # Paginate: render only the current page's rows. Selection + detail
+        # operate on the full filtered set.
+        page_size = self._LIST_PAGE_SIZE
+        total_pages = max(1, (len(vulns) + page_size - 1) // page_size)
+        self._vuln_page = max(1, min(self._vuln_page, total_pages))
+        start = (self._vuln_page - 1) * page_size
+        for r, v in enumerate(vulns[start : start + page_size]):
             self._vuln_row(self._vuln_list_frame, v, r)
+        self._render_pager(self._vuln_pagination_frame, self._vuln_page,
+                           total_pages, self._set_vuln_page)
 
         if not vulns:
             self._render_vuln_detail(None)
         elif self._selected_vuln_key is None:
             self._select_vuln(self._vuln_key(vulns[0]))
+
+    def _set_vuln_page(self, page):
+        page = max(1, int(page))
+        if page == self._vuln_page:
+            return
+        self._vuln_page = page
+        self._render_vuln_list(
+            self._vuln_search_var.get() if self._vuln_search_var else "")
+
+    def _apply_vuln_search(self):
+        # A new query resets to page 1 so the user sees the top matches.
+        self._vuln_page = 1
+        self._render_vuln_list(
+            self._vuln_search_var.get() if self._vuln_search_var else "")
 
     def _epss_color_key(self, epss):
         try:
@@ -4815,6 +4889,11 @@ class Plugin(BasePlugin):
     # adjacent page numbers (prev, current, next) per the design.
     _INVENTORY_PAGE_SIZE = 20
 
+    # Page size for the Events + Vulnerabilities tables. Larger than Inventory's
+    # since analysts scan more rows at once, but still bounds the widget count
+    # so a 250+ row dataset doesn't build hundreds of CTk rows in one render.
+    _LIST_PAGE_SIZE = 50
+
     def _inventory_group_values(self):
         """Distinct group names present in _AGENTS, with "All groups" pinned
         first and "(no group)" appended only if any agent actually lacks a
@@ -5059,12 +5138,17 @@ class Plugin(BasePlugin):
         self._render_inventory_body()
 
     def _render_inventory_pagination(self, total_pages):
-        """Build the right-aligned page navigator. Format per design:
-        [◀] [prev?] [current] [next?] [▶]  — prev shown only when current ≥ 2,
-        next shown only when current < total_pages, arrows disabled at the
-        boundary pages. When everything fits on a single page the navigator is
-        hidden entirely (no buttons)."""
-        frame = self._inventory_pagination_frame
+        self._render_pager(
+            self._inventory_pagination_frame, self._inventory_page,
+            total_pages, self._set_inventory_page)
+
+    def _render_pager(self, frame, current, total_pages, on_set_page):
+        """Right-aligned page navigator shared by the Inventory, Events, and
+        Vuln lists. Format: [◀] [prev?] [current] [next?] [▶] — prev shown only
+        when current ≥ 2, next only when current < total_pages, arrows disabled
+        at the boundaries. Hidden entirely (grid_remove) on a single page so an
+        empty CTkFrame doesn't reserve its default height. `on_set_page(p)` is
+        invoked with the target page."""
         if frame is None or not frame.winfo_exists():
             return
         for child in frame.winfo_children():
@@ -5073,48 +5157,31 @@ class Plugin(BasePlugin):
             except Exception:
                 pass
 
-        # Single page → no navigator at all. grid_remove (not just emptying the
-        # frame) so it stops reserving space — an empty CTkFrame keeps its
-        # default 200px height and would inflate the title row otherwise.
         if total_pages <= 1:
             frame.grid_remove()
             return
-
-        # Restore the frame in case a previous render removed it.
         frame.grid()
 
-        current = self._inventory_page
-        text_secondary = self._theme("text_secondary", default=["#6B7280", "#9CA3AF"])
-        # sidebar_active_bg is the soft accent the Events pane uses for the
-        # selected event row — same idiom carries over to "selected page".
-        active_bg = self._theme("sidebar_active_bg", default=["#EBF0FF", "#1A2744"])
+        text_secondary = self._theme("text_secondary", default=_DEFAULT_TEXT_SECONDARY)
+        active_bg = self._theme("sidebar_active_bg", default=_DEFAULT_ACTIVE_BG)
         hover_bg = self._hover_bg
-
         page_font = customtkinter.CTkFont(size=12)
         page_font_bold = customtkinter.CTkFont(size=12, weight="bold")
 
         def page_btn(text, command, is_current=False, disabled=False):
             kwargs = dict(
-                master=frame,
-                text=text,
-                width=30,
-                height=28,
-                corner_radius=6,
-                command=command,
+                master=frame, text=text, width=30, height=28,
+                corner_radius=6, command=command,
             )
             if is_current:
                 kwargs.update(
-                    fg_color=active_bg,
-                    text_color=self._accent_color,
-                    hover_color=active_bg,
-                    font=page_font_bold,
+                    fg_color=active_bg, text_color=self._accent_color,
+                    hover_color=active_bg, font=page_font_bold,
                 )
             else:
                 kwargs.update(
-                    fg_color="transparent",
-                    text_color=text_secondary,
-                    hover_color=hover_bg,
-                    font=page_font,
+                    fg_color="transparent", text_color=text_secondary,
+                    hover_color=hover_bg, font=page_font,
                 )
             btn = customtkinter.CTkButton(**kwargs)
             if disabled:
@@ -5122,43 +5189,25 @@ class Plugin(BasePlugin):
             return btn
 
         col = 0
-        left = page_btn(
-            "◀",
-            command=lambda: self._set_inventory_page(current - 1),
-            disabled=(current <= 1),
-        )
-        left.grid(row=0, column=col, padx=(0, 4))
+        page_btn("◀", command=lambda: on_set_page(current - 1),
+                 disabled=(current <= 1)).grid(row=0, column=col, padx=(0, 4))
         col += 1
-
         if current >= 2:
-            prev_page = current - 1
-            page_btn(
-                str(prev_page),
-                command=lambda p=prev_page: self._set_inventory_page(p),
-            ).grid(row=0, column=col, padx=2)
+            page_btn(str(current - 1),
+                     command=lambda p=current - 1: on_set_page(p)).grid(
+                row=0, column=col, padx=2)
             col += 1
-
-        page_btn(
-            str(current),
-            command=lambda: None,
-            is_current=True,
-        ).grid(row=0, column=col, padx=2)
+        page_btn(str(current), command=lambda: None, is_current=True).grid(
+            row=0, column=col, padx=2)
         col += 1
-
         if current < total_pages:
-            next_page = current + 1
-            page_btn(
-                str(next_page),
-                command=lambda p=next_page: self._set_inventory_page(p),
-            ).grid(row=0, column=col, padx=2)
+            page_btn(str(current + 1),
+                     command=lambda p=current + 1: on_set_page(p)).grid(
+                row=0, column=col, padx=2)
             col += 1
-
-        right = page_btn(
-            "▶",
-            command=lambda: self._set_inventory_page(current + 1),
-            disabled=(current >= total_pages),
-        )
-        right.grid(row=0, column=col, padx=(4, 0))
+        page_btn("▶", command=lambda: on_set_page(current + 1),
+                 disabled=(current >= total_pages)).grid(
+            row=0, column=col, padx=(4, 0))
 
     def _configure_inventory_columns(self, frame):
         # Use explicit minsize on the fixed-width columns and weight=1 only on
