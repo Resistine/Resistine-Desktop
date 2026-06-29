@@ -77,6 +77,14 @@ class StreamController:
         self._cancel_event.clear()
         self._queue = queue.Queue()
 
+        # Debug: echo the outgoing prompt to the debug terminal.
+        last_user = next(
+            (m.get("content", "") for m in reversed(messages)
+             if m.get("role") == "user"),
+            "",
+        )
+        logger.debug(f"[chat] → ({model}) user: {last_user}")
+
         thread = threading.Thread(
             target=self._worker,
             args=(client, model, messages, temperature, extra_body, base_url),
@@ -173,6 +181,7 @@ class StreamController:
 
                 elif msg_type == "done":
                     self._active = False
+                    logger.debug(f"[chat] ← assistant: {self._accumulated}")
                     self._on_done(self._accumulated)
                     return
 

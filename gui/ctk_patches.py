@@ -19,16 +19,18 @@ import customtkinter.windows.widgets.ctk_scrollable_frame as _sf
 
 
 # ── Cross-platform: CTkScrollableFrame string-widget bugfix ─────────────
-_orig_check = _sf.CTkScrollableFrame.check_if_master_is_canvas
+# Only present in some CustomTkinter versions; guard so import doesn't crash
+# on a build that lacks it (the bug it patches doesn't exist there either).
+_orig_check = getattr(_sf.CTkScrollableFrame, "check_if_master_is_canvas", None)
 
+if _orig_check is not None:
 
-def _patched_check(self, widget):
-    if isinstance(widget, str):
-        return False
-    return _orig_check(self, widget)
+    def _patched_check(self, widget):
+        if isinstance(widget, str):
+            return False
+        return _orig_check(self, widget)
 
-
-_sf.CTkScrollableFrame.check_if_master_is_canvas = _patched_check
+    _sf.CTkScrollableFrame.check_if_master_is_canvas = _patched_check
 
 
 # ── Cross-platform: clamp scrollregion (overscroll fix) ──────────────────
