@@ -496,3 +496,30 @@ class TestSetScanButtonsState:
     def test_missing_button_no_crash(self, plugin):
         plugin._action_buttons = {}
         plugin._set_scan_buttons_state("normal")  # Should not raise
+
+
+# ---------------------------------------------------------------------------
+# View switching (main <-> settings)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestViewSwitching:
+    def test_view_swap_reruns_layout_finalizer(self, plugin):
+        # Regression: swapping main<->settings must re-run the layout finalizer
+        # so the re-mapped CTkScrollableFrame refits and doesn't paint blank
+        # until the next window resize.
+        plugin.main_container = MagicMock()
+        plugin.main_frame = MagicMock()
+        plugin._settings_frame = MagicMock()  # already built -> no real widget
+        plugin._current_view = "main"
+
+        with patch.object(plugin, "_refresh_siem_switch"):
+            plugin._show_settings_view()
+        assert plugin._current_view == "settings"
+        plugin.main_frame.grid_remove.assert_called()
+        plugin.main_container._resistine_finalize.assert_called()  # regressed call
+
+        plugin._show_main_view()
+        assert plugin._current_view == "main"
+        plugin.main_frame.grid.assert_called()
+        assert plugin.main_container._resistine_finalize.call_count >= 2

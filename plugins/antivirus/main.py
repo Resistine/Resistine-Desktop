@@ -614,6 +614,7 @@ class Plugin(BasePlugin):
             # immediately and the data fills in a frame later.
             self.app.after(20, self._refresh_whitelist)
             self.app.after(40, self._refresh_exclusions)
+        self._finalize_view_swap()
 
     def _show_main_view(self):
         """Switch from settings view back to main view."""
@@ -623,6 +624,54 @@ class Plugin(BasePlugin):
             self._settings_frame.grid_remove()
         self.main_frame.grid()
         self._current_view = "main"
+        self._finalize_view_swap()
+
+    def _finalize_view_swap(self):
+        """Force layout + repaint after a main/settings view swap.
+
+        CTkScrollableFrame sizes its inner canvas window only on the canvas's
+        <Configure>. Re-grid()'ing a frame at the same outer geometry doesn't
+        reliably re-fire that event (and update_idletasks() never dispatches
+        it), so the re-mapped frame keeps a stale inner width and paints blank
+        until the next window resize. Mirror _settle_screen's refit + finalize.
+        """
+        mc = getattr(self, "main_container", None)
+        if not mc or not mc.winfo_exists():
+            return
+        # 1) Flush the grid map/unmap + canvas resize queued by the swap.
+        try:
+            mc.update_idletasks()
+        except Exception:
+            return
+        # 2) Re-fit the now-visible scrollable frame's inner window to its
+        #    canvas (replicates CTk's _fit_frame_dimensions_to_canvas, vertical
+        #    branch — same technique as gui/user_interface.py _refit). This is
+        #    what un-blanks the content.
+        active = (
+            self._settings_frame
+            if self._current_view == "settings"
+            else self.main_frame
+        )
+        try:
+            canvas = active._parent_canvas
+            canvas.itemconfigure(
+                active._create_window_id, width=canvas.winfo_width(),
+            )
+        except Exception:
+            pass
+        # 3) Re-run the resize-time layout (scrollbar auto-hide for the new
+        #    view + content-column minsize) via the existing finalizer.
+        fin = getattr(mc, "_resistine_finalize", None)
+        if callable(fin):
+            try:
+                fin()
+            except Exception:
+                pass
+        # 4) Flush the resulting redraw to screen now.
+        try:
+            mc.update_idletasks()
+        except Exception:
+            pass
 
     # ── UI Event Handlers ────────────────────────────────────
 
