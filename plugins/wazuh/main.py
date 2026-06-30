@@ -484,8 +484,25 @@ class Plugin(BasePlugin):
                 "script_failed": "Installation script encountered an error.",
                 "pkg_corrupted": "Package file is corrupted. Retry to re-download.",
                 "no_status_file": "Installation was interrupted. Click Retry.",
+                "duplicate_name": (
+                    "This device is already registered on the SIEM manager. "
+                    "Retry to enroll under a new identifier."
+                ),
+                "manager_unreachable": (
+                    "Couldn't reach the SIEM manager. Connect the VPN and retry."
+                ),
+                "enroll_failed": (
+                    "Enrollment with the SIEM manager failed. "
+                    "Connect the VPN and retry."
+                ),
             }
-            msg = _REASON_MSG.get(reason, f"Installation failed ({reason}).")
+            if reason.startswith("enroll_rc_"):
+                msg = (
+                    "Enrollment with the SIEM manager failed. "
+                    "Connect the VPN and retry."
+                )
+            else:
+                msg = _REASON_MSG.get(reason, f"Installation failed ({reason}).")
             customtkinter.CTkLabel(
                 card, text=msg,
                 font=customtkinter.CTkFont(size=13),
