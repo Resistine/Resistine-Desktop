@@ -403,19 +403,23 @@ class Plugin(ChatUIMixin, BasePlugin):
             if not full_text.strip():
                 # Server returned a 200 SSE stream with no content (e.g. the
                 # inference backend is restarting). Surface it instead of
-                # leaving a blank bubble, and don't store an empty turn.
+                # leaving a blank bubble, and don't store an empty turn — but
+                # fall through to the common cleanup below so the input bar
+                # unlocks and the send-arrow returns to its idle state. The
+                # earlier early-return left those stuck in "response loading"
+                # mode after an empty SSE, which made the chat look frozen.
                 self._current_asst_bubble.finalize_markdown(
                     "No response received from the server. Please try again in a moment.")
                 self._current_asst_bubble = None
                 self.app.show_notification(
                     "The server returned an empty response.", type="warning")
                 self._response_persisted = True
-                return
-            self._current_asst_bubble.finalize_markdown(full_text)
-            self._current_asst_bubble = None
-            self.conversation_history.append(
-                {"role": "assistant", "content": full_text})
-            self._response_persisted = True
+            else:
+                self._current_asst_bubble.finalize_markdown(full_text)
+                self._current_asst_bubble = None
+                self.conversation_history.append(
+                    {"role": "assistant", "content": full_text})
+                self._response_persisted = True
         self._unlock_input()
         self._save_current_session()
         self._refresh_sidebar()

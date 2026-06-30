@@ -1224,6 +1224,10 @@ class Plugin(BasePlugin):
     # Muted fill for a disabled scan button so it reads as inactive instead of
     # keeping its highlighted blue look while a scan is running.
     _SCAN_BTN_DISABLED_FG = ("#D1D5DB", "#3A3A3C")
+    # Muted label color paired with _SCAN_BTN_DISABLED_FG. Gray-400 on the
+    # light background, gray-500 on the dark — readable but unmistakably
+    # inactive, so the buttons match macOS's standard disabled-control look.
+    _SCAN_BTN_DISABLED_TEXT = ("#9CA3AF", "#71717A")
 
     def _set_scan_buttons_state(self, state: str):
         # While a scan is running the buttons must stay nullified. Without this
@@ -1236,17 +1240,30 @@ class Plugin(BasePlugin):
             btn = self._action_buttons.get(key)
             if not btn:
                 continue
-            # Remember the enabled (themed blue) fill once so it can be restored.
+            # Remember the enabled fill + text color once so we can restore them
+            # exactly. The buttons are created in ui_builders with a fixed near-
+            # white text — without re-applying that color, a previous disable
+            # would leave the text muted forever once the scan ended.
             if not hasattr(btn, "_enabled_fg"):
                 btn._enabled_fg = btn.cget("fg_color")
+            if not hasattr(btn, "_enabled_text_color"):
+                btn._enabled_text_color = btn.cget("text_color")
             if state == "disabled":
+                # Both Scan and Scan Computer need the SAME visual treatment
+                # throughout the entire scan — including the LABEL text, not
+                # just the background. Previously only fg_color was muted,
+                # leaving white-on-grey buttons that read as "active but
+                # unresponsive" on Mac.
                 btn.configure(
                     state="disabled", hover=False,
                     fg_color=self._SCAN_BTN_DISABLED_FG,
+                    text_color=self._SCAN_BTN_DISABLED_TEXT,
                 )
             else:
                 btn.configure(
-                    state="normal", hover=True, fg_color=btn._enabled_fg,
+                    state="normal", hover=True,
+                    fg_color=btn._enabled_fg,
+                    text_color=btn._enabled_text_color,
                 )
 
     def _restore_scan_ui(self):

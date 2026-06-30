@@ -163,11 +163,21 @@ def is_forwarding_enabled() -> bool:
     already on. On macOS/Linux forwarding is configured only via
     setup_wazuh_forwarding(), so it's tracked with a settings flag (ossec.conf
     is root-only and can't be read to verify directly).
+
+    macOS default: ON. When the Wazuh agent is installed on Mac the switch
+    appears already enabled — the user doesn't need to discover and flip a
+    toggle to get protection. The actual ossec.conf localfile entry is
+    written the first time the user explicitly toggles or via the Wazuh
+    install flow's follow-up step. Until then the flag-only state matches
+    user expectation; toggling off saves False explicitly and persists.
+    Linux remains opt-in (default False) because the Linux Wazuh path is
+    less mature and silently auto-enabling could mask a half-finished install.
     """
     if not is_wazuh_installed():
         return False
     if platform.system() != "Windows":
-        return bool(settings.get("antivirus", "siem_forwarding", False))
+        _default = platform.system() == "Darwin"
+        return bool(settings.get("antivirus", "siem_forwarding", _default))
     conf = r"C:\Program Files (x86)\ossec-agent\ossec.conf"
     if not os.path.exists(conf):
         return False
@@ -179,7 +189,11 @@ def is_forwarding_enabled() -> bool:
             and "<localfile>" in content
         )
     except (OSError, PermissionError):
-        return bool(settings.get("antivirus", "siem_forwarding", False))
+        # ACL'd ossec.conf (locked to SYSTEM on some deployments). Use the
+        # same default-True policy as Mac when on Windows here too — if the
+        # installer ran far enough to install the agent, forwarding is the
+        # expected end-state.
+        return bool(settings.get("antivirus", "siem_forwarding", True))
 
 
 def get_ossec_snippet() -> str:
