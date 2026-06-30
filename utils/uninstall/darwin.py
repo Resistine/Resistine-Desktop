@@ -146,21 +146,75 @@ class _UserCancelled(Exception):
 # ---------------------------------------------------------------------------
 
 
+_STEP_LOG = "/tmp/resistine-uninstall.log"
+
+
+def _instrument_cmds(cmds):
+    """Wrap each command with a step-log line so a post-mortem reveals
+    exactly which command died when the shell exits with a signal.
+
+    The log file at ``/tmp/resistine-uninstall.log`` is overwritten at the
+    start of every uninstall and gets a `STEP N/TOTAL: <command>` line
+    BEFORE each command, plus a final `DONE` sentinel. When the shell is
+    SIGKILL'd mid-run the file contains every step that started — the
+    last `STEP` entry is the one that was running when the kernel
+    pulled the rug. ``_run_privileged`` reads the log on nonzero return
+    and surfaces "died after step N: <description>" in the error so we
+    can stop guessing which operation triggers the kill.
+    """
+    instrumented = [f"true > {_STEP_LOG} 2>/dev/null"]
+    n_total = len(cmds)
+    for i, c in enumerate(cmds, 1):
+        # First 80 chars of the command so the log stays grep-able. Escape
+        # any double-quotes in the description so the echo doesn't break.
+        desc = c[:80].replace('"', "'")
+        instrumented.append(
+            f'echo "STEP {i}/{n_total}: {desc}" >> {_STEP_LOG} 2>/dev/null'
+        )
+        instrumented.append(c)
+    instrumented.append(f'echo DONE >> {_STEP_LOG} 2>/dev/null')
+    return instrumented
+
+
+def _read_last_step():
+    """Return the last `STEP N/TOTAL: ...` line written to the log, or
+    None if the log doesn't exist or is empty. Used by _run_privileged
+    to attribute a SIGKILL to a specific command.
+    """
+    try:
+        with open(_STEP_LOG, "r", encoding="utf-8", errors="replace") as f:
+            lines = [ln.strip() for ln in f.readlines() if ln.strip()]
+    except OSError:
+        return None
+    if not lines:
+        return None
+    if lines[-1] == "DONE":
+        return "DONE (all steps completed)"
+    for ln in reversed(lines):
+        if ln.startswith("STEP "):
+            return ln
+    return None
+
+
 def _run_privileged(cmds):
     """Run a list of shell commands in a single admin osascript prompt.
 
     Each command is joined with `;` so a failure in one doesn't abort the
     rest — every command also has its own `|| true` fallback inside
     sub-helpers so transient state (e.g. plist already gone) doesn't
-    short-circuit the cleanup.
+    short-circuit the cleanup. Every command is preceded by a STEP marker
+    that gets appended to ``/tmp/resistine-uninstall.log`` so when the
+    privileged shell is SIGKILL'd by some external actor (corporate EDR
+    hooking the AuthorizationExecuteWithPrivileges trampoline; macOS
+    EndpointSecurity teardown of Wazuh's ES subscription during bootout;
+    etc.) we can attribute the kill to a specific step.
 
     On failure, the prior version raised "Privileged cleanup failed: "
     with an empty message because osascript surfaces error text via
-    stdout, not stderr (and exit code 1 covers everything from "user
-    cancelled" to "execution error"). Capture both streams and the exit
-    code so the UI shows something actionable.
+    stdout, not stderr. Capture both streams, the exit code, AND the
+    last-completed step from the log so the UI shows something actionable.
     """
-    script = "; ".join(cmds)
+    script = "; ".join(_instrument_cmds(cmds))
     escaped = script.replace("\\", "\\\\").replace('"', '\\"')
     cmd = [
         "osascript", "-e",
@@ -189,6 +243,9 @@ def _run_privileged(cmds):
     # The previous version dropped the code when stderr had any content,
     # which made signal kills (exit 9 = SIGKILL, exit 137 = OOM-kill) and
     # other non-textual failures indistinguishable from script errors.
+    last_step = _read_last_step()
+    if last_step:
+        logger.error(f"[UNINSTALL] Last privileged step: {last_step}")
     if combined:
         detail = f"{combined} (exit code {result.returncode})"
     else:
@@ -203,10 +260,14 @@ def _run_privileged(cmds):
         detail = f"exit code {result.returncode}"
         if sig:
             detail += f" ({sig})"
-        # Hint at the most common cause when the script died with no
-        # output: the parent process tore down child handles while
-        # osascript was still running. Bug, not user error.
-        detail += " — privileged shell died with no output; this usually means a parent process killed it. Try the uninstall again."
+        if last_step:
+            detail += f" — died after {last_step}"
+        else:
+            detail += (
+                " — privileged shell died with no output; "
+                "log file missing too. See /tmp/resistine-uninstall.log "
+                "if it exists."
+            )
     raise OSError(detail)
 
 
@@ -252,7 +313,35 @@ def _remove_clamav_daemons(admin_cmds):
     except ImportError:
         logger.debug("[UNINSTALL] ServiceManagement not available")
 
-    # 2. Collect admin commands for legacy plist cleanup + process kill + data
+    # ORDER MATTERS (same reason as _collect_wazuh_admin_cmds): kill the
+    # ClamAV daemon processes FIRST, then bootout the launchd plists.
+    # `clamonacc` is a macOS EndpointSecurity client (subscribes to
+    # file-creation/write events to drive on-access scanning). When
+    # launchctl boots out an ES-subscribed daemon the ES framework's
+    # teardown path has been observed to SIGKILL processes that have
+    # active subscriptions or events in-flight, which has cascaded onto
+    # the privileged shell osascript spawned (`exit code -9` with no
+    # output). Killing first means the ES subscription is gone before
+    # launchd's bootout-time cleanup runs.
+    #
+    # `[f]` regex trick — `pkill -f` matches against the full command
+    # line, and our own admin shell script (passed verbatim to
+    # `osascript -e`) contains the literal text we'd otherwise be
+    # searching for. Without the bracket trick, pkill matches its own
+    # parent shell/osascript and SIGKILLs them, surfacing to the user
+    # as `exit code -9` with no output. `[f]reshclam-update.sh`
+    # matches `freshclam-update.sh` in REAL process command lines via
+    # the one-char character class, but the literal string
+    # `[f]reshclam-update.sh` doesn't appear anywhere else.
+    admin_cmds.append("pkill -f '[f]reshclam-update.sh' 2>/dev/null || true")
+    admin_cmds.append("pkill -x freshclam 2>/dev/null || true")
+    admin_cmds.append("pkill -x clamonacc 2>/dev/null || true")
+    admin_cmds.append("pkill -x clamd 2>/dev/null || true")
+    # Brief sleep to let the ES framework process daemon-death notifications
+    # before we tear down the launchd plists they're bound to.
+    admin_cmds.append("sleep 0.2")
+
+    # Collect admin commands for legacy plist cleanup
     legacy_plists = [
         "/Library/LaunchDaemons/com.resistine.clamonacc.plist",
         "/Library/LaunchDaemons/com.resistine.clamd.plist",
@@ -276,22 +365,6 @@ def _remove_clamav_daemons(admin_cmds):
         admin_cmds.append(
             f"launchctl bootout system/{label} 2>/dev/null || true",
         )
-
-    # Kill running ClamAV processes (root-owned, needs admin).
-    #
-    # `[f]` regex trick — `pkill -f` matches against the full command
-    # line, and our own admin shell script (passed verbatim to
-    # `osascript -e`) contains the literal text we'd otherwise be
-    # searching for. Without the bracket trick, pkill matches its own
-    # parent shell/osascript and SIGKILLs them, surfacing to the user
-    # as `exit code -9` with no output. `[f]reshclam-update.sh`
-    # matches `freshclam-update.sh` in REAL process command lines via
-    # the one-char character class, but the literal string
-    # `[f]reshclam-update.sh` doesn't appear anywhere else.
-    admin_cmds.append("pkill -f '[f]reshclam-update.sh' 2>/dev/null || true")
-    admin_cmds.append("pkill -x freshclam 2>/dev/null || true")
-    admin_cmds.append("pkill -x clamonacc 2>/dev/null || true")
-    admin_cmds.append("pkill -x clamd 2>/dev/null || true")
 
     # Remove system-level ClamAV data (signatures, configs, logs)
     if os.path.exists(_SYSTEM_CLAMAV_DIR):
@@ -352,21 +425,34 @@ def _collect_wazuh_admin_cmds(admin_cmds):
     def _sq(s: str) -> str:
         return s.replace("'", "'\\''")
 
-    admin_cmds.append(
-        f"launchctl bootout system '{_sq(WAZUH_LAUNCHD_PLIST)}' 2>/dev/null || true")
+    # ORDER MATTERS: kill the agent processes FIRST, then bootout.
+    #
+    # Wazuh's wazuh-agentd registers with the macOS EndpointSecurity (ES)
+    # framework for kernel process-event notifications. When `launchctl
+    # bootout` tears down an ES-subscribed daemon, the ES framework's
+    # teardown path can SIGKILL processes that were subscribed to or
+    # generated events for the dying client — and that has been observed
+    # to cascade onto the privileged shell osascript spawned, surfacing
+    # to the user as `exit code -9` with no output.
+    #
+    # Killing the agent processes here BEFORE bootout means the ES
+    # client is gone (and its subscriptions deregistered) by the time
+    # launchd performs its cleanup, so the bootout becomes a no-op for
+    # the kernel ES framework.
+    #
+    # `wazuh-control stop` first attempts a graceful shutdown (lets
+    # agentd notify the manager + flush state); pkill -9 with the
+    # [w] regex trick is the immediate fallback. The regex trick
+    # itself is documented in _remove_clamav_daemons.
     admin_cmds.append(
         f"'{_sq(_WAZUH_CONTROL)}' stop 2>/dev/null || true")
-    # `[w]` regex trick — see _remove_clamav_daemons for the full
-    # explanation. The literal string `/Library/Ossec/bin/wazuh-`
-    # appears in the bundled admin script that osascript runs, so
-    # `pkill -9 -f '/Library/Ossec/bin/wazuh-'` would match its own
-    # parent /bin/sh and osascript, SIGKILL them, and surface as
-    # `Privileged cleanup: exit code -9` with no output. The bracket
-    # form matches `wazuh-` in real Wazuh agent command lines via
-    # the one-char character class, but `[w]azuh-` itself never
-    # appears as a literal substring of any other process.
     admin_cmds.append(
         "pkill -9 -f '/Library/Ossec/bin/[w]azuh-' 2>/dev/null || true")
+    # Brief sleep to let ES framework process the agent death notifications
+    # before we tear down its launchd binding. Empirically 200 ms is enough.
+    admin_cmds.append("sleep 0.2")
+    admin_cmds.append(
+        f"launchctl bootout system '{_sq(WAZUH_LAUNCHD_PLIST)}' 2>/dev/null || true")
     # Identity wipe — same semantics as remove_agent(wipe_keys=True).
     admin_cmds.append(f"rm -f '{_sq(_KEY_BACKUP)}'")
     admin_cmds.append(
