@@ -34,34 +34,34 @@ if hasattr(_sf.CTkScrollableFrame, "check_if_master_is_canvas"):
 
 
 # ── Windows: resize performance patch ───────────────────────────────────
+# CustomTkinter fits the scrollable inner frame to the canvas synchronously on every
+# <Configure>.  An earlier patch deferred this behind a 200 ms after() debounce to cut
+# per-pixel churn — but on Windows the modal move/size loop never services after()
+# callbacks during a border drag, so the inner frame (and every card grid hosted in it)
+# stayed pinned at its pre-drag width and only snapped into place on release.
+#
+# <Configure> *does* fire live during the Windows drag, so we keep the fit synchronous
+# (matching CTk's native behaviour) and instead skip it when the relevant dimension
+# hasn't actually changed.  This tracks the window live while avoiding redundant
+# relayouts on duplicate events.
 if sys.platform.startswith("win"):
-    _orig_fit = _sf.CTkScrollableFrame._fit_frame_dimensions_to_canvas
 
-    def _throttled_fit(self, event):
-        if not hasattr(self, "_fit_job"):
-            self._fit_job = None
-        if self._fit_job is not None:
-            try:
-                self._parent_canvas.after_cancel(self._fit_job)
-            except Exception:
-                pass
+    def _guarded_fit(self, event):
+        canvas = self._parent_canvas
+        if self._orientation == "horizontal":
+            new_h = canvas.winfo_height()
+            if getattr(self, "_last_fit_h", None) == new_h:
+                return
+            self._last_fit_h = new_h
+            canvas.itemconfigure(self._create_window_id, height=new_h)
+        elif self._orientation == "vertical":
+            new_w = canvas.winfo_width()
+            if getattr(self, "_last_fit_w", None) == new_w:
+                return
+            self._last_fit_w = new_w
+            canvas.itemconfigure(self._create_window_id, width=new_w)
 
-        def _do_fit(inst=self):
-            inst._fit_job = None
-            if inst._orientation == "horizontal":
-                inst._parent_canvas.itemconfigure(
-                    inst._create_window_id,
-                    height=inst._parent_canvas.winfo_height(),
-                )
-            elif inst._orientation == "vertical":
-                inst._parent_canvas.itemconfigure(
-                    inst._create_window_id,
-                    width=inst._parent_canvas.winfo_width(),
-                )
-
-        self._fit_job = self._parent_canvas.after(200, _do_fit)
-
-    _sf.CTkScrollableFrame._fit_frame_dimensions_to_canvas = _throttled_fit
+    _sf.CTkScrollableFrame._fit_frame_dimensions_to_canvas = _guarded_fit
 
 
 # ── Linux: Cairo smooth rendering + cursor / keyboard patches ───────────

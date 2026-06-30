@@ -250,6 +250,9 @@ class MarkdownBubble(customtkinter.CTkFrame):
         self._tw = tw
         self.last_width = 0
         self.resize_timer = None
+        # Cache the last wraplength applied per table frame so width changes that
+        # don't alter the column width skip the per-cell reconfigure loop.
+        self._last_table_cols = {}
 
         self._parent_tw = None
         parent = self.master
@@ -265,8 +268,12 @@ class MarkdownBubble(customtkinter.CTkFrame):
         if not self._parent_tw and hasattr(self.master, "_textbox"):
             self._parent_tw = self.master._textbox
 
+        # NOTE: live-resize updates are driven by the chat plugin's single
+        # <Configure> dispatcher (see ChatPlugin._register_chat_bubble), not a
+        # per-bubble binding — that used to add one handler per message to the
+        # shared textbox and never remove it.  We only do the one-shot initial
+        # sizing here.
         if self._parent_tw:
-            self._parent_tw.bind("<Configure>", self._on_parent_cfg, add="+")
             self.after(10, lambda: self._update_width(
                 self._parent_tw.winfo_width()))
 
@@ -977,9 +984,6 @@ class MarkdownBubble(customtkinter.CTkFrame):
     # Responsive resize
     # ------------------------------------------------------------------
 
-    def _on_parent_cfg(self, event):
-        self._update_width(event.width)
-
     def _update_width(self, available_width):
         if available_width <= 1:
             return
@@ -1019,6 +1023,10 @@ class MarkdownBubble(customtkinter.CTkFrame):
             if num_cols == 0:
                 continue
             col_width = max(int(usable_width / num_cols) - 24, 50)
+            # Skip the per-cell loop when this table's column width is unchanged.
+            if self._last_table_cols.get(table_frame) == col_width:
+                continue
+            self._last_table_cols[table_frame] = col_width
             try:
                 for child in table_frame.winfo_children():
                     if isinstance(child, tk.Label):

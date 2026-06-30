@@ -22,6 +22,7 @@ from utils import settings
 from utils.cairo_canvas import CairoCanvas
 from utils.emoji_entry import EmojiEntry
 from utils.logger import logger
+from utils.ui_throttle import ResizeThrottle
 
 # Pool of suggestion prompts shown on the welcome screen.
 # 4 are picked at random each time the chat is opened.
@@ -319,11 +320,29 @@ class Plugin(BasePlugin):
     # Bubble rendering
     # ------------------------------------------------------------------
 
-    def _get_chat_width(self):
+    def _register_chat_bubble(self, widget, update_fn):
+        """Track a chat bubble so the single resize dispatcher updates it.
+
+        Replaces per-bubble <Configure> bindings, which accumulated one handler per
+        message on the shared textbox.  ``update_fn(width)`` receives the current
+        textbox width and applies it to ``widget``.
+        """
+        bubbles = getattr(self, "_chat_bubbles", None)
+        if bubbles is None:
+            self._chat_bubbles = bubbles = []
+        bubbles.append((update_fn, widget))
+
+    def _get_chat_width(self, allow_update=True):
         """Return usable pixel width inside the chat textbox.
 
         On Windows, winfo_width() may return 1 during layout phases.
         This method measures from the parent chat_wrapper frame instead.
+
+        ``allow_update`` forces a layout pass first (needed at creation time when
+        widths may not be settled yet).  Resize handlers must pass
+        ``allow_update=False``: calling update() from inside a <Configure> handler
+        pumps a nested event loop during the Windows modal move/size loop and makes
+        the drag stutter.
         """
         import sys
 
@@ -331,10 +350,11 @@ class Plugin(BasePlugin):
         if hasattr(self, '_chat_wrapper') and self._chat_wrapper:
             try:
                 # Ensure layout is complete, especially on Windows
-                if sys.platform == "win32":
-                    self._chat_wrapper.update()
-                else:
-                    self._chat_wrapper.update_idletasks()
+                if allow_update:
+                    if sys.platform == "win32":
+                        self._chat_wrapper.update()
+                    else:
+                        self._chat_wrapper.update_idletasks()
 
                 w = self._chat_wrapper.winfo_width()
                 if w > 1:
@@ -347,10 +367,11 @@ class Plugin(BasePlugin):
         # Fallback: measure textbox directly
         tw = self.chat_box._textbox
         try:
-            if sys.platform == "win32":
-                tw.update()
-            else:
-                tw.update_idletasks()
+            if allow_update:
+                if sys.platform == "win32":
+                    tw.update()
+                else:
+                    tw.update_idletasks()
             w = tw.winfo_width()
             if w > 1:
                 padx = int(str(tw.cget("padx") or 0))
@@ -616,14 +637,14 @@ class Plugin(BasePlugin):
         self._bind_scroll_redirect_to_chat(tw, bubble)
         self._bind_scroll_redirect_to_chat(tw, msg_widget)
 
-        # Keep container width in sync when window resizes
-        def _sync(event, c=container):
-            try:
-                w = self._get_chat_width()
-                c.configure(width=w)
-            except tk.TclError:
-                pass
-        tw.bind("<Configure>", _sync, add="+")
+        # Keep container width in sync when window resizes, via the chat-level
+        # resize dispatcher (one shared <Configure> handler for all bubbles).
+        self._register_chat_bubble(
+            container,
+            lambda _w, c=container: c.configure(
+                width=self._get_chat_width(allow_update=False)
+            ),
+        )
 
     def render_assistant_bubble_markdown(self, message):
         """Render the assistant's response at full available width."""
@@ -637,6 +658,9 @@ class Plugin(BasePlugin):
 
         tw.window_create("end", window=bubble, padx=0, pady=10)
         tw.insert("end", "\n")
+
+        # Track the bubble for live resize via the chat-level dispatcher.
+        self._register_chat_bubble(bubble, lambda w, b=bubble: b._update_width(w))
 
         # Force a proper resize after embedding
         def _finalize():
@@ -869,6 +893,38 @@ class Plugin(BasePlugin):
         self.chat_box._textbox.tag_config("error", foreground="#EF4444")
 
         self.chat_box.configure(state="disabled")
+
+        # --- Single resize dispatcher for all chat bubbles ---
+        # Every bubble used to bind its own <Configure> on the shared textbox
+        # (add="+"), so an N-message conversation fired N handlers per resize event
+        # and the bindings were never removed.  Instead we keep one throttled handler
+        # that updates every live bubble in a single pass.  (The textbox is recreated
+        # by create_main_screen, so the list and binding reset with each screen.)
+        self._chat_bubbles = []
+        _tw = self.chat_box._textbox
+
+        def _dispatch_bubble_resize(_tw=_tw):
+            width = _tw.winfo_width()
+            if width <= 1:
+                return
+            alive = []
+            for update_fn, widget in self._chat_bubbles:
+                try:
+                    if not widget.winfo_exists():
+                        continue  # bubble destroyed — drop it
+                except tk.TclError:
+                    continue
+                try:
+                    update_fn(width)
+                except Exception:
+                    pass  # keep the bubble registered; skip this pass only
+                alive.append((update_fn, widget))
+            self._chat_bubbles = alive
+
+        self._chat_resize_throttle = ResizeThrottle(
+            _tw, _dispatch_bubble_resize, interval_ms=33
+        )
+        _tw.bind("<Configure>", self._chat_resize_throttle.trigger, add="+")
 
         # Animated text handler
         from plugins.chat.animated_text import AnimatedText

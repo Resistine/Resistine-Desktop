@@ -12,6 +12,7 @@ from gui.notifications import ToastNotification
 from utils.logger import logger
 from utils.svg_loader import load_svg_as_ctk_image
 from utils.functions import get_resource_path
+from utils.ui_throttle import ResizeThrottle
 
 
 class AppUI(customtkinter.CTk):
@@ -224,43 +225,37 @@ class AppUI(customtkinter.CTk):
             buttons_area.grid(row=2, column=0, sticky="sew", padx=16, pady=(8, 16))
             extra_buttons_func(buttons_area, plugin)
 
-        # --- Wraplength: update once after resize stops ---
-        # During active resize the card fires <Configure> on every layout pass.
-        # We debounce the actual configure(wraplength=…) call so it only runs
-        # once — 150 ms after the card stops changing size.  This eliminates the
-        # N×card label canvas-redraws that happened on every pixel of drag on Win.
+        # --- Wraplength: track the card width live during a resize ---
+        # The card fires <Configure> on every layout pass.  We run the wraplength
+        # update synchronously (an after() debounce would be starved by the Windows
+        # modal move/size loop and only fire on release — the old "frozen then snaps"
+        # behaviour).  A ResizeThrottle caps the work at ~30fps and the >=16px delta
+        # guards skip no-op reconfigures, so the per-card label canvas re-wraps stay
+        # cheap even with many cards; the throttle's trailing pass applies the final
+        # width once the drag stops.
         _wrap_state = [_init_tw, _init_dw]
-        _wrap_job = [None]
         _tl = title_label
         _dl = _desc_lbl if show_description else None
 
-        def _apply_wraplength(_f=frame, _tl=_tl, _dl=_dl, _s=_wrap_state, _j=_wrap_job):
-            _j[0] = None
+        def _apply_wraplength(_f=frame, _tl=_tl, _dl=_dl, _s=_wrap_state):
             try:
                 card_w = _f.winfo_width()
                 if card_w <= 4:
                     return
                 new_tw = max(80, card_w - 80)
                 new_dw = max(100, card_w - 40)
-                if abs(new_tw - _s[0]) >= 4:
+                if abs(new_tw - _s[0]) >= 16:
                     _s[0] = new_tw
                     _tl.configure(wraplength=new_tw)
-                if _dl and abs(new_dw - _s[1]) >= 4:
+                if _dl and abs(new_dw - _s[1]) >= 16:
                     _s[1] = new_dw
                     _dl.configure(wraplength=new_dw)
             except Exception:
                 pass
 
-        def _schedule_wraplength(event=None, _f=frame, _j=_wrap_job):
-            if _j[0] is not None:
-                try:
-                    _f.after_cancel(_j[0])
-                except Exception:
-                    pass
-            _j[0] = _f.after(150, _apply_wraplength)
-
-        # <Configure> only schedules (cheap); <Map> and the initial after() fire immediately.
-        frame.bind("<Configure>", _schedule_wraplength)
+        _wrap_throttle = ResizeThrottle(frame, _apply_wraplength, interval_ms=33)
+        # <Configure> applies live (throttled); <Map> and the initial after() fire immediately.
+        frame.bind("<Configure>", _wrap_throttle.trigger)
         frame.bind("<Map>", lambda e: _apply_wraplength())
         frame.after(1, _apply_wraplength)
 
@@ -419,24 +414,15 @@ class AppUI(customtkinter.CTk):
         container._resistine_last_w = -1
         container._resistine_last_height = -1
         container._resistine_num_cols = len(cols_tuple)
-        container._resistine_resize_job = None
 
         def update_aspect_ratio(event=None, force_width=None):
-            if event and not force_width:
-                if container._resistine_resize_job:
-                    try:
-                        container.after_cancel(container._resistine_resize_job)
-                    except:
-                        pass
-                # 200 ms debounce: matches the CTkScrollableFrame inner-frame freeze so
-                # both the frame snap and the row-height update fire in the same pass,
-                # avoiding a second wave of card redraws shortly after the first.
-                container._resistine_resize_job = container.after(200, lambda: _do_update_aspect_ratio())
-                return
+            # Run synchronously, inline with the <Configure> event, so card rows track
+            # the window live during a drag.  (An after() debounce would be starved by
+            # the Windows modal move/size loop and only fire on release.)  The <4px
+            # width guard in _do_update_aspect_ratio keeps per-event cost bounded.
             _do_update_aspect_ratio(force_width=force_width)
 
         def _do_update_aspect_ratio(force_width=None):
-            container._resistine_resize_job = None
             try:
                 if not container.winfo_exists():
                     return
@@ -1231,12 +1217,9 @@ class AppUI(customtkinter.CTk):
                 pass
 
         def _schedule_visibility_check(_e=None):
-            if hide_state["job"] is not None:
-                try:
-                    canvas.after_cancel(hide_state["job"])
-                except Exception:
-                    pass
-            hide_state["job"] = canvas.after(60, _update_scrollbar_visibility)
+            # Run inline (no after() debounce) so the scrollbar tracks the drag live;
+            # the 32px hysteresis above already prevents flicker during resize.
+            _update_scrollbar_visibility()
 
         try:
             canvas.bind("<Configure>", _schedule_visibility_check, add="+")
