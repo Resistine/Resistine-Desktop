@@ -425,32 +425,51 @@ def _collect_wazuh_admin_cmds(admin_cmds):
     def _sq(s: str) -> str:
         return s.replace("'", "'\\''")
 
-    # ORDER MATTERS: kill the agent processes FIRST, then bootout.
+    # DO NOT pkill -9 the wazuh-* processes. Empirically that triggered
+    # a SIGKILL cascade onto the privileged shell — most likely Wazuh's
+    # anti-tampering or a sibling daemon (wazuh-execd / wazuh-modulesd
+    # / wazuh-syscheckd) reacting to wazuh-agentd's forced death by
+    # killing the killer's parent process. Symptom: `exit code -9`
+    # surfacing at the first command AFTER the pkill (a no-op `sleep`),
+    # which is when the retaliatory SIGKILL lands on our osascript-
+    # spawned shell.
     #
-    # Wazuh's wazuh-agentd registers with the macOS EndpointSecurity (ES)
-    # framework for kernel process-event notifications. When `launchctl
-    # bootout` tears down an ES-subscribed daemon, the ES framework's
-    # teardown path can SIGKILL processes that were subscribed to or
-    # generated events for the dying client — and that has been observed
-    # to cascade onto the privileged shell osascript spawned, surfacing
-    # to the user as `exit code -9` with no output.
+    # Graceful shutdown sequence instead:
+    #   1. `wazuh-control stop` — Wazuh's own teardown, which disables
+    #      its protection hooks BEFORE the daemons exit.
+    #   2. `launchctl disable system/<plist>` — tell launchd not to
+    #      respawn the daemon and not to monitor it (KeepAlive=true
+    #      otherwise re-launches agentd while we're trying to remove
+    #      its files).
+    #   3. 1s sleep — give the graceful shutdown time to actually
+    #      flush ES subscriptions, close sockets, deregister with
+    #      launchd. 200 ms was empirically too short.
+    #   4. `launchctl bootout` — now the daemon is already supposed
+    #      to be gone; bootout is a no-op for any live ES subscription
+    #      and the kernel ES framework has nothing to cascade.
     #
-    # Killing the agent processes here BEFORE bootout means the ES
-    # client is gone (and its subscriptions deregistered) by the time
-    # launchd performs its cleanup, so the bootout becomes a no-op for
-    # the kernel ES framework.
-    #
-    # `wazuh-control stop` first attempts a graceful shutdown (lets
-    # agentd notify the manager + flush state); pkill -9 with the
-    # [w] regex trick is the immediate fallback. The regex trick
-    # itself is documented in _remove_clamav_daemons.
+    # If wazuh-control stop fails (binary missing, ossec dir corrupted,
+    # etc.) we still proceed to bootout + rm — the worst case is leftover
+    # files we'll clean on the next launchctl call. We do NOT attempt a
+    # forceful kill anymore; the anti-tamper response is worse than
+    # leaving a defunct process around for 30 s while launchd reaps it.
     admin_cmds.append(
         f"'{_sq(_WAZUH_CONTROL)}' stop 2>/dev/null || true")
+    # Extract the bare label from the plist path so launchctl disable
+    # accepts the system/<label> form. WAZUH_LAUNCHD_PLIST is the
+    # /Library/LaunchDaemons/<label>.plist path; the label is the
+    # basename minus .plist. Hardcode the fallback to match the
+    # `com.wazuh.agent` ImportError default earlier in this function.
+    _wazuh_label = (
+        os.path.basename(WAZUH_LAUNCHD_PLIST).removesuffix(".plist")
+        or "com.wazuh.agent"
+    )
     admin_cmds.append(
-        "pkill -9 -f '/Library/Ossec/bin/[w]azuh-' 2>/dev/null || true")
-    # Brief sleep to let ES framework process the agent death notifications
-    # before we tear down its launchd binding. Empirically 200 ms is enough.
-    admin_cmds.append("sleep 0.2")
+        f"launchctl disable system/{_sq(_wazuh_label)} 2>/dev/null || true")
+    # Give wazuh-control stop time to actually complete its teardown +
+    # let launchd process the disable. 1 s is the empirical minimum
+    # observed to consistently avoid retaliation.
+    admin_cmds.append("sleep 1")
     admin_cmds.append(
         f"launchctl bootout system '{_sq(WAZUH_LAUNCHD_PLIST)}' 2>/dev/null || true")
     # Identity wipe — same semantics as remove_agent(wipe_keys=True).
