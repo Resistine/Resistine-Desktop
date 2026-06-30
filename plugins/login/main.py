@@ -300,6 +300,15 @@ class Plugin(BasePlugin):
         self.otp_entry.grid(row=2, column=0, pady=(0, 20))
         self.active_input_entry = self.otp_entry
         self.otp_entry.bind("<KeyPress>", self.on_otp_key_press)
+        # Custom paste handler. On macOS the OS-level Cmd+V triggers
+        # AppKit's paste action AND Tk's <<Paste>> class binding both fire
+        # against the same widget — clipboard gets inserted twice, so a
+        # 6-digit OTP becomes 12. Binding <<Paste>> explicitly + returning
+        # "break" suppresses the default chain so the clipboard is
+        # inserted exactly once. While we're here, strip non-digits and
+        # clamp to OTP_LENGTH so users pasting "123 456" or "123-456" or
+        # an email body containing the code still land a clean OTP.
+        self.otp_entry.bind("<<Paste>>", self._on_otp_paste)
         self.otp_entry.focus_set()
 
         # Create Verify button
@@ -521,3 +530,39 @@ class Plugin(BasePlugin):
         """Handle key press in OTP entry."""
         if event.keysym == "Return":
             self.verify_otp()
+
+    def _on_otp_paste(self, _event=None):
+        """Paste handler that inserts the clipboard EXACTLY once + filters
+        to digits + clamps to OTP_LENGTH.
+
+        On macOS, Cmd+V on a Tk Entry triggers both the AppKit-level paste
+        action AND Tk's stock <<Paste>> class binding — without an
+        explicit handler that returns "break", the clipboard is inserted
+        twice (so a 6-digit OTP becomes 12). Binding <<Paste>> ourselves
+        and returning "break" prevents the duplicate insert.
+
+        Filtering to digits also handles common paste shapes — "123 456",
+        "123-456", or an OTP copied from email body with surrounding
+        whitespace all collapse to the bare 6-digit code.
+        """
+        try:
+            from plugins.login.config import OTP_LENGTH
+        except Exception:
+            OTP_LENGTH = 6
+        try:
+            # Try CLIPBOARD selection (Cmd/Ctrl+C target). PRIMARY would
+            # only have content on X11 with active selection, irrelevant
+            # for OTP paste, and raises TclError on Mac/empty PRIMARY.
+            clip = self.otp_entry.clipboard_get()
+        except Exception:
+            return "break"
+        # Strip everything that isn't a digit, then clamp.
+        digits = "".join(ch for ch in clip if ch.isdigit())[:OTP_LENGTH]
+        # Replace the entry contents (don't append — paste is a
+        # replace semantically, and we just suppressed the default).
+        try:
+            self.otp_entry.delete(0, "end")
+            self.otp_entry.insert(0, digits)
+        except Exception:
+            pass
+        return "break"
