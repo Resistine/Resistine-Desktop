@@ -266,9 +266,27 @@ def check_and_advance():
     with _lock:
         state = get_setup_state()
 
-    # Already completed — nothing to do
+    # Already completed — but verify the system install still exists on
+    # disk. An uninstall (or manual cleanup) can wipe the system-level
+    # ClamAV files while leaving the user-level setup_state=completed,
+    # which strands a *reinstall* showing "Start Protection" for daemons
+    # that crash-loop with no config file. Self-heal by resetting to
+    # NOT_STARTED so seeding + the admin postinstall re-run. Bundle mode
+    # only — dev mode has no system install to validate.
     if state == STATE_COMPLETED:
-        return
+        if _system_install_intact():
+            return
+        logger.warning(
+            "[AV-INSTALLER] setup_state=completed but system ClamAV install "
+            "is missing (likely wiped by a prior uninstall) — resetting to "
+            "re-run setup",
+        )
+        with _lock:
+            _set_state(STATE_NOT_STARTED)
+            settings.set(_NAMESPACE, "retry_count", 0)
+            settings.set(_NAMESPACE, "last_attempt_ts", 0.0)
+        state = STATE_NOT_STARTED
+        # Fall through — the NOT_STARTED handling below re-seeds the DB.
 
     # If system setup is already done (daemons running), mark completed
     from plugins.antivirus.clamav_common import _ping_socket
@@ -419,6 +437,35 @@ def _validate_database() -> bool:
             except OSError:
                 continue
     return False
+
+
+def _system_install_intact() -> bool:
+    """Return True if the system-level ClamAV install is present on disk.
+
+    A bundle install places clamd.conf plus a seeded CVD under the system
+    ClamAV dir via the admin postinstall. If those are gone (e.g. an
+    uninstall wiped the directory) a persisted setup_state=completed is
+    stale and setup must re-run. In dev mode (no app bundle) there is no
+    system install to validate, so treat it as intact and let the live
+    runtime checks handle health.
+    """
+    from plugins.antivirus.clamav_platform_darwin import (
+        _SYSTEM_CLAMD_CONF,
+        _SYSTEM_DB_DIR,
+        is_app_bundle,
+    )
+
+    if not is_app_bundle():
+        return True
+
+    if not os.path.isfile(_SYSTEM_CLAMD_CONF):
+        return False
+
+    return any(
+        os.path.getsize(f) > _MIN_CVD_SIZE
+        for f in glob.glob(os.path.join(_SYSTEM_DB_DIR, "*.cvd"))
+        if os.path.isfile(f)
+    )
 
 
 def _do_db_seed():

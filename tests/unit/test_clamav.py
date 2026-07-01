@@ -1724,3 +1724,76 @@ class TestGetDbInfo:
         info = clamav_common.get_db_info()
 
         assert info == {"signatures": "\u2014", "last_updated": "\u2014"}
+
+
+class TestInstallerSelfHeal:
+    """check_and_advance() must not trust a persisted setup_state=completed
+    when the system-level ClamAV install has been wiped from disk.
+
+    Regression: a macOS uninstall removes /Library/Application Support/
+    Resistine/clamav but leaves the user-level setup_state=completed, so a
+    later reinstall showed "Start Protection" for daemons that crash-loop
+    with no config. The plugin must self-heal by re-running setup.
+    """
+
+    @pytest.fixture()
+    def svc(self, monkeypatch, tmp_path):
+        from plugins.antivirus import installer_service
+
+        # Force the darwin code paths regardless of host OS.
+        monkeypatch.setattr(installer_service, "_IS_DARWIN", True)
+
+        # Dict-backed fake settings store.
+        store = {}
+        fake = MagicMock()
+        fake.get.side_effect = (
+            lambda ns, key, default=None: store.get((ns, key), default)
+        )
+        fake.set.side_effect = (
+            lambda ns, key, value: store.__setitem__((ns, key), value)
+        )
+        monkeypatch.setattr(installer_service, "settings", fake)
+
+        # System install paths under tmp (empty dir == wiped install).
+        sysdir = tmp_path / "sys-clamav"
+        db_dir = sysdir / "db"
+        db_dir.mkdir(parents=True)
+        monkeypatch.setattr(
+            clamav_platform_darwin, "_SYSTEM_CLAMD_CONF",
+            str(sysdir / "clamd.conf"),
+        )
+        monkeypatch.setattr(
+            clamav_platform_darwin, "_SYSTEM_DB_DIR", str(db_dir),
+        )
+        monkeypatch.setattr(
+            clamav_platform_darwin, "is_app_bundle", lambda: True,
+        )
+        # clamd socket is dead (nothing running).
+        monkeypatch.setattr(
+            clamav_common, "_ping_socket", lambda *a, **k: False,
+        )
+        # Don't actually seed \u2014 just record that recovery was triggered.
+        monkeypatch.setattr(
+            installer_service, "ensure_db_seed_started", MagicMock(),
+        )
+        return installer_service, store, sysdir, db_dir
+
+    def test_completed_but_wiped_resets_and_reseeds(self, svc):
+        service, store, sysdir, db_dir = svc
+        store[("antivirus", "setup_state")] = service.STATE_COMPLETED
+
+        service.check_and_advance()
+
+        assert store[("antivirus", "setup_state")] == service.STATE_NOT_STARTED
+        service.ensure_db_seed_started.assert_called_once()
+
+    def test_completed_and_intact_is_left_alone(self, svc):
+        service, store, sysdir, db_dir = svc
+        (sysdir / "clamd.conf").write_text("x")
+        (db_dir / "main.cvd").write_bytes(b"0" * (service._MIN_CVD_SIZE + 1))
+        store[("antivirus", "setup_state")] = service.STATE_COMPLETED
+
+        service.check_and_advance()
+
+        assert store[("antivirus", "setup_state")] == service.STATE_COMPLETED
+        service.ensure_db_seed_started.assert_not_called()
