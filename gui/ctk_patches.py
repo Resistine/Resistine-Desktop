@@ -32,35 +32,172 @@ if hasattr(_sf.CTkScrollableFrame, "check_if_master_is_canvas"):
     _sf.CTkScrollableFrame.check_if_master_is_canvas = _patched_check
 
 
+# ── Cross-platform: clamp scrollregion (overscroll fix) ──────────────────
+# CTkScrollableFrame sets scrollregion = bbox("all"), which is SMALLER than
+# the canvas viewport when the content fits — so the smooth scroller can fling
+# up past the top of the page (revealing empty space above the start) even
+# when there's no scrollbar. Clamp the scrollregion to at least the viewport
+# size so the top/left edge is pinned.
+#
+# Restored from commit 7244710 ("Clamp scrolling so you can't scroll above the
+# bounds of a page"), which lived in main.py's patch block and was dropped when
+# the patches moved here in a later merge.
+_orig_sf_init = _sf.CTkScrollableFrame.__init__
+
+
+def _clamp_scrollregion(sf):
+    try:
+        canvas = sf._parent_canvas
+        bbox = canvas.bbox("all")
+        if bbox is None:
+            return
+        x1, y1, x2, y2 = bbox
+        # Never let the scrollregion be smaller than the viewport, so yview
+        # can't move when content fits (no overscroll).
+        x2 = max(x2, x1 + canvas.winfo_width())
+        y2 = max(y2, y1 + canvas.winfo_height())
+        canvas.configure(scrollregion=(x1, y1, x2, y2))
+    except Exception:
+        pass
+
+
+def _sf_init_clamp_scroll(self, *args, **kwargs):
+    _orig_sf_init(self, *args, **kwargs)
+    # Replace CTk's own <Configure> handler (which sets scrollregion =
+    # bbox("all")) with the clamped version. Other <Configure> handlers added
+    # later via add="+" (e.g. auto-hide scrollbar) are unaffected.
+    self.bind("<Configure>", lambda e, s=self: _clamp_scrollregion(s))
+
+
+_sf.CTkScrollableFrame.__init__ = _sf_init_clamp_scroll
+
+
+# ── Cross-platform: stop CTkScrollbar from forcing a present on every draw ─
+# CTkScrollbar._draw ends with self._canvas.update_idletasks() — a forced,
+# synchronous flush of the whole pending-render queue on EVERY scrollbar
+# redraw. Its result is unused; it's purely "paint now", and it fires on every
+# hover/scroll/resize/theme change across the app. Suppress just that trailing
+# flush; the scrollbar still redraws and paints at the next natural idle.
+#
+# This flush was also (accidentally) load-bearing for CTkScrollableFrame's
+# first-paint sizing — it masked the fact that _settle_screen() fits a scroll
+# frame's inner content BEFORE a plugin's _resistine_finalize widens its
+# column. _settle_screen now re-fits after the finalizers (see its step 3), so
+# layout no longer depends on this flush.
+from customtkinter.windows.widgets.ctk_scrollbar import (  # noqa: E402
+    CTkScrollbar as _CTkScrollbar_perf,
+)
+
+_orig_scrollbar_draw = _CTkScrollbar_perf._draw
+
+
+def _scrollbar_draw_no_flush(self, no_color_updates=False):
+    canvas = self._canvas
+    # Shadow the canvas's update_idletasks with a no-op for the duration of the
+    # draw, so the trailing forced flush inside _draw becomes a no-op. Restored
+    # immediately after, so nothing else is affected.
+    canvas.update_idletasks = lambda: None
+    try:
+        return _orig_scrollbar_draw(self, no_color_updates)
+    finally:
+        try:
+            del canvas.update_idletasks  # drop the shadow; class method returns
+        except Exception:
+            pass
+
+
+_CTkScrollbar_perf._draw = _scrollbar_draw_no_flush
+
+
 # ── Windows: resize performance patch ───────────────────────────────────
 if sys.platform.startswith("win"):
     _orig_fit = _sf.CTkScrollableFrame._fit_frame_dimensions_to_canvas
 
     def _throttled_fit(self, event):
+        # Leading-edge debounce.
+        #
+        # The original CTk handler re-fits the inner frame to the canvas on
+        # *every* <Configure>, which is the resize-time performance problem this
+        # patch exists to solve. A pure *trailing* debounce (wait 200 ms, then
+        # fit) fixed the drag cost but made the inner frame paint at its
+        # requested width on first load and then snap to the canvas width 200 ms
+        # later — a visible "bounce" when a screen first loads.
+        #
+        # Leading-edge fixes both: fit immediately the first time we see a real
+        # canvas size (and on the leading edge of each resize burst), then
+        # coalesce the flood of <Configure>s during an active drag into a single
+        # trailing fit. First paint is correct; drags stay cheap.
+        canvas = self._parent_canvas
         if not hasattr(self, "_fit_job"):
             self._fit_job = None
-        if self._fit_job is not None:
+
+        has_real_size = canvas.winfo_width() > 1 and canvas.winfo_height() > 1
+        if has_real_size and (
+            not getattr(self, "_did_real_fit", False) or self._fit_job is None
+        ):
+            # First real size ever, or the leading edge of a new burst → fit now.
             try:
-                self._parent_canvas.after_cancel(self._fit_job)
+                _orig_fit(self, event)
+                self._did_real_fit = True
             except Exception:
                 pass
 
-        def _do_fit(inst=self):
-            inst._fit_job = None
-            if inst._orientation == "horizontal":
-                inst._parent_canvas.itemconfigure(
-                    inst._create_window_id,
-                    height=inst._parent_canvas.winfo_height(),
-                )
-            elif inst._orientation == "vertical":
-                inst._parent_canvas.itemconfigure(
-                    inst._create_window_id,
-                    width=inst._parent_canvas.winfo_width(),
-                )
+        if self._fit_job is not None:
+            try:
+                canvas.after_cancel(self._fit_job)
+            except Exception:
+                pass
 
-        self._fit_job = self._parent_canvas.after(200, _do_fit)
+        def _do_fit(inst=self, ev=event):
+            inst._fit_job = None
+            try:
+                _orig_fit(inst, ev)
+            except Exception:
+                pass
+
+        self._fit_job = canvas.after(200, _do_fit)
 
     _sf.CTkScrollableFrame._fit_frame_dimensions_to_canvas = _throttled_fit
+
+
+# ── Windows/macOS: geometry cache for the stock draw engine ─────────────
+# CTk's font_shapes / polygon_shapes draw_rounded_rect_with_border re-issues
+# every find_withtag()/coords() call on EVERY _draw — even when the widget's
+# geometry (size, corner radius, border width, drawing method) is identical to
+# the previous draw. So a pure *color* change — hover feedback, theme toggle,
+# text selection, the chat dim — pays the full geometry re-layout cost. With
+# many widgets that adds up to hundreds of ms (measured ~197 ms to recolor ~100
+# widgets) and shows up as sluggish, staggered repaints app-wide.
+#
+# The canvas items are already created and positioned, so when the geometry
+# args match the last call we can skip the whole geometry pass. We return False
+# ("no new parts created", z-order already managed); the widget's _draw() still
+# applies color because it keys off its own no_color_updates flag, not this
+# return value. Only the plain rounded-rect is cached — progress/slider/
+# scrollbar draws depend on a value, not just geometry, so they're left alone.
+#
+# Linux swaps the entire draw engine for Cairo (which caches via its own
+# _poly_cache_key), so this is for the stock engine on Windows/macOS only.
+if not sys.platform.startswith("linux"):
+    from customtkinter.windows.widgets.core_rendering import (
+        DrawEngine as _DrawEngine,
+    )
+
+    _orig_rrb = _DrawEngine.draw_rounded_rect_with_border
+
+    def _cached_rrb(self, width, height, corner_radius, border_width,
+                    overwrite_preferred_drawing_method=None):
+        key = (width, height, corner_radius, border_width,
+               overwrite_preferred_drawing_method
+               or self.preferred_drawing_method)
+        if getattr(self, "_rrb_geom_key", None) == key:
+            return False  # geometry unchanged → items already drawn/positioned
+        result = _orig_rrb(self, width, height, corner_radius, border_width,
+                           overwrite_preferred_drawing_method)
+        self._rrb_geom_key = key
+        return result
+
+    _DrawEngine.draw_rounded_rect_with_border = _cached_rrb
 
 
 # ── Linux: Cairo smooth rendering + cursor / keyboard patches ───────────

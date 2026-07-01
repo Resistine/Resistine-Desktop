@@ -40,8 +40,8 @@ from utils.logger import logger
 _PLUGIN_DIR = os.path.dirname(os.path.realpath(__file__))
 
 
-def _send_notification(title: str, body: str):
-    """Send a native OS notification (macOS + Windows)."""
+def _send_notification(title: str, body: str, urgency: str = "critical"):
+    """Send a native OS notification (macOS + Windows + Linux)."""
     import platform as _platform
 
     system = _platform.system()
@@ -49,6 +49,13 @@ def _send_notification(title: str, body: str):
         _send_notification_darwin(title, body)
     elif system == "Windows":
         _send_notification_windows(title, body)
+    elif system == "Linux":
+        try:
+            from utils.notifications import send as _send
+
+            _send(title, body, urgency=urgency)
+        except Exception as e:
+            logger.debug(f"Linux notification failed: {e}")
 
 
 def _send_notification_darwin(title: str, body: str):
@@ -93,9 +100,19 @@ _PS_AUMID = (
 
 
 def _send_notification_windows(title: str, body: str):
-    """Windows 10/11: native Action Center toast with Resistine logo."""
+    """Windows 10/11: native Action Center toast with Resistine logo.
+
+    Toast XML is written to a temp file and read by PowerShell via
+    Get-Content -Raw rather than interpolated into the script. The previous
+    inline escape (replacing `"` with backtick-`"`) broke for threat names
+    containing backticks, dollar signs, or backslashes — which would either
+    break out of the PowerShell string or be eaten by PowerShell's parser
+    before LoadXml ever saw the content. The tempfile detour means the
+    notification body travels as bytes, never as PowerShell source.
+    """
     global _TOAST_COUNTER
     import subprocess
+    import tempfile
 
     # Resolve logo path (works for both dev and PyInstaller builds)
     logo = os.path.join(
@@ -104,7 +121,7 @@ def _send_notification_windows(title: str, body: str):
     )
 
     def _esc(s: str) -> str:
-        """Escape for XML content inside a PowerShell double-quoted here-string."""
+        """Escape for XML content."""
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
     esc_title = _esc(title)
@@ -128,19 +145,39 @@ def _send_notification_windows(title: str, body: str):
         "</toast>"
     )
 
-    # Use a here-string (@"..."@) so the XML doesn't need quote escaping
+    # Write XML to a temp file so PowerShell can read it as raw bytes —
+    # avoids any need to escape the threat name / body for the shell.
+    xml_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".xml", prefix="resistine_toast_",
+            encoding="utf-8", delete=False,
+        ) as tf:
+            tf.write(xml_str)
+            xml_path = tf.name
+    except Exception as e:
+        logger.debug(f"Failed to write toast XML tempfile: {e}")
+        return
+
+    # PowerShell loads the XML from disk via Get-Content -Raw, so the only
+    # untrusted-ish value left in the script is the path itself (which we
+    # control) and the AUMID / tag (also controlled).
+    safe_path = xml_path.replace("'", "''")  # PS single-quote escape
     ps_script = (
         "[Windows.UI.Notifications.ToastNotificationManager,"
         " Windows.UI.Notifications, ContentType = WindowsRuntime]"
         " | Out-Null; "
         "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom,"
         " ContentType = WindowsRuntime] | Out-Null; "
+        f"$raw = Get-Content -Raw -LiteralPath '{safe_path}'; "
         "$xml = New-Object Windows.Data.Xml.Dom.XmlDocument; "
-        f'$xml.LoadXml("{xml_str.replace(chr(34), "`" + chr(34))}"); '
+        "$xml.LoadXml($raw); "
         "$toast = [Windows.UI.Notifications.ToastNotification]::new($xml); "
         f"$toast.Tag = '{tag}'; "
         "[Windows.UI.Notifications.ToastNotificationManager]"
-        f"::CreateToastNotifier('{_PS_AUMID}').Show($toast)"
+        f"::CreateToastNotifier('{_PS_AUMID}').Show($toast); "
+        # Best-effort: clean the tempfile from PS once Windows has the toast.
+        f"Remove-Item -LiteralPath '{safe_path}' -ErrorAction SilentlyContinue"
     )
     try:
         subprocess.Popen(
@@ -150,13 +187,24 @@ def _send_notification_windows(title: str, body: str):
             stderr=subprocess.DEVNULL,
             creationflags=0x08000000,
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to spawn toast powershell: {e}")
+        # Fall back to cleaning up the tempfile ourselves on spawn failure.
+        try:
+            os.unlink(xml_path)
+        except OSError:
+            pass
 
 
 
 class Plugin(BasePlugin):
     """Antivirus plugin powered by ClamAV."""
+
+    # Scrollbar auto-hide + content-column centering settle just after build
+    # (the canvas reflows when the scrollbar toggles); defer the reveal until
+    # the layout is quiescent so the page doesn't visibly "shift right" after
+    # appearing. (Mirrors the VPN plugin, which shares this layout.)
+    defer_reveal_until_settled = True
 
     def __init__(self, app):
         super().__init__(
@@ -307,6 +355,51 @@ class Plugin(BasePlugin):
             return "Error"
         return "Warning"
 
+    def _is_active_screen(self):
+        """True only while the antivirus screen is the active navigation target.
+
+        Because the screen is cached (kept alive when navigated away), its
+        recurring status poll would otherwise keep re-rendering the banner even
+        after you've navigated off — including during the brief swap window,
+        which showed up as a blip. The moment a different screen is selected,
+        ``_current_main_screen`` points elsewhere (set synchronously, before the
+        deferred swap completes), so this returns False and the poll goes quiet.
+        """
+        try:
+            return getattr(self.app, "_current_main_screen", None) is getattr(
+                self, "main_container", None
+            )
+        except Exception:
+            return True
+
+    def screen_signature(self):
+        """Cache the antivirus screen across navigation.
+
+        This is the heaviest plugin screen; rebuilding/destroying its widget
+        tree on every visit is expensive, and the synchronous destroy on the way
+        OUT froze the swap-in of the next page (the antivirus→store "blip"). With
+        a stable signature the screen is hidden with grid_remove() (instant) and
+        re-shown as-is — no destroy, no freeze. Live data is kept current by the
+        status poller and re-synced in on_screen_shown(); we only force a rebuild
+        when the appearance mode changes (so theme colors re-render).
+        """
+        try:
+            return ("antivirus", customtkinter.get_appearance_mode())
+        except Exception:
+            return None
+
+    def on_screen_shown(self):
+        """Re-sync live data when returning to the cached screen."""
+        try:
+            self.app.after(0, self._refresh_db_info)
+            self.app.after(0, self._refresh_quarantine)
+            self.app.after(0, self._refresh_whitelist)
+            self.app.after(0, self._refresh_exclusions)
+            self.app.after(0, self._update_realtime_status)
+            self.app.after(0, self._refresh_siem_switch)
+        except Exception:
+            pass
+
     # ── Main screen ──────────────────────────────────────────
 
     def create_main_screen(self):
@@ -315,11 +408,18 @@ class Plugin(BasePlugin):
         )
         # Compute a reasonable initial content width so the first frame
         # isn't squeezed to 100px while _do_layout hasn't fired yet.
+        # _init_w is LOGICAL; winfo_width() is PHYSICAL, so normalize via CTk's
+        # widget scaling (1.0 on macOS, real OS ratio on Windows/HiDPI) and
+        # re-scale when setting minsize (which wants physical px).
+        try:
+            _s = customtkinter.ScalingTracker.get_widget_scaling(self.app) or 1.0
+        except Exception:
+            _s = getattr(self.app, "_hidpi_factor", 1.0) or 1.0
         _init_w = 750
         try:
-            _app_w = self.app.winfo_width()
+            _app_w = self.app.winfo_width() / _s
             _nav = getattr(self.app, "navigation_frame", None)
-            _nav_w = _nav.winfo_width() if (_nav and _nav.winfo_exists()) else 250
+            _nav_w = (_nav.winfo_width() / _s) if (_nav and _nav.winfo_exists()) else 250
             _nav_w = max(_nav_w, 250)
             _avail = _app_w - _nav_w
             _breathing = 60 if platform.system() == "Windows" else 40
@@ -330,7 +430,7 @@ class Plugin(BasePlugin):
         except Exception:
             pass
         self.main_container.grid_columnconfigure(0, weight=1)
-        self.main_container.grid_columnconfigure(1, weight=0, minsize=_init_w)
+        self.main_container.grid_columnconfigure(1, weight=0, minsize=int(_init_w * _s))
         self.main_container.grid_columnconfigure(2, weight=1)
         self.main_container.grid_rowconfigure(0, weight=1)
 
@@ -411,21 +511,35 @@ class Plugin(BasePlugin):
                             if hasattr(active, "_saved_sb_grid") and active._saved_sb_grid:
                                 active._scrollbar.grid(**active._saved_sb_grid)
                             else:
-                                active._scrollbar.grid(row=0, column=1, sticky="ns", pady=0)
+                                # CTk grids the vertical scrollbar at row=1
+                                # (row 0 is the label row). row=0 dropped a
+                                # default height=200 scrollbar into the empty
+                                # label row, pushing the canvas down 200px.
+                                active._scrollbar.grid(row=1, column=1, sticky="ns", pady=0)
             except Exception:
                 pass
             # --- End Auto-hide ---
 
-            app_w = self.app.winfo_width()
+            # winfo_width() returns PHYSICAL px; MAX_CONTENT_WIDTH is LOGICAL, so
+            # convert via CTk's widget scaling (the real OS-DPI ratio: 2.0 at
+            # 200% on Windows, 1.0 on macOS, == _hidpi_factor on Linux) and
+            # re-scale the minsize at the end. _hidpi_factor alone is 1.0 on
+            # Windows even when CTk scales 2x, which left the content column
+            # sized in physical px and rendered it half-width.
+            try:
+                _scale = customtkinter.ScalingTracker.get_widget_scaling(self.app) or 1.0
+            except Exception:
+                _scale = getattr(self.app, "_hidpi_factor", 1.0) or 1.0
+            app_w = self.app.winfo_width() / _scale
             if app_w < 10:
                 return
             try:
                 nav = getattr(self.app, "navigation_frame", None)
-                nav_w = nav.winfo_width() if (nav and nav.winfo_exists()) else 250
+                nav_w = (nav.winfo_width() / _scale) if (nav and nav.winfo_exists()) else 250
                 nav_w = max(nav_w, 250)
             except Exception:
                 nav_w = 250
-            width = app_w - nav_w
+            width = app_w - nav_w  # logical
             if width < 10:
                 return
             breathing = 60 if _is_windows else 40
@@ -434,8 +548,9 @@ class Plugin(BasePlugin):
             else:
                 col_w = max(100, width - breathing)
             try:
+                # grid_columnconfigure(minsize=) wants physical pixels — scale up.
                 self.main_container.grid_columnconfigure(
-                    1, weight=0, minsize=col_w,
+                    1, weight=0, minsize=int(col_w * _scale),
                 )
             except Exception:
                 return
@@ -449,7 +564,10 @@ class Plugin(BasePlugin):
             _resize_job[0] = self.app.after_idle(_do_layout)
 
         self.main_container.bind("<Configure>", _on_resize)
-        self.app.after(50, _do_layout)
+        # Synchronous finalizer: _settle_screen() runs the initial layout pass
+        # before reveal, so the content column is sized on first paint instead
+        # of jumping ~50 ms later. (<Configure> still handles genuine resizes.)
+        self.main_container._resistine_finalize = _do_layout
 
         return self.main_container
 
@@ -487,12 +605,16 @@ class Plugin(BasePlugin):
         self.main_frame.grid_remove()
         self._settings_frame.grid()
         self._current_view = "settings"
+        # Re-sync the SIEM forwarding switch every time the (cached) settings
+        # view is shown, so it reflects a Wazuh agent installed since it built.
+        self._refresh_siem_switch()
         if first_build:
             # Populate live data into the freshly-built whitelist + exclusions
             # cards. Done after the swap so the user sees the static layout
             # immediately and the data fills in a frame later.
             self.app.after(20, self._refresh_whitelist)
             self.app.after(40, self._refresh_exclusions)
+        self._finalize_view_swap()
 
     def _show_main_view(self):
         """Switch from settings view back to main view."""
@@ -502,6 +624,54 @@ class Plugin(BasePlugin):
             self._settings_frame.grid_remove()
         self.main_frame.grid()
         self._current_view = "main"
+        self._finalize_view_swap()
+
+    def _finalize_view_swap(self):
+        """Force layout + repaint after a main/settings view swap.
+
+        CTkScrollableFrame sizes its inner canvas window only on the canvas's
+        <Configure>. Re-grid()'ing a frame at the same outer geometry doesn't
+        reliably re-fire that event (and update_idletasks() never dispatches
+        it), so the re-mapped frame keeps a stale inner width and paints blank
+        until the next window resize. Mirror _settle_screen's refit + finalize.
+        """
+        mc = getattr(self, "main_container", None)
+        if not mc or not mc.winfo_exists():
+            return
+        # 1) Flush the grid map/unmap + canvas resize queued by the swap.
+        try:
+            mc.update_idletasks()
+        except Exception:
+            return
+        # 2) Re-fit the now-visible scrollable frame's inner window to its
+        #    canvas (replicates CTk's _fit_frame_dimensions_to_canvas, vertical
+        #    branch — same technique as gui/user_interface.py _refit). This is
+        #    what un-blanks the content.
+        active = (
+            self._settings_frame
+            if self._current_view == "settings"
+            else self.main_frame
+        )
+        try:
+            canvas = active._parent_canvas
+            canvas.itemconfigure(
+                active._create_window_id, width=canvas.winfo_width(),
+            )
+        except Exception:
+            pass
+        # 3) Re-run the resize-time layout (scrollbar auto-hide for the new
+        #    view + content-column minsize) via the existing finalizer.
+        fin = getattr(mc, "_resistine_finalize", None)
+        if callable(fin):
+            try:
+                fin()
+            except Exception:
+                pass
+        # 4) Flush the resulting redraw to screen now.
+        try:
+            mc.update_idletasks()
+        except Exception:
+            pass
 
     # ── UI Event Handlers ────────────────────────────────────
 
@@ -560,6 +730,12 @@ class Plugin(BasePlugin):
         Safe to call even if UI is gone.
         """
         if self._banner_frame is None:
+            return
+
+        # Don't re-render the banner while the antivirus screen isn't the active
+        # one — the poll keeps running because the screen is cached, but touching
+        # the widgets during/after navigation causes a visible blip.
+        if not self._is_active_screen():
             return
 
         try:
@@ -804,7 +980,20 @@ class Plugin(BasePlugin):
                     and self._settings_frame.winfo_exists()
                 )
             )
-            if alive:
+            # Pause the poll when the screen isn't the active one so it doesn't
+            # re-render the banner in the background during/after navigation.
+            # EXCEPTION: on Windows the poll is the ONLY thing that restarts the
+            # RTD threat watcher when Defender's real-time state flips (see the
+            # start/stop block in _apply_realtime_status), so it must keep running
+            # even while the tab is backgrounded — otherwise a watcher stopped
+            # while hidden never restarts and threat toasts silently stop. The
+            # banner re-render is independently suppressed in
+            # _apply_realtime_status_ui (early-returns when not active), so the
+            # background poll on Windows costs nothing visually. On macOS/Linux
+            # on_screen_shown() restarts the poll when we return to the screen.
+            if alive and (
+                self._is_active_screen() or platform.system() == "Windows"
+            ):
                 setup_active = self._last_status and self._last_status.get(
                     "setup_state", "completed",
                 ) != "completed"
@@ -1007,13 +1196,43 @@ class Plugin(BasePlugin):
         )
         return max(60, (target - now) + jitter)
 
-    def _auto_update_loop(self):
-        """Background loop: sleep until next run, then call freshclam.
+    def _sig_update_stale(self) -> bool:
+        """True if signatures haven't updated in ~a day (or were never recorded)."""
+        last = settings.get("antivirus", "last_sig_update_ts", 0) or 0
+        try:
+            return (time.time() - float(last)) >= 86400
+        except (TypeError, ValueError):
+            return True
 
-        Linux/Windows only. On macOS the OS-level freshclam LaunchDaemon
-        owns auto-updates (runs even when the app is closed), so this
-        in-process loop is never started there.
+    def _run_auto_update(self):
+        """Run the signature update and record the time on success."""
+        ok, msg = clamav.run_freshclam()
+        if ok:
+            settings.set("antivirus", "last_sig_update_ts", time.time())
+            logger.info(f"Antivirus: auto-update succeeded — {msg}")
+        else:
+            logger.warning(f"Antivirus: auto-update failed — {msg}")
+        # Refresh the UI if it's visible
+        try:
+            self.app.after(0, self._refresh_db_info)
+        except Exception:
+            logger.debug("Antivirus: app destroyed during auto-update")
+
+    def _auto_update_loop(self):
+        """Background loop: catch up if stale, then update daily near 4 AM.
+
+        Linux/Windows only. On macOS the OS-level freshclam LaunchDaemon owns
+        auto-updates (runs even when the app is closed), so this in-process
+        loop is never started there.
         """
+        # Catch-up: if signatures are stale (>24h, or never recorded), update
+        # now. The 4 AM schedule alone misses machines that are never running
+        # at that hour, so this is what actually makes "once a day" hold.
+        if (not self._auto_update_stop.is_set() and self._auto_update_on
+                and self._sig_update_stale()):
+            logger.info("Antivirus: signatures stale — running catch-up update")
+            self._run_auto_update()
+
         while not self._auto_update_stop.is_set():
             delay = self._seconds_until_next_run()
             logger.info(
@@ -1026,16 +1245,7 @@ class Plugin(BasePlugin):
             if not self._auto_update_on:
                 break
             logger.info("Antivirus: running scheduled signature update")
-            ok, msg = clamav.run_freshclam()
-            if ok:
-                logger.info(f"Antivirus: auto-update succeeded — {msg}")
-            else:
-                logger.warning(f"Antivirus: auto-update failed — {msg}")
-            # Refresh the UI if it's visible
-            try:
-                self.app.after(0, self._refresh_db_info)
-            except Exception:
-                logger.debug("Antivirus: app destroyed during auto-update")
+            self._run_auto_update()
 
     # ── Scan Log Helpers ──────────────────────────────────────
 
@@ -1060,15 +1270,50 @@ class Plugin(BasePlugin):
         self._scan_log.delete("1.0", "end")
         self._scan_log.configure(state="disabled")
 
+    # Muted fill for a disabled scan button so it reads as inactive instead of
+    # keeping its highlighted blue look while a scan is running.
+    _SCAN_BTN_DISABLED_FG = ("#D1D5DB", "#3A3A3C")
+    # Muted label color paired with _SCAN_BTN_DISABLED_FG. Gray-400 on the
+    # light background, gray-500 on the dark — readable but unmistakably
+    # inactive, so the buttons match macOS's standard disabled-control look.
+    _SCAN_BTN_DISABLED_TEXT = ("#9CA3AF", "#71717A")
+
     def _set_scan_buttons_state(self, state: str):
-        btn = self._action_buttons.get("scan")
-        if btn:
-            btn.configure(state=state)
-        # scan_computer is gated separately on real-time protection — only
-        # re-enable it if the last poll said clamonacc is running.
-        computer_btn = self._action_buttons.get("scan_computer")
-        if computer_btn:
-            computer_btn.configure(state=state)
+        # While a scan is running the buttons must stay nullified. Without this
+        # guard the realtime-status poll (which runs after the screen rebuilds
+        # when you navigate back) would call this with "normal" and re-enable
+        # them mid-scan. Force "disabled" whenever a scan is active.
+        if self._scanning:
+            state = "disabled"
+        for key in ("scan", "scan_computer"):
+            btn = self._action_buttons.get(key)
+            if not btn:
+                continue
+            # Remember the enabled fill + text color once so we can restore them
+            # exactly. The buttons are created in ui_builders with a fixed near-
+            # white text — without re-applying that color, a previous disable
+            # would leave the text muted forever once the scan ended.
+            if not hasattr(btn, "_enabled_fg"):
+                btn._enabled_fg = btn.cget("fg_color")
+            if not hasattr(btn, "_enabled_text_color"):
+                btn._enabled_text_color = btn.cget("text_color")
+            if state == "disabled":
+                # Both Scan and Scan Computer need the SAME visual treatment
+                # throughout the entire scan — including the LABEL text, not
+                # just the background. Previously only fg_color was muted,
+                # leaving white-on-grey buttons that read as "active but
+                # unresponsive" on Mac.
+                btn.configure(
+                    state="disabled", hover=False,
+                    fg_color=self._SCAN_BTN_DISABLED_FG,
+                    text_color=self._SCAN_BTN_DISABLED_TEXT,
+                )
+            else:
+                btn.configure(
+                    state="normal", hover=True,
+                    fg_color=btn._enabled_fg,
+                    text_color=btn._enabled_text_color,
+                )
 
     def _restore_scan_ui(self):
         """Rebuild scan UI state after navigating back during an active scan."""
@@ -1119,12 +1364,16 @@ class Plugin(BasePlugin):
                     self.app.after(0, self._poll_setup_progress)
                 else:
                     self.app.after(0, self._update_realtime_status)
-        else:
+        elif platform.system() == "Linux":
             from plugins.antivirus.clamav_platform_linux import activate_system_daemons
 
             def _run():
                 ok, _msg = activate_system_daemons()
                 self.app.after(0, self._update_realtime_status)
+        else:
+            # Windows: Defender setup is owned by the OS; nothing to do here.
+            self._update_realtime_status()
+            return
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -1691,6 +1940,7 @@ class Plugin(BasePlugin):
             if btn:
                 btn.configure(state="normal", text="Update Now")
             if ok:
+                settings.set("antivirus", "last_sig_update_ts", time.time())
                 self._scan_status_label.configure(text="Signatures updated")
             else:
                 self._scan_status_label.configure(text="Update failed")
@@ -1866,12 +2116,93 @@ class Plugin(BasePlugin):
 
     # ── SIEM Forwarding ───────────────────────────────────────
 
-    def _setup_wazuh_forwarding(self):
-        """Configure Wazuh agent to forward threat logs."""
-        btn = getattr(self, "_siem_btn", None)
-        if btn:
-            btn.configure(state="disabled", text="Configuring...")
+    def _on_forwarding_toggle(self):
+        """SIEM forwarding switch toggled in the AV settings view.
 
+        Forwarding requires the endpoint (Wazuh) agent. If it isn't installed,
+        flipping the switch on bounces the user to the Endpoint page to install
+        it. Once installed, forwarding is already on (the installer enables it),
+        so this mainly keeps the switch in sync.
+        """
+        sw = getattr(self, "_siem_switch", None)
+        if sw is None:
+            return
+        turning_on = bool(sw.get())
+        if not threat_log.is_wazuh_installed():
+            # Can't forward without the agent — revert and route to Endpoint.
+            sw.deselect()
+            self.app.show_notification(
+                "Install the endpoint agent to forward AV detections.",
+                type="info")
+            self._open_endpoint()
+            return
+        if turning_on:
+            if threat_log.is_forwarding_enabled():
+                return  # already on (Windows install auto-enables it)
+            self._setup_wazuh_forwarding()
+        else:
+            # Forwarding is managed by the endpoint agent; keep it on.
+            sw.select()
+            self.app.show_notification(
+                "SIEM forwarding stays on while the endpoint agent is installed.",
+                type="info")
+
+    def _open_endpoint(self):
+        """Navigate to the Endpoint (SIEM agent) plugin screen."""
+        try:
+            p = next((pl for pl in self.app.plugin_list
+                      if pl.get_name() == "Endpoint"), None)
+            if p is not None:
+                self.app.select_frame_by_name(
+                    "frame_Endpoint", button=p.get_button())
+        except Exception:
+            logger.debug("Antivirus: could not navigate to Endpoint")
+
+    def _refresh_siem_switch(self):
+        """Re-sync the SIEM forwarding switch with the live agent state.
+
+        The settings view is built once and cached, so without this the switch
+        keeps its build-time state and never reflects a Wazuh agent installed
+        afterwards (which auto-enables forwarding on Windows). Safe to call when
+        the switch doesn't exist (settings view not built yet).
+        """
+        sw = getattr(self, "_siem_switch", None)
+        if sw is None:
+            return
+        try:
+            if not sw.winfo_exists():
+                return
+        except Exception:
+            return
+        installed = threat_log.is_wazuh_installed()
+        on = threat_log.is_forwarding_enabled()
+        if on:
+            sw.select()
+        else:
+            sw.deselect()
+        lbl = getattr(self, "_siem_status_label", None)
+        if lbl is not None:
+            try:
+                if on:
+                    lbl.configure(text="Forwarding active",
+                                  text_color=("#1E8E3E", "#2CC985"))
+                elif installed:
+                    lbl.configure(
+                        text="Ready — turn on to forward AV detections",
+                        text_color=("#666666", "#aaaaaa"))
+                else:
+                    lbl.configure(
+                        text="Install the endpoint agent to enable forwarding",
+                        text_color=("#666666", "#aaaaaa"))
+            except Exception:
+                pass
+
+    def _setup_wazuh_forwarding(self):
+        """Configure the Wazuh agent to forward AV detections (macOS/Linux path).
+
+        On Windows the endpoint installer already injects the Defender localfile,
+        so this is only the manual fallback for platforms that don't.
+        """
         def _run():
             ok, msg = threat_log.setup_wazuh_forwarding()
             self.app.after(0, self._handle_wazuh_setup, ok, msg)
@@ -1881,18 +2212,20 @@ class Plugin(BasePlugin):
     def _handle_wazuh_setup(self, ok: bool, msg: str):
         if not hasattr(self, "main_frame") or not self.main_frame:
             return
-        btn = getattr(self, "_siem_btn", None)
+        sw = getattr(self, "_siem_switch", None)
         lbl = getattr(self, "_siem_status_label", None)
         if ok:
             self._log_append(f"SIEM: {msg}")
-            if btn:
-                btn.configure(text="Configured", state="disabled")
+            if sw:
+                sw.select()
             if lbl:
                 lbl.configure(text="Forwarding active")
         else:
             self._log_append(f"SIEM setup failed: {msg}")
-            if btn:
-                btn.configure(state="normal", text="Configure Forwarding")
+            if sw:
+                sw.deselect()
+            if lbl:
+                lbl.configure(text="Could not enable forwarding")
 
     # ── Quarantine ─────────────────────────────────────────────
 

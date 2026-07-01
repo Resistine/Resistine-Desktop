@@ -22,7 +22,14 @@ class BasePlugin:
         "warning": "Warning",
         "error": "Error",
         "critical": "Critical"
-    }    
+    }
+
+    # When True, the app keeps the previous screen visible and only swaps this
+    # one in once its layout has stopped changing (see AppUI.select_frame_by_name
+    # / _reveal_when_settled). Set this on plugins whose screen renders
+    # asynchronously after build (e.g. markdown/streamed content) and would
+    # otherwise visibly tear/pop-in during the swap. Default: immediate swap.
+    defer_reveal_until_settled = False
 
     def __init__(self, id, version, order, name, status, description, supported_systems, translations, icon_light_path, icon_dark_path, uninstall_enabled=True):
         """
@@ -74,6 +81,41 @@ class BasePlugin:
         This method should be implemented by subclasses.
         """
         raise NotImplementedError("Subclasses should implement this method")
+
+    def screen_signature(self):
+        """
+        Return a hashable snapshot of everything ``create_main_screen`` bakes
+        into the built widgets (statuses, appearance mode, column count, …).
+
+        The app caches built screens and reuses them across navigation: when a
+        plugin's signature is unchanged since the last build, the existing
+        widget tree is re-shown instantly instead of being rebuilt from scratch
+        (every CTk widget is its own canvas, so rebuilding is expensive).
+
+        Returning ``None`` (the default) disables caching for this plugin — its
+        screen is rebuilt on every visit, preserving the original behavior.
+        Override to opt in and return a value that compares unequal whenever a
+        rebuild is genuinely required.
+        """
+        return None
+
+    def on_screen_shown(self):
+        """
+        Called after a *cached* screen is re-shown (signature unchanged, no
+        rebuild). Use it to nudge any cheap, live refresh that shouldn't be
+        baked into the signature. Default: no-op.
+        """
+        pass
+
+    def is_screen_ready(self):
+        """
+        For plugins using ``defer_reveal_until_settled``: gate the reveal until
+        the screen's content is actually ready (e.g. an async fetch has
+        returned), so it appears fully populated rather than filling in after.
+        The deferred-reveal cap still forces a reveal eventually, so a stuck
+        fetch can't hold the screen hidden forever. Default: always ready.
+        """
+        return True
 
     def destroy(self):
         """

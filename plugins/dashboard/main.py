@@ -66,6 +66,23 @@ class Plugin(BasePlugin):
         mode = customtkinter.get_appearance_mode()
         return mode
 
+    def _widget_scale(self):
+        """Physical→logical scale factor for the app window.
+
+        winfo_width() returns *physical* pixels under CTk's DPI scaling, so it
+        must be divided by the real OS-DPI ratio before being compared against
+        the logical 480/680 column thresholds. CTk's widget scaling gives that
+        ratio on every platform (2.0 at 200% on Windows, 1.0 on macOS, and
+        == _hidpi_factor on Linux). Using _hidpi_factor alone was wrong on
+        Windows, where it stays 1.0 while CTk still scales the UI 2x — so
+        physical px leaked into the thresholds and over-counted columns,
+        squishing the plugin cards.
+        """
+        try:
+            return customtkinter.ScalingTracker.get_widget_scaling(self.app)
+        except Exception:
+            return getattr(self.app, "_hidpi_factor", 1.0) or 1.0
+
     def create_main_screen(self):
         # Use a ScrollableFrame for the dashboard to prevent clipping on smaller screens
         self.main_frame = customtkinter.CTkScrollableFrame(
@@ -152,15 +169,22 @@ class Plugin(BasePlugin):
         
         # Responsive layout: determine max columns based on content width.
         # Use absolute pixel thresholds (not screen percentages) so the layout
-        # is consistent regardless of screen size or DPI reporting differences
-        # between winfo_screenwidth() (physical) and winfo_width() (logical).
+        # is consistent regardless of screen size. winfo_width() is physical px
+        # under CTk DPI scaling, so normalize it to logical units via
+        # _widget_scale() before comparing against the logical 480/680 cutoffs.
         import platform as _plat
         _sidebar = 250
         _padding = 60 if _plat.system() == "Windows" else 40
+        _scale = self._widget_scale()
+        # Force pending geometry to be applied so winfo_width() returns the
+        # actual window size rather than a stale pre-layout value.
+        self.app.update_idletasks()
         window_width = self.app.winfo_width()
         if window_width <= 1:
-            screen_width = self.app.winfo_screenwidth()
-            window_width = int(screen_width * 0.7)
+            # Window not yet mapped — fall back to the geometry-targeted size
+            # (1920 * 0.7 logical = 1344, then scaled to physical).
+            window_width = int(1344 * _scale)
+        window_width = int(window_width / _scale)
 
         content_width = max(1, window_width - _sidebar - _padding)
         # Set hint for AppUI to use in create_grid synchronously
@@ -178,7 +202,7 @@ class Plugin(BasePlugin):
             max_cols = 4
         min_cols = None
         rows, cols = self.app.calculate_rows_cols(len(plugins), max_cols=max_cols, min_cols=min_cols)
-        
+
         # Store current column count to detect changes
         self._current_cols = len(cols)
         self._current_max_cols = max_cols
@@ -227,6 +251,64 @@ class Plugin(BasePlugin):
 
         return self.main_frame
     
+    def _resolve_max_cols(self):
+        """Column count for the current content width (mirrors create_main_screen)."""
+        import platform as _plat
+        _sidebar = 250
+        _padding = 60 if _plat.system() == "Windows" else 40
+        # Match create_main_screen/on_resize: winfo_width() is physical px, so
+        # normalize to logical units before comparing against the logical 480/680
+        # thresholds. Without this, the cache signature uses the wrong column
+        # count on any HiDPI display (Windows 200%, HiDPI Linux) and makes stale
+        # keep/rebuild decisions.
+        _scale = self._widget_scale()
+        window_width = self.app.winfo_width()
+        if window_width <= 1:
+            window_width = int(1344 * _scale)
+        window_width = int(window_width / _scale)
+        content_width = max(1, window_width - _sidebar - _padding)
+        if content_width < 480:
+            return 1
+        if content_width < 680:
+            return 2
+        return 4
+
+    def screen_signature(self):
+        """Cache the built dashboard until something it displays actually changes.
+
+        Captures every volatile input the build bakes in: appearance mode, the
+        VPN "Protected" banner state, each card's status badge, and the column
+        count (which depends on window width). Any change → unequal signature →
+        full rebuild; otherwise the screen is re-shown instantly.
+        """
+        try:
+            if not hasattr(self.app, "plugin_list") or not self.app.plugin_list:
+                plugin_list = PluginManager(self.app).plugins
+            else:
+                plugin_list = self.app.plugin_list
+
+            plugins = [
+                p for p in plugin_list
+                if p.get_name() != "Dashboard" and p.order != -1
+            ]
+            statuses = tuple((p.get_name(), p.get_status()) for p in plugins)
+
+            vpn_plugin = next(
+                (p for p in plugin_list if p.get_name() == "VPN"), None
+            )
+            vpn_ok = bool(vpn_plugin and vpn_plugin.get_status() == "OK")
+
+            return (
+                "dashboard",
+                self._effective_appearance_mode(),
+                vpn_ok,
+                self._resolve_max_cols(),
+                statuses,
+            )
+        except Exception:
+            # Any failure → no caching (rebuild as before).
+            return None
+
     def _bind_responsive_resize(self):
         """
         Bind a resize handler to rebuild grid when the column count needs to change.
@@ -245,7 +327,8 @@ class Plugin(BasePlugin):
             except Exception:
                 return
 
-            window_width = self.app.winfo_width()
+            _scale = self._widget_scale()
+            window_width = int(self.app.winfo_width() / _scale)
             content_width = max(1, window_width - 250 - self._padding_offset)
 
             if content_width < 480:
@@ -336,7 +419,16 @@ class Plugin(BasePlugin):
         rows, cols = self.app.calculate_rows_cols(len(plugins), max_cols=max_cols, min_cols=min_cols)
         self._current_cols = len(cols)
         self._current_max_cols = max_cols
-        
+
+        # Refresh the content_width hint with the current window size.
+        # Without this, create_grid would walk up to find the stale hint that
+        # was set during the initial dashboard load (when winfo_width hadn't
+        # been applied yet), giving wrong target_height on the rebuilt grid.
+        _scale = self._widget_scale()
+        window_width = int(self.app.winfo_width() / _scale)
+        content_width = max(1, window_width - 250 - self._padding_offset)
+        self.app._content_width_hint = content_width
+
         self.grid_frame = self.app.create_grid(
             frame=self._content_frame,
             row=0,
@@ -348,11 +440,18 @@ class Plugin(BasePlugin):
             min_cols=min_cols,
             aspect_ratio=1.0,
         )
-        
+
         for index, plugin in enumerate(plugins):
             r = index // len(cols)
             c = index % len(cols)
             self.app.create_plugin_card(
-                r, c, self.grid_frame, plugin, 
+                r, c, self.grid_frame, plugin,
                 show_description=True
             )
+
+        # Settle the rebuilt cards synchronously so a column-count change during
+        # resize lands in its final layout in one pass (no post-rebuild reflow).
+        try:
+            self.app._settle_screen(self.main_frame)
+        except Exception:
+            pass

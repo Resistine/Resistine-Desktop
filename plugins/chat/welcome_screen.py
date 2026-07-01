@@ -7,7 +7,7 @@ from typing import Callable
 
 import customtkinter
 
-from plugins.chat.fonts import RESISTINE_BLUE
+from plugins.chat.fonts import RESISTINE_BLUE, ui_family
 
 # Pool of suggestion prompts shown on the welcome screen.
 # 4 are picked at random each time the chat is opened.
@@ -65,7 +65,7 @@ class WelcomeScreen(customtkinter.CTkFrame):
             self,
             text="How can I help you today?",
             font=customtkinter.CTkFont(
-                family="Inter", size=24, weight="bold"),
+                family=ui_family(), size=24, weight="bold"),
             text_color=fg_color,
         )
         greeting_label.pack(pady=(0, 4))
@@ -73,10 +73,10 @@ class WelcomeScreen(customtkinter.CTkFrame):
         subtitle_label = customtkinter.CTkLabel(
             self,
             text="Ask me anything about cybersecurity",
-            font=customtkinter.CTkFont(family="Inter", size=14),
+            font=customtkinter.CTkFont(family=ui_family(), size=14),
             text_color=secondary,
         )
-        subtitle_label.pack(pady=(0, 28))
+        subtitle_label.pack(pady=(0, 14))
 
         # Pick 4 random suggestions from the pool
         suggestions = random.sample(
@@ -85,7 +85,7 @@ class WelcomeScreen(customtkinter.CTkFrame):
 
         # Measure longest text to set uniform chip width
         import tkinter.font as tkfont
-        measure_font = tkfont.Font(family="Inter", size=13)
+        measure_font = tkfont.Font(family=ui_family(), size=16)
         longest_px = max(measure_font.measure(s) for s in suggestions)
         # dot(16+18) + text + arrow(20+18) + padding
         chip_width = longest_px + 100
@@ -98,7 +98,7 @@ class WelcomeScreen(customtkinter.CTkFrame):
         section_label = customtkinter.CTkLabel(
             chips_box, text="TRY ASKING",
             font=customtkinter.CTkFont(
-                family="Inter", size=11, weight="bold"),
+                family=ui_family(), size=11, weight="bold"),
             text_color=RESISTINE_BLUE, anchor="w",
         )
         section_label.pack(anchor="w", pady=(16, 8))
@@ -120,7 +120,7 @@ class WelcomeScreen(customtkinter.CTkFrame):
             # Suggestion text
             lbl = customtkinter.CTkLabel(
                 chip, text=suggestion,
-                font=customtkinter.CTkFont(family="Inter", size=13),
+                font=customtkinter.CTkFont(family=ui_family(), size=16),
                 text_color=chip_fg, fg_color="transparent",
                 anchor="w", justify="left")
             lbl.pack(side="left", fill="x", expand=True, pady=8)
@@ -184,7 +184,7 @@ class ApiKeyMissingScreen(customtkinter.CTkFrame):
         title_label = customtkinter.CTkLabel(
             self,
             text="API Key Required",
-            font=customtkinter.CTkFont(family="Inter", size=20, weight="bold"),
+            font=customtkinter.CTkFont(family=ui_family(), size=20, weight="bold"),
             text_color="#ffffff" if is_dark else "#000000",
         )
         title_label.pack(pady=(0, 6))
@@ -192,7 +192,7 @@ class ApiKeyMissingScreen(customtkinter.CTkFrame):
         desc_label = customtkinter.CTkLabel(
             self,
             text="Add your OpenAI API key in Settings to start chatting.",
-            font=customtkinter.CTkFont(family="Inter", size=14),
+            font=customtkinter.CTkFont(family=ui_family(), size=14),
             text_color=secondary,
         )
         desc_label.pack(pady=(0, 20))
@@ -200,7 +200,7 @@ class ApiKeyMissingScreen(customtkinter.CTkFrame):
         settings_btn = customtkinter.CTkButton(
             self,
             text="Open Settings",
-            font=customtkinter.CTkFont(family="Inter", size=13, weight="bold"),
+            font=customtkinter.CTkFont(family=ui_family(), size=13, weight="bold"),
             fg_color=RESISTINE_BLUE,
             hover_color="#1565B0",
             text_color="#ffffff",
@@ -210,3 +210,95 @@ class ApiKeyMissingScreen(customtkinter.CTkFrame):
             command=self._on_configure_click,
         )
         settings_btn.pack()
+
+
+class ChatLockedScreen(customtkinter.CTkFrame):
+    """Centered overlay shown when chat is gated behind security requirements.
+
+    Chat is only available once the VPN is connected AND the Endpoint agent is
+    installed. Shows which requirements are met and offers shortcuts to the
+    relevant pages for the ones that aren't.
+    """
+
+    def __init__(
+        self,
+        master: customtkinter.CTkBaseClass,
+        vpn_on: bool,
+        agent_installed: bool,
+        on_open_vpn: Callable[[], None],
+        on_open_endpoint: Callable[[], None],
+        is_dark: bool = False,
+        **kwargs,
+    ) -> None:
+        kwargs.setdefault("fg_color", "transparent")
+        super().__init__(master, **kwargs)
+
+        fg = "#ffffff" if is_dark else "#000000"
+        secondary = _secondary_color(is_dark)
+        self._ok_color = "#2CC985" if is_dark else "#1B7A3E"
+        self._bad_color = "#FF6B6B" if is_dark else "#C5221F"
+        self._fg = fg
+        self._secondary = secondary
+
+        icon_label = customtkinter.CTkLabel(
+            self,
+            text="\U0001F512",  # lock
+            font=customtkinter.CTkFont(size=40),
+            text_color=secondary,
+        )
+        icon_label.pack(pady=(0, 8))
+
+        title_label = customtkinter.CTkLabel(
+            self,
+            text="Secure Chat Locked",
+            font=customtkinter.CTkFont(
+                family=ui_family(), size=22, weight="bold"),
+            text_color=fg,
+        )
+        title_label.pack(pady=(0, 6))
+
+        desc_label = customtkinter.CTkLabel(
+            self,
+            text=("Chat is only available on a protected device.\n"
+                  "Connect the VPN and install the Endpoint agent to continue."),
+            font=customtkinter.CTkFont(family=ui_family(), size=14),
+            text_color=secondary,
+            justify="center",
+        )
+        desc_label.pack(pady=(0, 20))
+
+        self._add_requirement(
+            "VPN connection", vpn_on, "Turn on VPN", on_open_vpn)
+        self._add_requirement(
+            "Endpoint agent", agent_installed,
+            "Install agent", on_open_endpoint)
+
+    def _add_requirement(
+        self, label: str, ok: bool, action_text: str,
+        on_click: Callable[[], None],
+    ) -> None:
+        row = customtkinter.CTkFrame(self, fg_color="transparent")
+        row.pack(pady=6)
+
+        customtkinter.CTkLabel(
+            row, text="✓" if ok else "✕", width=24,
+            font=customtkinter.CTkFont(size=16, weight="bold"),
+            text_color=self._ok_color if ok else self._bad_color,
+        ).pack(side="left", padx=(0, 8))
+
+        customtkinter.CTkLabel(
+            row,
+            text=f"{label}  —  {'ready' if ok else 'required'}",
+            font=customtkinter.CTkFont(family=ui_family(), size=14),
+            text_color=self._fg if ok else self._secondary,
+        ).pack(side="left")
+
+        if not ok and on_click is not None:
+            customtkinter.CTkButton(
+                row, text=action_text, width=120, height=30,
+                corner_radius=8, fg_color=RESISTINE_BLUE,
+                hover_color="#1565B0", text_color="#ffffff",
+                font=customtkinter.CTkFont(
+                    family=ui_family(), size=12, weight="bold"),
+                command=on_click,
+            ).pack(side="left", padx=(16, 0))

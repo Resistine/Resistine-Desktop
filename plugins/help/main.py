@@ -33,6 +33,11 @@ class Plugin(BasePlugin):
     Plugin class for the Help plugin, that provides help documentation.
     """
 
+    # Help renders markdown via MarkdownBubble (self-resizes via after() timers,
+    # same as Chat), so its layout settles asynchronously after build. Defer the
+    # swap until it's quiescent so switching to Help doesn't tear/reflow.
+    defer_reveal_until_settled = True
+
     def __init__(self, app):
         """
         @brief Initialize the Help plugin.

@@ -102,6 +102,50 @@ class Plugin(BasePlugin):
             self.login_frame.destroy()
             del self.login_frame
 
+    def _make_bordered_entry(self, row, placeholder, corner_radius,
+                             show=None):
+        """Create a CTkEntry inside a bordered CTkFrame.
+
+        CTkEntry draws its own border on its canvas, but its inner Tk entry
+        is gridded on top with a bottom inset of ``border_width + 1`` px —
+        under fractional display scaling that inset rounds up and covers the
+        bottom border row, so the field looks open at the bottom. Buttons and
+        frames have no such overlay, so drawing the border on a wrapping frame
+        and nesting a borderless entry inside renders a full, crisp border on
+        all four sides. Returns the inner entry; the frame is ``entry.master``.
+        """
+        frame = customtkinter.CTkFrame(
+            self.content_frame,
+            width=400,
+            height=45,
+            corner_radius=corner_radius,
+            border_width=1,
+            border_color=("#CCCCCC", "#444444"),
+            fg_color=self.app.cget("fg_color"),
+        )
+        frame.grid(row=row, column=0, pady=(0, 20))
+        frame.grid_propagate(False)
+        frame.grid_rowconfigure(0, weight=1)
+        frame.grid_columnconfigure(0, weight=1)
+
+        kwargs = dict(
+            placeholder_text=placeholder,
+            corner_radius=0,
+            border_width=0,
+            fg_color="transparent",
+            font=customtkinter.CTkFont(family="Inter", size=14),
+        )
+        if show is not None:
+            kwargs["show"] = show
+        entry = customtkinter.CTkEntry(frame, **kwargs)
+        # sticky="ew" (not "nsew"): the entry fills horizontally but keeps its
+        # natural height and centers vertically in the weighted row, so its own
+        # canvas never stretches to the frame's top/bottom border rows and can't
+        # paint over them. (A stretched entry paints its page-colored fill over
+        # the bottom border under DPI scaling — that was the clip.)
+        entry.grid(row=0, column=0, sticky="ew", padx=12)
+        return entry
+
     def create_main_screen(self):
         """
         Create the login screen matching the provided mockup.
@@ -129,11 +173,14 @@ class Plugin(BasePlugin):
         shield_path = get_resource_path(os.path.join("resources", "icons", "ResistineShield.png"))
         try:
             shield_img = Image.open(shield_path)
-            shield_ctk = customtkinter.CTkImage(shield_img, size=(250, 250))
+            shield_ctk = customtkinter.CTkImage(shield_img, size=(200, 200))
             self.shield_label = customtkinter.CTkLabel(
                 self.content_frame, text="", image=shield_ctk
             )
-            self.shield_label.grid(row=0, column=0, pady=(0, 30))
+            # Smaller shield + tighter padding so the content plus the footer
+            # (Privacy / Terms of Use) fit in the window and the terms text is
+            # visible on open without scrolling.
+            self.shield_label.grid(row=0, column=0, pady=(0, 16))
         except OSError as e:
             logger.warning(f"Shield logo load failed: {e}")
 
@@ -149,20 +196,9 @@ class Plugin(BasePlugin):
         # Get theme corner radius
         corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
 
-        # 3. Email Entry — transparent fill so it blends with the page
-        # background; the border alone defines the field.
-        self.email_entry = customtkinter.CTkEntry(
-            self.content_frame,
-            placeholder_text="Enter your email address",
-            width=400,
-            height=45,
-            corner_radius=corner_radius,
-            border_width=1,
-            border_color=("#CCCCCC", "#444444"),
-            fg_color="transparent",
-            font=customtkinter.CTkFont(family="Inter", size=14),
-        )
-        self.email_entry.grid(row=2, column=0, pady=(0, 20))
+        # 3. Email Entry (bordered frame wrapper — see _make_bordered_entry)
+        self.email_entry = self._make_bordered_entry(
+            2, "Enter your email address", corner_radius)
         self.active_input_entry = self.email_entry
 
         # 4. Sign in Button
@@ -188,7 +224,7 @@ class Plugin(BasePlugin):
             text_color=("#0D5394", "#3a7ebf"),
             font=customtkinter.CTkFont(family="Inter", size=15, weight="bold"),
             command=lambda: __import__("webbrowser").open(
-                "https://resistine-main2-v3-31646764.dev.odoo.com/web/signup?redirect=%2Fodoo%3F"
+                "https://resistine-main2-v3-33249814.dev.odoo.com/web/signup?redirect=%2Fodoo%3F"
             ),
         )
         self.create_account_btn.grid(row=4, column=0, pady=(0, 40))
@@ -270,9 +306,9 @@ class Plugin(BasePlugin):
     def transform_to_otp_input(self):
         """Transform the existing screen to show OTP entry."""
         corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
-        # Hide email entry and sign-in button
+        # Hide email entry (destroy its border frame) and sign-in button
         if hasattr(self, "email_entry") and self.email_entry.winfo_exists():
-            self.email_entry.destroy()
+            self.email_entry.master.destroy()
         if hasattr(self, "signin_button") and self.signin_button.winfo_exists():
             self.signin_button.destroy()
         if (
@@ -285,18 +321,19 @@ class Plugin(BasePlugin):
         self.title_label.configure(text=f"Enter the 6-digit code sent to {self.email}")
 
         # Create OTP entry in same spot
-        self.otp_entry = customtkinter.CTkEntry(
-            self.content_frame,
-            placeholder_text="Enter OTP",
-            width=400,
-            height=45,
-            corner_radius=corner_radius,
-            show="*",
-            font=customtkinter.CTkFont(family="Inter", size=14),
-        )
-        self.otp_entry.grid(row=2, column=0, pady=(0, 20))
+        self.otp_entry = self._make_bordered_entry(
+            2, "Enter OTP", corner_radius, show="*")
         self.active_input_entry = self.otp_entry
         self.otp_entry.bind("<KeyPress>", self.on_otp_key_press)
+        # Custom paste handler. On macOS the OS-level Cmd+V triggers
+        # AppKit's paste action AND Tk's <<Paste>> class binding both fire
+        # against the same widget — clipboard gets inserted twice, so a
+        # 6-digit OTP becomes 12. Binding <<Paste>> explicitly + returning
+        # "break" suppresses the default chain so the clipboard is
+        # inserted exactly once. While we're here, strip non-digits and
+        # clamp to OTP_LENGTH so users pasting "123 456" or "123-456" or
+        # an email body containing the code still land a clean OTP.
+        self.otp_entry.bind("<<Paste>>", self._on_otp_paste)
         self.otp_entry.focus_set()
 
         # Create Verify button
@@ -327,9 +364,9 @@ class Plugin(BasePlugin):
     def back_to_email(self):
         """Navigate back from OTP screen to email entry screen."""
         corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
-        # Destroy OTP widgets
+        # Destroy OTP widgets (destroy the entry's border frame)
         if hasattr(self, "otp_entry") and self.otp_entry.winfo_exists():
-            self.otp_entry.destroy()
+            self.otp_entry.master.destroy()
         if hasattr(self, "verify_button") and self.verify_button.winfo_exists():
             self.verify_button.destroy()
         if hasattr(self, "back_button") and self.back_button.winfo_exists():
@@ -341,16 +378,8 @@ class Plugin(BasePlugin):
         )
 
         # Recreate email entry
-        self.email_entry = customtkinter.CTkEntry(
-            self.content_frame,
-            placeholder_text="Enter your email address",
-            width=400,
-            height=45,
-            corner_radius=corner_radius,
-            border_width=1,
-            font=customtkinter.CTkFont(family="Inter", size=14),
-        )
-        self.email_entry.grid(row=2, column=0, pady=(0, 20))
+        self.email_entry = self._make_bordered_entry(
+            2, "Enter your email address", corner_radius)
         self.active_input_entry = self.email_entry
         self.email_entry.focus_set()
 
@@ -377,7 +406,7 @@ class Plugin(BasePlugin):
             text_color=("#0D5394", "#3a7ebf"),
             font=customtkinter.CTkFont(family="Inter", size=15, weight="bold"),
             command=lambda: __import__("webbrowser").open(
-                "https://resistine-main2-v3-31646764.dev.odoo.com/web/signup?redirect=%2Fodoo%3F"
+                "https://resistine-main2-v3-33249814.dev.odoo.com/web/signup?redirect=%2Fodoo%3F"
             ),
         )
         self.create_account_btn.grid(row=4, column=0, pady=(0, 40))
@@ -518,3 +547,39 @@ class Plugin(BasePlugin):
         """Handle key press in OTP entry."""
         if event.keysym == "Return":
             self.verify_otp()
+
+    def _on_otp_paste(self, _event=None):
+        """Paste handler that inserts the clipboard EXACTLY once + filters
+        to digits + clamps to OTP_LENGTH.
+
+        On macOS, Cmd+V on a Tk Entry triggers both the AppKit-level paste
+        action AND Tk's stock <<Paste>> class binding — without an
+        explicit handler that returns "break", the clipboard is inserted
+        twice (so a 6-digit OTP becomes 12). Binding <<Paste>> ourselves
+        and returning "break" prevents the duplicate insert.
+
+        Filtering to digits also handles common paste shapes — "123 456",
+        "123-456", or an OTP copied from email body with surrounding
+        whitespace all collapse to the bare 6-digit code.
+        """
+        try:
+            from plugins.login.config import OTP_LENGTH
+        except Exception:
+            OTP_LENGTH = 6
+        try:
+            # Try CLIPBOARD selection (Cmd/Ctrl+C target). PRIMARY would
+            # only have content on X11 with active selection, irrelevant
+            # for OTP paste, and raises TclError on Mac/empty PRIMARY.
+            clip = self.otp_entry.clipboard_get()
+        except Exception:
+            return "break"
+        # Strip everything that isn't a digit, then clamp.
+        digits = "".join(ch for ch in clip if ch.isdigit())[:OTP_LENGTH]
+        # Replace the entry contents (don't append — paste is a
+        # replace semantically, and we just suppressed the default).
+        try:
+            self.otp_entry.delete(0, "end")
+            self.otp_entry.insert(0, digits)
+        except Exception:
+            pass
+        return "break"

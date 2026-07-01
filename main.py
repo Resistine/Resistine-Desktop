@@ -29,6 +29,11 @@ from utils.logger import logger, setup_logging
 DEBUG_WINDOW = False
 DEBUG = False
 
+# 1080p reference. All logical dimensions are anchored to this so HiDPI
+# scaling produces an identical logical layout at any resolution.
+_REF_WIDTH = 1920
+_REF_HEIGHT = 1080
+
 
 def resource_path(relative_path: str) -> str:
     """Delegates to central utils.functions.get_resource_path."""
@@ -41,6 +46,22 @@ class App(AppUI):
     Main application class for Resistine.
     """
 
+    def _apply_hidpi_scaling(self):
+        """Scale CTk widgets proportionally based on the 1080p reference.
+
+        Factor is computed as ``min(screen_width / 1920, screen_height / 1080)``
+        so the window stays 16:9-shaped and inside the screen regardless of
+        the monitor's actual aspect ratio (handles ultrawide / DCI 4K, etc.).
+        """
+        factor = min(
+            self.winfo_screenwidth() / _REF_WIDTH,
+            self.winfo_screenheight() / _REF_HEIGHT,
+        )
+        if factor >= 1.5:
+            self._hidpi_factor = factor
+            customtkinter.set_widget_scaling(factor)
+            customtkinter.set_window_scaling(factor)
+
     def __init__(self):
         """
         @brief Initialize the main application window.
@@ -48,6 +69,35 @@ class App(AppUI):
         Check if the email is registered and create the appropriate screen.
         """
         super().__init__()
+
+        if sys.platform.startswith('win'):
+            try:
+                import ctypes
+                # Per-monitor v2 (-4) is best; degrade gracefully on older Windows.
+                # Without this, Win10/11 at 150-200% rasterises Tk at logical px
+                # then DWM bitmap-stretches → blurry text on HiDPI laptops.
+                ctypes.windll.shcore.SetProcessDpiAwarenessContext(-4)
+            except (AttributeError, OSError):
+                try:
+                    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+                except (AttributeError, OSError):
+                    try:
+                        ctypes.windll.user32.SetProcessDPIAware()
+                    except Exception:
+                        pass
+
+        if sys.platform.startswith("linux"):
+            self._apply_hidpi_scaling()
+
+        # Stay fully transparent until the first screen is built, mapped,
+        # measured, and settled — then reveal in a single step (see the
+        # update()/_settle_screen()/alpha=1 sequence below). This is what
+        # prevents the window from appearing at a provisional size/layout and
+        # then visibly reconfiguring on startup.
+        try:
+            self.attributes("-alpha", 0.0)
+        except Exception:
+            pass
 
         # Fix Ctrl+A select-all on Linux (Tk default is cursor-to-start)
         patch_linux_keybindings(self)
@@ -64,16 +114,35 @@ class App(AppUI):
         self._set_app_icon()
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
-        window_width = int(screen_width * 0.7)
-        window_height = int(screen_height * 0.7)
+        scale = getattr(self, "_hidpi_factor", 1.0)
+        # Window dimensions are LOGICAL, anchored to the 1080p reference.
+        # set_window_scaling() multiplies these by `scale` to produce the actual
+        # physical pixel size, so the logical layout is identical at every
+        # resolution and aspect ratio.
+        #
+        # Mac uses 0.7 (1344x756 at 1080p ref) — the historical default that
+        # leaves the dashboard cards and chat enough room to breathe and
+        # matches what users had before the Windows-optim window-shrink work.
+        # Windows / Linux use 0.54 (1036x583) which suits their denser font
+        # rendering and HiDPI scaling fixes.
+        _win_scale = 0.7 if sys.platform == "darwin" else 0.54
+        window_width = int(_REF_WIDTH * _win_scale)
+        window_height = int(_REF_HEIGHT * _win_scale)
         min_width = 750
         min_height = 350
-        position_right = int(screen_width / 2 - window_width / 2)
-        position_down = int(screen_height / 2 - window_height / 2)
+        # Centre the window on the physical screen.
+        position_right = int(screen_width / 2 - window_width * scale / 2)
+        position_down = int(screen_height / 2 - window_height * scale / 2)
         self.geometry(
             f"{window_width}x{window_height}+{position_right}+{position_down}"
         )
         self.minsize(min_width, min_height)
+
+        # Realize the geometry now so winfo_width()/winfo_height() report the
+        # real window size during the first screen build. Screens size their
+        # layout from the real width up front, so the first paint is final —
+        # no post-paint correction timers, no visible reflow.
+        self.update_idletasks()
 
         # Login plugin is uninstallable via the Store; respect that here so
         # users who removed it don't get the login screen on next launch.
@@ -107,8 +176,32 @@ class App(AppUI):
                 logger.error(f"❌ Failed to load login plugin: {e}")
                 self.create_dashboard()
 
-        # Ensure the window is visible
+        # Map the window — still transparent — so its widgets acquire their real
+        # geometry and Tk's layout cascade (wraplength → height → scroll region →
+        # scrollbar) can run. We then reveal the window only once that cascade
+        # has stopped moving, so the user never sees it reconfigure.
         self.update()
+        try:
+            screen = getattr(self, "_current_main_screen", None)
+            if screen is not None and hasattr(self, "_settle_screen"):
+                self._settle_screen(screen)
+        except Exception as e:
+            logger.warning(f"Initial layout settle failed: {e}")
+
+        def _reveal_window():
+            try:
+                self.attributes("-alpha", 1.0)
+            except Exception:
+                pass
+
+        try:
+            screen = getattr(self, "_current_main_screen", None)
+            if screen is not None and hasattr(self, "_reveal_when_settled"):
+                self._reveal_when_settled(screen, _reveal_window)
+            else:
+                _reveal_window()
+        except Exception:
+            _reveal_window()
 
         # Initialize auto-updater (cross-platform: Sparkle on macOS, stubs on Win/Linux)
         try:
@@ -127,6 +220,13 @@ class App(AppUI):
             logger.warning(f"Failed to initialize system notifications: {e}")
 
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
+
+        # macOS: route Cmd-Q through our normal shutdown path
+        if sys.platform == "darwin":
+            try:
+                self.tk.createcommand("::tk::mac::Quit", self._on_closing)
+            except Exception:
+                pass
 
         # Start system tray icon in a background thread (Windows only).
         # In dev mode, run.bat launches tray.py as a separate process, but in
@@ -360,16 +460,28 @@ if __name__ == "__main__":
         # Attach Inspector
         app.inspector = RuntimeInspector(app)
 
-    # Handle Ctrl+C gracefully
+    # Handle Ctrl+C gracefully. The handler only ends the Tk loop; the actual
+    # process exit happens after mainloop() returns (see the hard-exit below).
     def _handle_sigint(signum, frame):
-        """Close the app gracefully on Ctrl+C."""
+        """End the Tk loop on Ctrl+C; process exit follows mainloop()."""
         try:
-            app.destroy()
+            app.quit()
         except Exception:
             pass
-        sys.exit(0)
 
     signal.signal(signal.SIGINT, _handle_sigint)
+
+    # Keep signals responsive: while Tk is blocked in its C mainloop, a pending
+    # SIGINT handler can't run until the interpreter returns to Python. Pumping
+    # a no-op through the event loop every 200 ms guarantees Ctrl+C is handled
+    # promptly instead of only on the next Tk event (mouse move, redraw, etc.).
+    def _signal_pump():
+        try:
+            app.after(200, _signal_pump)
+        except Exception:
+            pass
+
+    app.after(200, _signal_pump)
 
     # Bring the window to the front on launch
     app.lift()
@@ -398,4 +510,23 @@ if __name__ == "__main__":
             ])
 
     # Application loop - run!
-    app.mainloop()
+    try:
+        app.mainloop()
+    except KeyboardInterrupt:
+        pass
+
+    # The Tk loop has ended (window closed, tray Quit, or Ctrl+C). Non-daemon
+    # background threads — the OTEL log-export worker retrying against an
+    # unreachable collector, the tray icon, keyring — would otherwise keep the
+    # process (and the terminal) alive indefinitely. Best-effort flush, then
+    # hard-exit so the shell returns immediately.
+    try:
+        from utils import updates
+        updates.shutdown()
+    except Exception:
+        pass
+    try:
+        logger.complete()  # drain any enqueued Loguru sinks before exit
+    except Exception:
+        pass
+    os._exit(0)

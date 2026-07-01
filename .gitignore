@@ -42,6 +42,7 @@ env/
 build/build/
 build/dist/
 *.manifest
+!packaging/windows/Resistine.exe.manifest
 
 # IDEs
 .vscode/

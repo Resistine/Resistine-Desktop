@@ -82,6 +82,7 @@ if _system == "Darwin":
         _SYSTEM_FRESHCLAM_CONF,
         _SYSTEM_LOG_DIR,
         _SYSTEM_RUN_DIR,
+        activate_system_daemons,
         clamav_env,
         daemons_approved,
         deactivate_system_daemons,
@@ -103,6 +104,7 @@ if _system == "Darwin":
 
 elif _system == "Linux":
     from plugins.antivirus.clamav_platform_linux import (  # noqa: F401
+        activate_system_daemons,
         clamav_env,
         daemons_approved,
         deactivate_system_daemons,

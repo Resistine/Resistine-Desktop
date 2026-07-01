@@ -483,7 +483,30 @@ class Plugin(BasePlugin):
             success, message = uninstall.run_uninstall(self.app, progress_callback=_progress)
 
             if success:
-                self.app.destroy()
+                self.uninstall_status_label.configure(
+                    text="Uninstalled. Closing…",
+                    text_color=("#0D5394", "#60A5FA"))
+                self.app.update_idletasks()
+                try:
+                    self.app.destroy()
+                except Exception:
+                    pass
+                if sys.platform == 'darwin':
+                    # macOS: keep the 0.3s deferred hard-exit so the Tk teardown
+                    # finishes flushing.
+                    import os as _os
+                    import threading as _th
+                    _th.Timer(0.3, lambda: _os._exit(0)).start()
+                else:
+                    # Windows/Linux: orderly shutdown so any spawned uninstaller
+                    # process (Inno's unins000.exe on Windows) and WinSparkle
+                    # finish cleanly. Their teardown is independent of ours.
+                    try:
+                        from utils import updates
+                        updates.shutdown()
+                    except Exception:
+                        pass
+                    sys.exit(0)
             else:
                 self.uninstall_button.configure(state="normal")
                 self.uninstall_status_label.configure(text=message, text_color="red")
