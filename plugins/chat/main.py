@@ -59,6 +59,9 @@ class Plugin(ChatUIMixin, BasePlugin):
         self._sidebar_visible = False
         self._accumulated_text = ""
         self._response_persisted = False
+        # Access-gate poller state (VPN + SIEM agent). See chat_ui.py.
+        self._gate_poll_id = None
+        self._gate_unlocked = False
         self.reinitialize_client()
         self.status = self.get_status()
         active_id = self._history.get_active_id()
@@ -72,13 +75,13 @@ class Plugin(ChatUIMixin, BasePlugin):
 
     def check_status(self):
         # Chat is only usable when the client is configured AND the same gate
-        # that unlocks the chat screen is satisfied (VPN connected + endpoint
-        # agent installed). Mirror that here so the dashboard tile isn't "OK"
-        # while chat is actually locked.
+        # that unlocks the chat screen is satisfied (VPN connected + SIEM agent
+        # running). Mirror that here so the dashboard tile isn't "OK" while chat
+        # is actually locked.
         if not self.client:
             return "Warning"
-        vpn_on, agent_installed = self._chat_access_status()
-        return "OK" if (vpn_on and agent_installed) else "Warning"
+        vpn_on, agent_on = self._chat_access_status()
+        return "OK" if (vpn_on and agent_on) else "Warning"
 
     def reinitialize_client(self, notify: bool = False):
         """Rebuild the OpenAI client from the current settings."""
@@ -481,6 +484,10 @@ class Plugin(ChatUIMixin, BasePlugin):
         response gets the canned marker so a reopen shows the right
         state.
         """
+        try:
+            self._stop_gate_poller()
+        except Exception:
+            pass
         try:
             self._finalize_in_flight_response(persist=True)
         except Exception:

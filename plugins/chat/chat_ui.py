@@ -102,11 +102,15 @@ class ChatUIMixin:
             self.app, corner_radius=0, fg_color="transparent")
 
         # Access gate: chat is only available when the VPN is connected AND the
-        # Endpoint agent is installed. Re-checked on every navigation to chat
-        # (the screen isn't cached), so it unlocks as soon as both are ready.
-        vpn_on, agent_installed = self._chat_access_status()
-        if not (vpn_on and agent_installed):
-            self._build_locked_screen(is_dark, vpn_on, agent_installed)
+        # SIEM/Endpoint agent is RUNNING. A background poller (_start_gate_poller)
+        # re-checks this while chat is open, so toggling the agent off or dropping
+        # the VPN snaps chat back to the locked referral screen — and turning them
+        # back on unlocks it — without navigating away and back.
+        vpn_on, agent_on = self._chat_access_status()
+        self._gate_unlocked = bool(vpn_on and agent_on)
+        self._start_gate_poller()
+        if not self._gate_unlocked:
+            self._build_locked_screen(is_dark, vpn_on, agent_on)
             return self.second_frame
 
         # Build the full-width chat area first. The history sidebar is an
@@ -157,9 +161,12 @@ class ChatUIMixin:
     # -- Access gate (VPN + endpoint agent) --------------------------------
 
     def _chat_access_status(self) -> tuple[bool, bool]:
-        """Return (vpn_connected, endpoint_agent_installed) for the gate.
+        """Return (vpn_connected, endpoint_agent_running) for the gate.
 
-        Note: the endpoint check is "installed" (not "running") on purpose.
+        The agent check is "running" (not merely "installed") so that manually
+        toggling the SIEM agent off re-locks chat. A running service is also our
+        best silent proxy for "connected to the manager" (the real connection
+        state file is root-owned and unreadable without a privileged prompt).
         Falls back to the VPN plugin's status badge if the helper is missing.
         """
         vpn_on = False
@@ -174,19 +181,93 @@ class ChatUIMixin:
                 vpn_on = bool(vp and vp.get_status() == "OK")
             except Exception:
                 vpn_on = False
-        agent_installed = False
+        agent_on = False
         try:
-            from plugins.wazuh.main import is_agent_installed
-            agent_installed = bool(is_agent_installed())
+            from plugins.wazuh.main import is_agent_running
+            agent_on = bool(is_agent_running())
         except Exception:
-            agent_installed = False
-        return vpn_on, agent_installed
+            agent_on = False
+        return vpn_on, agent_on
+
+    # Re-evaluate the access gate this often while chat is visible (ms). VPN is
+    # an in-process flag, but the agent check spawns a subprocess, so keep this
+    # at a few seconds rather than sub-second.
+    _GATE_POLL_MS = 8000
+
+    def _start_gate_poller(self) -> None:
+        """Poll the access gate while chat is visible; rebuild on change.
+
+        Detect-only (no privileged actions): when the VPN drops or the SIEM
+        agent is toggled off, rebuild the chat plugin screen so the locked
+        referral screen shows; when both come back, rebuild to the live chat.
+        The poller is bound to second_frame's existence, so navigating away
+        (which destroys second_frame) stops it.
+        """
+        self._stop_gate_poller()
+
+        def poll():
+            self._gate_poll_id = None
+            frame = getattr(self, "second_frame", None)
+            try:
+                alive = bool(frame is not None and frame.winfo_exists())
+            except Exception:
+                alive = False
+            if not alive:
+                return
+            try:
+                vpn_on, agent_on = self._chat_access_status()
+                unlocked = bool(vpn_on and agent_on)
+            except Exception:
+                unlocked = self._gate_unlocked
+            if unlocked != self._gate_unlocked:
+                logger.info(
+                    "Chat access gate changed: unlocked=%s -> %s "
+                    "(vpn=%s, agent=%s)",
+                    self._gate_unlocked, unlocked, vpn_on, agent_on)
+                self._gate_unlocked = unlocked
+                # create_main_screen re-runs the gate and restarts the poller.
+                self._refresh_gate_screen()
+                return
+            self._gate_poll_id = self.app.after(self._GATE_POLL_MS, poll)
+
+        self._gate_poll_id = self.app.after(self._GATE_POLL_MS, poll)
+
+    def _stop_gate_poller(self) -> None:
+        pid = getattr(self, "_gate_poll_id", None)
+        if pid is not None:
+            try:
+                self.app.after_cancel(pid)
+            except Exception:
+                pass
+            self._gate_poll_id = None
+
+    def _refresh_gate_screen(self) -> None:
+        """Rebuild the chat plugin screen in place when the gate flips.
+
+        Mirrors the Endpoint/VPN plugins: only rebuild when chat is the screen
+        actually on display. Destroying second_frame fires <Destroy>, which
+        tears down the dim overlay and stops the poller; create_main_screen then
+        builds the locked or live view and starts a fresh poller.
+        """
+        current = getattr(self.app, "current_frame_name", "")
+        if current != f"frame_{self.get_name()}":
+            return
+        old = getattr(self, "second_frame", None)
+        if old is not None:
+            try:
+                old.destroy()
+            except Exception:
+                pass
+        try:
+            self.create_main_screen().grid(row=0, column=1, sticky="nsew")
+        except Exception:
+            logger.exception("Chat gate screen rebuild failed")
 
     def _build_locked_screen(
-        self, is_dark: bool, vpn_on: bool, agent_installed: bool,
+        self, is_dark: bool, vpn_on: bool, agent_on: bool,
     ) -> None:
         screen = ChatLockedScreen(
-            self.second_frame, vpn_on, agent_installed,
+            self.second_frame, vpn_on, agent_on,
             on_open_vpn=lambda: self._open_plugin("VPN"),
             on_open_endpoint=lambda: self._open_plugin("Endpoint"),
             is_dark=is_dark)
@@ -236,6 +317,9 @@ class ChatUIMixin:
         # widget itself, so we only act on the second_frame's own event.
         if _event is not None and _event.widget is not self.second_frame:
             return
+        # Stop the access-gate poller tied to this (now dying) chat screen.
+        # A rebuild re-creates it; navigating away leaves it stopped.
+        self._stop_gate_poller()
         # Stream lifecycle: navigation away from chat plugin means the
         # user is leaving WHILE a response may still be streaming.
         # Cancel the stream and persist the canned "you switched chats"

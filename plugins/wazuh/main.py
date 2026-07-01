@@ -83,6 +83,23 @@ _FONT_TITLE = dict(family="Inter", size=18, weight="bold")
 _POLL_INTERVAL_MS = 10_000
 
 
+def is_agent_running():
+    """Return True if the SIEM agent service is currently running.
+
+    Cross-platform; returns False on unsupported platforms or any error.
+    Unlike is_agent_installed(), this reflects the live service state, so the
+    chat access gate re-locks the instant the agent is toggled off. We have no
+    readable "connected to manager" signal (the agent state file is root-owned),
+    so a running service is the best silent proxy for "connected".
+    """
+    if not _platform_supported:
+        return False
+    try:
+        return get_agent_status() == "Running"
+    except Exception:
+        return False
+
+
 class Plugin(BasePlugin):
     """Plugin class for the Wazuh SIEM agent."""
 
