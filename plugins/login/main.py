@@ -102,6 +102,50 @@ class Plugin(BasePlugin):
             self.login_frame.destroy()
             del self.login_frame
 
+    def _make_bordered_entry(self, row, placeholder, corner_radius,
+                             show=None):
+        """Create a CTkEntry inside a bordered CTkFrame.
+
+        CTkEntry draws its own border on its canvas, but its inner Tk entry
+        is gridded on top with a bottom inset of ``border_width + 1`` px —
+        under fractional display scaling that inset rounds up and covers the
+        bottom border row, so the field looks open at the bottom. Buttons and
+        frames have no such overlay, so drawing the border on a wrapping frame
+        and nesting a borderless entry inside renders a full, crisp border on
+        all four sides. Returns the inner entry; the frame is ``entry.master``.
+        """
+        frame = customtkinter.CTkFrame(
+            self.content_frame,
+            width=400,
+            height=45,
+            corner_radius=corner_radius,
+            border_width=1,
+            border_color=("#CCCCCC", "#444444"),
+            fg_color=self.app.cget("fg_color"),
+        )
+        frame.grid(row=row, column=0, pady=(0, 20))
+        frame.grid_propagate(False)
+        frame.grid_rowconfigure(0, weight=1)
+        frame.grid_columnconfigure(0, weight=1)
+
+        kwargs = dict(
+            placeholder_text=placeholder,
+            corner_radius=0,
+            border_width=0,
+            fg_color="transparent",
+            font=customtkinter.CTkFont(family="Inter", size=14),
+        )
+        if show is not None:
+            kwargs["show"] = show
+        entry = customtkinter.CTkEntry(frame, **kwargs)
+        # sticky="ew" (not "nsew"): the entry fills horizontally but keeps its
+        # natural height and centers vertically in the weighted row, so its own
+        # canvas never stretches to the frame's top/bottom border rows and can't
+        # paint over them. (A stretched entry paints its page-colored fill over
+        # the bottom border under DPI scaling — that was the clip.)
+        entry.grid(row=0, column=0, sticky="ew", padx=12)
+        return entry
+
     def create_main_screen(self):
         """
         Create the login screen matching the provided mockup.
@@ -152,20 +196,9 @@ class Plugin(BasePlugin):
         # Get theme corner radius
         corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
 
-        # 3. Email Entry — transparent fill so it blends with the page
-        # background; the border alone defines the field.
-        self.email_entry = customtkinter.CTkEntry(
-            self.content_frame,
-            placeholder_text="Enter your email address",
-            width=400,
-            height=45,
-            corner_radius=corner_radius,
-            border_width=1,
-            border_color=("#CCCCCC", "#444444"),
-            fg_color="transparent",
-            font=customtkinter.CTkFont(family="Inter", size=14),
-        )
-        self.email_entry.grid(row=2, column=0, pady=(0, 20))
+        # 3. Email Entry (bordered frame wrapper — see _make_bordered_entry)
+        self.email_entry = self._make_bordered_entry(
+            2, "Enter your email address", corner_radius)
         self.active_input_entry = self.email_entry
 
         # 4. Sign in Button
@@ -273,9 +306,9 @@ class Plugin(BasePlugin):
     def transform_to_otp_input(self):
         """Transform the existing screen to show OTP entry."""
         corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
-        # Hide email entry and sign-in button
+        # Hide email entry (destroy its border frame) and sign-in button
         if hasattr(self, "email_entry") and self.email_entry.winfo_exists():
-            self.email_entry.destroy()
+            self.email_entry.master.destroy()
         if hasattr(self, "signin_button") and self.signin_button.winfo_exists():
             self.signin_button.destroy()
         if (
@@ -288,16 +321,8 @@ class Plugin(BasePlugin):
         self.title_label.configure(text=f"Enter the 6-digit code sent to {self.email}")
 
         # Create OTP entry in same spot
-        self.otp_entry = customtkinter.CTkEntry(
-            self.content_frame,
-            placeholder_text="Enter OTP",
-            width=400,
-            height=45,
-            corner_radius=corner_radius,
-            show="*",
-            font=customtkinter.CTkFont(family="Inter", size=14),
-        )
-        self.otp_entry.grid(row=2, column=0, pady=(0, 20))
+        self.otp_entry = self._make_bordered_entry(
+            2, "Enter OTP", corner_radius, show="*")
         self.active_input_entry = self.otp_entry
         self.otp_entry.bind("<KeyPress>", self.on_otp_key_press)
         # Custom paste handler. On macOS the OS-level Cmd+V triggers
@@ -339,9 +364,9 @@ class Plugin(BasePlugin):
     def back_to_email(self):
         """Navigate back from OTP screen to email entry screen."""
         corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
-        # Destroy OTP widgets
+        # Destroy OTP widgets (destroy the entry's border frame)
         if hasattr(self, "otp_entry") and self.otp_entry.winfo_exists():
-            self.otp_entry.destroy()
+            self.otp_entry.master.destroy()
         if hasattr(self, "verify_button") and self.verify_button.winfo_exists():
             self.verify_button.destroy()
         if hasattr(self, "back_button") and self.back_button.winfo_exists():
@@ -353,16 +378,8 @@ class Plugin(BasePlugin):
         )
 
         # Recreate email entry
-        self.email_entry = customtkinter.CTkEntry(
-            self.content_frame,
-            placeholder_text="Enter your email address",
-            width=400,
-            height=45,
-            corner_radius=corner_radius,
-            border_width=1,
-            font=customtkinter.CTkFont(family="Inter", size=14),
-        )
-        self.email_entry.grid(row=2, column=0, pady=(0, 20))
+        self.email_entry = self._make_bordered_entry(
+            2, "Enter your email address", corner_radius)
         self.active_input_entry = self.email_entry
         self.email_entry.focus_set()
 

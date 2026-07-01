@@ -79,6 +79,9 @@ def _restrict_token_acl(token_path: str) -> None:
             check=False,
             capture_output=True,
             timeout=5,
+            # Suppress the console window so icacls doesn't flash a cmd
+            # window when the service runs in a user session (debug mode).
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except Exception:
         # Best-effort hardening — never fail the caller on ACL issues.

@@ -460,16 +460,28 @@ if __name__ == "__main__":
         # Attach Inspector
         app.inspector = RuntimeInspector(app)
 
-    # Handle Ctrl+C gracefully
+    # Handle Ctrl+C gracefully. The handler only ends the Tk loop; the actual
+    # process exit happens after mainloop() returns (see the hard-exit below).
     def _handle_sigint(signum, frame):
-        """Close the app gracefully on Ctrl+C."""
+        """End the Tk loop on Ctrl+C; process exit follows mainloop()."""
         try:
-            app.destroy()
+            app.quit()
         except Exception:
             pass
-        sys.exit(0)
 
     signal.signal(signal.SIGINT, _handle_sigint)
+
+    # Keep signals responsive: while Tk is blocked in its C mainloop, a pending
+    # SIGINT handler can't run until the interpreter returns to Python. Pumping
+    # a no-op through the event loop every 200 ms guarantees Ctrl+C is handled
+    # promptly instead of only on the next Tk event (mouse move, redraw, etc.).
+    def _signal_pump():
+        try:
+            app.after(200, _signal_pump)
+        except Exception:
+            pass
+
+    app.after(200, _signal_pump)
 
     # Bring the window to the front on launch
     app.lift()
@@ -498,4 +510,23 @@ if __name__ == "__main__":
             ])
 
     # Application loop - run!
-    app.mainloop()
+    try:
+        app.mainloop()
+    except KeyboardInterrupt:
+        pass
+
+    # The Tk loop has ended (window closed, tray Quit, or Ctrl+C). Non-daemon
+    # background threads — the OTEL log-export worker retrying against an
+    # unreachable collector, the tray icon, keyring — would otherwise keep the
+    # process (and the terminal) alive indefinitely. Best-effort flush, then
+    # hard-exit so the shell returns immediately.
+    try:
+        from utils import updates
+        updates.shutdown()
+    except Exception:
+        pass
+    try:
+        logger.complete()  # drain any enqueued Loguru sinks before exit
+    except Exception:
+        pass
+    os._exit(0)

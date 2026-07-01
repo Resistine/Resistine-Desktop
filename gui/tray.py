@@ -87,6 +87,10 @@ def _restrict_token_acl(token_path: str) -> None:
             check=False,
             capture_output=True,
             timeout=5,
+            # Suppress the console window: this runs on every IPC call
+            # (token is re-loaded per request), so without it a cmd window
+            # flashes on the desktop each time the GUI is windowless.
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except Exception:
         pass
