@@ -27,6 +27,7 @@ from plugins.base_plugin import BasePlugin
 from plugins.wazuh_overview import api_client
 from plugins.wazuh_overview.config import MAX_PARALLEL_FETCHES
 from utils.logger import logger
+from utils.ui_throttle import ResizeThrottle
 
 # matplotlib is imported lazily via _ensure_matplotlib() — see below. Pulling it
 # at module load adds ~200–500 ms to plugin discovery on the first run of the
@@ -2412,6 +2413,20 @@ class Plugin(BasePlugin):
             except Exception:
                 pass
 
+        def _apply_scaled():
+            # Throttled live preview: a PIL resize + new PhotoImage every <Configure>
+            # is CPU-heavy, so cap it to ~30fps. Reads the current size when it runs.
+            try:
+                if not widget.winfo_exists():
+                    return
+                w, h = widget.winfo_width(), widget.winfo_height()
+            except Exception:
+                return
+            if w > 1 and h > 1:
+                _show_scaled(w, h)
+
+        scale_throttle = ResizeThrottle(widget, _apply_scaled, interval_ms=33)
+
         def apply():
             job[0] = None
             dragging[0] = False
@@ -2444,7 +2459,7 @@ class Plugin(BasePlugin):
                 dragging[0] = True
                 _capture_snapshot()
             if w > 1 and h > 1:
-                _show_scaled(w, h)
+                scale_throttle.trigger()
             # Debounce the crisp re-render to the end of the drag.
             if job[0] is not None:
                 try:

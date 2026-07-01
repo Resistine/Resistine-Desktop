@@ -63,6 +63,20 @@ if sys.platform.startswith("win"):
 
     _sf.CTkScrollableFrame._fit_frame_dimensions_to_canvas = _guarded_fit
 
+    # ── Windows: cheaper rounded-corner rendering ───────────────────────
+    # CustomTkinter redraws every widget's rounded-corner canvas synchronously on
+    # every <Configure>.  On Windows the default method is "font_shapes" (antialiased
+    # circles drawn as font glyphs, ~12-20 ms/redraw); multiplied across hundreds of
+    # widgets this is what makes a live drag stutter.  macOS already defaults to the
+    # much cheaper "polygon_shapes" (~3 ms, Tk smooth polygons).  Switching Windows to
+    # match cuts per-frame redraw cost ~4-6x app-wide.  This is the per-frame *cost*
+    # lever — throttling redraw frequency would not help, since <Configure> already
+    # arrives at screen rate during the drag.  Corners are marginally softer than
+    # font_shapes (identical to the macOS look).  Set before any widget is created.
+    from customtkinter.windows.widgets.core_rendering import DrawEngine
+
+    DrawEngine.preferred_drawing_method = "polygon_shapes"
+
 
 # ── Linux: Cairo smooth rendering + cursor / keyboard patches ───────────
 if sys.platform.startswith("linux"):
