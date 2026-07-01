@@ -157,6 +157,21 @@ def get_agent_status():
     return "Stopped"
 
 
+def get_agent_connection():
+    """Return the agent's live manager-connection status.
+
+    One of ``connected`` / ``pending`` / ``disconnected`` / ``unknown``.
+    Reads Wazuh's own wazuh-agentd.state; falls back to ossec.log. Distinct
+    from get_agent_status(), which only reports whether the service is alive.
+    """
+    from plugins.wazuh.agent import agent_state
+
+    return agent_state.read_agent_connection(
+        os.path.join(WINDOWS_WAZUH_DIR, "wazuh-agentd.state"),
+        os.path.join(WINDOWS_WAZUH_DIR, "ossec.log"),
+    )
+
+
 def get_package_url():
     """Return the Wazuh MSI download URL."""
     return WINDOWS_WAZUH_MSI_URL
@@ -455,6 +470,49 @@ def restore_client_key_if_needed():
         else:
             logger.info("client.keys already present")
     return success
+
+
+def reenroll_agent():
+    """Force a fresh manager registration to recover a dead/invalid key.
+
+    Used when the agent is Running but never reaches ``connected`` (e.g. the
+    old agent was deleted server-side after a reinstall, invalidating the
+    reused key). Wipes the local key + backup, enrolls under a fresh unique
+    name so the manager creates a brand-new record, then restarts the service.
+    Returns (ok, msg).
+    """
+    if not is_agent_installed():
+        return (False, "Wazuh agent is not installed")
+
+    base = get_agent_name()
+    new_name = f"{base}-{str(int(time.time()))[-6:]}"
+    group = get_agent_group()
+
+    script = (
+        f"Stop-Service -Name '{_SERVICE_NAME}' -Force -ErrorAction SilentlyContinue; "
+        f"Remove-Item -Path '{_CLIENT_KEYS}','{_KEY_BACKUP}' -Force "
+        f"-ErrorAction SilentlyContinue; "
+        f"if (Test-Path '{_AGENT_AUTH}') {{ & '{_AGENT_AUTH}' -m '{WAZUH_MANAGER}' "
+        f"-P '{WAZUH_REGISTRATION_PORT}' -A '{new_name}' -G '{group}' }}; "
+        f"if (-not (Test-Path '{_CLIENT_KEYS}') -or "
+        f"((Get-Item '{_CLIENT_KEYS}').Length -eq 0)) "
+        f"{{ Write-Output 'REENROLL_NO_KEY'; exit 1 }}; "
+        f"if (Test-Path '{_OSSEC_CONF}') {{ (Get-Content '{_OSSEC_CONF}') "
+        f"-replace '<agent_name>.*</agent_name>', '<agent_name>{new_name}</agent_name>' | "
+        f"Set-Content '{_OSSEC_CONF}' }}; "
+        f"New-Item -ItemType Directory -Path (Split-Path '{_KEY_BACKUP}') -Force "
+        f"| Out-Null; "
+        f"Copy-Item '{_CLIENT_KEYS}' '{_KEY_BACKUP}' -Force; "
+        f"Start-Service -Name '{_SERVICE_NAME}'; "
+        f"Write-Output 'REENROLL_OK'"
+    )
+    success, output = _run_privileged(script)
+    if success and "REENROLL_OK" in (output or "") \
+            and "REENROLL_NO_KEY" not in (output or ""):
+        logger.info(f"Wazuh re-enrolled under fresh name {new_name}")
+        return (True, f"Re-enrolled as {new_name}")
+    logger.error(f"Wazuh re-enroll failed: {output!r}")
+    return (False, output or "Re-enrollment failed")
 
 
 def remove_agent(wipe_keys: bool = False):

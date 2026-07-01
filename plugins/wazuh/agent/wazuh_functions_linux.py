@@ -198,6 +198,20 @@ def get_agent_status():
         
     return "Stopped"
 
+def get_agent_connection():
+    """Return the agent's live manager-connection status.
+
+    One of ``connected`` / ``pending`` / ``disconnected`` / ``unknown``.
+    Reads Wazuh's own wazuh-agentd.state; falls back to ossec.log. Distinct
+    from get_agent_status(), which only reports whether the daemon is alive.
+    """
+    from plugins.wazuh.agent import agent_state
+
+    return agent_state.read_agent_connection(
+        os.path.join(LINUX_WAZUH_DIR, "var", "run", "wazuh-agentd.state"),
+        os.path.join(LINUX_WAZUH_DIR, "logs", "ossec.log"),
+    )
+
 def download_package(progress_callback=None):
     url = get_package_url()
     if not url:
@@ -395,3 +409,46 @@ def full_install(progress_callback=None):
     if progress_callback:
         progress_callback("Installation failed")
     return False
+
+def reenroll_agent():
+    """Force a fresh manager registration to recover a dead/invalid key.
+
+    Used when the agent is Running but never reaches ``connected`` (e.g. the
+    old agent was deleted server-side after a reinstall, invalidating the
+    reused key). Wipes the local key + backup, enrolls under a fresh unique
+    name so the manager creates a brand-new record, then restarts.
+    Returns (ok, msg).
+    """
+    import time
+
+    if not is_agent_installed():
+        return (False, "Wazuh agent is not installed")
+
+    base = get_agent_name()
+    new_name = f"{base}-{str(int(time.time()))[-6:]}"
+    group = get_agent_group()
+    agent_auth = f"{LINUX_WAZUH_DIR}/bin/agent-auth"
+    ossec_conf = f"{LINUX_WAZUH_DIR}/etc/ossec.conf"
+    backup_dir = os.path.dirname(_KEY_BACKUP)
+
+    script = f"""
+        systemctl stop wazuh-agent 2>/dev/null
+        pkill -9 -f '{LINUX_WAZUH_DIR}/bin/wazuh-' 2>/dev/null
+        rm -f '{_CLIENT_KEYS}' '{_KEY_BACKUP}'
+        '{agent_auth}' -m '{WAZUH_MANAGER}' -P '{WAZUH_REGISTRATION_PORT}' -A '{new_name}' -G '{group}'
+        if [ ! -s '{_CLIENT_KEYS}' ]; then echo REENROLL_NO_KEY; exit 1; fi
+        chmod 640 '{_CLIENT_KEYS}'
+        chown wazuh:wazuh '{_CLIENT_KEYS}' 2>/dev/null || chown root:wazuh '{_CLIENT_KEYS}' 2>/dev/null
+        sed -i 's|<agent_name>.*</agent_name>|<agent_name>{new_name}</agent_name>|' '{ossec_conf}' 2>/dev/null || true
+        mkdir -p '{backup_dir}'; cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}' 2>/dev/null
+        chown {os.getuid()}:{os.getgid()} '{_KEY_BACKUP}' 2>/dev/null
+        systemctl enable wazuh-agent 2>/dev/null
+        systemctl restart wazuh-agent
+        echo REENROLL_OK
+    """
+    success, output = run_privileged_command(["sh", "-c", script])
+    if success and "REENROLL_NO_KEY" not in (output or ""):
+        logger.info(f"Wazuh re-enrolled under fresh name {new_name}")
+        return (True, f"Re-enrolled as {new_name}")
+    logger.error(f"Wazuh re-enroll failed: {output!r}")
+    return (False, output or "Re-enrollment failed")
