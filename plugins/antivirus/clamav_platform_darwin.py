@@ -494,6 +494,53 @@ def ensure_daemons_registered():
 # ── System daemon activation ─────────────────────────────
 
 
+def activate_system_daemons() -> tuple[bool, str]:
+    """Start the system-level ClamAV daemons (clamd + clamonacc).
+
+    Symmetric counterpart to deactivate_system_daemons(). The daemons are
+    SMAppService-managed and provisioned by the installer flow
+    (trigger_system_setup / the postinstall script), so "starting" an
+    already-registered-but-offline daemon just means (re)loading it in launchd.
+    ensure_daemons_registered() re-bootstraps any daemon that's
+    enabled-but-not-loaded (e.g. after a bootout/stop, or a crash that KeepAlive
+    didn't recover) without a second admin prompt. We then poll launchd to
+    confirm the protection daemons actually came up.
+
+    Returns (ok, message). Backs the "Start Protection" banner action when the
+    app bundle is installed but the daemons aren't running.
+    """
+    if not is_app_bundle():
+        return False, "Real-time protection requires the installed app."
+
+    try:
+        ensure_daemons_registered()
+    except Exception as exc:
+        logger.error(f"ClamAV: activating system daemons failed: {exc}")
+        return False, str(exc)
+
+    # freshclam is auto-update, not real-time protection — only clamd and
+    # clamonacc gate the "protection running" state.
+    protection_labels = [
+        "com.resistine.desktop.clamd",
+        "com.resistine.desktop.clamonacc",
+    ]
+    # Give launchd a moment to bring the daemons up after (re)registration.
+    for _ in range(10):
+        if all(_daemon_loaded(label) for label in protection_labels):
+            return True, "Protection started."
+        time.sleep(0.5)
+
+    if any(_daemon_loaded(label) for label in protection_labels):
+        return True, "Protection is starting…"
+
+    # Nothing loaded — the daemons most likely still need approval in Login
+    # Items (SMAppService can't bootstrap until the user approves).
+    return False, (
+        "Couldn't start protection automatically. Enable the Resistine ClamAV "
+        "daemons in System Settings › General › Login Items."
+    )
+
+
 def _app_bundle_contents() -> str | None:
     """Return the Contents/ dir of the running .app bundle, or None."""
     for base in (sys.executable, os.path.abspath(sys.argv[0])):
