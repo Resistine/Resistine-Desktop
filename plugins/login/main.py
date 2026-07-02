@@ -99,6 +99,12 @@ class Plugin(BasePlugin):
         Destroy the login screen and clean up resources.
         """
         if hasattr(self, "login_frame"):
+            if getattr(self, "_layout_job", None) is not None:
+                try:
+                    self.login_frame.after_cancel(self._layout_job)
+                except Exception:
+                    pass
+                self._layout_job = None
             self.login_frame.destroy()
             del self.login_frame
 
@@ -173,9 +179,9 @@ class Plugin(BasePlugin):
         shield_path = get_resource_path(os.path.join("resources", "icons", "ResistineShield.png"))
         try:
             shield_img = Image.open(shield_path)
-            shield_ctk = customtkinter.CTkImage(shield_img, size=(200, 200))
+            self._shield_ctk = customtkinter.CTkImage(shield_img, size=(200, 200))
             self.shield_label = customtkinter.CTkLabel(
-                self.content_frame, text="", image=shield_ctk
+                self.content_frame, text="", image=self._shield_ctk
             )
             # Smaller shield + tighter padding so the content plus the footer
             # (Privacy / Terms of Use) fit in the window and the terms text is
@@ -277,7 +283,78 @@ class Plugin(BasePlugin):
         )
         self.skip_button.place(relx=0.98, rely=0.98, anchor="se")
 
+        # --- Adaptive layout: keep everything visible at small heights ---
+        # The fixed content stack is ~590 logical px tall; below that the
+        # sign-in button / create-account / footer clip. Shrink or hide the
+        # shield (the only purely decorative element) instead of scrolling.
+        # Debounced <Configure> binding — same pattern as the plugin cards in
+        # gui/user_interface.py — plus one immediate pass on the next idle
+        # tick (the app calls update_idletasks() before building screens, so
+        # winfo_height() is already realized).
+        self._layout_mode = None
+        self._layout_job = None
+        self.login_frame.bind("<Configure>", self._schedule_adaptive_layout)
+        self.login_frame.after_idle(self._apply_adaptive_layout)
+
         return self.login_frame
+
+    def _schedule_adaptive_layout(self, event=None):
+        """Debounce <Configure> storms during live resize (150 ms)."""
+        if getattr(self, "_layout_job", None) is not None:
+            try:
+                self.login_frame.after_cancel(self._layout_job)
+            except Exception:
+                pass
+        self._layout_job = self.login_frame.after(
+            150, self._apply_adaptive_layout)
+
+    def _apply_adaptive_layout(self):
+        """Fit the login stack to the current window height.
+
+        >= 590 logical px: normal layout (unchanged from before).
+        440-590: shield shrinks 200 -> 120 and paddings tighten.
+        < 440: shield hidden entirely — email entry, sign-in,
+        create-account and footer always remain visible (app minsize
+        height is 350).
+        """
+        self._layout_job = None
+        try:
+            if not self.login_frame.winfo_exists():
+                return
+            # winfo_height() is physical px; divide by CTk's widget scaling
+            # (NOT bare _hidpi_factor — unset/1.0 on Windows HiDPI) to
+            # compare against logical thresholds. See user_interface.py.
+            try:
+                scale = customtkinter.ScalingTracker.get_widget_scaling(
+                    self.login_frame)
+            except Exception:
+                scale = getattr(self.app, "_hidpi_factor", 1.0) or 1.0
+            height = self.login_frame.winfo_height() / scale
+            if height <= 4:  # not realized yet
+                return
+            mode = ("normal" if height >= 590
+                    else "compact" if height >= 440 else "tiny")
+            if mode == self._layout_mode:
+                return
+            self._layout_mode = mode
+            shield = getattr(self, "shield_label", None)
+            if shield is not None and shield.winfo_exists():
+                if mode == "tiny":
+                    shield.grid_remove()
+                else:
+                    size = 200 if mode == "normal" else 120
+                    self._shield_ctk.configure(size=(size, size))
+                    shield.grid(row=0, column=0,
+                                pady=(0, 16 if mode == "normal" else 8))
+            compact = mode != "normal"
+            if self.title_label.winfo_exists():
+                self.title_label.grid_configure(
+                    pady=(0, 10 if compact else 25))
+            btn = getattr(self, "create_account_btn", None)
+            if btn is not None and btn.winfo_exists():
+                btn.grid_configure(pady=(0, 10 if compact else 40))
+        except Exception:
+            pass
 
     def skip_login(self):
         """Skip login and go to dashboard."""
