@@ -780,6 +780,49 @@ class Plugin(BasePlugin):
         _stacked          = [False]
         _resize_job       = [None]
 
+        def _autohide_scrollbar():
+            """Re-evaluate scrollbar visibility AFTER the layout pass settles.
+
+            Runs via after_idle so the yview sample reflects the content minsize
+            _do_layout just wrote — sampling before it could latch a stale
+            hidden-while-overflowing state at heights near the boundary
+            (350-475). Hysteresis: hide only when fully visible (>= 0.99), show
+            only when clearly overflowing (< 0.97); the 0.97-0.99 dead band
+            prevents flapping (hide/show reflows content without a Configure).
+            """
+            try:
+                if not (hasattr(scroll_frame, "_parent_canvas")
+                        and hasattr(scroll_frame, "_scrollbar")):
+                    return
+                yview = scroll_frame._parent_canvas.yview()
+                if not yview:
+                    return
+                # Check if currently hidden (hacky check usually works if grid_remove used)
+                is_mapped = bool(scroll_frame._scrollbar.grid_info())
+                # If content fits entirely (0.0 to 1.0)
+                if yview[0] <= 0.01 and yview[1] >= 0.99:
+                    if is_mapped:
+                        # Save grid info to restore later if needed, though grid() usually suffices
+                        # if grid_remove was used. To be safe with CTk internals:
+                        scroll_frame._saved_sb_grid = scroll_frame._scrollbar.grid_info()
+                        scroll_frame._scrollbar.grid_remove()
+                elif yview[1] < 0.97:
+                    if not is_mapped:
+                        # Restore
+                        if hasattr(scroll_frame, "_saved_sb_grid") and scroll_frame._saved_sb_grid:
+                            scroll_frame._scrollbar.grid(**scroll_frame._saved_sb_grid)
+                        else:
+                            # Default fallback if we somehow didn't save it.
+                            # CTk's vertical CTkScrollableFrame grids the
+                            # scrollbar at row=1, column=1 (row 0 is the
+                            # label row). Using row=0 dropped a default
+                            # height=200 scrollbar into the empty label row,
+                            # creating a 200px gap that pushed the canvas
+                            # down and shrank it.
+                            scroll_frame._scrollbar.grid(row=1, column=1, sticky="ns", pady=0)
+            except Exception:
+                pass
+
         def _do_layout():
             """Apply centering and responsive layout based on current app/sidebar widths."""
             _resize_job[0] = None
@@ -787,39 +830,10 @@ class Plugin(BasePlugin):
             # Safety check: if plugin updated/destroyed, main_container might be gone
             if not hasattr(self, 'main_container') or not self.main_container.winfo_exists():
                 return
-            
-            # --- Auto-hide Scrollbar Logic ---
-            try:
-                if hasattr(scroll_frame, "_parent_canvas") and hasattr(scroll_frame, "_scrollbar"):
-                    yview = scroll_frame._parent_canvas.yview()
-                    
-                    # Check if currently hidden (hacky check usually works if grid_remove used)
-                    is_mapped = bool(scroll_frame._scrollbar.grid_info())
-                    
-                    # If content fits entirely (0.0 to 1.0)
-                    if yview and (yview[0] <= 0.01 and yview[1] >= 0.99):
-                        if is_mapped:
-                            # Save grid info to restore later if needed, though grid() usually suffices 
-                            # if grid_remove was used. To be safe with CTk internals:
-                            scroll_frame._saved_sb_grid = scroll_frame._scrollbar.grid_info()
-                            scroll_frame._scrollbar.grid_remove()
-                    else:
-                        if not is_mapped:
-                             # Restore
-                             if hasattr(scroll_frame, "_saved_sb_grid") and scroll_frame._saved_sb_grid:
-                                 scroll_frame._scrollbar.grid(**scroll_frame._saved_sb_grid)
-                             else:
-                                 # Default fallback if we somehow didn't save it.
-                                 # CTk's vertical CTkScrollableFrame grids the
-                                 # scrollbar at row=1, column=1 (row 0 is the
-                                 # label row). Using row=0 dropped a default
-                                 # height=200 scrollbar into the empty label row,
-                                 # creating a 200px gap that pushed the canvas
-                                 # down and shrank it.
-                                 scroll_frame._scrollbar.grid(row=1, column=1, sticky="ns", pady=0)
-            except Exception:
-                pass
-            # --- End Auto-hide ---
+
+            # --- Auto-hide Scrollbar: deferred until after this pass settles,
+            # so the decision sees the minsize written below, not the old one.
+            self.app.after_idle(_autohide_scrollbar)
             try:
                 if not scroll_frame.winfo_exists():
                     return
