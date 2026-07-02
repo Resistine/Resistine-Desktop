@@ -68,15 +68,17 @@ class App(AppUI):
         Initialize the main application window, set its title, size, and position.
         Check if the email is registered and create the appropriate screen.
         """
-        super().__init__()
-
         if sys.platform.startswith('win'):
             try:
                 import ctypes
                 # Per-monitor v2 (-4) is best; degrade gracefully on older Windows.
                 # Without this, Win10/11 at 150-200% rasterises Tk at logical px
                 # then DWM bitmap-stretches → blurry text on HiDPI laptops.
-                ctypes.windll.shcore.SetProcessDpiAwarenessContext(-4)
+                # NOTE: SetProcessDpiAwarenessContext lives in user32 (not
+                # shcore), and process DPI awareness is first-caller-wins — CTk
+                # sets per-monitor v1 inside super().__init__(), so this must
+                # run BEFORE it to actually get v2.
+                ctypes.windll.user32.SetProcessDpiAwarenessContext(-4)
             except (AttributeError, OSError):
                 try:
                     ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -85,6 +87,8 @@ class App(AppUI):
                         ctypes.windll.user32.SetProcessDPIAware()
                     except Exception:
                         pass
+
+        super().__init__()
 
         if sys.platform.startswith("linux"):
             self._apply_hidpi_scaling()
@@ -114,22 +118,29 @@ class App(AppUI):
         self._set_app_icon()
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
-        scale = getattr(self, "_hidpi_factor", 1.0)
-        # Window dimensions are LOGICAL, anchored to the 1080p reference.
-        # set_window_scaling() multiplies these by `scale` to produce the actual
-        # physical pixel size, so the logical layout is identical at every
-        # resolution and aspect ratio.
-        #
-        # Mac uses 0.7 (1344x756 at 1080p ref) — the historical default that
-        # leaves the dashboard cards and chat enough room to breathe and
-        # matches what users had before the Windows-optim window-shrink work.
-        # Windows / Linux use 0.54 (1036x583) which suits their denser font
-        # rendering and HiDPI scaling fixes.
-        _win_scale = 0.7 if sys.platform == "darwin" else 0.54
-        window_width = int(_REF_WIDTH * _win_scale)
-        window_height = int(_REF_HEIGHT * _win_scale)
+        # CTk multiplies the width/height we pass to geometry() by its window
+        # scaling (the real OS-DPI ratio on Windows, our set_window_scaling
+        # factor on Linux, 1.0 on macOS) but leaves +x+y offsets untouched.
+        # _hidpi_factor alone is 1.0 on Windows even at 200% DPI, which would
+        # render the window at double the intended size — so use the effective
+        # CTk window scaling for both the size and the centering math.
+        try:
+            scale = customtkinter.ScalingTracker.get_window_scaling(self) or 1.0
+        except Exception:
+            scale = getattr(self, "_hidpi_factor", 1.0) or 1.0
+        # Default window covers 33% of the screen AREA (~57.5% per dimension),
+        # centred. winfo_screen*() report physical px on Windows/Linux and
+        # logical points on macOS — the same unit space CTk's scaled geometry
+        # lands in, so dividing by `scale` yields exactly the target fraction
+        # on-screen regardless of HiDPI.
+        _side_fraction = 0.33 ** 0.5
         min_width = 750
         min_height = 350
+        # Clamp to the minsize BEFORE centering so the +x+y offsets match the
+        # size Tk actually enforces (otherwise the window sits off-centre on
+        # screens small enough to trip the clamp).
+        window_width = max(min_width, int(screen_width * _side_fraction / scale))
+        window_height = max(min_height, int(screen_height * _side_fraction / scale))
         # Centre the window on the physical screen.
         position_right = int(screen_width / 2 - window_width * scale / 2)
         position_down = int(screen_height / 2 - window_height * scale / 2)
