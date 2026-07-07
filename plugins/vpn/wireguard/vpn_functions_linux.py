@@ -274,49 +274,21 @@ def parse_and_create_vpn_config(vpn_config_json_string, config_name="resistine")
             else str(allowed_ips)
         )
 
-        # DNS handling. wg-quick's built-in `DNS =` directive shells out to
-        # `resolvconf`, which isn't present on every distro (e.g. Arch without
-        # the systemd-resolvconf package). Pick the mechanism that's actually
-        # available so tunnel bring-up doesn't hard-fail:
-        #   1. resolvconf present  -> use the standard `DNS =` line (unchanged
-        #      behavior for Debian/Ubuntu/Fedora/SUSE).
-        #   2. resolvectl present  -> drive systemd-resolved directly via
-        #      PostUp/PostDown hooks. Each hook is guarded with `|| true` so a
-        #      DNS failure (e.g. systemd-resolved not running) never tears the
-        #      interface back down — the tunnel still comes up.
-        #   3. neither              -> bring the tunnel up without tunnel-managed
-        #      DNS and warn.
-        dns_directives = ""
-        if dns_servers:
-            if shutil.which("resolvconf"):
-                dns_csv = (
-                    ", ".join(dns_servers)
-                    if isinstance(dns_servers, list)
-                    else str(dns_servers)
-                )
-                dns_directives = f"DNS = {dns_csv}\n"
-            elif shutil.which("resolvectl"):
-                dns_list = (
-                    " ".join(dns_servers)
-                    if isinstance(dns_servers, list)
-                    else str(dns_servers)
-                )
-                dns_directives = (
-                    f"PostUp = resolvectl dns %i {dns_list} || true\n"
-                    f"PostUp = resolvectl domain %i ~. || true\n"
-                    f"PostDown = resolvectl revert %i || true\n"
-                )
-            else:
-                logger.warning(
-                    "Neither resolvconf nor resolvectl found; bringing up VPN "
-                    "without tunnel-managed DNS."
-                )
+        # Convert DNS array to comma-separated string
+        dns_str = (
+            ", ".join(dns_servers)
+            if isinstance(dns_servers, list)
+            else str(dns_servers)
+        )
 
-        # Build WireGuard config content
+        # Build WireGuard config content. The canonical `DNS =` directive is
+        # stored here; host-specific DNS compatibility (resolvconf vs
+        # resolvectl) is applied at bring-up time in start_vpn().
         config_content = f"""[Interface]
 PrivateKey = {private_key}
 Address = {client_address}
-{dns_directives}
+DNS = {dns_str}
+
 [Peer]
 PublicKey = {server_public_key}
 AllowedIPs = {allowed_ips_str}
@@ -433,6 +405,80 @@ def stop_vpn(config_path):
         return False
 
 
+def make_dns_compatible_config(config_path):
+    """
+    Return a path to a WireGuard config whose DNS handling works on this host.
+
+    wg-quick's `DNS =` directive shells out to `resolvconf`, which isn't present
+    on every distro (e.g. Arch without the systemd-resolvconf package). When
+    resolvconf is missing, rewrite the `DNS =` line into systemd-resolved
+    `resolvectl` PostUp/PostDown hooks — each guarded with `|| true` so a DNS
+    failure never tears the tunnel back down — or drop it entirely if neither
+    tool exists. When resolvconf is present the config is used unchanged.
+
+    The (possibly rewritten) config is written alongside the original; the
+    user's stored config is never modified. Returns the original path if no
+    rewrite is needed or on any error.
+    """
+    try:
+        with open(config_path, "r") as config_file:
+            lines = config_file.readlines()
+    except OSError as e:
+        logger.warning(f"Could not read config for DNS compatibility check: {e}")
+        return config_path
+
+    def is_dns_line(line):
+        stripped = line.strip()
+        return stripped.lower().startswith("dns") and "=" in stripped
+
+    dns_values = []
+    for line in lines:
+        if is_dns_line(line):
+            _, _, value = line.strip().partition("=")
+            dns_values = [d.strip() for d in value.replace(",", " ").split() if d.strip()]
+            break
+
+    # No DNS directive, or resolvconf is available -> use config as-is.
+    if not dns_values or shutil.which("resolvconf"):
+        return config_path
+
+    if shutil.which("resolvectl"):
+        dns_list = " ".join(dns_values)
+        replacement = [
+            f"PostUp = resolvectl dns %i {dns_list} || true\n",
+            "PostUp = resolvectl domain %i ~. || true\n",
+            "PostDown = resolvectl revert %i || true\n",
+        ]
+        logger.info("resolvconf not found; using resolvectl for tunnel DNS")
+    else:
+        replacement = []
+        logger.warning(
+            "Neither resolvconf nor resolvectl found; bringing up VPN without "
+            "tunnel-managed DNS."
+        )
+
+    new_lines = []
+    for line in lines:
+        if is_dns_line(line):
+            new_lines.extend(replacement)
+        else:
+            new_lines.append(line)
+
+    iface = os.path.splitext(os.path.basename(config_path))[0]
+    compat_path = os.path.join(
+        os.path.dirname(config_path), f".{iface}.compat.conf"
+    )
+    try:
+        with open(compat_path, "w") as compat_file:
+            compat_file.writelines(new_lines)
+        os.chmod(compat_path, 0o600)
+    except OSError as e:
+        logger.error(f"Failed to write DNS-compatible config: {e}")
+        return config_path
+
+    return compat_path
+
+
 def start_vpn(config_path):
     """
     Start the WireGuard VPN service with a specified configuration.
@@ -443,10 +489,13 @@ def start_vpn(config_path):
     try:
         iface = os.path.splitext(os.path.basename(config_path))[0]
         etc_conf = f"/etc/wireguard/{iface}.conf"
+        # Adapt DNS handling to whatever this host provides (resolvconf vs
+        # resolvectl) so wg-quick doesn't fail on a missing resolvconf.
+        src_conf = make_dns_compatible_config(config_path)
         # Copy into /etc/wireguard/ first — Ubuntu's AppArmor profile for
         # wg-quick only permits reading configs from that directory.
         script = (
-            f"cp '{config_path}' '{etc_conf}' && "
+            f"cp '{src_conf}' '{etc_conf}' && "
             f"chmod 600 '{etc_conf}' && "
             f"wg-quick up '{iface}'"
         )
