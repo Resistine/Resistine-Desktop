@@ -51,7 +51,9 @@ def run_privileged_command(command_args):
     :param command_args: List of command arguments (e.g., ["wg", "show"])
     :return: subprocess.CompletedProcess or None if failed
     """
-    # Try pkexec first (standard GUI way)
+    # Try pkexec first (standard GUI way). When pkexec is available it drives
+    # the system polkit prompt, which already handles authentication — so we do
+    # NOT pop a second, in-app sudo password dialog on top of it.
     if shutil.which("pkexec"):
         try:
             # Resolve absolute path for the command
@@ -70,14 +72,23 @@ def run_privileged_command(command_args):
                 text=True,
             )
         except subprocess.CalledProcessError as e:
+            # pkexec executed and the privileged command (or the auth prompt)
+            # returned non-zero. Authentication was already handled by the
+            # system polkit agent, so re-prompting with an in-app sudo dialog
+            # would just run the same command again and double-prompt the user.
+            # Report the failure instead of falling back.
             error_msg = e.stderr.strip() or e.stdout.strip() or "No output"
-            logger.warning(
-                f"pkexec failed (code {e.returncode}): {error_msg}. Falling back to sudo."
+            logger.error(
+                f"Privileged command failed under pkexec (code {e.returncode}): {error_msg}"
             )
+            return None
         except Exception as e:
-            logger.warning(f"pkexec error: {e}. Falling back to sudo.")
+            # pkexec itself could not be executed (e.g. missing polkit agent).
+            # Only in this case do we fall back to the sudo password dialog.
+            logger.warning(f"pkexec could not run: {e}. Falling back to sudo.")
 
-    # Fallback to sudo with GUI password prompt
+    # Fallback to sudo with GUI password prompt (only reached when pkexec is
+    # unavailable or failed to execute at all)
     logger.info("Falling back to sudo with themed password prompt")
 
     dialog = CTkPasswordDialog(
