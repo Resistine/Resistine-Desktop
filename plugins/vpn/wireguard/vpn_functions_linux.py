@@ -263,19 +263,49 @@ def parse_and_create_vpn_config(vpn_config_json_string, config_name="resistine")
             else str(allowed_ips)
         )
 
-        # Convert DNS array to comma-separated string
-        dns_str = (
-            ", ".join(dns_servers)
-            if isinstance(dns_servers, list)
-            else str(dns_servers)
-        )
+        # DNS handling. wg-quick's built-in `DNS =` directive shells out to
+        # `resolvconf`, which isn't present on every distro (e.g. Arch without
+        # the systemd-resolvconf package). Pick the mechanism that's actually
+        # available so tunnel bring-up doesn't hard-fail:
+        #   1. resolvconf present  -> use the standard `DNS =` line (unchanged
+        #      behavior for Debian/Ubuntu/Fedora/SUSE).
+        #   2. resolvectl present  -> drive systemd-resolved directly via
+        #      PostUp/PostDown hooks. Each hook is guarded with `|| true` so a
+        #      DNS failure (e.g. systemd-resolved not running) never tears the
+        #      interface back down — the tunnel still comes up.
+        #   3. neither              -> bring the tunnel up without tunnel-managed
+        #      DNS and warn.
+        dns_directives = ""
+        if dns_servers:
+            if shutil.which("resolvconf"):
+                dns_csv = (
+                    ", ".join(dns_servers)
+                    if isinstance(dns_servers, list)
+                    else str(dns_servers)
+                )
+                dns_directives = f"DNS = {dns_csv}\n"
+            elif shutil.which("resolvectl"):
+                dns_list = (
+                    " ".join(dns_servers)
+                    if isinstance(dns_servers, list)
+                    else str(dns_servers)
+                )
+                dns_directives = (
+                    f"PostUp = resolvectl dns %i {dns_list} || true\n"
+                    f"PostUp = resolvectl domain %i ~. || true\n"
+                    f"PostDown = resolvectl revert %i || true\n"
+                )
+            else:
+                logger.warning(
+                    "Neither resolvconf nor resolvectl found; bringing up VPN "
+                    "without tunnel-managed DNS."
+                )
 
         # Build WireGuard config content
         config_content = f"""[Interface]
 PrivateKey = {private_key}
 Address = {client_address}
-DNS = {dns_str}
-
+{dns_directives}
 [Peer]
 PublicKey = {server_public_key}
 AllowedIPs = {allowed_ips_str}
