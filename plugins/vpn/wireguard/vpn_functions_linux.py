@@ -442,7 +442,19 @@ def make_dns_compatible_config(config_path):
     if not dns_values or shutil.which("resolvconf"):
         return config_path
 
-    if shutil.which("resolvectl"):
+    def resolved_active():
+        try:
+            return (
+                subprocess.run(
+                    ["systemctl", "is-active", "--quiet", "systemd-resolved"]
+                ).returncode
+                == 0
+            )
+        except Exception:
+            return False
+
+    if shutil.which("resolvectl") and resolved_active():
+        # systemd-resolved is running: set per-link DNS the clean way.
         dns_list = " ".join(dns_values)
         replacement = [
             f"PostUp = resolvectl dns %i {dns_list} || true\n",
@@ -451,10 +463,20 @@ def make_dns_compatible_config(config_path):
         ]
         logger.info("resolvconf not found; using resolvectl for tunnel DNS")
     else:
-        replacement = []
-        logger.warning(
-            "Neither resolvconf nor resolvectl found; bringing up VPN without "
-            "tunnel-managed DNS."
+        # No resolvconf and no active systemd-resolved (e.g. a plain
+        # NetworkManager host). Manage /etc/resolv.conf directly for the
+        # lifetime of the tunnel: back it up on up, restore it on down. Guarded
+        # with `|| true` so a write failure never tears the tunnel down.
+        ns_block = "".join(f"nameserver {d}\\n" for d in dns_values)
+        backup = "/etc/resolv.conf.wg-%i.bak"
+        replacement = [
+            f"PostUp = cp -fp /etc/resolv.conf '{backup}' 2>/dev/null || true\n",
+            f"PostUp = printf '{ns_block}' > /etc/resolv.conf 2>/dev/null || true\n",
+            f"PostDown = mv -f '{backup}' /etc/resolv.conf 2>/dev/null || true\n",
+        ]
+        logger.info(
+            "resolvconf and systemd-resolved unavailable; managing "
+            "/etc/resolv.conf directly for tunnel DNS"
         )
 
     new_lines = []
