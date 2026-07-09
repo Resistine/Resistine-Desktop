@@ -164,6 +164,11 @@ class Plugin(BasePlugin):
             return "Error"
         return "Warning"
 
+    def on_theme_changed(self):
+        """Rebuild the Wazuh screen on theme toggle."""
+        if getattr(self, "app", None):
+            self.app.update_plugin(self.id)
+
     # ── Main screen ────────────────────────────────────────────────────
 
     def create_main_screen(self):
@@ -239,7 +244,7 @@ class Plugin(BasePlugin):
         body.addSpacing(4)
         div = QFrame()
         div.setFixedHeight(1)
-        div.setStyleSheet(f"background-color: {theme.color('divider')};")
+        div.setObjectName("Divider")
         body.addWidget(div)
         body.addSpacing(4)
 

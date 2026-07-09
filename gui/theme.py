@@ -118,6 +118,7 @@ QLabel {{ background: transparent; }}
    paint a darker rectangle inside a lighter card) by setObjectName("Transparent").
    ID selector beats the QWidget type rule above. */
 #Transparent {{ background: transparent; }}
+#Divider {{ background-color: {c('divider')}; border: none; }}
 QToolTip {{
     background-color: {c('card_bg')}; color: {c('text_primary')};
     border: 1px solid {c('border')}; border-radius: 6px; padding: 4px 8px;

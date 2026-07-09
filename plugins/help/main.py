@@ -113,7 +113,7 @@ class Plugin(BasePlugin):
         outer.addSpacing(12)
         div = QFrame()
         div.setFixedHeight(1)
-        div.setStyleSheet(f"background-color: {theme.color('divider')};")
+        div.setObjectName("Divider")
         outer.addWidget(div)
         outer.addSpacing(12)
 

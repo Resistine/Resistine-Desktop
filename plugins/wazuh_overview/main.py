@@ -997,6 +997,7 @@ class Plugin(BasePlugin):
         self._vuln_donut_wedges = []     # (wedge_artist, severity) pairs
         self._vuln_cvss_fig = None
         self._vuln_cvss_canvas = None
+        self._vuln_cvss_ax = None
         self._vuln_rows_layout = None
         self._vuln_row_frames = {}
         self._vuln_detail_holder = None
@@ -1019,8 +1020,57 @@ class Plugin(BasePlugin):
     def check_status(self):
         return None
 
+    def on_theme_changed(self):
+        """Rebuild the Wazuh Overview screen on theme toggle to re-render charts and colors."""
+        if getattr(self, "app", None):
+            self.app.update_plugin(self.id)
+
     # ----- screen scaffold ---------------------------------------------------
     def create_main_screen(self):
+        self._cancel_pending_ui_callbacks()
+        self._tabs = None
+        self._tab_built = {name: False for name in _TAB_NAMES}
+        self._tab_pages = {}
+
+        self._overview_poll_token = None
+        self._device_holder = None
+        self._alert_holder = None
+        self._module_grid = None
+        self._refresh_button = None
+
+        self._ev_page_widget = None
+        self._ev_search = None
+        self._ev_count_label = None
+        self._ev_pill_labels = {}
+        self._ev_rows_layout = None
+        self._ev_row_frames = {}
+        self._ev_detail_holder = None
+        self._ev_pager_holder = None
+        self._ev_chart_canvas = None
+        self._ev_chart_fig = None
+        self._ev_chart_ax = None
+
+        self._vuln_page_widget = None
+        self._vuln_search = None
+        self._vuln_count_label = None
+        self._vuln_severity_filter = None
+        self._vuln_donut_fig = None
+        self._vuln_donut_canvas = None
+        self._vuln_donut_ax = None
+        self._vuln_cvss_fig = None
+        self._vuln_cvss_canvas = None
+        self._vuln_cvss_ax = None
+        self._vuln_rows_layout = None
+        self._vuln_row_frames = {}
+        self._vuln_detail_holder = None
+        self._vuln_pager_holder = None
+
+        self._inv_page_widget = None
+        self._inv_count_label = None
+        self._inv_rows_layout = None
+        self._inv_pager_holder = None
+        self._inv_body_holder = None
+
         root = QWidget()
         root.setObjectName("Transparent")
         outer = QVBoxLayout(root)
@@ -1042,7 +1092,8 @@ class Plugin(BasePlugin):
             "border-top-left-radius:8px;border-top-right-radius:8px;font-size:14px;}"
             "QTabBar::tab:selected{"
             f"color:{theme.color('text_primary')};font-weight:600;"
-            f"border-bottom:2px solid {theme.color('accent')};}}"
+            f"border-bottom:2px solid {theme.color('accent')};"
+            "}"
             f"QTabBar::tab:hover{{background:{theme.color('sidebar_hover_bg')};}}"
         )
         for name in _TAB_NAMES:
@@ -1287,7 +1338,7 @@ class Plugin(BasePlugin):
         # Divider
         divider = QFrame()
         divider.setFixedHeight(1)
-        divider.setStyleSheet(f"background-color:{theme.color('divider')};border:none;")
+        divider.setObjectName("Divider")
         lay.addWidget(divider)
 
         # Bottom: facts row
@@ -2009,7 +2060,7 @@ class Plugin(BasePlugin):
 
         divider = QFrame()
         divider.setFixedHeight(1)
-        divider.setStyleSheet(f"background-color:{theme.color('divider')};border:none;")
+        divider.setObjectName("Divider")
         cl.addWidget(divider)
 
         cl.addWidget(_label("RAW LOG", size=10, bold=True, secondary=True))
@@ -2303,7 +2354,9 @@ class Plugin(BasePlugin):
         fig, canvas, ax = charts.make_canvas(card, (5.5, 2.2), facecolor=ct["bg"])
         canvas.setMinimumHeight(160)
         canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._vuln_cvss_fig, self._vuln_cvss_canvas = fig, canvas
+        fig.patch.set_facecolor(ct["bg"])
+        ax.set_facecolor(ct["bg"])
+        self._vuln_cvss_fig, self._vuln_cvss_canvas, self._vuln_cvss_ax = fig, canvas, ax
 
         buckets, counts = self._bucket_vulns_daily()
         x = list(range(len(buckets)))
@@ -2656,7 +2709,7 @@ class Plugin(BasePlugin):
 
         divider = QFrame()
         divider.setFixedHeight(1)
-        divider.setStyleSheet(f"background-color:{theme.color('divider')};border:none;")
+        divider.setObjectName("Divider")
         cl.addWidget(divider)
 
         cl.addWidget(_label("DESCRIPTION", size=10, bold=True, secondary=True))
@@ -2875,7 +2928,7 @@ class Plugin(BasePlugin):
 
         divider = QFrame()
         divider.setFixedHeight(1)
-        divider.setStyleSheet(f"background-color:{theme.color('divider')};border:none;")
+        divider.setObjectName("Divider")
         cl.addWidget(divider)
 
         # Body (column header + list) — rebuilt in place on view/group/page change.
@@ -3050,7 +3103,7 @@ class Plugin(BasePlugin):
         h.addWidget(self._pager_button("▶", current < total_pages, lambda: on_set_page(current + 1)))
 
     # ----- lifecycle ---------------------------------------------------------
-    def destroy(self):
+    def _cancel_pending_ui_callbacks(self):
         for token_attr in ("_overview_poll_token", "_ev_ready_token", "_ev_search_token",
                            "_vuln_ready_token", "_vuln_search_token", "_inv_ready_token"):
             token = getattr(self, token_attr, None)
@@ -3060,3 +3113,6 @@ class Plugin(BasePlugin):
                 except Exception:
                     pass
                 setattr(self, token_attr, None)
+
+    def destroy(self):
+        self._cancel_pending_ui_callbacks()

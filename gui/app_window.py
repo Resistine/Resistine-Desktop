@@ -147,7 +147,7 @@ class AppWindow(QMainWindow):
         sb.addWidget(self._logo_widget())
         divider = QFrame()
         divider.setFixedHeight(1)
-        divider.setStyleSheet(f"background-color: {theme.color('divider')};")
+        divider.setObjectName("Divider")
         sb.addSpacing(8)
         sb.addWidget(divider)
         sb.addSpacing(8)
@@ -321,6 +321,14 @@ class AppWindow(QMainWindow):
             p = self._plugin_by_name(name)
             if p is not None:
                 btn.setIcon(p.get_icon())
+
+        # Notify plugins of the theme change so they can update custom-coloured UI
+        for p in self.plugins:
+            if hasattr(p, "on_theme_changed"):
+                try:
+                    p.on_theme_changed()
+                except Exception as e:
+                    logger.error(f"Plugin {p.get_name()} on_theme_changed error: {e}")
 
     def apply_theme(self, resolved: str) -> None:
         theme.set_mode(resolved)

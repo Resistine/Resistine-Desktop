@@ -53,7 +53,7 @@ def section_title(text: str) -> QLabel:
 def divider() -> QFrame:
     div = QFrame()
     div.setFixedHeight(1)
-    div.setStyleSheet(f"background-color: {theme.color('divider')};")
+    div.setObjectName("Divider")
     return div
 
 

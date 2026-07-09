@@ -77,7 +77,7 @@ class Plugin(BasePlugin):
         lay.addWidget(lbl)
         div = QFrame()
         div.setFixedHeight(1)
-        div.setStyleSheet(f"background-color: {theme.color('divider')};")
+        div.setObjectName("Divider")
         lay.addWidget(div)
         lay.addSpacing(4)
         return card, lay

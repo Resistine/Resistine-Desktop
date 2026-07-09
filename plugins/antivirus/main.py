@@ -289,6 +289,11 @@ class Plugin(BasePlugin):
             return "Error"
         return "Warning"
 
+    def on_theme_changed(self):
+        """Rebuild the AV screen on theme toggle to re-evaluate hardcoded colours."""
+        if getattr(self, "app", None):
+            self.app.update_plugin(self.id)
+
     def _is_active_screen(self):
         try:
             return getattr(self.app, "_current_main_screen", None) is (

@@ -310,6 +310,11 @@ class Plugin(BasePlugin):
             return "Info"
         return "Warning"
 
+    def on_theme_changed(self):
+        """Rebuild the VPN screen on theme toggle to re-evaluate the _pick() colours."""
+        if getattr(self, "app", None):
+            self.app.update_plugin(self.id)
+
     @staticmethod
     def validate_wireguard_config(content):
         """Validate that content is a well-formed WireGuard config.
@@ -863,9 +868,7 @@ class Plugin(BasePlugin):
         g.setContentsMargins(14, 14, 14, 8)
         div = QFrame()
         div.setFixedHeight(1)
-        div.setStyleSheet(
-            f"background-color: {_pick('#E0E0E0', '#2A2A2A')}; border: none;"
-        )
+        div.setObjectName("Divider")
         g.addWidget(div, row + 1, 0, 1, 2)
         # Spacer between the title/divider and the content rows. Its height is
         # assigned later by _rebalance_padding() to an EQUAL value across every
