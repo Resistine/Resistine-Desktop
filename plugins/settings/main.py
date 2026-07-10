@@ -214,7 +214,7 @@ class Plugin(BasePlugin):
 
         existing_base = settings.get("chat", "openai_base_url")
         self.api_base_entry.insert(
-            0, existing_base or "http://dashboard.resisti.net:8001/v1",
+            0, existing_base or "https://dashboard.resisti.net:8002/v1",
         )
 
         # Disable Typing Animation Checkbox

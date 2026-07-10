@@ -76,6 +76,9 @@ $RECYCLE.BIN/
 utils/email-settings.txt
 *.key
 *.pem
+# Public internal root CA (no private key) — bundled so the chat plugin can
+# verify the leaf-only dashboard cert. Exempted from the *.pem secret guard.
+!resources/certs/resistine-rootCA.pem
 *.p12
 *.env
 .env.*
