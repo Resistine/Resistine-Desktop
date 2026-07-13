@@ -786,10 +786,10 @@ class Plugin(BasePlugin):
         self._vpn_outer_grid = grid
         self._vpn_scroll = self.main_container
         _orig_resize = self.main_container.resizeEvent
-
+        self._rebalance_padding() # unconditional cuz revisiting from theme change doesn't resize
         def _on_resize(event, _o=_orig_resize):
             _o(event)
-            self._rebalance_padding()
+            self._rebalance_padding() # rebalance on a resize too or it WILL misalign itself
 
         self.main_container.resizeEvent = _on_resize
         self.app.after(0, self._rebalance_padding)
