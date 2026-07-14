@@ -681,6 +681,45 @@ def _wazuh_start() -> bool:
         return False
 
 
+# Human-readable messages for Wazuh installer failure reasons. Mirrors the
+# mapping the Endpoint plugin's own UI uses (plugins/wazuh/main.py) so the
+# wizard explains failures the same clear way instead of "didn't finish".
+_WZ_REASON_MSG = {
+    "user_canceled": "The install was cancelled.",
+    "script_failed": "The installer hit an error. You can try again or skip.",
+    "pkg_corrupted": "The downloaded package was corrupted. Try again to re-download.",
+    "no_status_file": "The install was interrupted. Try again.",
+    "dns_failed": "Couldn't reach the download server. Check your connection and try again.",
+    "network_timeout": "The download timed out. Check your connection and try again.",
+    "signature_invalid": "The package failed signature verification. Try again to re-download.",
+    "duplicate_name": (
+        "This device is already registered on the monitoring server. "
+        "Try again to enroll under a new identifier."
+    ),
+    "manager_unreachable": (
+        "Couldn't reach the monitoring server. Make sure the VPN is connected, "
+        "then try again."
+    ),
+    "enroll_failed": (
+        "Enrollment with the monitoring server failed. Make sure the VPN is "
+        "connected, then try again."
+    ),
+}
+
+
+def _wazuh_reason_message(reason) -> str:
+    """Turn a Wazuh installer failure_reason into a clear, actionable message."""
+    if reason and reason.startswith("enroll_rc_"):
+        rc = reason[len("enroll_rc_"):]
+        return (f"Enrollment with the monitoring server failed (code {rc}). "
+                "Make sure the VPN is connected, then try again.")
+    if reason in _WZ_REASON_MSG:
+        return _WZ_REASON_MSG[reason]
+    if reason:
+        return f"Endpoint setup didn't finish ({reason}). You can try again or skip."
+    return "Endpoint setup didn't finish. You can try again or skip."
+
+
 def _maybe_forward_clamav(on_status):
     """Best-effort: once the agent is running, forward ClamAV logs to it if
     ClamAV is also set up. Never fails the endpoint step."""
@@ -741,12 +780,18 @@ class _EndpointStepMac(SetupStep):
             STATE_DOWNLOAD_FAILED,
             STATE_ENROLL_FAILED,
             STATE_INSTALL_FAILED,
+            get_failure_reason,
             get_install_state,
         )
-        if get_install_state() in (
+        state = get_install_state()
+        if state in (
             STATE_DOWNLOAD_FAILED, STATE_INSTALL_FAILED, STATE_ENROLL_FAILED,
         ):
-            return "Endpoint setup didn't finish. You can try again or skip."
+            reason = get_failure_reason()
+            if not self._logged_failure:
+                self._logged_failure = True
+                logger.error(f"[EP-SETUP] FAILED state={state} reason={reason!r}")
+            return _wazuh_reason_message(reason)
         return None
 
     def begin(self, on_status):
@@ -772,7 +817,8 @@ class _EndpointStepMac(SetupStep):
                     if state in (wz.STATE_INSTALLED, wz.STATE_READY):
                         break
                     if state == wz.STATE_DOWNLOAD_FAILED:
-                        self._failed = "Couldn't download the endpoint agent. Check your connection and try again."
+                        self._failed = _wazuh_reason_message(
+                            wz.get_failure_reason() or "dns_failed")
                         return
                     time.sleep(2)
                 else:
@@ -784,7 +830,8 @@ class _EndpointStepMac(SetupStep):
             if not _wazuh_installed():
                 on_status("Approve the administrator prompt to install…")
                 if not wz.trigger_install(self.app):
-                    self._failed = "Endpoint install was cancelled. You can try again or skip."
+                    self._failed = _wazuh_reason_message(
+                        wz.get_failure_reason() or "user_canceled")
                     return
                 _STEPS = {
                     "install_pkg": "Installing package…",
@@ -801,7 +848,10 @@ class _EndpointStepMac(SetupStep):
                         on_status(_STEPS.get(step, "Installing…"))
                     if result.get("finished"):
                         if not result.get("success"):
-                            self._failed = "Endpoint setup didn't finish. You can try again or skip."
+                            reason = wz.get_failure_reason()
+                            logger.error(f"[EP-SETUP] install failed reason={reason!r} "
+                                         f"result={result}")
+                            self._failed = _wazuh_reason_message(reason)
                             return
                         break
                     time.sleep(2)
