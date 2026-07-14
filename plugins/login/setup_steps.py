@@ -727,6 +727,45 @@ def _wazuh_start() -> bool:
         return False
 
 
+def _wazuh_connection() -> str:
+    """Live manager-connection status: connected/pending/disconnected/unknown.
+    Distinct from _wazuh_running() (which only checks the daemon process)."""
+    try:
+        m = _wazuh_mod()
+        return m.get_agent_connection() if m else "unknown"
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+def _wazuh_reenroll(on_status) -> bool:
+    """Recover a dead/duplicate enrollment (the enroll_rc_* case, common after a
+    reinstall): wipe the key + backups, enroll under a fresh unique name, and
+    restart. One admin prompt. Returns True if the agent is running afterward.
+    Worker thread only."""
+    import time
+    m = _wazuh_mod()
+    if not (m and hasattr(m, "reenroll_agent")):
+        logger.warning("[EP-SETUP] reenroll_agent unavailable on this platform")
+        return False
+    on_status("Reconnecting to the monitoring server…")
+    logger.info("[EP-SETUP] reenroll_agent()")
+    try:
+        ok, msg = m.reenroll_agent()
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"[EP-SETUP] reenroll_agent error: {e}")
+        return False
+    logger.info(f"[EP-SETUP] reenroll_agent -> {ok} ({msg})")
+    if not ok:
+        return False
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        if _wazuh_running():
+            logger.info(f"[EP-SETUP] re-enrolled; connection={_wazuh_connection()}")
+            return True
+        time.sleep(2)
+    return _wazuh_running()
+
+
 # Human-readable messages for Wazuh installer failure reasons. Mirrors the
 # mapping the Endpoint plugin's own UI uses (plugins/wazuh/main.py) so the
 # wizard explains failures the same clear way instead of "didn't finish".
@@ -816,8 +855,13 @@ class _EndpointStepMac(SetupStep):
     working_label = "Installing endpoint agent…"
 
     def is_complete(self) -> bool:
-        # Must be installed AND running — the flow leaves monitoring active.
-        return _wazuh_installed() and _wazuh_running()
+        # Installed AND running AND not a confirmed disconnect. "disconnected"
+        # means the daemon is alive but the manager rejected its key (the
+        # enroll_rc_* / reinstalled-dead-key case) — not done until re-enrolled.
+        # pending/unknown are treated as OK so the step never hangs on a slow or
+        # unreadable state file.
+        return (_wazuh_installed() and _wazuh_running()
+                and _wazuh_connection() != "disconnected")
 
     def check_failed(self):
         if self._failed:
@@ -851,12 +895,16 @@ class _EndpointStepMac(SetupStep):
         self._failed = None
 
         def _work():
+            needs_reenroll = False
+
             # Phase 1: package download (kicked off at login; wait for it).
             if not _wazuh_installed():
                 wz.ensure_download_started()
                 on_status("Downloading endpoint agent…")
                 deadline = time.time() + 180
                 while time.time() < deadline:
+                    if self.cancelled():
+                        return
                     state = wz.get_install_state()
                     if state == wz.STATE_DOWNLOADED:
                         break
@@ -888,25 +936,58 @@ class _EndpointStepMac(SetupStep):
                     "done": "Finishing up…",
                 }
                 while True:
+                    if self.cancelled():
+                        return
                     result = wz.poll_install_progress()
                     step = result.get("step", "")
                     if step:
                         on_status(_STEPS.get(step, "Installing…"))
                     if result.get("finished"):
                         if not result.get("success"):
-                            reason = wz.get_failure_reason()
+                            reason = wz.get_failure_reason() or ""
                             logger.error(f"[EP-SETUP] install failed reason={reason!r} "
                                          f"result={result}")
+                            # A pure ENROLLMENT failure (enroll_rc_*, duplicate
+                            # name, manager unreachable) leaves the package
+                            # installed — recover by re-enrolling under a fresh
+                            # identity instead of dead-ending. Anything else
+                            # (download/pkg/script) is a real install failure.
+                            enroll_like = (reason.startswith("enroll")
+                                           or reason in ("duplicate_name",
+                                                         "manager_unreachable"))
+                            if enroll_like and _wazuh_installed():
+                                logger.info("[EP-SETUP] enrollment failed but pkg "
+                                            "installed — will re-enroll")
+                                needs_reenroll = True
+                                break
                             self._failed = _wazuh_reason_message(reason)
                             return
                         break
                     time.sleep(2)
 
-            # Phase 4: make sure the agent is actually running.
-            if not _wazuh_activate(on_status, self.cancelled):
-                self._failed = ("Endpoint agent installed but isn't running yet. "
-                                "You can start it from the Endpoint page, or skip.")
-                return
+            # Phase 4: get the agent running AND connected to the manager.
+            if needs_reenroll:
+                # Skip the pointless start-with-dead-key; re-enroll directly.
+                if not _wazuh_reenroll(on_status):
+                    self._failed = (
+                        "Couldn't enroll the endpoint agent with the monitoring "
+                        "server. Make sure the VPN is connected, then try again.")
+                    return
+            else:
+                if not _wazuh_activate(on_status, self.cancelled):
+                    # Can't even start — a dead key can't be fixed by a restart,
+                    # so fall back to a fresh enrollment.
+                    if not _wazuh_reenroll(on_status):
+                        self._failed = ("Endpoint agent installed but isn't running "
+                                        "yet. You can start it from the Endpoint "
+                                        "page, or skip.")
+                        return
+                elif _wazuh_connection() == "disconnected":
+                    # Running but the manager rejected the key (classic reinstall
+                    # dead-key). Recover by re-enrolling under a fresh identity.
+                    logger.info("[EP-SETUP] running but disconnected — re-enrolling")
+                    _wazuh_reenroll(on_status)
+
             # Phase 5: link ClamAV → Wazuh if antivirus is also set up.
             _maybe_forward_clamav(on_status)
 
@@ -929,8 +1010,10 @@ class _EndpointStepDirect(SetupStep):
     working_label = "Installing endpoint agent…"
 
     def is_complete(self) -> bool:
-        # Must be installed AND running — the flow leaves monitoring active.
-        return _wazuh_installed() and _wazuh_running()
+        # Installed AND running AND not a confirmed disconnect (dead key) — see
+        # _EndpointStepMac.is_complete for the reasoning.
+        return (_wazuh_installed() and _wazuh_running()
+                and _wazuh_connection() != "disconnected")
 
     def begin(self, on_status):
         # Windows/Linux full_install() returns only a bool, so classify the
@@ -956,20 +1039,26 @@ class _EndpointStepDirect(SetupStep):
                     self._failed = self._install_fail_message()
                     return
 
-            # Ensure the agent is actually running. On Windows/Linux a failed
-            # enrollment leaves the agent installed-but-not-running (agent-auth
-            # ran inside the privileged script but couldn't reach/register with
-            # the manager), so this is where enrollment failures surface.
+            # Ensure the agent is running. On Windows/Linux a failed enrollment
+            # leaves the agent installed-but-not-running (agent-auth ran inside
+            # the privileged script but couldn't register with the manager).
             if not _wazuh_activate(_status, self.cancelled):
                 logger.error("[EP-SETUP] agent not running after install; "
                              f"installed={_wazuh_installed()} "
                              f"last_progress={self._last_progress!r}")
-                self._failed = (
-                    "The endpoint agent installed but couldn't reach the "
-                    "monitoring server to finish enrolling. Make sure the VPN is "
-                    "connected, then try again."
-                )
-                return
+                # A dead key survives a restart — recover with a fresh enrollment.
+                if not _wazuh_reenroll(_status):
+                    self._failed = (
+                        "The endpoint agent installed but couldn't reach the "
+                        "monitoring server to finish enrolling. Make sure the VPN "
+                        "is connected, then try again."
+                    )
+                    return
+            elif _wazuh_connection() == "disconnected":
+                # Running but the manager rejected the key (reinstall dead-key) —
+                # re-enroll under a fresh identity to recover.
+                logger.info("[EP-SETUP] running but disconnected — re-enrolling")
+                _wazuh_reenroll(_status)
             # Link ClamAV → Wazuh if antivirus is also set up.
             _maybe_forward_clamav(_status)
         self._run_bg(_work)
