@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 from gui.dialogs import CTkPasswordDialog
 from utils.i18n import get_text
@@ -492,12 +493,14 @@ def make_dns_compatible_config(config_path):
         else:
             new_lines.append(line)
 
+    # Write the adapted config to a short-lived temp file rather than a
+    # persistent dotfile next to the user's config. start_vpn copies it into
+    # /etc/wireguard and then deletes it (see _is_temp_compat), so nothing is
+    # left behind in ~/.config/resistine/wireguard.
     iface = os.path.splitext(os.path.basename(config_path))[0]
-    compat_path = os.path.join(
-        os.path.dirname(config_path), f".{iface}.compat.conf"
-    )
     try:
-        with open(compat_path, "w") as compat_file:
+        fd, compat_path = tempfile.mkstemp(prefix=f"{iface}-", suffix=".conf")
+        with os.fdopen(fd, "w") as compat_file:
             compat_file.writelines(new_lines)
         os.chmod(compat_path, 0o600)
     except OSError as e:
@@ -505,6 +508,11 @@ def make_dns_compatible_config(config_path):
         return config_path
 
     return compat_path
+
+
+def _is_temp_compat(src_conf, config_path):
+    """True if make_dns_compatible_config produced a throwaway temp file."""
+    return src_conf != config_path
 
 
 def start_vpn(config_path):
@@ -527,7 +535,16 @@ def start_vpn(config_path):
             f"chmod 600 '{etc_conf}' && "
             f"wg-quick up '{iface}'"
         )
-        result = run_privileged_command(["sh", "-c", script])
+        try:
+            result = run_privileged_command(["sh", "-c", script])
+        finally:
+            # Clean up the throwaway DNS-compat temp file (contains the private
+            # key), regardless of success/failure.
+            if _is_temp_compat(src_conf, config_path):
+                try:
+                    os.remove(src_conf)
+                except OSError:
+                    pass
         return result is not None and result.returncode == 0
     except Exception as e:
         logger.error(f"Failed to start VPN service: {e}")
