@@ -213,6 +213,28 @@ class Plugin(BasePlugin):
             # If the bundled extension is newer than the installed one, macOS
             # prompts for replacement — preventing stale-extension XPC failures.
             self.app.after(1000, self._activate_extension_if_needed)
+            # Debug-mode convenience: auto-connect the VPN so VPN-gated
+            # features (chat, wazuh_overview) work without a manual toggle.
+            # Scheduled after extension activation has had time to settle.
+            if os.environ.get("RESISTINE_DEBUG") == "1":
+                self.app.after(3000, self._debug_auto_connect)
+
+    def _debug_auto_connect(self):
+        """Auto-start the VPN on launch in debug mode (macOS dev flow).
+
+        Skips silently when the tunnel is already up; skips with a log
+        line when no config has been imported yet. activate_tunnel()
+        itself handles the extension-disabled case with a notification.
+        """
+        if my_vpn_status == "Running":
+            return
+        tunnel = self.get_selected_conf_file_name()
+        if not tunnel:
+            logger.warning(
+                "Debug auto-connect skipped: no VPN config found")
+            return
+        logger.info(f"Debug mode: auto-connecting VPN tunnel {tunnel}")
+        self.activate_tunnel(tunnel)
 
     def _activate_extension_if_needed(self):
         """Request system extension activation (macOS only).
