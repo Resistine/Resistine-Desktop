@@ -47,6 +47,7 @@ class SetupStep:
     def __init__(self, app):
         self.app = app
         self._failed = None  # user-facing error string, or None
+        self._logged_failure = False  # dedupe one-time failure logging
 
     # ── Hooks ───────────────────────────────────────────────────────
     def is_applicable(self) -> bool:
@@ -204,19 +205,28 @@ class _AntivirusStepMac(SetupStep):
         "system-wide protection."
     )
     instructions = [
-        "Click “Enable Antivirus”.",
-        "Enter your administrator password when macOS asks.",
-        "Definitions download and protection turns on automatically.",
+        "Click “Enable Antivirus” and enter your administrator password.",
+        "If asked, enable the ClamAV items under System Settings ▸ General ▸ "
+        "Login Items & Extensions.",
+        "Protection turns on automatically once approved.",
     ]
     primary_label = "Enable Antivirus"
     working_label = "Setting up antivirus…"
 
     def is_complete(self) -> bool:
+        # STATE_COMPLETED means the admin install ran — but on macOS 13+ the
+        # daemons still sit in "Approval Required" until the user enables them
+        # in Login Items & Extensions. Only treat the step as done once the
+        # daemons are actually running (healthy/degraded), or once they're
+        # approved and only Full Disk Access remains (handled by the next step).
         from plugins.antivirus.installer_service import (
             STATE_COMPLETED,
+            get_runtime_state,
             get_setup_state,
         )
-        return get_setup_state() == STATE_COMPLETED
+        if get_setup_state() != STATE_COMPLETED:
+            return False
+        return get_runtime_state() in ("healthy", "degraded", "fda_required")
 
     def check_failed(self):
         if self._failed:
@@ -227,42 +237,81 @@ class _AntivirusStepMac(SetupStep):
             get_setup_state,
         )
         if get_setup_state() in (STATE_SEED_FAILED, STATE_INSTALL_FAILED):
-            return "Antivirus setup didn't finish. You can try again or skip."
+            return self._fail_msg("Antivirus setup didn't finish.")
         return None
+
+    def _fail_msg(self, prefix):
+        """Build a user-facing failure message that includes the installer's
+        recorded reason, and log the full reason+detail once for diagnosis."""
+        from plugins.antivirus.installer_service import (
+            get_failure_detail,
+            get_failure_reason,
+            get_setup_state,
+        )
+        reason = get_failure_reason() or "unknown"
+        detail = get_failure_detail() or ""
+        if not self._logged_failure:
+            self._logged_failure = True
+            logger.error(
+                f"[AV-SETUP] FAILED state={get_setup_state()} "
+                f"reason={reason} detail={detail!r}"
+            )
+        return f"{prefix} ({reason}) You can try again or skip."
 
     def begin(self, on_status):
         import time
         from plugins.antivirus import installer_service as av
 
+        self._logged_failure = False
+        state0 = av.get_setup_state()
+        logger.info(
+            f"[AV-SETUP] begin: setup_state={state0} "
+            f"runtime_state={self._safe_runtime()} "
+            f"prior_reason={av.get_failure_reason()!r} "
+            f"prior_detail={av.get_failure_detail()!r}"
+        )
+
         # A prior failed attempt leaves the state machine parked — reset it so
         # this run starts cleanly.
-        if av.get_setup_state() in (av.STATE_SEED_FAILED, av.STATE_INSTALL_FAILED):
+        if state0 in (av.STATE_SEED_FAILED, av.STATE_INSTALL_FAILED):
+            logger.info(f"[AV-SETUP] resetting parked state {state0} via retry()")
             av.retry()
         self._failed = None
 
         def _work():
             # Phase 1: virus definitions (seeded at login; wait for it).
+            logger.info("[AV-SETUP] phase 1: ensure_db_seed_started()")
             av.ensure_db_seed_started()
             on_status("Downloading virus definitions…")
             deadline = time.time() + 180
+            last = None
             while time.time() < deadline:
                 state = av.get_setup_state()
+                if state != last:
+                    logger.info(f"[AV-SETUP] phase 1 state -> {state}")
+                    last = state
                 if state == av.STATE_DB_READY:
                     break
                 if state == av.STATE_COMPLETED:
+                    logger.info("[AV-SETUP] already completed; nothing to do")
                     return  # already fully set up
                 if state == av.STATE_SEED_FAILED:
-                    self._failed = "Couldn't download virus definitions. Check your connection and try again."
+                    self._failed = self._fail_msg("Couldn't download virus definitions.")
                     return
                 time.sleep(2)
             else:
+                logger.error("[AV-SETUP] phase 1 TIMED OUT waiting for DB_READY "
+                             f"(last state={last})")
                 self._failed = "Downloading definitions timed out. You can try again or skip."
                 return
 
             # Phase 2: system install (admin prompt).
+            logger.info("[AV-SETUP] phase 2: trigger_system_setup() (admin prompt)")
             on_status("Approve the administrator prompt to enable protection…")
-            if not av.trigger_system_setup():
-                self._failed = "Antivirus setup was cancelled. You can try again or skip."
+            launched = av.trigger_system_setup()
+            logger.info(f"[AV-SETUP] trigger_system_setup() -> {launched}")
+            if not launched:
+                self._failed = self._fail_msg("Antivirus setup couldn't start.")
                 return
 
             # Phase 3: watch the install to completion.
@@ -272,18 +321,81 @@ class _AntivirusStepMac(SetupStep):
                 "register_daemons": "Registering protection service…",
                 "start_daemons": "Starting real-time protection…",
             }
+            logger.info("[AV-SETUP] phase 3: polling install progress")
+            last_step = None
             while True:
                 result = av.poll_setup_progress()
                 step = result.get("step", "")
-                if step:
+                if step and step != last_step:
+                    logger.info(f"[AV-SETUP] install step -> {step}")
+                    last_step = step
                     on_status(_STEPS.get(step, "Setting up antivirus…"))
                 if result.get("finished"):
-                    if not result.get("success"):
-                        self._failed = "Antivirus setup didn't finish. You can try again or skip."
-                    return
+                    logger.info(f"[AV-SETUP] install finished: {result}")
+                    if result.get("success"):
+                        logger.info("[AV-SETUP] admin install OK")
+                    else:
+                        # The admin postinstall can report failure while the
+                        # daemons are merely awaiting Login Items approval —
+                        # don't hard-fail if that's the real blocker.
+                        rt = self._safe_runtime()
+                        logger.warning(
+                            f"[AV-SETUP] install poll not success; runtime={rt}")
+                        if rt != av.RUNTIME_APPROVAL_REQUIRED:
+                            self._failed = self._fail_msg("Antivirus setup didn't finish.")
+                            return
+                    break
                 time.sleep(2)
 
+            # Phase 4: Login Items & Extensions approval (macOS 13+). After the
+            # admin install the ClamAV daemons are registered but sit in
+            # "Approval Required" until the user enables them. Open the pane and
+            # wait — this is the step the flow was missing.
+            logger.info("[AV-SETUP] phase 4: daemon approval")
+            opened = False
+            deadline = time.time() + 300
+            while time.time() < deadline:
+                rt = self._safe_runtime()
+                if rt in ("healthy", "degraded", "fda_required"):
+                    logger.info(f"[AV-SETUP] SUCCESS — protection active (runtime={rt})")
+                    return
+                if rt == av.RUNTIME_APPROVAL_REQUIRED:
+                    if not opened:
+                        logger.info("[AV-SETUP] opening Login Items & Extensions "
+                                    "for daemon approval")
+                        try:
+                            from plugins.antivirus import clamav
+                            clamav.open_login_items_settings()
+                        except Exception as e:  # noqa: BLE001
+                            logger.error(f"[AV-SETUP] open_login_items failed: {e}")
+                        opened = True
+                    on_status("Enable the ClamAV items in System Settings ▸ "
+                              "Login Items & Extensions to finish.")
+                else:  # offline — try to (re)register/start the daemons
+                    logger.info(f"[AV-SETUP] runtime={rt}; ensure_daemons_registered()")
+                    try:
+                        from plugins.antivirus import clamav
+                        clamav.ensure_daemons_registered()
+                    except Exception as e:  # noqa: BLE001
+                        logger.error(f"[AV-SETUP] ensure_daemons_registered failed: {e}")
+                    on_status("Starting real-time protection…")
+                time.sleep(2)
+
+            logger.error("[AV-SETUP] phase 4 TIMED OUT (runtime="
+                         f"{self._safe_runtime()})")
+            self._failed = ("Protection is installed but waiting for approval in "
+                            "Login Items & Extensions. You can finish this from the "
+                            "Antivirus page, or skip.")
+
         self._run_bg(_work)
+
+    @staticmethod
+    def _safe_runtime():
+        try:
+            from plugins.antivirus.installer_service import get_runtime_state
+            return get_runtime_state()
+        except Exception as e:  # noqa: BLE001
+            return f"<err:{e}>"
 
 
 class _AntivirusStepDefender(SetupStep):

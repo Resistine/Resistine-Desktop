@@ -155,11 +155,15 @@ class SetupWizardScreen:
         while self.index < len(self.steps):
             step = self.steps[self.index]
             if self._safe(step.is_complete, False):
+                logger.info(f"[SETUP] step '{step.key}' already complete — skipping")
                 self.results.setdefault(step.key, "done")
                 self.index += 1
                 continue
+            logger.info(f"[SETUP] showing step {self.index + 1}/{len(self.steps)}: "
+                        f"'{step.key}'")
             self._build_step(step)
             return
+        logger.info(f"[SETUP] all steps handled; results={self.results}")
         self._build_success()
 
     # ── Step screen ─────────────────────────────────────────────────
@@ -256,6 +260,7 @@ class SetupWizardScreen:
         if self._active:
             return
         step = self.steps[self.index]
+        logger.info(f"[SETUP] primary clicked for step '{step.key}' — begin()")
         self._active = True
         step._failed = None
         self._primary.configure(state="disabled", text=step.working_label)
@@ -288,12 +293,14 @@ class SetupWizardScreen:
         step = self.steps[self.index]
 
         if self._safe(step.is_complete, False):
+            logger.info(f"[SETUP] step '{step.key}' reported complete")
             self.results[step.key] = "done"
             self._on_step_done()
             return
 
         failure = self._safe(step.check_failed, None)
         if failure:
+            logger.error(f"[SETUP] step '{step.key}' failed: {failure}")
             self._show_failure(failure)
             return
 
