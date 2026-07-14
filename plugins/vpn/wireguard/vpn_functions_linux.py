@@ -236,8 +236,14 @@ def parse_and_create_vpn_config(vpn_config_json_string, config_name="resistine")
         str: Path to created config file, or None if failed
     """
     try:
-        # Parse the VPN config JSON string
-        vpn_config = json.loads(vpn_config_json_string)
+        # Accept both a dict (already parsed from the API response) and a JSON
+        # string. The login flow passes result["vpn_config"], which requests
+        # has already decoded into a dict — json.loads() on a dict raises
+        # "the JSON object must be str, bytes or bytearray, not dict".
+        if isinstance(vpn_config_json_string, dict):
+            vpn_config = vpn_config_json_string
+        else:
+            vpn_config = json.loads(vpn_config_json_string)
 
         # Extract Peer configuration
         peer_config = vpn_config.get("Peer", {})

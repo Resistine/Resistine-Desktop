@@ -257,7 +257,13 @@ def parse_and_create_vpn_config(
         if not vpn_config_json_string:
             raise ValueError("Empty API response")
 
-        vpn_config = json.loads(vpn_config_json_string)
+        # Accept both a dict (already parsed from the API response) and a JSON
+        # string — the login flow passes an already-decoded dict, and
+        # json.loads() on a dict raises a TypeError.
+        if isinstance(vpn_config_json_string, dict):
+            vpn_config = vpn_config_json_string
+        else:
+            vpn_config = json.loads(vpn_config_json_string)
 
         interface = vpn_config.get("Interface")
         peer = vpn_config.get("Peer")
