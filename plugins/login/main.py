@@ -514,34 +514,32 @@ class Plugin(BasePlugin):
 
         # Phase 4: Transition to next screen
         from utils import settings as app_settings
-        needs_onboarding = (
-            platform.system() == "Darwin"
-            and not app_settings.get("vpn", "onboarding_complete", False)
-        )
+        needs_setup = not app_settings.get("setup", "complete", False)
 
-        if needs_onboarding:
-            self._transition_to_onboarding()
+        if needs_setup:
+            self._transition_to_setup_wizard()
         else:
             app_settings.set("auth", "logged_in", True)
             self.destroy()
             self.app.create_dashboard()
 
-    def _transition_to_onboarding(self):
-        """Transition from login to VPN onboarding.
+    def _transition_to_setup_wizard(self):
+        """Transition from login to the unified customer setup wizard.
 
-        Constructs the onboarding screen BEFORE destroying the login frame,
-        so if construction fails the login screen stays visible.
+        Constructs the wizard screen BEFORE destroying the login frame, so if
+        construction fails the login screen stays visible. The wizard guides the
+        user through every permission/installation their OS needs (VPN,
+        antivirus, Full Disk Access, endpoint monitoring) behind one flow.
         """
-        from plugins.login.vpn_onboarding import VPNOnboardingScreen
+        from plugins.login.setup_wizard import SetupWizardScreen
 
-        def on_onboarding_complete():
+        def on_setup_complete():
             self.app.create_dashboard()
-            self.app.after(100, lambda: self.app.select_frame_by_name("frame_VPN"))
 
-        # Build onboarding first, then tear down login
-        self._onboarding = VPNOnboardingScreen(self.app, on_onboarding_complete)
+        # Build the wizard first, then tear down login.
+        self._wizard = SetupWizardScreen(self.app, on_setup_complete)
         self.destroy()
-        self._onboarding.show()
+        self._wizard.show()
 
     def on_otp_key_press(self, event):
         """Handle key press in OTP entry."""
