@@ -589,9 +589,19 @@ class _AntivirusStepDefender(SetupStep):
         def _work():
             from plugins.antivirus import clamav
             ok, msg = clamav.activate_system_daemons()
+            logger.info(f"[AV-SETUP] activate_system_daemons -> {ok} ({msg})")
             if not ok:
-                self._failed = "Couldn't turn on antivirus. You can try again or skip."
-                logger.warning(f"[SETUP] activate_system_daemons: {msg}")
+                # Surface the platform's own message so the failure is specific
+                # (e.g. "package install failed", "UAC declined") rather than a
+                # blank "couldn't turn on antivirus".
+                detail = (msg or "").strip()
+                if _PLATFORM == "Windows":
+                    base = ("Couldn't turn on Microsoft Defender real-time "
+                            "protection.")
+                else:
+                    base = "Couldn't install or start ClamAV."
+                self._failed = (f"{base} {detail}".strip()
+                                + " You can try again or skip.")
         self._run_bg(_work)
 
 
@@ -887,6 +897,15 @@ class _EndpointStepDirect(SetupStep):
         return _wazuh_installed() and _wazuh_running()
 
     def begin(self, on_status):
+        # Windows/Linux full_install() returns only a bool, so classify the
+        # failure from what's observable: the last progress line (download vs
+        # install) and the post-run installed/running state (enrollment).
+        self._last_progress = ""
+
+        def _status(msg):
+            self._last_progress = str(msg)
+            on_status(str(msg))
+
         def _work():
             if not _wazuh_installed():
                 if _PLATFORM == "Linux":
@@ -894,23 +913,41 @@ class _EndpointStepDirect(SetupStep):
                 else:
                     from plugins.wazuh.agent.wazuh_functions_windows import full_install
 
-                def _progress(msg):
-                    on_status(str(msg))
-
-                ok = full_install(progress_callback=_progress)
+                ok = full_install(progress_callback=_status)
                 if not ok and not _wazuh_installed():
-                    self._failed = "Endpoint setup didn't finish. You can try again or skip."
+                    logger.error("[EP-SETUP] full_install failed; "
+                                 f"last_progress={self._last_progress!r}")
+                    self._failed = self._install_fail_message()
                     return
 
-            # Ensure the agent is actually running (full_install usually starts
-            # it; this covers the already-installed-but-stopped case too).
-            if not _wazuh_activate(on_status, self.cancelled):
-                self._failed = ("Endpoint agent installed but isn't running yet. "
-                                "You can start it from the Endpoint page, or skip.")
+            # Ensure the agent is actually running. On Windows/Linux a failed
+            # enrollment leaves the agent installed-but-not-running (agent-auth
+            # ran inside the privileged script but couldn't reach/register with
+            # the manager), so this is where enrollment failures surface.
+            if not _wazuh_activate(_status, self.cancelled):
+                logger.error("[EP-SETUP] agent not running after install; "
+                             f"installed={_wazuh_installed()} "
+                             f"last_progress={self._last_progress!r}")
+                self._failed = (
+                    "The endpoint agent installed but couldn't reach the "
+                    "monitoring server to finish enrolling. Make sure the VPN is "
+                    "connected, then try again."
+                )
                 return
             # Link ClamAV → Wazuh if antivirus is also set up.
-            _maybe_forward_clamav(on_status)
+            _maybe_forward_clamav(_status)
         self._run_bg(_work)
+
+    def _install_fail_message(self) -> str:
+        """Classify a full_install() failure from its last progress line."""
+        lp = (self._last_progress or "").lower()
+        if "download" in lp:
+            return ("Couldn't download the endpoint agent. Check your connection "
+                    "and try again.")
+        if "admin" in lp or "approve" in lp or "cancel" in lp:
+            return ("The administrator prompt was declined. Try again and approve "
+                    "it to install the endpoint agent.")
+        return "Couldn't install the endpoint agent. You can try again or skip."
 
 
 # ════════════════════════════════════════════════════════════════════
