@@ -48,6 +48,7 @@ class SetupStep:
         self.app = app
         self._failed = None  # user-facing error string, or None
         self._logged_failure = False  # dedupe one-time failure logging
+        self._activated = False  # set once the step's service is running
 
     # ── Hooks ───────────────────────────────────────────────────────
     def is_applicable(self) -> bool:
@@ -76,36 +77,160 @@ class SetupStep:
 
 
 # ════════════════════════════════════════════════════════════════════
-# VPN
+# VPN — module helpers (import lazily; keep the slow status check off the
+# UI thread by only calling it inside worker threads).
 # ════════════════════════════════════════════════════════════════════
 
-class _VPNStepMac(SetupStep):
+def _vpn_config():
+    """Return (config_name, config_path) for the active tunnel, or (None, None)."""
+    try:
+        from plugins.vpn.main import _config_manager
+        return (_config_manager.get_active_config_name(),
+                _config_manager.get_active_config_path())
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[VPN-SETUP] config lookup failed: {e}")
+        return None, None
+
+
+def _vpn_status(name):
+    """Return "Running"/"Stopped" for the tunnel. Blocking — worker thread only."""
+    try:
+        if _PLATFORM == "Windows":
+            from plugins.vpn.wireguard.vpn_windows_client import get_status
+            return get_status(name).get("state", "Stopped")
+        if _PLATFORM == "Linux":
+            from plugins.vpn.wireguard.vpn_functions_linux import check_service_status
+            return check_service_status(name, None)
+        from plugins.vpn.wireguard.vpn_functions_darwin import check_service_status
+        return check_service_status(name)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[VPN-SETUP] status check failed: {e}")
+        return "Stopped"
+
+
+def _vpn_connect(name, path):
+    """Start/connect the tunnel. Blocking — worker thread only."""
+    if _PLATFORM == "Windows":
+        from plugins.vpn.wireguard.vpn_windows_client import connect
+        return connect(name, config_path=path)
+    if _PLATFORM == "Linux":
+        from plugins.vpn.wireguard.vpn_functions_linux import start_vpn
+        return start_vpn(path)
+    from plugins.vpn.wireguard.vpn_functions_darwin import start_vpn
+    return start_vpn(path)
+
+
+# ════════════════════════════════════════════════════════════════════
+# VPN — steps
+# ════════════════════════════════════════════════════════════════════
+
+class _VPNStepBase(SetupStep):
+    """Shared VPN step: ensure permission/install, then connect the tunnel.
+
+    Completion means the tunnel is actually up (self._activated), not merely
+    that the extension/WireGuard is present — the flow must leave the VPN
+    running, not just set up.
+    """
+
     key = "vpn"
     icon = "🔒"
-    title = "Enable VPN Protection"
+
+    def is_complete(self) -> bool:
+        # Fast checks only (called on the UI thread). _perm_ready() is a quick,
+        # cached probe; _activated is a bool set by the worker once the tunnel
+        # is confirmed up. The slow status check stays in the worker.
+        try:
+            return self._perm_ready() and self._activated
+        except Exception:  # noqa: BLE001
+            return False
+
+    # Subclasses implement these.
+    def _perm_ready(self) -> bool:
+        raise NotImplementedError
+
+    def _ensure_permission(self, on_status) -> bool:
+        """Bring the platform prerequisite (extension/WireGuard) online.
+        Return True when ready; set self._failed and return False otherwise."""
+        raise NotImplementedError
+
+    def begin(self, on_status):
+        self._failed = None
+
+        def _work():
+            if not self._ensure_permission(on_status):
+                return  # _failed already set
+            name, path = _vpn_config()
+            if not path:
+                self._failed = ("No VPN configuration found. Sign in again, then "
+                                "retry.")
+                logger.error("[VPN-SETUP] no active config to connect")
+                return
+            if _vpn_status(name) == "Running":
+                logger.info("[VPN-SETUP] tunnel already up")
+                self._activated = True
+                return
+            logger.info(f"[VPN-SETUP] connecting tunnel '{name}'")
+            on_status("Connecting to VPN…")
+            _vpn_connect(name, path)
+            import time
+            deadline = time.time() + 40
+            while time.time() < deadline:
+                st = _vpn_status(name)
+                if st == "Running":
+                    logger.info("[VPN-SETUP] connected")
+                    self._activated = True
+                    return
+                time.sleep(2)
+            logger.error(f"[VPN-SETUP] connect timed out (status={_vpn_status(name)})")
+            self._failed = "VPN didn't connect. You can try again or skip."
+
+        self._run_bg(_work)
+
+
+class _VPNStepMac(_VPNStepBase):
+    title = "Enable & Connect VPN"
     subtitle = "Secure your connection with a private tunnel"
     detail = (
-        "Resistine installs a system network extension so your traffic can be "
-        "routed through a secure VPN. This is a one-time approval in System "
+        "Resistine installs a system network extension, then connects you to a "
+        "secure VPN. Approving the extension is a one-time step in System "
         "Settings."
     )
     primary_label = "Enable VPN"
-    working_label = "Waiting for approval…"
+    working_label = "Setting up VPN…"
 
-    def is_complete(self) -> bool:
+    def __init__(self, app):
+        super().__init__(app)
+        self.instructions = self._mac_instructions()
+
+    def _perm_ready(self) -> bool:
         from plugins.vpn.wireguard.vpn_functions_darwin import is_extension_enabled
         return bool(is_extension_enabled())
 
-    def begin(self, on_status):
-        self.instructions = self._mac_instructions()
+    def _ensure_permission(self, on_status) -> bool:
+        from plugins.vpn.wireguard.vpn_functions_darwin import (
+            VPNHelper,
+            is_extension_enabled,
+        )
+        if is_extension_enabled():
+            return True
+        logger.info("[VPN-SETUP] requesting extension activation")
         try:
-            from plugins.vpn.wireguard.vpn_functions_darwin import VPNHelper
             VPNHelper.activate_extension()
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"[SETUP] Extension activation request failed: {e}")
+            logger.warning(f"[VPN-SETUP] activate_extension failed: {e}")
         self._open_settings()
-        on_status("Approve the Resistine extension in System Settings, then this "
-                  "will continue automatically.")
+        on_status("Approve the Resistine extension in System Settings — this "
+                  "continues automatically once enabled.")
+        import time
+        deadline = time.time() + 300
+        while time.time() < deadline:
+            if is_extension_enabled():
+                logger.info("[VPN-SETUP] extension approved")
+                return True
+            time.sleep(2)
+        logger.error("[VPN-SETUP] extension approval timed out")
+        self._failed = ("VPN extension wasn't approved. You can try again or skip.")
+        return False
 
     def _open_settings(self):
         import subprocess
@@ -115,7 +240,7 @@ class _VPNStepMac(SetupStep):
                 "x-apple.systempreferences:com.apple.LoginItems-Settings.extension",
             ])
         except Exception as e:  # noqa: BLE001
-            logger.error(f"[SETUP] Failed to open System Settings: {e}")
+            logger.error(f"[VPN-SETUP] Failed to open System Settings: {e}")
 
     @staticmethod
     def _mac_instructions():
@@ -134,60 +259,68 @@ class _VPNStepMac(SetupStep):
         ]
 
 
-class _VPNStepWindows(SetupStep):
-    key = "vpn"
-    icon = "🔒"
-    title = "Set Up VPN"
+class _VPNStepWindows(_VPNStepBase):
+    title = "Set Up & Connect VPN"
     subtitle = "Install WireGuard to secure your connection"
     detail = (
         "Resistine's VPN is powered by WireGuard. Install it once and Resistine "
-        "manages the secure tunnel for you."
+        "connects and manages the secure tunnel for you."
     )
     instructions = [
         "Click “Download WireGuard” to open the installer page.",
         "Run the WireGuard installer and accept the prompts.",
-        "This step continues automatically once WireGuard is installed.",
+        "This step continues and connects automatically once installed.",
     ]
     primary_label = "Download WireGuard"
-    working_label = "Waiting for WireGuard…"
+    working_label = "Setting up VPN…"
 
-    def is_complete(self) -> bool:
+    def _perm_ready(self) -> bool:
         from plugins.vpn.wireguard.vpn_functions_windows import check_wireguard_installed
         return bool(check_wireguard_installed())
 
-    def begin(self, on_status):
+    def _ensure_permission(self, on_status) -> bool:
+        from plugins.vpn.wireguard.vpn_functions_windows import check_wireguard_installed
+        if check_wireguard_installed():
+            return True
         webbrowser.open("https://www.wireguard.com/install/")
-        on_status("Install WireGuard, then this step continues automatically.")
+        on_status("Install WireGuard — this continues automatically once done.")
+        import time
+        deadline = time.time() + 300
+        while time.time() < deadline:
+            if check_wireguard_installed():
+                return True
+            time.sleep(3)
+        self._failed = "WireGuard wasn't installed. You can try again or skip."
+        return False
 
 
-class _VPNStepLinux(SetupStep):
-    key = "vpn"
-    icon = "🔒"
-    title = "Set Up VPN"
+class _VPNStepLinux(_VPNStepBase):
+    title = "Set Up & Connect VPN"
     subtitle = "Install WireGuard to secure your connection"
     detail = (
-        "Resistine's VPN is powered by WireGuard. We'll install the WireGuard "
-        "tools for you — you may be asked for your password."
+        "Resistine's VPN is powered by WireGuard. We'll install the tools and "
+        "connect you — you may be asked for your password."
     )
-    primary_label = "Install WireGuard"
-    working_label = "Installing WireGuard…"
+    primary_label = "Set Up VPN"
+    working_label = "Setting up VPN…"
 
-    def is_complete(self) -> bool:
+    def _perm_ready(self) -> bool:
         from plugins.vpn.wireguard.vpn_functions_linux import check_wireguard_installed
         return bool(check_wireguard_installed())
 
-    def begin(self, on_status):
+    def _ensure_permission(self, on_status) -> bool:
+        from plugins.vpn.wireguard.vpn_functions_linux import (
+            check_wireguard_installed,
+            run_installer_as_admin,
+        )
+        if check_wireguard_installed():
+            return True
         on_status("Installing WireGuard — you may be prompted for your password…")
-
-        def _work():
-            from plugins.vpn.wireguard.vpn_functions_linux import (
-                check_wireguard_installed,
-                run_installer_as_admin,
-            )
-            run_installer_as_admin("")
-            if not check_wireguard_installed():
-                self._failed = "WireGuard didn't install. You can try again or skip."
-        self._run_bg(_work)
+        run_installer_as_admin("")
+        if check_wireguard_installed():
+            return True
+        self._failed = "WireGuard didn't install. You can try again or skip."
+        return False
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -371,13 +504,14 @@ class _AntivirusStepMac(SetupStep):
                         opened = True
                     on_status("Enable the ClamAV items in System Settings ▸ "
                               "Login Items & Extensions to finish.")
-                else:  # offline — try to (re)register/start the daemons
-                    logger.info(f"[AV-SETUP] runtime={rt}; ensure_daemons_registered()")
+                else:  # offline — actively (re)start the daemons
+                    logger.info(f"[AV-SETUP] runtime={rt}; activate_system_daemons()")
                     try:
                         from plugins.antivirus import clamav
-                        clamav.ensure_daemons_registered()
+                        ok, msg = clamav.activate_system_daemons()
+                        logger.info(f"[AV-SETUP] activate_system_daemons -> {ok} ({msg})")
                     except Exception as e:  # noqa: BLE001
-                        logger.error(f"[AV-SETUP] ensure_daemons_registered failed: {e}")
+                        logger.error(f"[AV-SETUP] activate_system_daemons failed: {e}")
                     on_status("Starting real-time protection…")
                 time.sleep(2)
 
@@ -493,19 +627,61 @@ class _FullDiskAccessStepMac(SetupStep):
 # Endpoint / SIEM agent
 # ════════════════════════════════════════════════════════════════════
 
+def _wazuh_mod():
+    if _PLATFORM == "Darwin":
+        from plugins.wazuh.agent import wazuh_functions_darwin as m
+    elif _PLATFORM == "Linux":
+        from plugins.wazuh.agent import wazuh_functions_linux as m
+    elif _PLATFORM == "Windows":
+        from plugins.wazuh.agent import wazuh_functions_windows as m
+    else:
+        return None
+    return m
+
+
 def _wazuh_installed() -> bool:
     try:
-        if _PLATFORM == "Darwin":
-            from plugins.wazuh.agent.wazuh_functions_darwin import is_agent_installed
-        elif _PLATFORM == "Linux":
-            from plugins.wazuh.agent.wazuh_functions_linux import is_agent_installed
-        elif _PLATFORM == "Windows":
-            from plugins.wazuh.agent.wazuh_functions_windows import is_agent_installed
-        else:
-            return False
-        return bool(is_agent_installed())
+        m = _wazuh_mod()
+        return bool(m and m.is_agent_installed())
     except Exception:  # noqa: BLE001
         return False
+
+
+def _wazuh_running() -> bool:
+    try:
+        m = _wazuh_mod()
+        return bool(m and m.get_agent_status() == "Running")
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _wazuh_start() -> bool:
+    """Start the agent service (admin/UAC/password prompt). Worker thread only."""
+    try:
+        m = _wazuh_mod()
+        return bool(m and m.start_agent())
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"[EP-SETUP] start_agent failed: {e}")
+        return False
+
+
+def _wazuh_activate(on_status):
+    """After install, ensure the agent is actually Running. Worker thread only."""
+    import time
+    if _wazuh_running():
+        logger.info("[EP-SETUP] agent already running")
+        return True
+    logger.info("[EP-SETUP] starting agent")
+    on_status("Starting endpoint monitoring…")
+    _wazuh_start()
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        if _wazuh_running():
+            logger.info("[EP-SETUP] agent running")
+            return True
+        time.sleep(2)
+    logger.warning("[EP-SETUP] agent did not reach Running state")
+    return False
 
 
 class _EndpointStepMac(SetupStep):
@@ -527,7 +703,8 @@ class _EndpointStepMac(SetupStep):
     working_label = "Installing endpoint agent…"
 
     def is_complete(self) -> bool:
-        return _wazuh_installed()
+        # Must be installed AND running — the flow leaves monitoring active.
+        return _wazuh_installed() and _wazuh_running()
 
     def check_failed(self):
         if self._failed:
@@ -556,48 +733,55 @@ class _EndpointStepMac(SetupStep):
 
         def _work():
             # Phase 1: package download (kicked off at login; wait for it).
-            wz.ensure_download_started()
-            on_status("Downloading endpoint agent…")
-            deadline = time.time() + 180
-            while time.time() < deadline:
-                state = wz.get_install_state()
-                if state == wz.STATE_DOWNLOADED:
-                    break
-                if state in (wz.STATE_INSTALLED, wz.STATE_READY):
-                    return  # already installed
-                if state == wz.STATE_DOWNLOAD_FAILED:
-                    self._failed = "Couldn't download the endpoint agent. Check your connection and try again."
+            if not _wazuh_installed():
+                wz.ensure_download_started()
+                on_status("Downloading endpoint agent…")
+                deadline = time.time() + 180
+                while time.time() < deadline:
+                    state = wz.get_install_state()
+                    if state == wz.STATE_DOWNLOADED:
+                        break
+                    if state in (wz.STATE_INSTALLED, wz.STATE_READY):
+                        break
+                    if state == wz.STATE_DOWNLOAD_FAILED:
+                        self._failed = "Couldn't download the endpoint agent. Check your connection and try again."
+                        return
+                    time.sleep(2)
+                else:
+                    self._failed = "Download timed out. You can try again or skip."
                     return
-                time.sleep(2)
-            else:
-                self._failed = "Download timed out. You can try again or skip."
-                return
 
-            # Phase 2: install (admin prompt).
-            on_status("Approve the administrator prompt to install…")
-            if not wz.trigger_install(self.app):
-                self._failed = "Endpoint install was cancelled. You can try again or skip."
-                return
-
-            # Phase 3: watch install to completion.
-            _STEPS = {
-                "install_pkg": "Installing package…",
-                "patch_config": "Configuring agent…",
-                "enrollment": "Enrolling agent…",
-                "key_backup": "Backing up keys…",
-                "launchd": "Starting agent service…",
-                "done": "Finishing up…",
-            }
-            while True:
-                result = wz.poll_install_progress()
-                step = result.get("step", "")
-                if step:
-                    on_status(_STEPS.get(step, "Installing…"))
-                if result.get("finished"):
-                    if not result.get("success"):
-                        self._failed = "Endpoint setup didn't finish. You can try again or skip."
+            # Phase 2 + 3: install (admin prompt) + watch to completion, unless
+            # the agent is already on disk.
+            if not _wazuh_installed():
+                on_status("Approve the administrator prompt to install…")
+                if not wz.trigger_install(self.app):
+                    self._failed = "Endpoint install was cancelled. You can try again or skip."
                     return
-                time.sleep(2)
+                _STEPS = {
+                    "install_pkg": "Installing package…",
+                    "patch_config": "Configuring agent…",
+                    "enrollment": "Enrolling agent…",
+                    "key_backup": "Backing up keys…",
+                    "launchd": "Starting agent service…",
+                    "done": "Finishing up…",
+                }
+                while True:
+                    result = wz.poll_install_progress()
+                    step = result.get("step", "")
+                    if step:
+                        on_status(_STEPS.get(step, "Installing…"))
+                    if result.get("finished"):
+                        if not result.get("success"):
+                            self._failed = "Endpoint setup didn't finish. You can try again or skip."
+                            return
+                        break
+                    time.sleep(2)
+
+            # Phase 4: make sure the agent is actually running.
+            if not _wazuh_activate(on_status):
+                self._failed = ("Endpoint agent installed but isn't running yet. "
+                                "You can start it from the Endpoint page, or skip.")
 
         self._run_bg(_work)
 
@@ -618,21 +802,30 @@ class _EndpointStepDirect(SetupStep):
     working_label = "Installing endpoint agent…"
 
     def is_complete(self) -> bool:
-        return _wazuh_installed()
+        # Must be installed AND running — the flow leaves monitoring active.
+        return _wazuh_installed() and _wazuh_running()
 
     def begin(self, on_status):
         def _work():
-            if _PLATFORM == "Linux":
-                from plugins.wazuh.agent.wazuh_functions_linux import full_install
-            else:
-                from plugins.wazuh.agent.wazuh_functions_windows import full_install
+            if not _wazuh_installed():
+                if _PLATFORM == "Linux":
+                    from plugins.wazuh.agent.wazuh_functions_linux import full_install
+                else:
+                    from plugins.wazuh.agent.wazuh_functions_windows import full_install
 
-            def _progress(msg):
-                on_status(str(msg))
+                def _progress(msg):
+                    on_status(str(msg))
 
-            ok = full_install(progress_callback=_progress)
-            if not ok and not _wazuh_installed():
-                self._failed = "Endpoint setup didn't finish. You can try again or skip."
+                ok = full_install(progress_callback=_progress)
+                if not ok and not _wazuh_installed():
+                    self._failed = "Endpoint setup didn't finish. You can try again or skip."
+                    return
+
+            # Ensure the agent is actually running (full_install usually starts
+            # it; this covers the already-installed-but-stopped case too).
+            if not _wazuh_activate(on_status):
+                self._failed = ("Endpoint agent installed but isn't running yet. "
+                                "You can start it from the Endpoint page, or skip.")
         self._run_bg(_work)
 
 
