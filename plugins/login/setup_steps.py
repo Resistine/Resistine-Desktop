@@ -360,24 +360,26 @@ class _AntivirusStepMac(SetupStep):
     subtitle = "Real-time malware scanning with ClamAV"
     detail = (
         "Resistine downloads virus definitions and installs the ClamAV scanning "
-        "service. You'll be asked once for your administrator password to enable "
-        "system-wide protection."
+        "service. You'll be asked once for your administrator password, then to "
+        "approve it in System Settings — first in Login Items & Extensions, then "
+        "Full Disk Access."
     )
     instructions = [
         "Click “Enable Antivirus” and enter your administrator password.",
-        "If asked, enable the ClamAV items under System Settings ▸ General ▸ "
-        "Login Items & Extensions.",
-        "Protection turns on automatically once approved.",
+        "Enable all the ClamAV items under Login Items & Extensions.",
+        "Then grant Resistine Full Disk Access when prompted — protection turns "
+        "on automatically.",
     ]
     primary_label = "Enable Antivirus"
     working_label = "Setting up antivirus…"
 
     def is_complete(self) -> bool:
         # STATE_COMPLETED means the admin install ran — but on macOS 13+ the
-        # daemons still sit in "Approval Required" until the user enables them
-        # in Login Items & Extensions. Only treat the step as done once the
-        # daemons are actually running (healthy/degraded), or once they're
-        # approved and only Full Disk Access remains (handled by the next step).
+        # daemons still sit in "Approval Required" until enabled in Login Items,
+        # and real-time monitoring (clamonacc) needs Full Disk Access. This step
+        # now walks BOTH approvals, so it's only done once neither is
+        # outstanding: runtime is past approval_required AND fda_required
+        # (healthy = full real-time; degraded = clamd up, FDA already granted).
         from plugins.antivirus.installer_service import (
             STATE_COMPLETED,
             get_runtime_state,
@@ -385,7 +387,7 @@ class _AntivirusStepMac(SetupStep):
         )
         if get_setup_state() != STATE_COMPLETED:
             return False
-        return get_runtime_state() in ("healthy", "degraded", "fda_required")
+        return get_runtime_state() in ("healthy", "degraded")
 
     def check_failed(self):
         if self._failed:
@@ -528,38 +530,47 @@ class _AntivirusStepMac(SetupStep):
                 logger.info("[AV-SETUP] system already set up — refreshing "
                             "daemon registration")
 
-            # Phase 4: register the daemons so the Login Items entry EXISTS
-            # (this is exactly what a reinstall loses — a missing registration
-            # also reports as approval_required), then wait for the user to
-            # enable them and confirm protection comes up.
-            logger.info("[AV-SETUP] phase 4: register + approval")
+            # Phase 4: guide BOTH System Settings approvals in sequence —
+            # Login Items & Extensions first (daemon approval), then Full Disk
+            # Access (real-time monitoring). A single loop reacts to the runtime
+            # state, which naturally advances approval_required → fda_required →
+            # healthy as the user grants each one. First (re)register so the
+            # Login Items entry exists — this is what a reinstall loses, and a
+            # missing registration also reports as approval_required.
+            logger.info("[AV-SETUP] phase 4: Login Items + Full Disk Access")
             self._register_daemons()
-            opened = False
+            opened_login = False
+            opened_fda = False
             start = time.time()
-            deadline = start + 300
+            deadline = start + 420  # room for two manual approvals
             while time.time() < deadline:
                 if self.cancelled():
                     logger.info("[AV-SETUP] phase 4 cancelled (step left)")
                     return
                 rt = self._safe_runtime()
                 elapsed = int(time.time() - start)
-                if rt in ("healthy", "degraded", "fda_required"):
+                if rt in ("healthy", "degraded"):
                     logger.info(f"[AV-SETUP] SUCCESS — protection active (runtime={rt})")
                     return
                 if rt == av.RUNTIME_APPROVAL_REQUIRED:
-                    if not opened:
+                    if not opened_login:
                         # Re-assert registration right before opening Settings so
                         # the entry is definitely present for the user to enable.
                         self._register_daemons()
                         logger.info("[AV-SETUP] opening Login Items & Extensions")
-                        try:
-                            from plugins.antivirus import clamav
-                            clamav.open_login_items_settings()
-                        except Exception as e:  # noqa: BLE001
-                            logger.error(f"[AV-SETUP] open_login_items failed: {e}")
-                        opened = True
-                    on_status("Enable all the ClamAV items under System Settings ▸ "
-                              "Login Items & Extensions — still checking… "
+                        self._open_pane("open_login_items_settings")
+                        opened_login = True
+                    on_status("Step 1 of 2 — enable all the ClamAV items under "
+                              "System Settings ▸ Login Items & Extensions… "
+                              f"({elapsed}s)")
+                elif rt == av.RUNTIME_FDA_REQUIRED:
+                    # Login Items done; now walk Full Disk Access.
+                    if not opened_fda:
+                        logger.info("[AV-SETUP] opening Full Disk Access")
+                        self._open_pane("open_fda_settings")
+                        opened_fda = True
+                    on_status("Step 2 of 2 — turn on Full Disk Access for Resistine "
+                              "under System Settings ▸ Privacy & Security… "
                               f"({elapsed}s)")
                 else:  # offline — actively (re)start the daemons
                     logger.info(f"[AV-SETUP] runtime={rt}; activate_system_daemons()")
@@ -574,11 +585,22 @@ class _AntivirusStepMac(SetupStep):
 
             logger.error("[AV-SETUP] phase 4 TIMED OUT (runtime="
                          f"{self._safe_runtime()})")
-            self._failed = ("Protection is installed but waiting for approval in "
-                            "Login Items & Extensions. You can finish this from the "
-                            "Antivirus page, or skip.")
+            self._failed = ("Protection is installed but still waiting on approval "
+                            "in System Settings (Login Items & Extensions and Full "
+                            "Disk Access). You can finish this from the Antivirus "
+                            "page, or skip.")
 
         self._run_bg(_work)
+
+    @staticmethod
+    def _open_pane(func_name):
+        """Open a System Settings pane via a clamav facade function by name
+        (open_login_items_settings / open_fda_settings)."""
+        try:
+            from plugins.antivirus import clamav
+            getattr(clamav, func_name)()
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"[AV-SETUP] {func_name} failed: {e}")
 
     @staticmethod
     def _register_daemons():
@@ -658,48 +680,9 @@ class _AntivirusStepDefender(SetupStep):
         self._run_bg(_work)
 
 
-class _FullDiskAccessStepMac(SetupStep):
-    key = "full_disk_access"
-    icon = "📁"
-    title = "Grant Full Disk Access"
-    subtitle = "Let the scanner protect every folder"
-    detail = (
-        "macOS restricts which files apps can read. Grant Resistine Full Disk "
-        "Access so the antivirus can scan your whole system, including Mail and "
-        "protected folders."
-    )
-    instructions = [
-        "Click “Open System Settings”.",
-        "In Privacy & Security ▸ Full Disk Access, enable Resistine.",
-        "This step continues automatically once access is granted.",
-    ]
-    primary_label = "Open System Settings"
-    working_label = "Waiting for Full Disk Access…"
-
-    def is_applicable(self) -> bool:
-        # Only meaningful for the packaged app (dev builds report access via a
-        # different path and don't have the bundled daemons to protect).
-        from plugins.antivirus import clamav
-        try:
-            return bool(clamav.is_app_bundle())
-        except Exception:  # noqa: BLE001
-            return False
-
-    def is_complete(self) -> bool:
-        from plugins.antivirus import clamav
-        try:
-            return bool(clamav.has_full_disk_access())
-        except Exception:  # noqa: BLE001
-            return True
-
-    def begin(self, on_status):
-        from plugins.antivirus import clamav
-        try:
-            clamav.open_fda_settings()
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"[SETUP] Failed to open FDA settings: {e}")
-        on_status("Enable Resistine under Full Disk Access, then this continues "
-                  "automatically.")
+# Full Disk Access is no longer a standalone step — it's walked as the second
+# half of the macOS antivirus step (_AntivirusStepMac phase 4), right after the
+# Login Items approval, so both System Settings approvals happen back-to-back.
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -1016,8 +999,7 @@ def build_steps(app):
     if _PLATFORM == "Darwin":
         candidates = [
             _VPNStepMac,
-            _AntivirusStepMac,
-            _FullDiskAccessStepMac,
+            _AntivirusStepMac,  # now also walks Full Disk Access
             _EndpointStepMac,
         ]
     elif _PLATFORM == "Windows":
