@@ -47,7 +47,7 @@ from PyQt6.QtWidgets import (
 )
 
 from gui import theme
-from gui.qt_widgets import scroll_page
+from gui.qt_widgets import FlowLayout, scroll_page
 from plugins.base_plugin import BasePlugin
 from plugins.wazuh_overview import api_client, charts
 from plugins.wazuh_overview.config import MAX_PARALLEL_FETCHES
@@ -75,13 +75,6 @@ _SEV_TO_STATUS = {
 # Sort priority for composite threat ranking. Higher is more severe.
 _THREAT_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "ok": 0}
 _RANK_TO_SEV = {v: k for k, v in _THREAT_RANK.items()}
-
-# Layout constants. The Overview content is a centered column so page elements
-# don't stretch edge-to-edge (which forced horizontal scroll); module tiles sit
-# in a fixed two-column grid within it and stretch to fill each half. The min
-# width guarantees both columns always have room (never collapses to one).
-_CONTENT_MAX_WIDTH = 760
-_CONTENT_MIN_WIDTH = 460
 
 # Severity name -> badge theme key.
 #   critical -> violet/red   high -> red (error)
@@ -811,10 +804,11 @@ class _ModuleCard(QFrame):
         self._on_click = on_click if (self._target and on_click) else None
         if self._on_click:
             self.setCursor(Qt.CursorShape.PointingHandCursor)
-        # Stretch to fill each grid half; height follows content with a floor
-        # for a uniform tile look.
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self.setMinimumHeight(140)
+        # Fixed square tiles reflowed by FlowLayout (like the Dashboard) instead
+        # of stretched to fill. Sized 250px so three tiles fit per row at the
+        # default 1120px window (grid gets ~816px there: 3*250 + 2*16 = 782),
+        # while still stepping to 2-up when narrower and 4-up on wide monitors.
+        self.setFixedSize(250, 250)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 16, 16, 16)
@@ -885,49 +879,31 @@ def _rows_scroll():
 
 
 class _ModuleGrid(QWidget):
-    """Holds the module tiles in a fixed two-column grid. Tiles stretch to fill
-    each half of the centered content column, so it's always paired regardless
-    of window size (the content column's min width keeps both columns viable)."""
-
-    _COLS = 2
+    """Holds the module tiles in a responsive, reflowing grid — fixed-size cards
+    that wrap 1→2→3→4-up as the window widens, matching the Dashboard's card
+    grid (same FlowLayout, same centering, same resizing behaviour)."""
 
     def __init__(self):
         super().__init__()
         self.setObjectName("Transparent")
-        self._grid = QGridLayout(self)
-        self._grid.setContentsMargins(0, 0, 0, 0)
-        self._grid.setSpacing(16)
-        self._grid.setColumnStretch(0, 1)
-        self._grid.setColumnStretch(1, 1)
+        self._flow = FlowLayout(self, margin=0, spacing=16, center=True)
 
     def set_cards(self, cards):
         # Delete the previous tiles outright — detaching from the layout alone
         # leaves them parented here, painted at their old geometry, so they'd
         # stack behind the new ones on every repaint.
-        while self._grid.count():
-            item = self._grid.takeAt(0)
-            w = item.widget()
+        while self._flow.count():
+            item = self._flow.takeAt(0)
+            w = item.widget() if item is not None else None
             if w is not None:
                 w.setParent(None)
                 w.deleteLater()
-
-        n = len(cards)
-        paired = n - (n % self._COLS)
-        for i in range(paired):
-            self._grid.addWidget(cards[i], i // self._COLS, i % self._COLS)
-        # A lone trailing tile would sit left-aligned in column 0; span it across
-        # both columns and center it at ~one column's width so the grid stays
-        # balanced.
-        if n > paired:
-            last = cards[-1]
-            wrap = QWidget()
-            wrap.setObjectName("Transparent")
-            hb = QHBoxLayout(wrap)
-            hb.setContentsMargins(0, 0, 0, 0)
-            hb.addStretch(1)
-            hb.addWidget(last, 2)
-            hb.addStretch(1)
-            self._grid.addWidget(wrap, paired // self._COLS, 0, 1, self._COLS)
+        for card in cards:
+            self._flow.addWidget(card)
+        # Force a reflow: takeAt() bypasses QLayout's automatic invalidate, so
+        # without this the grid keeps its pre-clear geometry on a poll rebuild.
+        self._flow.invalidate()
+        self.updateGeometry()
 
 
 # ==============================================================================
@@ -1159,25 +1135,14 @@ class Plugin(BasePlugin):
 
     # ----- Overview pane -----------------------------------------------------
     def _build_overview_pane(self, page, _name="Overview"):
-        # Centered, max-width column so page elements don't stretch edge-to-edge
-        # (which triggered horizontal scroll on this build's wider default size).
+        # Full-width page (Dashboard margins), so the module grid below can
+        # reflow across the whole content area instead of being capped to two
+        # columns. The device card / alert bar span the width like the CTk
+        # original; the FlowLayout tiles wrap responsively and stay centered.
         inner = QWidget()
         inner.setObjectName("Transparent")
-        row = QHBoxLayout(inner)
-        row.setContentsMargins(24, 16, 24, 20)
-        row.addStretch(1)
-        content = QWidget()
-        content.setObjectName("Transparent")
-        content.setMaximumWidth(_CONTENT_MAX_WIDTH)
-        content.setMinimumWidth(_CONTENT_MIN_WIDTH)
-        # Dominant stretch so content claims the width up to its max; the two
-        # thin side stretches just center it. Equal weights would let content
-        # collapse to a third of the row and squeeze the tiles to one per line.
-        row.addWidget(content, 20)
-        row.addStretch(1)
-
-        col = QVBoxLayout(content)
-        col.setContentsMargins(0, 0, 0, 0)
+        col = QVBoxLayout(inner)
+        col.setContentsMargins(20, 16, 20, 20)
         col.setSpacing(0)
 
         # Section holders so the poll can rebuild device card + alert bar in
