@@ -127,28 +127,35 @@ def _run_privileged_batch(admin_cmds):
 
 
 def _collect_vpn_cmds(admin_cmds):
-    """Append WireGuard teardown commands for each stored config."""
+    """Append WireGuard teardown commands (per config) + helper removal."""
     try:
         from utils.settings import get_config_dir
     except ImportError:
-        return
+        get_config_dir = None
 
-    wg_dir = os.path.join(get_config_dir(), "wireguard")
-    if not os.path.isdir(wg_dir):
-        logger.info("[UNINSTALL-LINUX] No WireGuard config dir, skipping VPN")
-        return
+    if get_config_dir is not None:
+        wg_dir = os.path.join(get_config_dir(), "wireguard")
+        if os.path.isdir(wg_dir):
+            for fn in os.listdir(wg_dir):
+                if not fn.endswith(".conf"):
+                    continue
+                iface = os.path.splitext(fn)[0].replace("'", "")
+                # Match stop_vpn: bring the interface down by name
+                # (AppArmor-friendly), then remove the /etc/wireguard copy.
+                admin_cmds.append(f"wg-quick down '{iface}' 2>/dev/null || true")
+                admin_cmds.append(f"rm -f '/etc/wireguard/{iface}.conf'")
 
-    confs = [fn for fn in os.listdir(wg_dir) if fn.endswith(".conf")]
-    if not confs:
-        logger.info("[UNINSTALL-LINUX] No WireGuard configs, skipping VPN")
-        return
-
-    for fn in confs:
-        iface = os.path.splitext(fn)[0].replace("'", "")
-        # Match stop_vpn: bring the interface down by name (AppArmor-friendly)
-        # then remove the /etc/wireguard copy wg-quick reads.
-        admin_cmds.append(f"wg-quick down '{iface}' 2>/dev/null || true")
-        admin_cmds.append(f"rm -f '/etc/wireguard/{iface}.conf'")
+    # Remove the passwordless VPN helper + polkit policy if installed. This is
+    # independent of stored configs — the root files must go regardless.
+    try:
+        from plugins.vpn.wireguard.vpn_functions_linux import (
+            HELPER_PATH, HELPER_DIR, POLKIT_POLICY_PATH, passwordless_helper_installed,
+        )
+        if passwordless_helper_installed():
+            admin_cmds.append(f"rm -f '{HELPER_PATH}' '{POLKIT_POLICY_PATH}'")
+            admin_cmds.append(f"rmdir '{HELPER_DIR}' 2>/dev/null || true")
+    except ImportError:
+        pass
 
 
 def _collect_wazuh_cmds(admin_cmds):

@@ -26,6 +26,138 @@ from utils.logger import logger
 # Keychain Constants
 KEYS_FILE_PATH = os.path.expanduser("~/.config/resistine/keys.json")
 
+# --- Passwordless privileged VPN helper (polkit) ----------------------------
+# A small root-owned helper that ONLY brings the Resistine tunnel up/down,
+# authorized via a polkit action with allow_active=yes so the active local
+# session toggles the VPN without a password. Installed once (one admin
+# prompt); every toggle afterwards is passwordless.
+HELPER_DIR = "/usr/local/lib/resistine"
+HELPER_PATH = f"{HELPER_DIR}/resistine-vpn-helper"
+POLKIT_ACTION_ID = "com.resistine.vpn.control"
+POLKIT_POLICY_PATH = f"/usr/share/polkit-1/actions/{POLKIT_ACTION_ID}.policy"
+
+# Only the Resistine tunnel may be controlled through the helper.
+_HELPER_ALLOWED_IFACE = "resistine"
+
+# The helper is intentionally minimal and defensive: it refuses any interface
+# but 'resistine', requires the source config to be owned by the caller
+# (PKEXEC_UID) and to look like a WireGuard config, and never accepts arbitrary
+# shell. This is what makes it safe to authorize passwordless.
+HELPER_SCRIPT = r"""#!/bin/sh
+# Resistine VPN privileged helper. Brings the Resistine WireGuard tunnel
+# up/down. Root-owned; authorized via polkit action com.resistine.vpn.control
+# (passwordless for the active local session). Do not edit.
+set -eu
+
+ACTION="${1:-}"
+IFACE="${2:-}"
+
+# Only the Resistine tunnel may be controlled through this helper.
+if [ "$IFACE" != "resistine" ]; then
+    echo "resistine-vpn-helper: refusing interface '$IFACE'" >&2
+    exit 2
+fi
+
+ETC_CONF="/etc/wireguard/${IFACE}.conf"
+
+case "$ACTION" in
+    up)
+        SRC="${3:-}"
+        [ -f "$SRC" ] || { echo "source config not found: $SRC" >&2; exit 3; }
+        # Only accept a source owned by the user who invoked pkexec, so this
+        # helper can't be coerced into installing a root-owned file's contents.
+        if [ -n "${PKEXEC_UID:-}" ]; then
+            OWNER="$(stat -c '%u' "$SRC" 2>/dev/null || echo -1)"
+            [ "$OWNER" = "$PKEXEC_UID" ] || { echo "source not owned by caller" >&2; exit 4; }
+        fi
+        grep -q '\[Interface\]' "$SRC" || { echo "not a WireGuard config" >&2; exit 5; }
+        install -m 600 -o root -g root "$SRC" "$ETC_CONF"
+        exec wg-quick up "$IFACE"
+        ;;
+    down)
+        wg-quick down "$IFACE" 2>/dev/null || true
+        rm -f "$ETC_CONF"
+        ;;
+    *)
+        echo "usage: resistine-vpn-helper {up|down} resistine [src]" >&2
+        exit 1
+        ;;
+esac
+"""
+
+HELPER_POLICY = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
+<policyconfig>
+  <vendor>Resistine</vendor>
+  <action id="{POLKIT_ACTION_ID}">
+    <description>Control the Resistine VPN tunnel</description>
+    <message>Authentication is required to control the Resistine VPN</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">{HELPER_PATH}</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+</policyconfig>
+"""
+
+# Session guard so a cancelled install isn't retried on every toggle.
+_helper_install_attempted = False
+
+
+def passwordless_helper_installed():
+    """True when both the helper binary and its polkit policy are present."""
+    return os.path.exists(HELPER_PATH) and os.path.exists(POLKIT_POLICY_PATH)
+
+
+def _build_helper_install_script():
+    """Root shell that writes the helper + polkit policy (base64 to dodge
+    quoting). Run once via pkexec/sudo — needs admin auth as no rule exists
+    yet; subsequent up/down calls are passwordless."""
+    import base64
+
+    h64 = base64.b64encode(HELPER_SCRIPT.encode("utf-8")).decode("ascii")
+    p64 = base64.b64encode(HELPER_POLICY.encode("utf-8")).decode("ascii")
+    return (
+        "set -e\n"
+        f"mkdir -p '{HELPER_DIR}'\n"
+        f"printf %s '{h64}' | base64 -d > '{HELPER_PATH}'\n"
+        f"chown root:root '{HELPER_PATH}'\n"
+        f"chmod 755 '{HELPER_PATH}'\n"
+        f"printf %s '{p64}' | base64 -d > '{POLKIT_POLICY_PATH}'\n"
+        f"chown root:root '{POLKIT_POLICY_PATH}'\n"
+        f"chmod 644 '{POLKIT_POLICY_PATH}'\n"
+    )
+
+
+def install_passwordless_helper():
+    """Install the root-owned helper + polkit policy (one admin prompt)."""
+    if passwordless_helper_installed():
+        return True
+    result = run_privileged_command(["sh", "-c", _build_helper_install_script()])
+    ok = result is not None and result.returncode == 0
+    if ok:
+        logger.info("Installed passwordless VPN helper + polkit policy")
+    else:
+        logger.warning("Failed to install passwordless VPN helper")
+    return ok
+
+
+def _ensure_passwordless_helper():
+    """Ensure the helper is installed; install on first use. Returns True if
+    it's available for passwordless toggling."""
+    global _helper_install_attempted
+    if passwordless_helper_installed():
+        return True
+    if _helper_install_attempted:
+        return False  # already tried (and the user likely cancelled)
+    _helper_install_attempted = True
+    return install_passwordless_helper()
+
 
 def get_writable_wireguard_dir():
     """Get a writable directory for WireGuard configuration files"""
@@ -402,6 +534,16 @@ def stop_vpn(config_path):
     try:
         iface = os.path.splitext(os.path.basename(config_path))[0]
         etc_conf = f"/etc/wireguard/{iface}.conf"
+        # Passwordless path: the installed helper handles down + cleanup.
+        if iface == _HELPER_ALLOWED_IFACE and passwordless_helper_installed():
+            result = subprocess.run(
+                ["pkexec", HELPER_PATH, "down", iface],
+                capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                logger.error(f"VPN helper down failed: {result.stderr.strip()}")
+            return result.returncode == 0
+        # Fallback (helper not installed): prompt-based teardown.
         # Use interface name so AppArmor-confined wg-quick (Ubuntu) can access
         # the config; clean up the /etc/wireguard copy afterwards.
         script = f"wg-quick down '{iface}'; rm -f '{etc_conf}'"
@@ -528,15 +670,28 @@ def start_vpn(config_path):
         # Adapt DNS handling to whatever this host provides (resolvconf vs
         # resolvectl) so wg-quick doesn't fail on a missing resolvconf.
         src_conf = make_dns_compatible_config(config_path)
-        # Copy into /etc/wireguard/ first — Ubuntu's AppArmor profile for
-        # wg-quick only permits reading configs from that directory.
-        script = (
-            f"cp '{src_conf}' '{etc_conf}' && "
-            f"chmod 600 '{etc_conf}' && "
-            f"wg-quick up '{iface}'"
-        )
         try:
+            # Passwordless path: install the helper on first use (one prompt),
+            # then bring the tunnel up with no password on every toggle after.
+            if iface == _HELPER_ALLOWED_IFACE and _ensure_passwordless_helper():
+                result = subprocess.run(
+                    ["pkexec", HELPER_PATH, "up", iface, src_conf],
+                    capture_output=True, text=True,
+                )
+                if result.returncode != 0:
+                    logger.error(f"VPN helper up failed: {result.stderr.strip()}")
+                return result.returncode == 0
+
+            # Fallback (helper unavailable / user declined install): prompt-based
+            # bring-up. Copy into /etc/wireguard/ first — Ubuntu's AppArmor
+            # profile for wg-quick only permits reading configs from there.
+            script = (
+                f"cp '{src_conf}' '{etc_conf}' && "
+                f"chmod 600 '{etc_conf}' && "
+                f"wg-quick up '{iface}'"
+            )
             result = run_privileged_command(["sh", "-c", script])
+            return result is not None and result.returncode == 0
         finally:
             # Clean up the throwaway DNS-compat temp file (contains the private
             # key), regardless of success/failure.
@@ -545,7 +700,6 @@ def start_vpn(config_path):
                     os.remove(src_conf)
                 except OSError:
                     pass
-        return result is not None and result.returncode == 0
     except Exception as e:
         logger.error(f"Failed to start VPN service: {e}")
         return False
