@@ -358,8 +358,30 @@ def install_wazuh_helper():
     return success
 
 
+def _classify_enroll_output(output, name):
+    """Turn raw agent-auth output into an actionable one-line message, or None."""
+    low = (output or "").lower()
+    if "unable to add agent" in low or "invalid request for new agent" in low:
+        return (
+            f"Manager rejected: an agent named '{name}' already exists. Remove it "
+            "on the dashboard (or enable forced re-registration on the manager). "
+            "Retrying every 15s."
+        )
+    if any(s in low for s in (
+        "unable to connect", "couldn't connect", "cannot connect",
+        "timeout", "connection refused",
+    )):
+        return "Couldn't reach the manager to enroll — check VPN/network. Retrying."
+    if "duplicate" in low:
+        return f"Manager rejected a duplicate for '{name}'. Remove the old agent server-side."
+    return None
+
+
 def reenroll_agent():
     """Re-register the agent with the manager (agent-auth) and restart it.
+
+    Returns ``(success, message)`` — message is a human-readable, actionable
+    status (the manager commonly rejects a still-present duplicate agent).
 
     Used by the re-registration loop when the agent is running but not connected
     (e.g. the server dropped/replaced its key). Uses the passwordless helper
@@ -370,7 +392,7 @@ def reenroll_agent():
     group = get_agent_group()
     if not (_SAFE_ARG_RE.match(name) and _SAFE_ARG_RE.match(group)):
         logger.error(f"[WAZUH] refusing re-enroll with unsafe name/group: {name!r}/{group!r}")
-        return False
+        return False, "Refusing re-enroll: unsafe agent name/group."
 
     global _wazuh_helper_install_attempted
     if wazuh_helper_installed() or (
@@ -381,9 +403,11 @@ def reenroll_agent():
             ["pkexec", WAZUH_HELPER_PATH, "reenroll", name, group],
             capture_output=True, text=True,
         )
-        if result.returncode != 0:
-            logger.error(f"[WAZUH] re-enroll helper failed: {result.stderr.strip()}")
-        return result.returncode == 0
+        if result.returncode == 0:
+            return True, "Re-registration submitted."
+        combined = f"{result.stderr or ''}\n{result.stdout or ''}".strip()
+        logger.error(f"[WAZUH] re-enroll helper failed: {combined}")
+        return False, _classify_enroll_output(combined, name) or "Re-registration failed — see logs."
 
     _wazuh_helper_install_attempted = True
     # Fallback: single prompted re-enroll.
@@ -394,8 +418,11 @@ def reenroll_agent():
         f"-A '{name}' -G '{group}'\n"
         f"systemctl restart wazuh-agent\n"
     )
-    success, _ = run_privileged_command(["sh", "-c", script])
-    return success
+    success, output = run_privileged_command(["sh", "-c", script])
+    if success:
+        return True, "Re-registration submitted."
+    logger.error(f"[WAZUH] re-enroll failed: {output}")
+    return False, _classify_enroll_output(output, name) or "Re-registration failed — see logs."
 
 
 def get_connection_state():

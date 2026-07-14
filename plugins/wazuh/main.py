@@ -98,14 +98,15 @@ _REENROLL_SUPPORTED = _PLATFORM == "Linux"
 
 
 def _reenroll_agent():
-    """Dispatch to the platform re-enroll. Returns False where unimplemented."""
+    """Dispatch to the platform re-enroll. Returns (success, message)."""
     try:
         if _PLATFORM == "Linux":
             from plugins.wazuh.agent.wazuh_functions_linux import reenroll_agent
             return reenroll_agent()
     except Exception as e:
         logger.warning(f"[WAZUH] re-enroll unavailable: {e}")
-    return False
+        return False, f"Re-registration error: {e}"
+    return False, "Re-registration isn't supported on this platform yet."
 
 
 # Shared UI constants
@@ -682,13 +683,10 @@ class Plugin(BasePlugin):
         self._set_reregister_status("Re-registering with manager…", _COLOR_ACCENT)
 
         def _run():
-            ok = _reenroll_agent()
+            ok, msg = _reenroll_agent()
             def _done():
                 self._reenrolling = False
-                if ok:
-                    self._set_reregister_status("Re-registration submitted.", _COLOR_OK)
-                else:
-                    self._set_reregister_status("Re-registration failed — see logs.", _COLOR_ERROR)
+                self._set_reregister_status(msg, _COLOR_OK if ok else _COLOR_ERROR)
                 if hasattr(self, "_reregister_btn") and self._reregister_btn.winfo_exists():
                     self._reregister_btn.configure(state="normal")
                 self._refresh_screen()
@@ -1003,13 +1001,16 @@ class Plugin(BasePlugin):
         logger.info(f"[WAZUH] agent running but '{state}'; re-registering with manager...")
 
         def _run():
-            ok = _reenroll_agent()
+            ok, msg = _reenroll_agent()
             def _done():
                 self._reenrolling = False
                 if ok:
                     logger.info("[WAZUH] re-registration attempt completed")
                 else:
-                    logger.warning("[WAZUH] re-registration attempt failed")
+                    logger.warning(f"[WAZUH] re-registration attempt failed: {msg}")
+                # Surface the reason on the Endpoint card if it's showing.
+                self._set_reregister_status(
+                    msg, _COLOR_OK if ok else _COLOR_ERROR)
             self.app.after(0, _done)
 
         threading.Thread(target=_run, daemon=True).start()
