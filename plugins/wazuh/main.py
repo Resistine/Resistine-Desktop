@@ -91,6 +91,12 @@ def _get_connection_state():
         return UNKNOWN
 
 
+# Re-enroll is currently implemented for Linux only (silent via the polkit
+# helper). macOS/Windows lack a silent-privilege path (see review), so the
+# manual button and the auto-monitor are gated off there.
+_REENROLL_SUPPORTED = _PLATFORM == "Linux"
+
+
 def _reenroll_agent():
     """Dispatch to the platform re-enroll. Returns False where unimplemented."""
     try:
@@ -637,7 +643,62 @@ class Plugin(BasePlugin):
             "Platform": f"{_PLATFORM} {platform.release()}",
         })
 
+        # Manual re-registration — force a fresh agent-auth enrollment with the
+        # manager. Useful when the agent is running but not showing active on the
+        # dashboard (e.g. the server dropped/replaced its key). Only shown where
+        # a re-enroll path exists (Linux); the 15s monitor does this
+        # automatically, this button triggers it on demand.
+        if _REENROLL_SUPPORTED:
+            row = self._add_separator(card, row)
+
+            self._reregister_status = customtkinter.CTkLabel(
+                card, text="",
+                font=customtkinter.CTkFont(size=12),
+                text_color=_COLOR_ACCENT,
+            )
+            self._reregister_status.grid(row=row, column=0, columnspan=2, padx=20, pady=(8, 0), sticky="w")
+            row += 1
+
+            self._reregister_btn = customtkinter.CTkButton(
+                card, text="Re-register now",
+                height=36, corner_radius=8,
+                command=self._handle_reregister,
+            )
+            # Re-enrollment needs a running agent to restart into; disable when stopped.
+            if not is_running:
+                self._reregister_btn.configure(state="disabled")
+            self._reregister_btn.grid(row=row, column=0, columnspan=2, padx=20, pady=(8, 16), sticky="ew")
+            row += 1
+
         return row
+
+    def _handle_reregister(self):
+        """Force a manual re-enrollment with the manager (background thread)."""
+        if getattr(self, "_reenrolling", False):
+            return
+        self._reenrolling = True
+        if hasattr(self, "_reregister_btn") and self._reregister_btn.winfo_exists():
+            self._reregister_btn.configure(state="disabled")
+        self._set_reregister_status("Re-registering with manager…", _COLOR_ACCENT)
+
+        def _run():
+            ok = _reenroll_agent()
+            def _done():
+                self._reenrolling = False
+                if ok:
+                    self._set_reregister_status("Re-registration submitted.", _COLOR_OK)
+                else:
+                    self._set_reregister_status("Re-registration failed — see logs.", _COLOR_ERROR)
+                if hasattr(self, "_reregister_btn") and self._reregister_btn.winfo_exists():
+                    self._reregister_btn.configure(state="normal")
+                self._refresh_screen()
+            self.app.after(0, _done)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _set_reregister_status(self, text, color):
+        if hasattr(self, "_reregister_status") and self._reregister_status.winfo_exists():
+            self._reregister_status.configure(text=text, text_color=color)
 
     # --- Key Restore (background thread) ---
 
