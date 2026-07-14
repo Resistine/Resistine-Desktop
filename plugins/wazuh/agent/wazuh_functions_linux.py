@@ -307,23 +307,36 @@ def stop_agent():
     return get_agent_status() != "Running"
 
 def remove_agent(wipe_keys: bool = False):
+    """Uninstall the Wazuh agent and clean up system resources.
+
+    When ``wipe_keys=True`` (used on user logout) the persistent client.keys
+    backup is also deleted so the next user starts with a clean enrollment.
+    """
     if not is_agent_installed() and not (wipe_keys and os.path.exists(_KEY_BACKUP)):
         return True
 
     os_type = _get_os_info()
     backup_dir = os.path.dirname(_KEY_BACKUP)
 
-    uninstall_cmd = ""
+    # Build package uninstall command based on OS type
+    uninstall_pkg_cmd = ""
+    cleanup_arch_cmd = ""
+
     if os_type == "deb":
-        uninstall_cmd = "apt-get remove -y wazuh-agent"
+        # apt removes the package and calls its postrm hooks for user/group cleanup
+        uninstall_pkg_cmd = "apt-get remove -y wazuh-agent || true"
     elif os_type == "rpm":
-        uninstall_cmd = "yum remove -y wazuh-agent || dnf remove -y wazuh-agent"
+        # yum/dnf removes the package and calls its postrm hooks for user/group cleanup
+        uninstall_pkg_cmd = "(yum remove -y wazuh-agent || dnf remove -y wazuh-agent || true)"
     elif os_type == "arch":
-        # bsdtar-extracted install isn't tracked by pacman, so tear down by path
-        uninstall_cmd = (
-            "systemctl disable wazuh-agent 2>/dev/null; "
+        # bsdtar-extracted install isn't tracked by pacman; manually clean up
+        # systemd units first, then the wazuh user/group, then the installation
+        cleanup_arch_cmd = (
+            "systemctl disable wazuh-agent || true; "
             "rm -f /usr/lib/systemd/system/wazuh-agent.service /etc/systemd/system/wazuh-agent.service; "
-            "systemctl daemon-reload"
+            "systemctl daemon-reload; "
+            "userdel wazuh || true; "
+            "groupdel wazuh || true"
         )
 
     if wipe_keys:
@@ -331,17 +344,22 @@ def remove_agent(wipe_keys: bool = False):
     else:
         key_phase = (
             f"mkdir -p '{backup_dir}'; "
-            f"cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}' 2>/dev/null; "
-            f"chown {os.getuid()}:{os.getgid()} '{_KEY_BACKUP}' 2>/dev/null"
+            f"cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}' 2>/dev/null || true; "
+            f"chown {os.getuid()}:{os.getgid()} '{_KEY_BACKUP}' 2>/dev/null || true"
         )
 
     script = f"""
-        systemctl stop wazuh-agent 2>/dev/null
+        systemctl stop wazuh-agent || true
         {key_phase}
-        {uninstall_cmd}
+        {uninstall_pkg_cmd}
+        {cleanup_arch_cmd}
         rm -rf '{LINUX_WAZUH_DIR}'
     """
     success, output = run_privileged_command(["sh", "-c", script])
+    if success:
+        logger.info("Wazuh agent removed successfully")
+    else:
+        logger.error(f"Failed to remove Wazuh agent: {output}")
     return success
 
 def full_install(progress_callback=None):
