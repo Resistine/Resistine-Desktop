@@ -420,79 +420,102 @@ class _AntivirusStepMac(SetupStep):
         self._failed = None
 
         def _work():
-            # Phase 1: virus definitions (seeded at login; wait for it).
-            logger.info("[AV-SETUP] phase 1: ensure_db_seed_started()")
-            av.ensure_db_seed_started()
-            on_status("Downloading virus definitions…")
-            deadline = time.time() + 180
-            last = None
-            while time.time() < deadline:
-                state = av.get_setup_state()
-                if state != last:
-                    logger.info(f"[AV-SETUP] phase 1 state -> {state}")
-                    last = state
-                if state == av.STATE_DB_READY:
-                    break
-                if state == av.STATE_COMPLETED:
-                    logger.info("[AV-SETUP] already completed; nothing to do")
-                    return  # already fully set up
-                if state == av.STATE_SEED_FAILED:
-                    self._failed = self._fail_msg("Couldn't download virus definitions.")
+            # Self-heal stale state from a previous install. Settings live in
+            # ~/Library/Application Support/Resistine and SURVIVE an app
+            # uninstall, so a dev uninstall/reinstall can leave
+            # setup_state="completed" while the system files and — critically —
+            # the SMAppService "Login Items & Extensions" registration are gone.
+            # check_and_advance() resets to not_started when the system install
+            # is missing; a genuine "completed" falls through to phase 4, which
+            # re-registers the daemons and refreshes the Login Items entry.
+            try:
+                av.check_and_advance()
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[AV-SETUP] check_and_advance: {e}")
+            state = av.get_setup_state()
+            logger.info(f"[AV-SETUP] post-heal state={state} "
+                        f"runtime={self._safe_runtime()}")
+
+            if state != av.STATE_COMPLETED:
+                # Phase 1: virus definitions (seeded at login; wait for it).
+                logger.info("[AV-SETUP] phase 1: ensure_db_seed_started()")
+                av.ensure_db_seed_started()
+                on_status("Downloading virus definitions…")
+                deadline = time.time() + 180
+                last = None
+                while time.time() < deadline:
+                    if self.cancelled():
+                        return
+                    state = av.get_setup_state()
+                    if state != last:
+                        logger.info(f"[AV-SETUP] phase 1 state -> {state}")
+                        last = state
+                    if state in (av.STATE_DB_READY, av.STATE_COMPLETED):
+                        break
+                    if state == av.STATE_SEED_FAILED:
+                        self._failed = self._fail_msg("Couldn't download virus definitions.")
+                        return
+                    time.sleep(2)
+                else:
+                    logger.error("[AV-SETUP] phase 1 TIMED OUT waiting for DB_READY "
+                                 f"(last state={last})")
+                    self._failed = "Downloading definitions timed out. You can try again or skip."
                     return
-                time.sleep(2)
-            else:
-                logger.error("[AV-SETUP] phase 1 TIMED OUT waiting for DB_READY "
-                             f"(last state={last})")
-                self._failed = "Downloading definitions timed out. You can try again or skip."
-                return
 
-            # Phase 2: system install (admin prompt).
-            logger.info("[AV-SETUP] phase 2: trigger_system_setup() (admin prompt)")
-            on_status("Approve the administrator prompt to enable protection…")
-            launched = av.trigger_system_setup()
-            logger.info(f"[AV-SETUP] trigger_system_setup() -> {launched}")
-            if not launched:
-                self._failed = self._fail_msg("Antivirus setup couldn't start.")
-                return
+                # Phase 2 + 3: system install (admin prompt), unless a
+                # concurrent path already completed it.
+                if av.get_setup_state() != av.STATE_COMPLETED:
+                    logger.info("[AV-SETUP] phase 2: trigger_system_setup() (admin prompt)")
+                    on_status("Approve the administrator prompt to enable protection…")
+                    launched = av.trigger_system_setup()
+                    logger.info(f"[AV-SETUP] trigger_system_setup() -> {launched}")
+                    if not launched:
+                        self._failed = self._fail_msg("Antivirus setup couldn't start.")
+                        return
 
-            # Phase 3: watch the install to completion.
-            _STEPS = {
-                "install_files": "Installing ClamAV…",
-                "seed_db": "Preparing definitions…",
-                "register_daemons": "Registering protection service…",
-                "start_daemons": "Starting real-time protection…",
-            }
-            logger.info("[AV-SETUP] phase 3: polling install progress")
-            last_step = None
-            while True:
-                result = av.poll_setup_progress()
-                step = result.get("step", "")
-                if step and step != last_step:
-                    logger.info(f"[AV-SETUP] install step -> {step}")
-                    last_step = step
-                    on_status(_STEPS.get(step, "Setting up antivirus…"))
-                if result.get("finished"):
-                    logger.info(f"[AV-SETUP] install finished: {result}")
-                    if result.get("success"):
-                        logger.info("[AV-SETUP] admin install OK")
-                    else:
-                        # The admin postinstall can report failure while the
-                        # daemons are merely awaiting Login Items approval —
-                        # don't hard-fail if that's the real blocker.
-                        rt = self._safe_runtime()
-                        logger.warning(
-                            f"[AV-SETUP] install poll not success; runtime={rt}")
-                        if rt != av.RUNTIME_APPROVAL_REQUIRED:
-                            self._failed = self._fail_msg("Antivirus setup didn't finish.")
+                    _STEPS = {
+                        "install_files": "Installing ClamAV…",
+                        "seed_db": "Preparing definitions…",
+                        "register_daemons": "Registering protection service…",
+                        "start_daemons": "Starting real-time protection…",
+                    }
+                    logger.info("[AV-SETUP] phase 3: polling install progress")
+                    last_step = None
+                    while True:
+                        if self.cancelled():
                             return
-                    break
-                time.sleep(2)
+                        result = av.poll_setup_progress()
+                        step = result.get("step", "")
+                        if step and step != last_step:
+                            logger.info(f"[AV-SETUP] install step -> {step}")
+                            last_step = step
+                            on_status(_STEPS.get(step, "Setting up antivirus…"))
+                        if result.get("finished"):
+                            logger.info(f"[AV-SETUP] install finished: {result}")
+                            if result.get("success"):
+                                logger.info("[AV-SETUP] admin install OK")
+                            else:
+                                # The postinstall can report failure while the
+                                # daemons merely await Login Items approval —
+                                # don't hard-fail if that's the real blocker.
+                                rt = self._safe_runtime()
+                                logger.warning(
+                                    f"[AV-SETUP] install poll not success; runtime={rt}")
+                                if rt != av.RUNTIME_APPROVAL_REQUIRED:
+                                    self._failed = self._fail_msg("Antivirus setup didn't finish.")
+                                    return
+                            break
+                        time.sleep(2)
+            else:
+                logger.info("[AV-SETUP] system already set up — refreshing "
+                            "daemon registration")
 
-            # Phase 4: Login Items & Extensions approval (macOS 13+). After the
-            # admin install the ClamAV daemons are registered but sit in
-            # "Approval Required" until the user enables them. Open the pane and
-            # wait — this is the step the flow was missing.
-            logger.info("[AV-SETUP] phase 4: daemon approval")
+            # Phase 4: register the daemons so the Login Items entry EXISTS
+            # (this is exactly what a reinstall loses — a missing registration
+            # also reports as approval_required), then wait for the user to
+            # enable them and confirm protection comes up.
+            logger.info("[AV-SETUP] phase 4: register + approval")
+            self._register_daemons()
             opened = False
             start = time.time()
             deadline = start + 300
@@ -507,16 +530,16 @@ class _AntivirusStepMac(SetupStep):
                     return
                 if rt == av.RUNTIME_APPROVAL_REQUIRED:
                     if not opened:
-                        logger.info("[AV-SETUP] opening Login Items & Extensions "
-                                    "for daemon approval")
+                        # Re-assert registration right before opening Settings so
+                        # the entry is definitely present for the user to enable.
+                        self._register_daemons()
+                        logger.info("[AV-SETUP] opening Login Items & Extensions")
                         try:
                             from plugins.antivirus import clamav
                             clamav.open_login_items_settings()
                         except Exception as e:  # noqa: BLE001
                             logger.error(f"[AV-SETUP] open_login_items failed: {e}")
                         opened = True
-                    # Live heartbeat so the user sees it's actively checking, and
-                    # remind them that ALL the ClamAV items must be enabled.
                     on_status("Enable all the ClamAV items under System Settings ▸ "
                               "Login Items & Extensions — still checking… "
                               f"({elapsed}s)")
@@ -538,6 +561,18 @@ class _AntivirusStepMac(SetupStep):
                             "Antivirus page, or skip.")
 
         self._run_bg(_work)
+
+    @staticmethod
+    def _register_daemons():
+        """(Re)register the ClamAV daemons via SMAppService so their Login Items
+        entry exists. Idempotent — a no-op when already registered/approved,
+        re-creates the entry after an uninstall/reinstall."""
+        try:
+            from plugins.antivirus import clamav
+            clamav.ensure_daemons_registered()
+            logger.info("[AV-SETUP] ensure_daemons_registered() done")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"[AV-SETUP] ensure_daemons_registered failed: {e}")
 
     @staticmethod
     def _safe_runtime():
