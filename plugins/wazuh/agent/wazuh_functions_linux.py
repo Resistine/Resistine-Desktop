@@ -139,11 +139,17 @@ def needs_reenrollment():
     return False
 
 def _get_os_info():
-    """Determine package family (deb, rpm, arch) using LinuxDistro utility."""
+    """Determine package family (deb, rpm, arch) using LinuxDistro utility.
+
+    openSUSE/SLES is rpm-based — it uses the same .rpm artifact and the same
+    ``rpm -ihv`` install path as Fedora — so it maps to "rpm".  remove_agent
+    picks the correct uninstall tool (zypper vs dnf/yum) from the detected
+    package manager independently, so it doesn't need its own family here.
+    """
     from utils.distro import LinuxDistro
     if LinuxDistro.is_debian_like():
         return "deb"
-    if LinuxDistro.is_fedora_like():
+    if LinuxDistro.is_fedora_like() or LinuxDistro.is_suse_like():
         return "rpm"
     if LinuxDistro.is_arch_like():
         return "arch"
@@ -309,36 +315,77 @@ def stop_agent():
 def remove_agent(wipe_keys: bool = False):
     """Uninstall the Wazuh agent and clean up system resources.
 
+    Removal is driven by the detected package manager and init system rather
+    than a single hard-coded path, so it works across apt/dnf/yum/zypper and
+    both systemd and non-systemd (OpenRC/SysV) hosts:
+
+    * Package-managed installs (deb/rpm/zypper) are removed by the package
+      manager, whose postrm/postun hooks drop the wazuh user and group.
+    * Arch installs are bsdtar-extracted and tracked by no package manager, so
+      they are always torn down by path with a manual user/group cleanup.
+    * Hosts with no recognized package manager fall back to the same manual
+      teardown as Arch (the install can only have been extraction-based).
+
     When ``wipe_keys=True`` (used on user logout) the persistent client.keys
     backup is also deleted so the next user starts with a clean enrollment.
     """
     if not is_agent_installed() and not (wipe_keys and os.path.exists(_KEY_BACKUP)):
         return True
 
+    from utils.distro import LinuxDistro
+
     os_type = _get_os_info()
+    pkg_mgr = LinuxDistro.get_package_manager()
     backup_dir = os.path.dirname(_KEY_BACKUP)
 
-    # Build package uninstall command based on OS type
-    uninstall_pkg_cmd = ""
-    cleanup_arch_cmd = ""
-
-    if os_type == "deb":
-        # apt removes the package and calls its postrm hooks for user/group cleanup
-        uninstall_pkg_cmd = "apt-get remove -y wazuh-agent || true"
-    elif os_type == "rpm":
-        # yum/dnf removes the package and calls its postrm hooks for user/group cleanup
-        uninstall_pkg_cmd = "(yum remove -y wazuh-agent || dnf remove -y wazuh-agent || true)"
-    elif os_type == "arch":
-        # bsdtar-extracted install isn't tracked by pacman; manually clean up
-        # systemd units first, then the wazuh user/group, then the installation
-        cleanup_arch_cmd = (
+    # --- Stop + disable the service (init-system aware) ---
+    # wazuh-control stops the agent regardless of init system; the unit/init
+    # script teardown then differs between systemd and OpenRC/SysV.
+    stop_cmd = f"'{LINUX_WAZUH_DIR}/bin/wazuh-control' stop 2>/dev/null || true"
+    if LinuxDistro.is_systemd():
+        service_teardown = (
+            "systemctl stop wazuh-agent || true; "
             "systemctl disable wazuh-agent || true; "
-            "rm -f /usr/lib/systemd/system/wazuh-agent.service /etc/systemd/system/wazuh-agent.service; "
-            "systemctl daemon-reload; "
-            "userdel wazuh || true; "
-            "groupdel wazuh || true"
+            "rm -f /usr/lib/systemd/system/wazuh-agent.service "
+            "/etc/systemd/system/wazuh-agent.service; "
+            "systemctl daemon-reload || true"
+        )
+    else:
+        # OpenRC (rc-service/rc-update) or SysV (service) fallback.
+        service_teardown = (
+            "(rc-service wazuh-agent stop 2>/dev/null || "
+            "service wazuh-agent stop 2>/dev/null) || true; "
+            "(rc-update del wazuh-agent 2>/dev/null || true); "
+            "rm -f /etc/init.d/wazuh-agent"
         )
 
+    # --- Package removal + orphan user/group cleanup ---
+    # Recognized package managers run postrm/postun hooks that drop the wazuh
+    # user/group, so we let them handle it. Arch and the no-package-manager
+    # fallback are extraction-based, so they must remove the user/group by hand.
+    manual_user_cleanup = (
+        "userdel wazuh 2>/dev/null || true; groupdel wazuh 2>/dev/null || true"
+    )
+    if os_type == "arch":
+        pkg_remove = ""
+        cleanup_users = manual_user_cleanup
+    elif pkg_mgr == "apt":
+        pkg_remove = "apt-get remove -y wazuh-agent || true"
+        cleanup_users = ""
+    elif pkg_mgr in ("dnf", "yum"):
+        pkg_remove = f"{pkg_mgr} remove -y wazuh-agent || true"
+        cleanup_users = ""
+    elif pkg_mgr == "zypper":
+        pkg_remove = "zypper --non-interactive remove wazuh-agent || true"
+        cleanup_users = ""
+    else:
+        # No recognized package manager: the install can only have been placed
+        # by extraction, so tear it down by path like the Arch case.
+        pkg_remove = ""
+        cleanup_users = manual_user_cleanup
+
+    # --- Preserve or wipe the enrollment key backup ---
+    # Runs before pkg_remove/rm -rf so client.keys still exists to be copied.
     if wipe_keys:
         key_phase = f"rm -f '{_KEY_BACKUP}'"
     else:
@@ -349,10 +396,11 @@ def remove_agent(wipe_keys: bool = False):
         )
 
     script = f"""
-        systemctl stop wazuh-agent || true
+        {stop_cmd}
+        {service_teardown}
         {key_phase}
-        {uninstall_pkg_cmd}
-        {cleanup_arch_cmd}
+        {pkg_remove}
+        {cleanup_users}
         rm -rf '{LINUX_WAZUH_DIR}'
     """
     success, output = run_privileged_command(["sh", "-c", script])
