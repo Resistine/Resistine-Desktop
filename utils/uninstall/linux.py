@@ -1,21 +1,21 @@
 """
 Linux Uninstaller Backend.
 
-Removes Resistine's runtime footprint on Linux by delegating to each plugin's
-existing (tested) teardown code and then clearing the app's own state:
+Removes Resistine's runtime footprint on Linux.  Every privileged operation
+(VPN teardown, Wazuh agent removal, ClamAV deactivation) is collected into a
+SINGLE shell script and run through ONE privilege-escalation prompt, mirroring
+the macOS uninstaller.  Earlier revisions escalated once per component, which
+prompted the user for their password up to four times.
 
-  1. VPN        — bring down the WireGuard interface + remove its config/keys
-  2. SIEM agent — stop/remove the Wazuh agent with a full identity wipe
-  3. Antivirus  — deactivate the system ClamAV daemons (packages left in place)
-  4. Secrets    — delete the keyring master key
-  5. App data   — remove the config dir (~/.config/resistine): settings, secrets,
-                  VPN keys, and the Wazuh key backup all live here
-
-Each privileged step is guarded by a presence/active check so a component that
-was never set up doesn't trigger a needless pkexec/sudo prompt.
+Phases:
+  1. Collect privileged commands from each plugin's tested script builders
+     (guarded so an un-configured component contributes nothing).
+  2. Run them all in one pkexec/sudo prompt.
+  3. Non-privileged cleanup (no prompt): keyring master key + config dir
+     (~/.config/resistine — settings, secrets, VPN keys, Wazuh key backup).
 
 Running from source (run.sh) there is no installed binary or .desktop entry to
-remove.  A packaged build should extend this with artifact removal.
+remove.  A packaged build should extend phase 1/3 with artifact removal.
 
 Author: Resistine Team
 Copyright (c) Resistine 2025
@@ -34,11 +34,10 @@ def is_available():
 
 
 def run_uninstall(app, progress_callback=None):
-    """Execute the full Linux uninstall sequence.
+    """Execute the full Linux uninstall sequence in a single password prompt.
 
     Returns (success, message).  Individual step failures are collected and
-    reported rather than aborting the whole teardown, so a failure in one
-    component still lets the rest clean up.
+    reported rather than aborting the whole teardown.
     """
 
     def _progress(msg):
@@ -50,15 +49,37 @@ def run_uninstall(app, progress_callback=None):
                 logger.debug(f"[UNINSTALL-LINUX] Progress callback failed: {e}")
 
     errors = []
+    admin_cmds = []  # privileged shell commands, run in ONE prompt
 
-    steps = [
-        ("Stopping VPN...",            "VPN",         _teardown_vpn),
-        ("Removing SIEM agent...",     "SIEM agent",  _remove_wazuh_agent),
-        ("Deactivating antivirus...",  "Antivirus",   _deactivate_clamav),
-        ("Removing stored secrets...", "Secrets",     _remove_keyring_master_key),
-        ("Removing application data...", "App data",   _remove_app_config),
-    ]
-    for message, label, func in steps:
+    # -- Phase 1: collect privileged commands (no execution yet) -------------
+    for message, label, collector in (
+        ("Preparing VPN teardown...",        "VPN",        _collect_vpn_cmds),
+        ("Preparing SIEM agent removal...",  "SIEM agent", _collect_wazuh_cmds),
+        ("Preparing antivirus teardown...",  "Antivirus",  _collect_clamav_cmds),
+    ):
+        _progress(message)
+        try:
+            collector(admin_cmds)
+        except Exception as e:
+            logger.error(f"[UNINSTALL-LINUX] Failed — {label} prep: {e}")
+            errors.append(f"{label} prep: {e}")
+
+    # -- Phase 2: run every privileged command in ONE prompt -----------------
+    if admin_cmds:
+        _progress("Authenticating for system cleanup...")
+        try:
+            _run_privileged_batch(admin_cmds)
+        except _UserCancelled:
+            return (False, "Uninstall cancelled at password prompt.")
+        except Exception as e:
+            logger.error(f"[UNINSTALL-LINUX] Failed — Privileged cleanup: {e}")
+            errors.append(f"Privileged cleanup: {e}")
+
+    # -- Phase 3: non-privileged cleanup (no prompt) -------------------------
+    for message, label, func in (
+        ("Removing stored secrets...",   "Secrets",  _remove_keyring_master_key),
+        ("Removing application data...", "App data", _remove_app_config),
+    ):
         _progress(message)
         try:
             func()
@@ -71,88 +92,100 @@ def run_uninstall(app, progress_callback=None):
     return (True, "Resistine has been uninstalled successfully.")
 
 
+class _UserCancelled(Exception):
+    """User clicked Cancel on the privilege-escalation prompt."""
+    pass
+
+
 # ---------------------------------------------------------------------------
-# Cleanup helpers
+# Privileged command runner
 # ---------------------------------------------------------------------------
 
 
-def _teardown_vpn():
-    """Bring down any WireGuard interface and remove its config + keys.
+def _run_privileged_batch(admin_cmds):
+    """Run all collected privileged commands in a single escalation.
 
-    Guarded on the presence of a stored config so an un-configured VPN doesn't
-    prompt for privileges.
+    Reuses the shared Linux privilege helper (pkexec, then a themed sudo
+    dialog).  Every command already carries its own ``|| true`` guard so one
+    failing step can't abort the rest.
     """
+    from plugins.wazuh.agent.wazuh_functions_linux import run_privileged_command
+
+    script = "\n".join(admin_cmds)
+    success, output = run_privileged_command(["sh", "-c", script], timeout=600)
+    if success:
+        logger.info("[UNINSTALL-LINUX] Privileged cleanup completed")
+        return
+    if output and "User cancelled" in output:
+        raise _UserCancelled()
+    raise OSError(output or "Privileged cleanup failed")
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 collectors — append privileged shell commands, no execution
+# ---------------------------------------------------------------------------
+
+
+def _collect_vpn_cmds(admin_cmds):
+    """Append WireGuard teardown commands for each stored config."""
     try:
-        from plugins.vpn.wireguard import vpn_functions_linux as vpn
+        from utils.settings import get_config_dir
     except ImportError:
-        logger.info("[UNINSTALL-LINUX] VPN plugin not present, skipping")
         return
 
-    from utils.settings import get_config_dir
-
     wg_dir = os.path.join(get_config_dir(), "wireguard")
-    confs = []
-    if os.path.isdir(wg_dir):
-        confs = [
-            os.path.join(wg_dir, fn)
-            for fn in os.listdir(wg_dir)
-            if fn.endswith(".conf")
-        ]
+    if not os.path.isdir(wg_dir):
+        logger.info("[UNINSTALL-LINUX] No WireGuard config dir, skipping VPN")
+        return
 
+    confs = [fn for fn in os.listdir(wg_dir) if fn.endswith(".conf")]
     if not confs:
-        logger.info("[UNINSTALL-LINUX] No WireGuard config found, skipping VPN teardown")
-    else:
-        for conf in confs:
-            try:
-                vpn.stop_vpn(conf)  # wg-quick down + removes the /etc/wireguard copy
-            except Exception as e:
-                logger.warning(f"[UNINSTALL-LINUX] stop_vpn failed for {conf}: {e}")
+        logger.info("[UNINSTALL-LINUX] No WireGuard configs, skipping VPN")
+        return
 
-    # Local key file is also removed with the config dir, but be explicit.
-    try:
-        vpn.delete_wireguard_keys()
-    except Exception as e:
-        logger.warning(f"[UNINSTALL-LINUX] delete_wireguard_keys failed: {e}")
+    for fn in confs:
+        iface = os.path.splitext(fn)[0].replace("'", "")
+        # Match stop_vpn: bring the interface down by name (AppArmor-friendly)
+        # then remove the /etc/wireguard copy wg-quick reads.
+        admin_cmds.append(f"wg-quick down '{iface}' 2>/dev/null || true")
+        admin_cmds.append(f"rm -f '/etc/wireguard/{iface}.conf'")
 
 
-def _remove_wazuh_agent():
-    """Stop and remove the Wazuh agent with a full identity wipe.
-
-    remove_agent(wipe_keys=True) self-guards: it returns without prompting for
-    privileges when the agent isn't installed and no key backup exists.
-    """
+def _collect_wazuh_cmds(admin_cmds):
+    """Append the Wazuh agent teardown script (full identity wipe)."""
     try:
         from plugins.wazuh.agent import wazuh_functions_linux as wazuh
     except ImportError:
         logger.info("[UNINSTALL-LINUX] Wazuh plugin not present, skipping")
         return
 
-    if not wazuh.remove_agent(wipe_keys=True):
-        raise OSError("Wazuh agent removal reported failure")
+    if not wazuh.agent_present(wipe_keys=True):
+        logger.info("[UNINSTALL-LINUX] Wazuh agent not present, skipping")
+        return
+
+    admin_cmds.append(wazuh.build_remove_script(wipe_keys=True))
 
 
-def _deactivate_clamav():
-    """Deactivate system ClamAV daemons, guarded on any being active."""
+def _collect_clamav_cmds(admin_cmds):
+    """Append ClamAV daemon deactivation, guarded on an active service."""
     try:
         from plugins.antivirus import clamav_platform_linux as clamav
     except ImportError:
         logger.info("[UNINSTALL-LINUX] Antivirus plugin not present, skipping")
         return
 
-    # Only touch systemd (and prompt) if one of our services is actually active.
-    try:
-        services = clamav._service_names()
-        any_active = any(clamav._systemctl_is_active(s) for s in services)
-    except Exception:
-        any_active = False
-
-    if not any_active:
+    if not clamav.is_any_service_active():
         logger.info("[UNINSTALL-LINUX] No active ClamAV services, skipping")
         return
 
-    ok, msg = clamav.deactivate_system_daemons()
-    if not ok:
-        raise OSError(msg or "ClamAV deactivation failed")
+    script = clamav.build_deactivate_script()
+    if script:
+        admin_cmds.append(script)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 helpers — non-privileged cleanup
+# ---------------------------------------------------------------------------
 
 
 def _remove_keyring_master_key():
