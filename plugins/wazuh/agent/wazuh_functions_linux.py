@@ -312,26 +312,22 @@ def stop_agent():
         
     return get_agent_status() != "Running"
 
-def remove_agent(wipe_keys: bool = False):
-    """Uninstall the Wazuh agent and clean up system resources.
+def agent_present(wipe_keys: bool = False) -> bool:
+    """Return True if there's a Wazuh agent (or key backup) worth removing.
 
-    Removal is driven by the detected package manager and init system rather
-    than a single hard-coded path, so it works across apt/dnf/yum/zypper and
-    both systemd and non-systemd (OpenRC/SysV) hosts:
-
-    * Package-managed installs (deb/rpm/zypper) are removed by the package
-      manager, whose postrm/postun hooks drop the wazuh user and group.
-    * Arch installs are bsdtar-extracted and tracked by no package manager, so
-      they are always torn down by path with a manual user/group cleanup.
-    * Hosts with no recognized package manager fall back to the same manual
-      teardown as Arch (the install can only have been extraction-based).
-
-    When ``wipe_keys=True`` (used on user logout) the persistent client.keys
-    backup is also deleted so the next user starts with a clean enrollment.
+    Mirrors remove_agent's guard so callers batching privileged work (e.g. the
+    app uninstaller) can decide whether to include the teardown commands.
     """
-    if not is_agent_installed() and not (wipe_keys and os.path.exists(_KEY_BACKUP)):
-        return True
+    return is_agent_installed() or (wipe_keys and os.path.exists(_KEY_BACKUP))
 
+
+def build_remove_script(wipe_keys: bool = False) -> str:
+    """Build the privileged shell script that tears down the Wazuh agent.
+
+    Split out from remove_agent so the app-level uninstaller can fold these
+    commands into a single privilege-escalation prompt instead of running its
+    own. See remove_agent for the per-distro rationale.
+    """
     from utils.distro import LinuxDistro
 
     os_type = _get_os_info()
@@ -395,7 +391,7 @@ def remove_agent(wipe_keys: bool = False):
             f"chown {os.getuid()}:{os.getgid()} '{_KEY_BACKUP}' 2>/dev/null || true"
         )
 
-    script = f"""
+    return f"""
         {stop_cmd}
         {service_teardown}
         {key_phase}
@@ -403,6 +399,29 @@ def remove_agent(wipe_keys: bool = False):
         {cleanup_users}
         rm -rf '{LINUX_WAZUH_DIR}'
     """
+
+
+def remove_agent(wipe_keys: bool = False):
+    """Uninstall the Wazuh agent and clean up system resources.
+
+    Removal is driven by the detected package manager and init system rather
+    than a single hard-coded path, so it works across apt/dnf/yum/zypper and
+    both systemd and non-systemd (OpenRC/SysV) hosts:
+
+    * Package-managed installs (deb/rpm/zypper) are removed by the package
+      manager, whose postrm/postun hooks drop the wazuh user and group.
+    * Arch installs are bsdtar-extracted and tracked by no package manager, so
+      they are always torn down by path with a manual user/group cleanup.
+    * Hosts with no recognized package manager fall back to the same manual
+      teardown as Arch (the install can only have been extraction-based).
+
+    When ``wipe_keys=True`` (used on user logout) the persistent client.keys
+    backup is also deleted so the next user starts with a clean enrollment.
+    """
+    if not agent_present(wipe_keys):
+        return True
+
+    script = build_remove_script(wipe_keys)
     success, output = run_privileged_command(["sh", "-c", script])
     if success:
         logger.info("Wazuh agent removed successfully")
