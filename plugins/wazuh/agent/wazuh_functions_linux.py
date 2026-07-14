@@ -139,21 +139,29 @@ def needs_reenrollment():
     return False
 
 def _set_ossec_agent_name(ossec_conf, agent_name):
-    """Shell that sets <agent_name> inside the <enrollment> block of ossec.conf.
+    """Shell that pins wazuh-agentd's enrollment <agent_name> in ossec.conf.
 
-    The default Wazuh agent config has NO <agent_name> tag, so a plain
-    sed-replace is a no-op and wazuh-agentd's built-in auto-enrollment falls
-    back to the bare hostname (e.g. 'archlinux' instead of the unique
+    The stock Wazuh agent config ships with NO <agent_name> — and often no
+    <enrollment> block at all (e.g. the RPM's CentOS-profile config) — so a
+    plain sed-replace is a no-op and wazuh-agentd's built-in auto-enrollment
+    falls back to the bare hostname ('archlinux' instead of the unique
     'archlinux-<uuid>'). This bit Arch especially: bsdtar extraction runs no
-    postinst to apply WAZUH_AGENT_NAME. So: replace the tag if present,
-    otherwise INSERT it into <enrollment> — keeping agent-auth and the agent's
-    own auto-enrollment on the same unique name.
+    postinst to apply WAZUH_AGENT_NAME. Handle all three shapes:
+
+      1. <agent_name> already present  -> replace it
+      2. <enrollment> present, no name -> insert <agent_name> into it
+      3. neither                       -> insert a full <enrollment> block
+                                          before </client>
+
+    so agent-auth and the agent's own auto-enrollment stay on one unique name.
     """
     return (
         f"if grep -q '<agent_name>' '{ossec_conf}'; then "
         f"sed -i 's|<agent_name>.*</agent_name>|<agent_name>{agent_name}</agent_name>|' '{ossec_conf}'; "
         f"elif grep -q '<enrollment>' '{ossec_conf}'; then "
         f"sed -i 's|<enrollment>|<enrollment>\\n      <agent_name>{agent_name}</agent_name>|' '{ossec_conf}'; "
+        f"else "
+        f"sed -i 's|</client>|  <enrollment>\\n      <agent_name>{agent_name}</agent_name>\\n    </enrollment>\\n  </client>|' '{ossec_conf}'; "
         f"fi"
     )
 
