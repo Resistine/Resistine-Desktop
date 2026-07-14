@@ -562,10 +562,12 @@ def _build_install_script(sysmon, msi_path, agent_name, agent_group, backup_dir)
     ])))
 
     # Enroll with the manager (writes client.keys).
+    # -p is the port flag; -P (uppercase) is the password-file path — passing
+    # the port to -P is a no-op that only works because 1515 is the default.
     parts.append(_guard(
         f"if (Test-Path '{_AGENT_AUTH}') {{ "
         f"& '{_AGENT_AUTH}' -m '{WAZUH_MANAGER}' "
-        f"-P '{WAZUH_REGISTRATION_PORT}' "
+        f"-p '{WAZUH_REGISTRATION_PORT}' "
         f"-A '{agent_name}' -G '{agent_group}' }}"
     ))
 

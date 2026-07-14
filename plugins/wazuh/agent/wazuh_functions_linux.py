@@ -138,6 +138,26 @@ def needs_reenrollment():
         return True
     return False
 
+def _set_ossec_agent_name(ossec_conf, agent_name):
+    """Shell that sets <agent_name> inside the <enrollment> block of ossec.conf.
+
+    The default Wazuh agent config has NO <agent_name> tag, so a plain
+    sed-replace is a no-op and wazuh-agentd's built-in auto-enrollment falls
+    back to the bare hostname (e.g. 'archlinux' instead of the unique
+    'archlinux-<uuid>'). This bit Arch especially: bsdtar extraction runs no
+    postinst to apply WAZUH_AGENT_NAME. So: replace the tag if present,
+    otherwise INSERT it into <enrollment> — keeping agent-auth and the agent's
+    own auto-enrollment on the same unique name.
+    """
+    return (
+        f"if grep -q '<agent_name>' '{ossec_conf}'; then "
+        f"sed -i 's|<agent_name>.*</agent_name>|<agent_name>{agent_name}</agent_name>|' '{ossec_conf}'; "
+        f"elif grep -q '<enrollment>' '{ossec_conf}'; then "
+        f"sed -i 's|<enrollment>|<enrollment>\\n      <agent_name>{agent_name}</agent_name>|' '{ossec_conf}'; "
+        f"fi"
+    )
+
+
 def _get_os_info():
     """Determine package family (deb, rpm, arch) using LinuxDistro utility.
 
@@ -284,7 +304,7 @@ case "$ACTION" in
             esac
         done
         rm -f "$CLIENT_KEYS"
-        "$AGENT_AUTH" -m "$MANAGER" -P "$REG_PORT" -A "$NAME" -G "$GROUP"
+        "$AGENT_AUTH" -m "$MANAGER" -p "$REG_PORT" -A "$NAME" -G "$GROUP"
         systemctl restart wazuh-agent
         ;;
     *)
@@ -414,7 +434,7 @@ def reenroll_agent():
     agent_auth = f"{LINUX_WAZUH_DIR}/bin/agent-auth"
     script = (
         f"rm -f '{_CLIENT_KEYS}'\n"
-        f"'{agent_auth}' -m '{WAZUH_MANAGER}' -P '{WAZUH_REGISTRATION_PORT}' "
+        f"'{agent_auth}' -m '{WAZUH_MANAGER}' -p '{WAZUH_REGISTRATION_PORT}' "
         f"-A '{name}' -G '{group}'\n"
         f"systemctl restart wazuh-agent\n"
     )
@@ -661,16 +681,19 @@ def full_install(progress_callback=None):
 
     # Always re-enroll so the manager receives the group on every install.
     # The key backup is still written for future repair/recovery flows.
+    # NOTE: the port flag is lowercase -p (uppercase -P is the password-FILE
+    # path in agent-auth; passing the port there is a no-op that only "works"
+    # because 1515 is also the default port).
     enrollment_script = f"""
             rm -f '{_CLIENT_KEYS}'
-            '{agent_auth}' -m '{WAZUH_MANAGER}' -P '{WAZUH_REGISTRATION_PORT}' -A '{agent_name}' -G '{agent_group}'
+            '{agent_auth}' -m '{WAZUH_MANAGER}' -p '{WAZUH_REGISTRATION_PORT}' -A '{agent_name}' -G '{agent_group}'
             mkdir -p '{backup_dir}' && cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}'
             chown {os.getuid()}:{os.getgid()} '{_KEY_BACKUP}' 2>/dev/null
         """
 
     script = f"""
         {install_cmd}
-        sed -i 's|<agent_name>.*</agent_name>|<agent_name>{agent_name}</agent_name>|' '{ossec_conf}'
+        {_set_ossec_agent_name(ossec_conf, agent_name)}
         {enrollment_script}
         systemctl daemon-reload
         systemctl enable wazuh-agent
