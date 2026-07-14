@@ -49,6 +49,10 @@ class SetupStep:
         self._failed = None  # user-facing error string, or None
         self._logged_failure = False  # dedupe one-time failure logging
         self._activated = False  # set once the step's service is running
+        self._cancel = threading.Event()  # set when the wizard leaves this step
+
+    def cancelled(self) -> bool:
+        return self._cancel.is_set()
 
     # ── Hooks ───────────────────────────────────────────────────────
     def is_applicable(self) -> bool:
@@ -175,6 +179,8 @@ class _VPNStepBase(SetupStep):
             import time
             deadline = time.time() + 40
             while time.time() < deadline:
+                if self.cancelled():
+                    return
                 st = _vpn_status(name)
                 if st == "Running":
                     logger.info("[VPN-SETUP] connected")
@@ -224,6 +230,8 @@ class _VPNStepMac(_VPNStepBase):
         import time
         deadline = time.time() + 300
         while time.time() < deadline:
+            if self.cancelled():
+                return False
             if is_extension_enabled():
                 logger.info("[VPN-SETUP] extension approved")
                 return True
@@ -486,9 +494,14 @@ class _AntivirusStepMac(SetupStep):
             # wait — this is the step the flow was missing.
             logger.info("[AV-SETUP] phase 4: daemon approval")
             opened = False
-            deadline = time.time() + 300
+            start = time.time()
+            deadline = start + 300
             while time.time() < deadline:
+                if self.cancelled():
+                    logger.info("[AV-SETUP] phase 4 cancelled (step left)")
+                    return
                 rt = self._safe_runtime()
+                elapsed = int(time.time() - start)
                 if rt in ("healthy", "degraded", "fda_required"):
                     logger.info(f"[AV-SETUP] SUCCESS — protection active (runtime={rt})")
                     return
@@ -502,8 +515,11 @@ class _AntivirusStepMac(SetupStep):
                         except Exception as e:  # noqa: BLE001
                             logger.error(f"[AV-SETUP] open_login_items failed: {e}")
                         opened = True
-                    on_status("Enable the ClamAV items in System Settings ▸ "
-                              "Login Items & Extensions to finish.")
+                    # Live heartbeat so the user sees it's actively checking, and
+                    # remind them that ALL the ClamAV items must be enabled.
+                    on_status("Enable all the ClamAV items under System Settings ▸ "
+                              "Login Items & Extensions — still checking… "
+                              f"({elapsed}s)")
                 else:  # offline — actively (re)start the daemons
                     logger.info(f"[AV-SETUP] runtime={rt}; activate_system_daemons()")
                     try:
@@ -512,7 +528,7 @@ class _AntivirusStepMac(SetupStep):
                         logger.info(f"[AV-SETUP] activate_system_daemons -> {ok} ({msg})")
                     except Exception as e:  # noqa: BLE001
                         logger.error(f"[AV-SETUP] activate_system_daemons failed: {e}")
-                    on_status("Starting real-time protection…")
+                    on_status(f"Starting real-time protection… ({elapsed}s)")
                 time.sleep(2)
 
             logger.error("[AV-SETUP] phase 4 TIMED OUT (runtime="
@@ -665,7 +681,17 @@ def _wazuh_start() -> bool:
         return False
 
 
-def _wazuh_activate(on_status):
+def _maybe_forward_clamav(on_status):
+    """Best-effort: once the agent is running, forward ClamAV logs to it if
+    ClamAV is also set up. Never fails the endpoint step."""
+    try:
+        from plugins.wazuh.agent.log_forwarding import ensure_clamav_log_forwarding
+        ensure_clamav_log_forwarding(on_status)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[EP-SETUP] ClamAV forwarding skipped: {e}")
+
+
+def _wazuh_activate(on_status, cancelled=None):
     """After install, ensure the agent is actually Running. Worker thread only."""
     import time
     if _wazuh_running():
@@ -676,6 +702,8 @@ def _wazuh_activate(on_status):
     _wazuh_start()
     deadline = time.time() + 60
     while time.time() < deadline:
+        if cancelled and cancelled():
+            return False
         if _wazuh_running():
             logger.info("[EP-SETUP] agent running")
             return True
@@ -779,9 +807,12 @@ class _EndpointStepMac(SetupStep):
                     time.sleep(2)
 
             # Phase 4: make sure the agent is actually running.
-            if not _wazuh_activate(on_status):
+            if not _wazuh_activate(on_status, self.cancelled):
                 self._failed = ("Endpoint agent installed but isn't running yet. "
                                 "You can start it from the Endpoint page, or skip.")
+                return
+            # Phase 5: link ClamAV → Wazuh if antivirus is also set up.
+            _maybe_forward_clamav(on_status)
 
         self._run_bg(_work)
 
@@ -823,9 +854,12 @@ class _EndpointStepDirect(SetupStep):
 
             # Ensure the agent is actually running (full_install usually starts
             # it; this covers the already-installed-but-stopped case too).
-            if not _wazuh_activate(on_status):
+            if not _wazuh_activate(on_status, self.cancelled):
                 self._failed = ("Endpoint agent installed but isn't running yet. "
                                 "You can start it from the Endpoint page, or skip.")
+                return
+            # Link ClamAV → Wazuh if antivirus is also set up.
+            _maybe_forward_clamav(on_status)
         self._run_bg(_work)
 
 

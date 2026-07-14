@@ -48,6 +48,8 @@ class SetupWizardScreen:
         self.index = -1                 # current step (-1 = welcome)
         self._poll_id = None
         self._active = False            # a step's work is running / polling
+        self._act_seq = 0               # bumped each activation; stale worker
+        #                                 on_status callbacks are ignored
         self.results = {}               # step.key -> "done" | "skipped"
 
     # ── Lifecycle ───────────────────────────────────────────────────
@@ -151,6 +153,12 @@ class SetupWizardScreen:
         """Move to the next step that is both applicable and not yet complete."""
         self._cancel_poll()
         self._active = False
+        # Signal the step we're leaving so any worker thread it left running
+        # stops (and its stale on_status callbacks are already ignored via the
+        # activation sequence guard).
+        if 0 <= self.index < len(self.steps):
+            self.steps[self.index]._cancel.set()
+        self._act_seq += 1
         self.index += 1
         while self.index < len(self.steps):
             step = self.steps[self.index]
@@ -263,14 +271,22 @@ class SetupWizardScreen:
         logger.info(f"[SETUP] primary clicked for step '{step.key}' — begin()")
         self._active = True
         step._failed = None
+        step._cancel.clear()
+        self._act_seq += 1
+        my_seq = self._act_seq
         self._primary.configure(state="disabled", text=step.working_label)
         self._skip_btn.configure(text="Skip this step")
         self._bar.grid()
         self._bar.start()
         self._set_status(step.working_label)
 
-        # on_status is called from worker threads — marshal to the UI thread.
-        def on_status(text):
+        # on_status is called from worker threads — marshal to the UI thread,
+        # but ignore updates from a superseded activation so a left-behind
+        # worker (e.g. the antivirus approval loop) can't write into a later
+        # step's screen.
+        def on_status(text, _seq=my_seq):
+            if _seq != self._act_seq:
+                return
             try:
                 self.app.after(0, self._set_status, text)
             except Exception:  # noqa: BLE001
