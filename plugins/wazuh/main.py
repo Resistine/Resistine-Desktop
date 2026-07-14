@@ -164,6 +164,9 @@ class Plugin(BasePlugin):
         self._reenrolling = False
         self._installing = False
         self.status = self.get_status()
+        # Background re-registration monitor — runs app-wide, independent of
+        # whether the Endpoint page is currently open.
+        self._start_reregister_monitor()
 
     # --- Status ---
 
@@ -185,7 +188,8 @@ class Plugin(BasePlugin):
 
     def create_main_screen(self):
         self._stop_status_polling()
-        self._stop_reregister_monitor()
+        # NOTE: the re-registration monitor is intentionally NOT stopped here —
+        # it runs app-wide and must survive navigating between pages.
         if not _platform_supported:
             return self._unsupported_screen()
         return self._agent_screen()
@@ -962,17 +966,22 @@ class Plugin(BasePlugin):
     # platforms without a silent re-enroll path it's a no-op (see review).
 
     def _start_reregister_monitor(self):
-        if not _platform_supported:
+        # Runs APP-WIDE, not tied to the Endpoint screen: once started it keeps
+        # ticking regardless of which page is showing (and survives navigating
+        # away from Endpoint), so a fresh install that isn't connected keeps
+        # retrying in the background. Idempotent — a second call is a no-op.
+        if not _platform_supported or not _REENROLL_SUPPORTED:
             return
-        self._stop_reregister_monitor()
-        self._reenrolling = False
+        if getattr(self, "_reregister_id", None) is not None:
+            return  # already running
 
         def tick():
-            if not hasattr(self, "main_container") or not self.main_container.winfo_exists():
-                self._reregister_id = None
-                return
             self._maybe_reregister()
-            self._reregister_id = self.app.after(_REREGISTER_INTERVAL_MS, tick)
+            # Keep ticking as long as the app (Tk root) is alive.
+            try:
+                self._reregister_id = self.app.after(_REREGISTER_INTERVAL_MS, tick)
+            except Exception:
+                self._reregister_id = None
 
         self._reregister_id = self.app.after(_REREGISTER_INTERVAL_MS, tick)
 
@@ -988,6 +997,10 @@ class Plugin(BasePlugin):
             return  # an attempt is already in flight
         try:
             if not is_agent_installed() or get_agent_status() != "Running":
+                return
+            # Different-account enrollment needs a Reinstall, not a silent
+            # re-enroll — leave that to the UI's re-enroll section.
+            if needs_reenrollment():
                 return
             state = _get_connection_state()
         except Exception:
