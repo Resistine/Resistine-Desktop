@@ -239,6 +239,190 @@ def write_env_file(agent_name, agent_group):
 _KEY_BACKUP = os.path.expanduser("~/.config/resistine/wazuh_client.keys")
 _CLIENT_KEYS = f"{LINUX_WAZUH_DIR}/etc/client.keys"
 
+# --- Passwordless re-enrollment helper (polkit) -----------------------------
+# Mirrors the VPN helper: a root-owned script that ONLY re-enrolls the Wazuh
+# agent (agent-auth + restart), authorized via a polkit action with
+# allow_active=yes so the re-registration loop can re-enroll silently (no
+# password prompt every 15s). Installed once (one admin prompt).
+WAZUH_HELPER_DIR = "/usr/local/lib/resistine"
+WAZUH_HELPER_PATH = f"{WAZUH_HELPER_DIR}/resistine-wazuh-helper"
+WAZUH_POLKIT_ACTION_ID = "com.resistine.wazuh.control"
+WAZUH_POLKIT_POLICY_PATH = (
+    f"/usr/share/polkit-1/actions/{WAZUH_POLKIT_ACTION_ID}.policy"
+)
+
+# name/group are validated here AND in the helper — Wazuh's own allowed charset.
+_SAFE_ARG_RE = re.compile(r"^[A-Za-z0-9.\-_]+$")
+
+WAZUH_HELPER_SCRIPT = r"""#!/bin/sh
+# Resistine Wazuh helper. Two actions, both root-owned and authorized via polkit
+# action com.resistine.wazuh.control (passwordless for the active local
+# session): 'state' prints the agentd state file (root-readable only), and
+# 'reenroll' re-registers the agent with the manager and restarts it.
+set -eu
+
+ACTION="${1:-}"
+
+MANAGER="__MANAGER__"
+REG_PORT="__REG_PORT__"
+CLIENT_KEYS="__CLIENT_KEYS__"
+AGENT_AUTH="__AGENT_AUTH__"
+STATE_FILE="__STATE_FILE__"
+
+case "$ACTION" in
+    state)
+        # Print the state file so the app can read connection status silently.
+        cat "$STATE_FILE" 2>/dev/null || true
+        ;;
+    reenroll)
+        NAME="${2:-}"
+        GROUP="${3:-}"
+        # Only Wazuh's safe agent-name/group charset (no shell metacharacters).
+        for v in "$NAME" "$GROUP"; do
+            case "$v" in
+                *[!A-Za-z0-9._-]*|"") echo "invalid name/group" >&2; exit 2 ;;
+            esac
+        done
+        rm -f "$CLIENT_KEYS"
+        "$AGENT_AUTH" -m "$MANAGER" -P "$REG_PORT" -A "$NAME" -G "$GROUP"
+        systemctl restart wazuh-agent
+        ;;
+    *)
+        echo "usage: resistine-wazuh-helper {state|reenroll <name> <group>}" >&2
+        exit 1
+        ;;
+esac
+"""
+
+WAZUH_HELPER_POLICY = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
+<policyconfig>
+  <vendor>Resistine</vendor>
+  <action id="{WAZUH_POLKIT_ACTION_ID}">
+    <description>Re-enroll the Resistine SIEM agent</description>
+    <message>Authentication is required to re-enroll the Resistine SIEM agent</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">{WAZUH_HELPER_PATH}</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+</policyconfig>
+"""
+
+_wazuh_helper_install_attempted = False
+
+
+def _wazuh_helper_script_filled():
+    """The helper script with install-specific constants substituted in."""
+    return (
+        WAZUH_HELPER_SCRIPT
+        .replace("__MANAGER__", WAZUH_MANAGER)
+        .replace("__REG_PORT__", str(WAZUH_REGISTRATION_PORT))
+        .replace("__CLIENT_KEYS__", _CLIENT_KEYS)
+        .replace("__AGENT_AUTH__", f"{LINUX_WAZUH_DIR}/bin/agent-auth")
+        .replace("__STATE_FILE__", f"{LINUX_WAZUH_DIR}/var/run/wazuh-agentd.state")
+    )
+
+
+def wazuh_helper_installed():
+    return os.path.exists(WAZUH_HELPER_PATH) and os.path.exists(WAZUH_POLKIT_POLICY_PATH)
+
+
+def install_wazuh_helper():
+    """Install the root-owned re-enroll helper + polkit policy (one prompt)."""
+    if wazuh_helper_installed():
+        return True
+    import base64
+    h64 = base64.b64encode(_wazuh_helper_script_filled().encode()).decode()
+    p64 = base64.b64encode(WAZUH_HELPER_POLICY.encode()).decode()
+    script = (
+        "set -e\n"
+        f"mkdir -p '{WAZUH_HELPER_DIR}'\n"
+        f"printf %s '{h64}' | base64 -d > '{WAZUH_HELPER_PATH}'\n"
+        f"chown root:root '{WAZUH_HELPER_PATH}'\n"
+        f"chmod 755 '{WAZUH_HELPER_PATH}'\n"
+        f"printf %s '{p64}' | base64 -d > '{WAZUH_POLKIT_POLICY_PATH}'\n"
+        f"chown root:root '{WAZUH_POLKIT_POLICY_PATH}'\n"
+        f"chmod 644 '{WAZUH_POLKIT_POLICY_PATH}'\n"
+    )
+    success, _ = run_privileged_command(["sh", "-c", script])
+    if success:
+        logger.info("Installed passwordless Wazuh re-enroll helper + polkit policy")
+    else:
+        logger.warning("Failed to install Wazuh re-enroll helper")
+    return success
+
+
+def reenroll_agent():
+    """Re-register the agent with the manager (agent-auth) and restart it.
+
+    Used by the re-registration loop when the agent is running but not connected
+    (e.g. the server dropped/replaced its key). Uses the passwordless helper
+    when available so the loop doesn't prompt every retry; otherwise falls back
+    to a single prompted privileged run.
+    """
+    name = get_agent_name()
+    group = get_agent_group()
+    if not (_SAFE_ARG_RE.match(name) and _SAFE_ARG_RE.match(group)):
+        logger.error(f"[WAZUH] refusing re-enroll with unsafe name/group: {name!r}/{group!r}")
+        return False
+
+    global _wazuh_helper_install_attempted
+    if wazuh_helper_installed() or (
+        not _wazuh_helper_install_attempted and install_wazuh_helper()
+    ):
+        _wazuh_helper_install_attempted = True
+        result = subprocess.run(
+            ["pkexec", WAZUH_HELPER_PATH, "reenroll", name, group],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            logger.error(f"[WAZUH] re-enroll helper failed: {result.stderr.strip()}")
+        return result.returncode == 0
+
+    _wazuh_helper_install_attempted = True
+    # Fallback: single prompted re-enroll.
+    agent_auth = f"{LINUX_WAZUH_DIR}/bin/agent-auth"
+    script = (
+        f"rm -f '{_CLIENT_KEYS}'\n"
+        f"'{agent_auth}' -m '{WAZUH_MANAGER}' -P '{WAZUH_REGISTRATION_PORT}' "
+        f"-A '{name}' -G '{group}'\n"
+        f"systemctl restart wazuh-agent\n"
+    )
+    success, _ = run_privileged_command(["sh", "-c", script])
+    return success
+
+
+def get_connection_state():
+    """Return the agent's manager-connection status (see connection_state).
+
+    Tries a direct read first; the agentd state file is usually root:wazuh 0640
+    (unreadable by the app user), so when that yields UNKNOWN and the
+    passwordless helper is installed, read it silently via 'pkexec helper state'.
+    """
+    from plugins.wazuh.agent import connection_state as cs
+
+    state = cs.get_connection_state()
+    if state != cs.UNKNOWN:
+        return state
+
+    if wazuh_helper_installed():
+        try:
+            result = subprocess.run(
+                ["pkexec", WAZUH_HELPER_PATH, "state"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                return cs.parse_state(result.stdout)
+        except Exception as e:
+            logger.debug(f"[WAZUH] helper state read failed: {e}")
+    return cs.UNKNOWN
+
 def start_agent():
     if get_agent_status() == "Running":
         return True

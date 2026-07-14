@@ -69,6 +69,39 @@ elif _PLATFORM == "Windows":
     )
     _platform_supported = True
 
+# Manager-connection detection (cross-platform) + re-enroll (platform-specific).
+# Detection reads the wazuh-agentd state file; re-enroll re-registers the agent
+# when it's running locally but not connected to the manager (e.g. the server
+# dropped/replaced its key after a fresh install).
+try:
+    from plugins.wazuh.agent.connection_state import CONNECTED, UNKNOWN
+except Exception:  # pragma: no cover - config import guard
+    CONNECTED, UNKNOWN = "connected", "unknown"
+
+
+def _get_connection_state():
+    """Platform-aware manager-connection status; UNKNOWN if undeterminable."""
+    try:
+        if _PLATFORM == "Linux":
+            from plugins.wazuh.agent.wazuh_functions_linux import get_connection_state
+            return get_connection_state()
+        from plugins.wazuh.agent.connection_state import get_connection_state
+        return get_connection_state()
+    except Exception:
+        return UNKNOWN
+
+
+def _reenroll_agent():
+    """Dispatch to the platform re-enroll. Returns False where unimplemented."""
+    try:
+        if _PLATFORM == "Linux":
+            from plugins.wazuh.agent.wazuh_functions_linux import reenroll_agent
+            return reenroll_agent()
+    except Exception as e:
+        logger.warning(f"[WAZUH] re-enroll unavailable: {e}")
+    return False
+
+
 # Shared UI constants
 _COLOR_MUTED = ("#666666", "#aaaaaa")
 _COLOR_ERROR = ("#C5221F", "#FF474C")
@@ -81,6 +114,7 @@ _FONT_LABEL = dict(size=13)
 _FONT_VALUE = dict(family="Inter", size=13, weight="bold")
 _FONT_TITLE = dict(family="Inter", size=18, weight="bold")
 _POLL_INTERVAL_MS = 10_000
+_REREGISTER_INTERVAL_MS = 15_000
 
 
 def is_agent_running():
@@ -119,6 +153,8 @@ class Plugin(BasePlugin):
         )
         self.app = app
         self._status_poll_id = None
+        self._reregister_id = None
+        self._reenrolling = False
         self._installing = False
         self.status = self.get_status()
 
@@ -142,6 +178,7 @@ class Plugin(BasePlugin):
 
     def create_main_screen(self):
         self._stop_status_polling()
+        self._stop_reregister_monitor()
         if not _platform_supported:
             return self._unsupported_screen()
         return self._agent_screen()
@@ -209,6 +246,7 @@ class Plugin(BasePlugin):
 
         if installed and not needs_reenrollment():
             self._start_status_polling()
+            self._start_reregister_monitor()
             # If the agent is stopped, try restoring client.keys from backup
             # (covers key loss from disk corruption, manual deletion, etc.).
             # Wrapped in _deferred_restore to avoid a spurious admin prompt
@@ -856,6 +894,65 @@ class Plugin(BasePlugin):
             self.app.after_cancel(self._status_poll_id)
             self._status_poll_id = None
 
+    # --- Re-registration monitor ---
+    #
+    # When the agent is running locally but the manager doesn't show it as
+    # active (state != 'connected') — e.g. the server dropped/replaced its key
+    # after a fresh install — re-enroll every _REREGISTER_INTERVAL_MS until it
+    # connects. On Linux this runs silently via the passwordless helper; on
+    # platforms without a silent re-enroll path it's a no-op (see review).
+
+    def _start_reregister_monitor(self):
+        if not _platform_supported:
+            return
+        self._stop_reregister_monitor()
+        self._reenrolling = False
+
+        def tick():
+            if not hasattr(self, "main_container") or not self.main_container.winfo_exists():
+                self._reregister_id = None
+                return
+            self._maybe_reregister()
+            self._reregister_id = self.app.after(_REREGISTER_INTERVAL_MS, tick)
+
+        self._reregister_id = self.app.after(_REREGISTER_INTERVAL_MS, tick)
+
+    def _stop_reregister_monitor(self):
+        rid = getattr(self, "_reregister_id", None)
+        if rid:
+            self.app.after_cancel(rid)
+        self._reregister_id = None
+
+    def _maybe_reregister(self):
+        """Re-enroll if the agent is running but not connected to the manager."""
+        if getattr(self, "_reenrolling", False):
+            return  # an attempt is already in flight
+        try:
+            if not is_agent_installed() or get_agent_status() != "Running":
+                return
+            state = _get_connection_state()
+        except Exception:
+            return
+        if state in (CONNECTED, UNKNOWN):
+            # CONNECTED: nothing to do. UNKNOWN: can't read state (no silent
+            # read available) — don't blind-reenroll, which would prompt/spam.
+            return
+
+        self._reenrolling = True
+        logger.info(f"[WAZUH] agent running but '{state}'; re-registering with manager...")
+
+        def _run():
+            ok = _reenroll_agent()
+            def _done():
+                self._reenrolling = False
+                if ok:
+                    logger.info("[WAZUH] re-registration attempt completed")
+                else:
+                    logger.warning("[WAZUH] re-registration attempt failed")
+            self.app.after(0, _done)
+
+        threading.Thread(target=_run, daemon=True).start()
+
     # --- Helpers ---
 
     def _refresh_screen(self):
@@ -884,3 +981,4 @@ class Plugin(BasePlugin):
     def destroy(self):
         """Clean up polling. Agent removal is handled by platform-specific uninstallers."""
         self._stop_status_polling()
+        self._stop_reregister_monitor()

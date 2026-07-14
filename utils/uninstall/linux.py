@@ -166,6 +166,13 @@ def _collect_wazuh_cmds(admin_cmds):
         logger.info("[UNINSTALL-LINUX] Wazuh plugin not present, skipping")
         return
 
+    # Remove the passwordless re-enroll helper + polkit policy if installed
+    # (independent of whether the agent itself is still present).
+    if getattr(wazuh, "wazuh_helper_installed", lambda: False)():
+        admin_cmds.append(
+            f"rm -f '{wazuh.WAZUH_HELPER_PATH}' '{wazuh.WAZUH_POLKIT_POLICY_PATH}'"
+        )
+
     if not wazuh.agent_present(wipe_keys=True):
         logger.info("[UNINSTALL-LINUX] Wazuh agent not present, skipping")
         return
