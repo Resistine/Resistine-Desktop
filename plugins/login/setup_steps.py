@@ -124,6 +124,22 @@ def _vpn_connect(name, path):
     return start_vpn(path)
 
 
+def _vpn_mark_connected(name):
+    """Sync the VPN plugin's in-memory state so the app's toggle/dashboard
+    show the tunnel as ON. The wizard connects the tunnel directly (not through
+    the plugin's toggle), so the plugin's module globals — read when the VPN
+    screen builds — would otherwise still say "Stopped" until a later poll.
+    """
+    try:
+        import plugins.vpn.main as vpnmain
+        vpnmain.my_vpn_status = "Running"
+        if name:
+            vpnmain.active_client_name = name
+        logger.info("[VPN-SETUP] synced plugin toggle state -> Running")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[VPN-SETUP] could not sync plugin toggle state: {e}")
+
+
 # ════════════════════════════════════════════════════════════════════
 # VPN — steps
 # ════════════════════════════════════════════════════════════════════
@@ -172,6 +188,7 @@ class _VPNStepBase(SetupStep):
             if _vpn_status(name) == "Running":
                 logger.info("[VPN-SETUP] tunnel already up")
                 self._activated = True
+                _vpn_mark_connected(name)
                 return
             logger.info(f"[VPN-SETUP] connecting tunnel '{name}'")
             on_status("Connecting to VPN…")
@@ -185,6 +202,7 @@ class _VPNStepBase(SetupStep):
                 if st == "Running":
                     logger.info("[VPN-SETUP] connected")
                     self._activated = True
+                    _vpn_mark_connected(name)
                     return
                 time.sleep(2)
             logger.error(f"[VPN-SETUP] connect timed out (status={_vpn_status(name)})")
