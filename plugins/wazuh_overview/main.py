@@ -623,10 +623,14 @@ def _ready_mask():
         | (4 if _remote_sca_ready.is_set() else 0)
         | (8 if _remote_inventory_ready.is_set() else 0)
         | (16 if _remote_hotfixes_ready.is_set() else 0)
+        # Phase-1 vuln events back the Security Alerts card. Included so the
+        # readiness poll keeps repainting until they land (they arrive after the
+        # agent fetch, so they're usually the last slot to complete).
+        | (32 if _remote_vuln_events_ready.is_set() else 0)
     )
 
 
-_READY_ALL = 31  # all 5 slots set
+_READY_ALL = 63  # all 6 slots set
 
 
 def _overview_has_errors():
@@ -1405,11 +1409,7 @@ class Plugin(BasePlugin):
     def _module_cards(self):
         """Compute module-card data from the live /me/* responses."""
         cards = [
-            _unavailable_card(
-                "Security Alerts",
-                "Threats and security incidents detected",
-                target_tab="Events",
-            ),
+            self._security_alerts_card(),
             self._vuln_card(),
             self._sca_card(),
             _unavailable_card("File Integrity", "Created · added/modified · deleted"),
@@ -1420,6 +1420,30 @@ class Plugin(BasePlugin):
             self._manager_card(),
         ]
         return cards
+
+    def _security_alerts_card(self):
+        """Summarise the vuln-detection events (same data the Events tab paints)
+        as a severity breakdown, so the Overview card mirrors that tab."""
+        title, desc, target = (
+            "Security Alerts",
+            "Threats and security incidents detected",
+            "Events",
+        )
+        if not _remote_vuln_events_ready.is_set():
+            return _loading_card(title, desc, target_tab=target)
+
+        counts = _bucket_by_severity(_REMOTE_VULN_EVENTS)
+        total = sum(counts.values())
+        if total == 0:
+            return {
+                "title": title, "status": "OK", "description": desc,
+                "stats": (("No alerts", "ok"),), "target_tab": target,
+            }
+        highest = next((s for s in _SEVERITY_LEVELS if counts.get(s, 0) > 0), "low")
+        return {
+            "title": title, "status": _SEV_TO_STATUS[highest], "description": desc,
+            "stats": _severity_stats(counts), "target_tab": target,
+        }
 
     def _vuln_card(self):
         title, desc, target = "Vulnerabilities", "CVEs across installed packages", "Vulnerabilities"
