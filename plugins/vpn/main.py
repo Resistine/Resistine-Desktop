@@ -896,12 +896,13 @@ class Plugin(BasePlugin):
         # Always allow wrapping: a non-wrapping QLabel is CLIPPED (no
         # ellipsis) when the two side-by-side panels compress its column on
         # a narrow window — IPs rendered as "10.11.128." and labels as
-        # "Config Nam". Wrapped values shrink gracefully instead.
+        # "Config Nam". Wrapped values shrink gracefully instead. Keep the
+        # value vertically CENTERED against its label even when it wraps to
+        # multiple lines (Public Keys / Routes rows looked misaligned with
+        # the label at the bottom and the value at the top).
         val.setWordWrap(True)
         val.setAlignment(
-            Qt.AlignmentFlag.AlignRight
-            | (Qt.AlignmentFlag.AlignTop if wrap
-               else Qt.AlignmentFlag.AlignVCenter)
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
         val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         g.addWidget(val, row, 1)

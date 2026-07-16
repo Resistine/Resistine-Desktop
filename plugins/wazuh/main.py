@@ -26,6 +26,7 @@ import threading
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
+    QGridLayout,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -296,18 +297,28 @@ class Plugin(BasePlugin):
         body.addWidget(lbl)
 
     def _add_detail_rows(self, body: QVBoxLayout, details: dict) -> None:
-        for label, value in details.items():
-            row = QHBoxLayout()
-            row.setContentsMargins(0, 8, 0, 0)
+        # One QGridLayout, not stacked QHBoxLayouts: word-wrapped QLabels
+        # inside nested box layouts break Qt's height-for-width propagation,
+        # which painted the rows on top of each other. A grid computes each
+        # row's height from the wrapped value correctly.
+        g = QGridLayout()
+        g.setContentsMargins(0, 8, 0, 0)
+        g.setHorizontalSpacing(12)
+        g.setVerticalSpacing(10)
+        g.setColumnStretch(1, 1)
+        for r, (label, value) in enumerate(details.items()):
             lk = QLabel(label)
             lk.setStyleSheet(f"font-size: 13px; color: {_c(_COLOR_MUTED)};")
-            row.addWidget(lk, 0, Qt.AlignmentFlag.AlignLeft)
-            row.addStretch(1)
+            g.addWidget(lk, r, 0,
+                        Qt.AlignmentFlag.AlignLeft
+                        | Qt.AlignmentFlag.AlignVCenter)
             lv = QLabel(str(value))
             lv.setStyleSheet("font-size: 13px; font-weight: 700;")
-            lv.setWordWrap(True)  # wrap instead of clipping on narrow windows
-            row.addWidget(lv, 1, Qt.AlignmentFlag.AlignRight)
-            body.addLayout(row)
+            lv.setWordWrap(True)  # wrap instead of clipping when narrow
+            lv.setAlignment(Qt.AlignmentFlag.AlignRight
+                            | Qt.AlignmentFlag.AlignVCenter)
+            g.addWidget(lv, r, 1)
+        body.addLayout(g)
 
     # ── Card: Re-enrollment required (account change) ──────────────────
 
