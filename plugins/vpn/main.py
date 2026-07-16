@@ -601,8 +601,11 @@ class Plugin(BasePlugin):
             f"#Surface {{ background-color: {card_bg}; border: none; "
             f"border-radius: 12px; }}"
         )
+        # Cap the banner height so leftover page height doesn't inflate it
+        # into a sparse slab with the subtitle marooned at the bottom.
+        status_card.setMaximumHeight(110)
         sc_lay = QHBoxLayout(status_card)
-        sc_lay.setContentsMargins(22, 20, 22, 20)
+        sc_lay.setContentsMargins(22, 16, 22, 16)
         sc_lay.setSpacing(12)
 
         text_col = QVBoxLayout()
@@ -752,7 +755,7 @@ class Plugin(BasePlugin):
         buttons_row.setSpacing(8)
 
         import_btn = QPushButton("Import Configuration")
-        import_btn.setObjectName("Secondary")
+        import_btn.setObjectName("SurfaceBtn")
         import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         import_btn.setMinimumHeight(38)
         import_btn.clicked.connect(self.import_config)
@@ -760,7 +763,7 @@ class Plugin(BasePlugin):
 
         if selected_conf_file:
             view_btn = QPushButton("View Config")
-            view_btn.setObjectName("Secondary")
+            view_btn.setObjectName("SurfaceBtn")
             view_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             view_btn.setMinimumHeight(38)
             view_btn.clicked.connect(

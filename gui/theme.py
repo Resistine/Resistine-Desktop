@@ -177,6 +177,11 @@ QPushButton#Secondary {{
     border: 1px solid {c('border')};
 }}
 QPushButton#Secondary:hover {{ background-color: {c('sidebar_hover_bg')}; }}
+QPushButton#SurfaceBtn {{
+    background-color: {c('card_bg')}; color: {c('text_primary')};
+    border: 1px solid {c('border')}; border-radius: 10px; font-weight: 600;
+}}
+QPushButton#SurfaceBtn:hover {{ background-color: {c('sidebar_hover_bg')}; }}
 QPushButton#Danger {{ background-color: #DC2626; }}
 QPushButton#Danger:hover {{ background-color: #B91C1C; }}
 QPushButton#Link {{
@@ -216,9 +221,11 @@ QCheckBox::indicator:checked {{
 }}
 
 QScrollArea {{ border: none; background-color: transparent; }}
-QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
+QScrollBar:vertical {{ background: transparent; width: 12px; margin: 2px; }}
 QScrollBar::handle:vertical {{
-    background: {c('scroll_handle')}; border-radius: 5px; min-height: 30px;
+    /* radius must be <= half the handle width or Qt silently drops the
+       rounding and paints square corners. */
+    background: {c('scroll_handle')}; border-radius: 4px; min-height: 30px;
 }}
 QScrollBar::handle:vertical:hover {{ background: {c('accent')}; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}

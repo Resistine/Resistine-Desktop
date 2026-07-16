@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import os
 
-from PyQt6.QtCore import QPoint, QRect, QSize, Qt
+from PyQt6.QtCore import QTimer, QPoint, QRect, QSize, Qt
 from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (
+    QGridLayout,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -126,6 +127,80 @@ def centered(inner: QWidget, max_width: int = 760, min_width: int = 420) -> QWid
     h.addWidget(inner, 3)
     h.addStretch(1)
     return wrap
+
+
+class CardGrid(QWidget):
+    """Responsive card grid: 1-4 columns by width, cells stretch to fill the
+    page (no dead gutters). 200ms debounced relayout. Exposes a FlowLayout-
+    compatible surface (addWidget/count/takeAt) so pages that add cards
+    incrementally (Store) can drive it the same way.
+    """
+
+    _CARD_STEP = 300  # px of width per column
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._cards: list = []
+        self._cols = None
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setSpacing(16)
+        self._debounce = QTimer(self)
+        self._debounce.setSingleShot(True)
+        self._debounce.setInterval(200)
+        self._debounce.timeout.connect(self._relayout)
+
+    def resizeEvent(self, event):  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        self._debounce.start()
+
+    # -- FlowLayout-compatible surface --
+    def addWidget(self, w):  # noqa: N802 - Qt-style name
+        self._cards.append(w)
+        self._cols = None
+        self._relayout()
+
+    def count(self):
+        return len(self._cards)
+
+    def takeAt(self, index):
+        if 0 <= index < len(self._cards):
+            w = self._cards.pop(index)
+            self._grid.removeWidget(w)
+            self._cols = None
+            self._relayout()
+
+            class _Item:  # minimal QLayoutItem stand-in
+                def __init__(self, widget):
+                    self._w = widget
+
+                def widget(self):
+                    return self._w
+
+            return _Item(w)
+        return None
+
+    def set_cards(self, cards):
+        self._cards = list(cards)
+        self._cols = None
+        self._relayout()
+
+    # -- layout --
+    def _relayout(self):
+        while self._grid.count():
+            self._grid.takeAt(0)
+        if not self._cards:
+            return
+        width = max(1, self.width())
+        cols = max(1, min(4, width // self._CARD_STEP, len(self._cards)))
+        self._cols = cols
+        rows = (len(self._cards) + cols - 1) // cols
+        for c in range(4):
+            self._grid.setColumnStretch(c, 1 if c < cols else 0)
+        for r in range(rows):
+            self._grid.setRowStretch(r, 1)
+        for i, card in enumerate(self._cards):
+            self._grid.addWidget(card, i // cols, i % cols)
 
 
 class FlowLayout(QLayout):

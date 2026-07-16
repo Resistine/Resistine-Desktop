@@ -26,6 +26,7 @@ import threading
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
+    QSizePolicy,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -35,7 +36,7 @@ from PyQt6.QtWidgets import (
 )
 
 from gui import theme
-from gui.qt_widgets import FlowLayout, StatusBadge, scroll_page
+from gui.qt_widgets import CardGrid, StatusBadge, scroll_page
 from plugins.base_plugin import BasePlugin
 
 _DIR = os.path.dirname(os.path.realpath(__file__))
@@ -70,7 +71,11 @@ class _StoreCard(QFrame):
     def __init__(self, plugin, inject_buttons):
         super().__init__()
         self.setObjectName("Card")
-        self.setFixedSize(345, 230)
+        # Cards stretch to fill their grid cell (same behaviour as the
+        # Dashboard grid) instead of fixed-size tiles with dead gutters.
+        self.setMinimumSize(280, 230)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding,
+                           QSizePolicy.Policy.Expanding)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(16, 16, 16, 16)
@@ -180,13 +185,12 @@ class Plugin(BasePlugin):
         self._remote_done = available_remote is not None
         self._store_plugins = plugins
 
-        self._grid_host = QWidget()
-        self._flow = FlowLayout(self._grid_host, margin=0, spacing=16, center=True)
+        self._grid_host = CardGrid()
+        self._flow = self._grid_host  # FlowLayout-compatible surface
         self.plugin_cards = {}
         for p in plugins:
             self._add_card(p)
-        col.addWidget(self._grid_host)
-        col.addStretch(1)
+        col.addWidget(self._grid_host, 1)
 
         self.main_frame = scroll_page(inner)
 
