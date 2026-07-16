@@ -32,6 +32,7 @@ import random
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import (
+    QStyle,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -634,16 +635,23 @@ class Plugin(BasePlugin):
         lbl.mousePressEvent = lambda _e, s=sid: self._select_chat(s)
         rl.addWidget(lbl, 1)
 
-        del_btn = QPushButton("✕")
+        # Standard close icon from the platform style, NOT a "✕" text glyph —
+        # the glyph rendered blank (missing from the active font), which made
+        # the delete affordance invisible even though the button was there.
+        del_btn = QPushButton()
+        del_btn.setIcon(row.style().standardIcon(
+            QStyle.StandardPixmap.SP_TitleBarCloseButton))
+        del_btn.setIconSize(QSize(12, 12))
         del_btn.setFixedSize(24, 24)
+        del_btn.setToolTip("Delete chat")
         del_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         del_btn.setStyleSheet(
-            "QPushButton { background: transparent; color: #6B7280; "
-            "border: none; border-radius: 6px; font-size: 12px; }"
-            "QPushButton:hover { color: #DC2626; "
-            f"background: {theme.color('sidebar_hover_bg')}; }}")
+            "QPushButton { background: transparent; border: none; "
+            "border-radius: 6px; }"
+            f"QPushButton:hover {{ background: "
+            f"{theme.color('sidebar_hover_bg')}; }}")
         del_btn.clicked.connect(lambda _=False, s=sid: self._delete_chat(s))
-        rl.addWidget(del_btn)
+        rl.addWidget(del_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         return row
 
     def _toggle_sidebar(self) -> None:

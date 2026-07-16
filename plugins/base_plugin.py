@@ -130,20 +130,44 @@ class BasePlugin:
     def _icon_path(self) -> str:
         return self.icon_light if not theme.is_dark() else self.icon_dark
 
+    @staticmethod
+    def _tint(pm: QPixmap) -> QPixmap:
+        """Colorize a monochrome line icon to the theme's primary text colour.
+
+        The shipped *_light.png assets are pale grey and wash out on the
+        light card background; tinting keys the strokes to the theme (near-
+        black in light mode, white in dark) at any size.
+        """
+        if pm.isNull():
+            return pm
+        from PyQt6.QtGui import QColor, QPainter
+
+        from gui import theme
+        out = QPixmap(pm.size())
+        out.setDevicePixelRatio(pm.devicePixelRatio())
+        out.fill(Qt.GlobalColor.transparent)
+        p = QPainter(out)
+        p.drawPixmap(0, 0, pm)
+        p.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_SourceIn)
+        p.fillRect(pm.rect(), QColor(theme.color("text_primary")))
+        p.end()
+        return out
+
     def get_icon(self) -> QIcon:
         path = self._icon_path()
         if path and os.path.isfile(path):
-            return QIcon(path)
+            return QIcon(self._tint(QPixmap(path)))
         return QIcon()
 
     def get_icon_pixmap(self, size: int = 44) -> QPixmap:
         path = self._icon_path()
         if path and os.path.isfile(path):
-            return QPixmap(path).scaled(
+            return self._tint(QPixmap(path).scaled(
                 QSize(size, size),
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
-            )
+            ))
         return QPixmap()
 
     def get_icon_large(self) -> QIcon:
