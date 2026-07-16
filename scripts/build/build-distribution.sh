@@ -839,6 +839,33 @@ find "$PYTHON_APP/Contents/Frameworks" "$PYTHON_APP/Contents/MacOS" \
 done
 echo "    Framework/library signing complete"
 
+# 5d-2: Sign Qt framework binaries (PyQt6)
+# PyInstaller bundles Qt as Contents/Frameworks/PyQt6/Qt6/lib/<Name>.framework
+# whose main binaries are EXTENSIONLESS Mach-O files (Versions/A/QtCore etc.)
+# — the pattern-find above never matches them, which fails notarization
+# ("binary is not signed with a valid Developer ID certificate"). PyQt6 wheels
+# ship slimmed frameworks without Resources/Info.plist, so codesign on the
+# .framework bundle can error with "bundle format unrecognized"; sign each
+# Mach-O binary file directly instead — exactly the paths the notary log
+# reports.
+echo "  - Signing Qt framework binaries (PyQt6)..."
+_QT_SIGNED=0
+while IFS= read -r binary; do
+    file "$binary" 2>/dev/null | grep -q "Mach-O" || continue
+    codesign --force --sign "$SIGN_IDENTITY" \
+        --options runtime \
+        --timestamp \
+        "$binary" 2>/dev/null || {
+        echo "    Warning: Failed to sign: $binary"
+        continue
+    }
+    _QT_SIGNED=$((_QT_SIGNED + 1))
+done < <(find "$PYTHON_APP/Contents/Frameworks" \
+    -path "*.framework/Versions/*" -type f \
+    ! -name "*.plist" ! -name "*.prl" ! -name "*.h" \
+    ! -path "*Sparkle.framework*" ! -path "*Python.framework*")
+echo "    Qt framework binaries signed ($_QT_SIGNED)"
+
 # 5e: Sign Sparkle.framework (inner-to-outer: deepest bundles first)
 if [ -d "$PYTHON_APP/Contents/Frameworks/Sparkle.framework" ]; then
     SPARKLE_FW="$PYTHON_APP/Contents/Frameworks/Sparkle.framework"
