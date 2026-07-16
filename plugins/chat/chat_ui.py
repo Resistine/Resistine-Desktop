@@ -426,6 +426,24 @@ class ChatUIMixin:
         self._chat_area = customtkinter.CTkFrame(
             self.second_frame, corner_radius=0, fg_color="transparent")
         self._chat_area.pack(side="left", fill="both", expand=True)
+        # On a REBUILD (chat switch / new / delete) the history drawer already
+        # exists as a sibling of second_frame. A freshly-packed widget stacks
+        # ABOVE its siblings, so the new chat area would cover the open drawer
+        # for the duration of the (heavy) history restore — the menu appears to
+        # vanish for a moment and the drawer's column flashes bright (the dim
+        # overlay intentionally doesn't cover the drawer, so covered-drawer ==
+        # a visible "gap" in the dimming). Lower the chat area BELOW the drawer
+        # NOW, before any repaint, so the drawer stays on top throughout the
+        # rebuild. No-op on the initial build (the drawer is created after this
+        # and is naturally on top); guarded for the full-rebuild path where
+        # self._sidebar may briefly point at a destroyed widget.
+        if getattr(self, "_sidebar_visible", False):
+            sb = getattr(self, "_sidebar", None)
+            try:
+                if sb is not None and sb.winfo_exists():
+                    self._chat_area.lower(sb)
+            except Exception:
+                pass
         self._chat_area.grid_columnconfigure(0, weight=1)
         self._chat_area.grid_rowconfigure(0, weight=1)
 
