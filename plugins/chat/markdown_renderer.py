@@ -215,17 +215,29 @@ class MarkdownRenderer:
         """Set up text tags for headings, bullets, etc."""
         tw = self._tw
         colors = self._colors
+        # Tag fonts bypass CTkTextbox's _apply_font_scaling — only the
+        # widget's BASE font goes through it — so a raw CTkFont here renders
+        # unscaled and headings/bold come out SMALLER than body text on
+        # HiDPI. Mirror what CTkTextbox does for its base font: hand Tk the
+        # scaled tuple (CTkFont sizes are pixels; create_scaled_tuple
+        # multiplies by the widget scaling). Identical at 100% (scale == 1).
+        try:
+            _fs = customtkinter.ScalingTracker.get_widget_scaling(
+                self.text_widget) or 1.0
+        except Exception:
+            _fs = 1.0
         for level in range(1, 7):
             tag = f"h{level}"
             top, bottom = _H_SPACING.get(level, (4, 2))
             tw.tag_configure(
-                tag, font=self._fonts[tag],
+                tag, font=self._fonts[tag].create_scaled_tuple(_fs),
                 foreground=colors["heading"],
                 spacing1=top, spacing3=bottom,
             )
         for htag in ("h1", "h2", "h3", "h4", "h5", "h6"):
             tw.tag_raise(htag)
-        tw.tag_configure("bold", font=self._fonts["bold"])
+        tw.tag_configure(
+            "bold", font=self._fonts["bold"].create_scaled_tuple(_fs))
         tw.tag_configure(
             "bullet", lmargin1=20, lmargin2=36,
             spacing1=2, spacing3=2,

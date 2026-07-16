@@ -7,7 +7,7 @@ from typing import Callable
 
 import customtkinter
 
-from plugins.chat.fonts import RESISTINE_BLUE, ui_family
+from plugins.chat.fonts import RESISTINE_BLUE, ui_family, widget_scale
 
 # Pool of suggestion prompts shown on the welcome screen.
 # 4 are picked at random each time the chat is opened.
@@ -83,12 +83,30 @@ class WelcomeScreen(customtkinter.CTkFrame):
             SUGGESTION_POOL, min(4, len(SUGGESTION_POOL))
         )
 
-        # Measure longest text to set uniform chip width
+        # Measure longest text to set uniform chip width. The chip label
+        # renders in CTkFont(size=16) — PIXEL size, times widget scaling —
+        # so measure with the same scaled pixel font (negative size = px;
+        # a positive 16 would be POINTS, i.e. DPI-dependent) and divide back
+        # to LOGICAL units, since CTkFrame width is re-multiplied by the
+        # scaling. Identical at 100% (scale == 1, px == pt on Tk default).
         import tkinter.font as tkfont
-        measure_font = tkfont.Font(family=ui_family(), size=16)
+        _s = widget_scale(self)
+        measure_font = tkfont.Font(
+            family=ui_family(), size=-int(round(16 * _s)))
         longest_px = max(measure_font.measure(s) for s in suggestions)
-        # dot(16+18) + text + arrow(20+18) + padding
-        chip_width = longest_px + 100
+        # dot(16+18) + text + arrow(20+18) + padding — logical units
+        chip_width = int(round(longest_px / _s)) + 100
+        # Clamp to the available chat width so a long suggestion can never
+        # push the chips off-screen. The scroll frame may not be laid out
+        # yet (width 1); fall back to the toplevel, minus sidebar/padding.
+        try:
+            avail = master.winfo_width()
+            if avail <= 1:
+                avail = master.winfo_toplevel().winfo_width() - 120
+        except Exception:
+            avail = 0
+        if avail > 1:
+            chip_width = min(chip_width, max(240, int(avail / _s) - 40))
 
         # Container for TRY ASKING + chips, centered
         chips_box = customtkinter.CTkFrame(

@@ -15,7 +15,7 @@ from utils.logger import logger
 _SYSTEM_PROMPT = "You are SOC Copilot specialized in cybersecurity."
 _ICON_DIR = os.path.dirname(os.path.realpath(__file__))
 _SYS_MSG = {"role": "system", "content": _SYSTEM_PROMPT}
-_DEFAULT_BASE_URL = "http://dashboard.resisti.net:8001/v1"
+_DEFAULT_BASE_URL = "https://dashboard.resisti.net:8002/v1"
 
 # Canned assistant message when the user navigates away from a chat
 # (switch chat, + New, delete, leave plugin) while a response is still
@@ -26,6 +26,32 @@ _NAV_AWAY_MSG = (
     "_(You switched chats before this response could finish. "
     "Please ask your question again.)_"
 )
+
+
+def _tls_verify() -> str | bool:
+    """httpx ``verify`` value for the HTTPS chat endpoint.
+
+    The dashboard serves a leaf-only certificate (no intermediate) signed
+    by the internal Resistine root CA, so the default certifi store cannot
+    validate it. Resolution order: RESISTINE_CA_BUNDLE env var, a
+    ``certs/resistine-rootCA.pem`` override in the config dir, then the
+    root CA bundled with the app. If all are missing (shouldn't happen --
+    the bundled cert ships in resources/), fall back to standard
+    verification rather than disabling it.
+    """
+    ca = os.environ.get("RESISTINE_CA_BUNDLE")
+    if ca and os.path.isfile(ca):
+        return ca
+    ca = os.path.join(
+        settings.get_config_dir(), "certs", "resistine-rootCA.pem")
+    if os.path.isfile(ca):
+        return ca
+    from utils.functions import get_resource_path
+    ca = get_resource_path(
+        os.path.join("resources", "certs", "resistine-rootCA.pem"))
+    if os.path.isfile(ca):
+        return ca
+    return True
 
 
 class Plugin(ChatUIMixin, BasePlugin):
@@ -91,7 +117,8 @@ class Plugin(ChatUIMixin, BasePlugin):
         )
         self.session_id = None
         if self.base_url:
-            self.model, self.conversation_history = "ministral-3:14b", []
+            self.model, self.conversation_history = (
+                "mistral-small3.2:24b", [])
         else:
             self.model = "gpt-4o"
             self.conversation_history = [dict(_SYS_MSG)]
@@ -102,6 +129,10 @@ class Plugin(ChatUIMixin, BasePlugin):
             kwargs: dict = {"api_key": api_key or "unused"}
             if self.base_url:
                 kwargs["base_url"] = self.base_url
+                if self.base_url.lower().startswith("https://"):
+                    import httpx
+                    kwargs["http_client"] = httpx.Client(
+                        verify=_tls_verify())
             from openai import OpenAI
             self.client = OpenAI(**kwargs)
         except Exception as e:

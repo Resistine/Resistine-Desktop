@@ -174,6 +174,23 @@ def get_agent_status():
     return "Stopped"
 
 
+def get_agent_connection():
+    """Return the agent's live manager-connection status.
+
+    One of ``connected`` / ``pending`` / ``disconnected`` / ``unknown``.
+    Reads Wazuh's own wazuh-agentd.state; falls back to ossec.log. This is
+    distinct from get_agent_status() (which only reports whether the daemon
+    process is alive) — an agent can be "Running" yet never connected when
+    its key was invalidated server-side.
+    """
+    from plugins.wazuh.agent import agent_state
+
+    return agent_state.read_agent_connection(
+        os.path.join(WAZUH_INSTALL_DIR, "var", "run", "wazuh-agentd.state"),
+        os.path.join(WAZUH_INSTALL_DIR, "logs", "ossec.log"),
+    )
+
+
 def _run_privileged(script, timeout=120):
     """Execute a shell script with admin privileges via osascript.
 
@@ -498,6 +515,62 @@ def remove_agent(wipe_keys: bool = False):
     else:
         logger.error(f"Failed to remove Wazuh agent: {output}")
     return success
+
+
+def reenroll_agent():
+    """Force a fresh manager registration to recover a dead/invalid key.
+
+    Used when the agent is Running but never reaches ``connected`` — the
+    classic case is the operator deleting the old agent server-side after a
+    reinstall, which invalidates the key the reinstalled agent kept reusing.
+    A plain restart can't fix this: start_agent() would just restore the same
+    dead key from the Keychain/file backup. So this wipes the local key AND
+    both backups, enrolls under a fresh unique name (so the manager creates a
+    brand-new record, not the deleted one), then restarts. Returns (ok, msg).
+    """
+    import time
+
+    if not is_agent_installed():
+        return (False, "Wazuh agent is not installed")
+
+    base = get_agent_name()
+    new_name = f"{base}-{str(int(time.time()))[-6:]}"
+    group = get_agent_group()
+    agent_auth = f"{WAZUH_INSTALL_DIR}/bin/agent-auth"
+    ossec_conf = f"{WAZUH_INSTALL_DIR}/etc/ossec.conf"
+
+    script = (
+        # Stop cleanly so the new key is what gets loaded on restart.
+        f"launchctl bootout system '{WAZUH_LAUNCHD_PLIST}' 2>/dev/null; "
+        f"'{_WAZUH_CONTROL}' stop 2>/dev/null; "
+        f"pkill -9 -f '/Library/Ossec/bin/wazuh-' 2>/dev/null; "
+        # Purge the dead identity everywhere so nothing can restore it.
+        f"rm -f '{_CLIENT_KEYS}' '{_KEY_BACKUP}'; "
+        f"security delete-generic-password -s '{_KC_SERVICE}' -a '{_KC_ACCOUNT}' "
+        f"'{_KEYCHAIN}' 2>/dev/null; "
+        # Register a brand-new agent identity (matches the postinstall flags).
+        f"'{agent_auth}' -m '{WAZUH_MANAGER}' -A '{new_name}' -G '{group}' 2>&1; "
+        # Enrollment must have produced a key — otherwise starting is pointless.
+        f"if [ ! -s '{_CLIENT_KEYS}' ]; then echo REENROLL_NO_KEY; exit 1; fi; "
+        f"chmod 640 '{_CLIENT_KEYS}' && chown root:wazuh '{_CLIENT_KEYS}'; "
+        # Persist the new name + a fresh key backup (file + Keychain).
+        f"/usr/bin/sed -i '' "
+        f"'s|<agent_name>.*</agent_name>|<agent_name>{new_name}</agent_name>|' "
+        f"'{ossec_conf}' 2>/dev/null || true; "
+        f"cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}' 2>/dev/null; "
+        f"security add-generic-password -U -k '{_KEYCHAIN}' -s '{_KC_SERVICE}' "
+        f"-a '{_KC_ACCOUNT}' -w \"$(cat '{_CLIENT_KEYS}')\" 2>/dev/null; "
+        # Bring it back up under launchd.
+        f"launchctl enable system/com.wazuh.agent 2>/dev/null; "
+        f"launchctl bootstrap system '{WAZUH_LAUNCHD_PLIST}' 2>/dev/null; "
+        f"echo REENROLL_OK"
+    )
+    success, output = _run_privileged(script, timeout=180)
+    if success and "REENROLL_OK" in output and "REENROLL_NO_KEY" not in output:
+        logger.info(f"Wazuh re-enrolled under fresh name {new_name}")
+        return (True, f"Re-enrolled as {new_name}")
+    logger.error(f"Wazuh re-enroll failed: {output!r}")
+    return (False, output or "Re-enrollment failed")
 
 
 def _has_keychain_entry() -> bool:

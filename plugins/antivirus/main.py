@@ -483,6 +483,46 @@ class Plugin(BasePlugin):
         _is_windows = platform.system() == "Windows"
         _resize_job = [None]
 
+        def _autohide_scrollbar():
+            """Re-evaluate scrollbar visibility AFTER the layout pass settles.
+
+            Runs via after_idle so the yview sample reflects the content minsize
+            _do_layout just wrote — sampling before it could latch a stale
+            hidden-while-overflowing state at heights near the boundary
+            (350-475). Hysteresis: hide only when fully visible (>= 0.99), show
+            only when clearly overflowing (< 0.97); the 0.97-0.99 dead band
+            prevents flapping (hide/show reflows content without a Configure).
+            """
+            active = (
+                self._settings_frame
+                if self._current_view == "settings"
+                else self.main_frame
+            )
+            try:
+                if not (hasattr(active, "_parent_canvas")
+                        and hasattr(active, "_scrollbar")):
+                    return
+                yview = active._parent_canvas.yview()
+                if not yview:
+                    return
+                is_mapped = bool(active._scrollbar.grid_info())
+                if yview[0] <= 0.01 and yview[1] >= 0.99:
+                    if is_mapped:
+                        active._saved_sb_grid = active._scrollbar.grid_info()
+                        active._scrollbar.grid_remove()
+                elif yview[1] < 0.97:
+                    if not is_mapped:
+                        if hasattr(active, "_saved_sb_grid") and active._saved_sb_grid:
+                            active._scrollbar.grid(**active._saved_sb_grid)
+                        else:
+                            # CTk grids the vertical scrollbar at row=1
+                            # (row 0 is the label row). row=0 dropped a
+                            # default height=200 scrollbar into the empty
+                            # label row, pushing the canvas down 200px.
+                            active._scrollbar.grid(row=1, column=1, sticky="ns", pady=0)
+            except Exception:
+                pass
+
         def _do_layout():
             _resize_job[0] = None
             if (
@@ -492,33 +532,9 @@ class Plugin(BasePlugin):
             ):
                 return
 
-            # --- Auto-hide Scrollbar Logic ---
-            active = (
-                self._settings_frame
-                if self._current_view == "settings"
-                else self.main_frame
-            )
-            try:
-                if hasattr(active, "_parent_canvas") and hasattr(active, "_scrollbar"):
-                    yview = active._parent_canvas.yview()
-                    is_mapped = bool(active._scrollbar.grid_info())
-                    if yview and (yview[0] <= 0.01 and yview[1] >= 0.99):
-                        if is_mapped:
-                            active._saved_sb_grid = active._scrollbar.grid_info()
-                            active._scrollbar.grid_remove()
-                    else:
-                        if not is_mapped:
-                            if hasattr(active, "_saved_sb_grid") and active._saved_sb_grid:
-                                active._scrollbar.grid(**active._saved_sb_grid)
-                            else:
-                                # CTk grids the vertical scrollbar at row=1
-                                # (row 0 is the label row). row=0 dropped a
-                                # default height=200 scrollbar into the empty
-                                # label row, pushing the canvas down 200px.
-                                active._scrollbar.grid(row=1, column=1, sticky="ns", pady=0)
-            except Exception:
-                pass
-            # --- End Auto-hide ---
+            # --- Auto-hide Scrollbar: deferred until after this pass settles,
+            # so the decision sees the minsize written below, not the old one.
+            self.app.after_idle(_autohide_scrollbar)
 
             # winfo_width() returns PHYSICAL px; MAX_CONTENT_WIDTH is LOGICAL, so
             # convert via CTk's widget scaling (the real OS-DPI ratio: 2.0 at

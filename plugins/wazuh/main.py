@@ -34,9 +34,11 @@ if _PLATFORM == "Darwin":
         full_install,
         get_agent_group,
         get_agent_name,
+        get_agent_connection,
         get_agent_status,
         is_agent_installed,
         needs_reenrollment,
+        reenroll_agent,
         restore_client_key_if_needed,
         start_agent,
         stop_agent,
@@ -47,9 +49,11 @@ elif _PLATFORM == "Linux":
         full_install,
         get_agent_group,
         get_agent_name,
+        get_agent_connection,
         get_agent_status,
         is_agent_installed,
         needs_reenrollment,
+        reenroll_agent,
         restore_client_key_if_needed,
         start_agent,
         stop_agent,
@@ -60,9 +64,11 @@ elif _PLATFORM == "Windows":
         full_install,
         get_agent_group,
         get_agent_name,
+        get_agent_connection,
         get_agent_status,
         is_agent_installed,
         needs_reenrollment,
+        reenroll_agent,
         restore_client_key_if_needed,
         start_agent,
         stop_agent,
@@ -120,6 +126,8 @@ class Plugin(BasePlugin):
         self.app = app
         self._status_poll_id = None
         self._installing = False
+        self._reconnect_btn = None
+        self._reconnecting = False
         self.status = self.get_status()
 
     # --- Status ---
@@ -133,6 +141,16 @@ class Plugin(BasePlugin):
             logger.warning(f"SIEM check_status failed: {e}")
             return "Warning"
         if state == "Running":
+            # "Running" only means the daemon is alive. If we can positively
+            # read that it's not connected to the manager (e.g. its key was
+            # invalidated server-side), surface a Warning so the dashboard tile
+            # and the Reconnect affordance reflect reality. "unknown" (state
+            # file unreadable) is NOT downgraded — we don't guess.
+            try:
+                if get_agent_connection() == "disconnected":
+                    return "Warning"
+            except Exception:
+                pass
             return "OK"
         if state == "Stopped":
             return "Error"
@@ -266,7 +284,7 @@ class Plugin(BasePlugin):
             ),
             font=customtkinter.CTkFont(size=13),
             text_color=_COLOR_ERROR,
-            wraplength=460,
+            wraplength=400,
             justify="left",
         ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 12), sticky="w")
         row += 1
@@ -317,7 +335,7 @@ class Plugin(BasePlugin):
                 "and reports to the Resistine SIEM dashboard."
             ),
             font=customtkinter.CTkFont(size=13),
-            text_color=_COLOR_MUTED, wraplength=460, justify="left",
+            text_color=_COLOR_MUTED, wraplength=400, justify="left",
         ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 12), sticky="w")
         row += 1
 
@@ -398,7 +416,7 @@ class Plugin(BasePlugin):
             customtkinter.CTkLabel(
                 card, text="Log in to enable endpoint protection.",
                 font=customtkinter.CTkFont(size=13),
-                text_color=_COLOR_MUTED, wraplength=460, justify="left",
+                text_color=_COLOR_MUTED, wraplength=400, justify="left",
             ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="w")
             row += 1
 
@@ -406,7 +424,7 @@ class Plugin(BasePlugin):
             customtkinter.CTkLabel(
                 card, text="Downloading security agent...",
                 font=customtkinter.CTkFont(size=13),
-                text_color=_COLOR_ACCENT, wraplength=460, justify="left",
+                text_color=_COLOR_ACCENT, wraplength=400, justify="left",
             ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 8), sticky="w")
             row += 1
             bar = customtkinter.CTkProgressBar(card, mode="indeterminate", width=300)
@@ -425,7 +443,7 @@ class Plugin(BasePlugin):
             customtkinter.CTkLabel(
                 card, text=msg,
                 font=customtkinter.CTkFont(size=13),
-                text_color=_COLOR_ERROR, wraplength=460, justify="left",
+                text_color=_COLOR_ERROR, wraplength=400, justify="left",
             ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 8), sticky="w")
             row += 1
             customtkinter.CTkButton(
@@ -443,13 +461,13 @@ class Plugin(BasePlugin):
                     "that monitors your device for threats."
                 ),
                 font=customtkinter.CTkFont(size=13),
-                text_color=_COLOR_MUTED, wraplength=460, justify="left",
+                text_color=_COLOR_MUTED, wraplength=400, justify="left",
             ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 4), sticky="w")
             row += 1
             customtkinter.CTkLabel(
                 card, text="This requires your password to allow the installation.",
                 font=customtkinter.CTkFont(size=13),
-                text_color=_COLOR_MUTED, wraplength=460, justify="left",
+                text_color=_COLOR_MUTED, wraplength=400, justify="left",
             ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 12), sticky="w")
             row += 1
 
@@ -523,7 +541,7 @@ class Plugin(BasePlugin):
             customtkinter.CTkLabel(
                 card, text=msg,
                 font=customtkinter.CTkFont(size=13),
-                text_color=_COLOR_ERROR, wraplength=460, justify="left",
+                text_color=_COLOR_ERROR, wraplength=400, justify="left",
             ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 8), sticky="w")
             row += 1
 
@@ -552,7 +570,21 @@ class Plugin(BasePlugin):
     def _build_status_section(self, card, row):
         state = get_agent_status()
         is_running = state == "Running"
-        status_color = _COLOR_OK if is_running else _COLOR_ERROR
+        # Live manager-connection status \u2014 distinct from "process running".
+        # "disconnected" is the only reading we treat as a hard fault;
+        # "pending"/"unknown" stay neutral so we never cry wolf (the state
+        # file can be root-owned and unreadable on some installs).
+        connection = get_agent_connection() if is_running else "unknown"
+        not_connected = is_running and connection == "disconnected"
+
+        if not is_running:
+            status_color, status_text = _COLOR_ERROR, "Stopped"
+        elif not_connected:
+            status_color, status_text = _COLOR_ERROR, "Not Connected"
+        elif connection == "connected":
+            status_color, status_text = _COLOR_OK, "Connected"
+        else:
+            status_color, status_text = _COLOR_OK, "Running"
 
         header = customtkinter.CTkFrame(card, fg_color="transparent")
         header.grid(row=row, column=0, columnspan=2, sticky="ew", padx=20, pady=(16, 4))
@@ -569,7 +601,7 @@ class Plugin(BasePlugin):
         ).grid(row=0, column=1, sticky="w")
 
         customtkinter.CTkLabel(
-            header, text="Running" if is_running else "Stopped",
+            header, text=status_text,
             text_color=status_color,
             font=customtkinter.CTkFont(family="Inter", size=14, weight="bold"),
         ).grid(row=0, column=2, padx=(8, 0), sticky="e")
@@ -589,10 +621,44 @@ class Plugin(BasePlugin):
         self._agent_toggle.grid(row=row, column=0, columnspan=2, padx=20, pady=(4, 12), sticky="w")
         row += 1
 
+        # Reconnect affordance. When we can confirm the agent is running but
+        # not connected (e.g. the old agent was deleted server-side after a
+        # reinstall, invalidating the reused key), show a clear warning. The
+        # button re-registers the agent under a fresh identity \u2014 the actual
+        # fix, since a plain toggle just restarts the daemon with the same
+        # dead key. Recovery is user-initiated (one admin prompt), never a
+        # surprise background dialog.
+        if is_running:
+            if not_connected:
+                customtkinter.CTkLabel(
+                    card,
+                    text=(
+                        "Agent is running but not connected to the SIEM manager.\n"
+                        "If the old agent was removed on the server, Reconnect to "
+                        "re-register under a new identity."
+                    ),
+                    text_color=_COLOR_ERROR,
+                    font=customtkinter.CTkFont(**_FONT_LABEL),
+                    justify="left", anchor="w",
+                ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 4), sticky="w")
+                row += 1
+            self._reconnect_btn = customtkinter.CTkButton(
+                card,
+                text="Reconnect",
+                command=self._reconnect_agent,
+                width=120, height=30,
+                fg_color=(_COLOR_ERROR if not_connected else _COLOR_ACCENT),
+            )
+            self._reconnect_btn.grid(row=row, column=0, padx=20, pady=(0, 12), sticky="w")
+            row += 1
+        else:
+            self._reconnect_btn = None
+
         row = self._add_separator(card, row)
 
         row = self._add_detail_rows(card, row, {
             "Status": state,
+            "Connection": connection.capitalize(),
             "Agent Name": get_agent_name(),
             "Agent Group": get_agent_group(),
             "Manager": WAZUH_MANAGER,
@@ -600,6 +666,41 @@ class Plugin(BasePlugin):
         })
 
         return row
+
+    def _reconnect_agent(self):
+        """Force a fresh manager re-enrollment to recover a stuck agent.
+
+        Wipes the (invalidated) key + backups and re-registers under a new
+        unique name via reenroll_agent(), so the manager creates a brand-new
+        record instead of the deleted one. One admin prompt; runs off-thread.
+        """
+        if self._reconnecting:
+            return
+        self._reconnecting = True
+        if self._reconnect_btn is not None:
+            try:
+                self._reconnect_btn.configure(state="disabled", text="Reconnecting\u2026")
+            except Exception:
+                pass
+
+        def _run():
+            try:
+                ok, msg = reenroll_agent()
+            except Exception as e:
+                ok, msg = False, str(e)
+
+            def _done():
+                self._reconnecting = False
+                self.app.show_notification(
+                    "Re-enrolled \u2014 reconnecting to SIEM manager"
+                    if ok else f"Reconnect failed: {msg}",
+                    type="info" if ok else "error",
+                )
+                self._refresh_screen()
+
+            self.app.after(0, _done)
+
+        threading.Thread(target=_run, daemon=True).start()
 
     # --- Key Restore (background thread) ---
 

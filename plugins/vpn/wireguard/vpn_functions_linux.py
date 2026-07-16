@@ -51,7 +51,9 @@ def run_privileged_command(command_args):
     :param command_args: List of command arguments (e.g., ["wg", "show"])
     :return: subprocess.CompletedProcess or None if failed
     """
-    # Try pkexec first (standard GUI way)
+    # Try pkexec first (standard GUI way). When pkexec is available it drives
+    # the system polkit prompt, which already handles authentication — so we do
+    # NOT pop a second, in-app sudo password dialog on top of it.
     if shutil.which("pkexec"):
         try:
             # Resolve absolute path for the command
@@ -70,14 +72,23 @@ def run_privileged_command(command_args):
                 text=True,
             )
         except subprocess.CalledProcessError as e:
+            # pkexec executed and the privileged command (or the auth prompt)
+            # returned non-zero. Authentication was already handled by the
+            # system polkit agent, so re-prompting with an in-app sudo dialog
+            # would just run the same command again and double-prompt the user.
+            # Report the failure instead of falling back.
             error_msg = e.stderr.strip() or e.stdout.strip() or "No output"
-            logger.warning(
-                f"pkexec failed (code {e.returncode}): {error_msg}. Falling back to sudo."
+            logger.error(
+                f"Privileged command failed under pkexec (code {e.returncode}): {error_msg}"
             )
+            return None
         except Exception as e:
-            logger.warning(f"pkexec error: {e}. Falling back to sudo.")
+            # pkexec itself could not be executed (e.g. missing polkit agent).
+            # Only in this case do we fall back to the sudo password dialog.
+            logger.warning(f"pkexec could not run: {e}. Falling back to sudo.")
 
-    # Fallback to sudo with GUI password prompt
+    # Fallback to sudo with GUI password prompt (only reached when pkexec is
+    # unavailable or failed to execute at all)
     logger.info("Falling back to sudo with themed password prompt")
 
     dialog = CTkPasswordDialog(
@@ -270,7 +281,9 @@ def parse_and_create_vpn_config(vpn_config_json_string, config_name="resistine")
             else str(dns_servers)
         )
 
-        # Build WireGuard config content
+        # Build WireGuard config content. The canonical `DNS =` directive is
+        # stored here; host-specific DNS compatibility (resolvconf vs
+        # resolvectl) is applied at bring-up time in start_vpn().
         config_content = f"""[Interface]
 PrivateKey = {private_key}
 Address = {client_address}
@@ -392,6 +405,102 @@ def stop_vpn(config_path):
         return False
 
 
+def make_dns_compatible_config(config_path):
+    """
+    Return a path to a WireGuard config whose DNS handling works on this host.
+
+    wg-quick's `DNS =` directive shells out to `resolvconf`, which isn't present
+    on every distro (e.g. Arch without the systemd-resolvconf package). When
+    resolvconf is missing, rewrite the `DNS =` line into systemd-resolved
+    `resolvectl` PostUp/PostDown hooks — each guarded with `|| true` so a DNS
+    failure never tears the tunnel back down — or drop it entirely if neither
+    tool exists. When resolvconf is present the config is used unchanged.
+
+    The (possibly rewritten) config is written alongside the original; the
+    user's stored config is never modified. Returns the original path if no
+    rewrite is needed or on any error.
+    """
+    try:
+        with open(config_path, "r") as config_file:
+            lines = config_file.readlines()
+    except OSError as e:
+        logger.warning(f"Could not read config for DNS compatibility check: {e}")
+        return config_path
+
+    def is_dns_line(line):
+        stripped = line.strip()
+        return stripped.lower().startswith("dns") and "=" in stripped
+
+    dns_values = []
+    for line in lines:
+        if is_dns_line(line):
+            _, _, value = line.strip().partition("=")
+            dns_values = [d.strip() for d in value.replace(",", " ").split() if d.strip()]
+            break
+
+    # No DNS directive, or resolvconf is available -> use config as-is.
+    if not dns_values or shutil.which("resolvconf"):
+        return config_path
+
+    def resolved_active():
+        try:
+            return (
+                subprocess.run(
+                    ["systemctl", "is-active", "--quiet", "systemd-resolved"]
+                ).returncode
+                == 0
+            )
+        except Exception:
+            return False
+
+    if shutil.which("resolvectl") and resolved_active():
+        # systemd-resolved is running: set per-link DNS the clean way.
+        dns_list = " ".join(dns_values)
+        replacement = [
+            f"PostUp = resolvectl dns %i {dns_list} || true\n",
+            "PostUp = resolvectl domain %i ~. || true\n",
+            "PostDown = resolvectl revert %i || true\n",
+        ]
+        logger.info("resolvconf not found; using resolvectl for tunnel DNS")
+    else:
+        # No resolvconf and no active systemd-resolved (e.g. a plain
+        # NetworkManager host). Manage /etc/resolv.conf directly for the
+        # lifetime of the tunnel: back it up on up, restore it on down. Guarded
+        # with `|| true` so a write failure never tears the tunnel down.
+        ns_block = "".join(f"nameserver {d}\\n" for d in dns_values)
+        backup = "/etc/resolv.conf.wg-%i.bak"
+        replacement = [
+            f"PostUp = cp -fp /etc/resolv.conf '{backup}' 2>/dev/null || true\n",
+            f"PostUp = printf '{ns_block}' > /etc/resolv.conf 2>/dev/null || true\n",
+            f"PostDown = mv -f '{backup}' /etc/resolv.conf 2>/dev/null || true\n",
+        ]
+        logger.info(
+            "resolvconf and systemd-resolved unavailable; managing "
+            "/etc/resolv.conf directly for tunnel DNS"
+        )
+
+    new_lines = []
+    for line in lines:
+        if is_dns_line(line):
+            new_lines.extend(replacement)
+        else:
+            new_lines.append(line)
+
+    iface = os.path.splitext(os.path.basename(config_path))[0]
+    compat_path = os.path.join(
+        os.path.dirname(config_path), f".{iface}.compat.conf"
+    )
+    try:
+        with open(compat_path, "w") as compat_file:
+            compat_file.writelines(new_lines)
+        os.chmod(compat_path, 0o600)
+    except OSError as e:
+        logger.error(f"Failed to write DNS-compatible config: {e}")
+        return config_path
+
+    return compat_path
+
+
 def start_vpn(config_path):
     """
     Start the WireGuard VPN service with a specified configuration.
@@ -402,10 +511,13 @@ def start_vpn(config_path):
     try:
         iface = os.path.splitext(os.path.basename(config_path))[0]
         etc_conf = f"/etc/wireguard/{iface}.conf"
+        # Adapt DNS handling to whatever this host provides (resolvconf vs
+        # resolvectl) so wg-quick doesn't fail on a missing resolvconf.
+        src_conf = make_dns_compatible_config(config_path)
         # Copy into /etc/wireguard/ first — Ubuntu's AppArmor profile for
         # wg-quick only permits reading configs from that directory.
         script = (
-            f"cp '{config_path}' '{etc_conf}' && "
+            f"cp '{src_conf}' '{etc_conf}' && "
             f"chmod 600 '{etc_conf}' && "
             f"wg-quick up '{iface}'"
         )

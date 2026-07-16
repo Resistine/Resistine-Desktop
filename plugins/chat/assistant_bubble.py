@@ -34,6 +34,22 @@ _THINK_SPINNER = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇",
 _THINK_FRAME_MS = 80
 
 
+def _logical_px(widget, px: int) -> int:
+    """Convert a PHYSICAL-pixel size to the LOGICAL units a CTk widget's
+    configure values expect (mirrors markdown_renderer._logical_px).
+
+    max_width comes from _available_width() — canvas.winfo_width(), physical
+    px — but CTkLabel re-multiplies wraplength by the widget scaling, so
+    passing it straight double-scales and the streamed text clips at the
+    right edge on HiDPI. Returns ``px`` unchanged at 100%.
+    """
+    try:
+        s = customtkinter.ScalingTracker.get_widget_scaling(widget)
+        return int(round(px / s)) if s else px
+    except Exception:
+        return px
+
+
 class AssistantBubble(customtkinter.CTkFrame):
     """Left-aligned bubble for assistant responses.
 
@@ -131,7 +147,8 @@ class AssistantBubble(customtkinter.CTkFrame):
         """
         self._streaming_label = customtkinter.CTkLabel(
             self, text="", fg_color="transparent",
-            text_color=self._bubble_fg, wraplength=self._max_width,
+            text_color=self._bubble_fg,
+            wraplength=_logical_px(self, self._max_width),
             font=customtkinter.CTkFont(
                 family=ui_family(), size=_BASE_SIZE),
             justify="left", anchor="nw",
@@ -280,7 +297,8 @@ class AssistantBubble(customtkinter.CTkFrame):
         self._max_width = max_width
         if self._streaming_label is not None:
             try:
-                self._streaming_label.configure(wraplength=max_width)
+                self._streaming_label.configure(
+                    wraplength=_logical_px(self, max_width))
             except Exception:
                 pass
         if self._renderer is not None \
