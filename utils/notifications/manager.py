@@ -2,13 +2,13 @@
 Cross-Platform System Notification Manager.
 
 Provides a single interface for all platforms. Dispatches to the
-appropriate backend (UserNotifications on macOS, stubs on Win/Linux).
+appropriate backend.
 
 Architecture:
     utils/notifications/
     +-- manager.py         <- shared interface (this file)
     +-- darwin.py          <- macOS: UNUserNotificationCenter via PyObjC
-    +-- linux.py           <- Linux: stub (TODO: notify-send)
+    +-- linux.py           <- Linux: freedesktop D-Bus (jeepney) / notify-send
     +-- windows.py         <- Windows: stub (TODO: WinRT toast)
 
 Usage:

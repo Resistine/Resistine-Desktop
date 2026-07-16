@@ -68,7 +68,27 @@ class App(AppUI):
         Initialize the main application window, set its title, size, and position.
         Check if the email is registered and create the appropriate screen.
         """
-        super().__init__()
+        # On Linux, give the window a stable WM_CLASS so GNOME associates it
+        # with our resistine.desktop (correct dock-tile name + icon, and the
+        # notification identity) instead of Tkinter's default "Tk". CTk forwards
+        # className to tkinter.Tk. Harmless/ignored on Windows & macOS.
+        _init_kwargs = {}
+        if sys.platform.startswith("linux"):
+            _init_kwargs["className"] = "resistine"
+        super().__init__(**_init_kwargs)
+
+        if sys.platform.startswith("linux"):
+            self._apply_hidpi_scaling()
+
+        # Stay fully transparent until the first screen is built, mapped,
+        # measured, and settled — then reveal in a single step (see the
+        # update()/_settle_screen()/alpha=1 sequence below). This is what
+        # prevents the window from appearing at a provisional size/layout and
+        # then visibly reconfiguring on startup.
+        try:
+            self.attributes("-alpha", 0.0)
+        except Exception:
+            pass
 
         if sys.platform.startswith('win'):
             try:
@@ -85,19 +105,6 @@ class App(AppUI):
                         ctypes.windll.user32.SetProcessDPIAware()
                     except Exception:
                         pass
-
-        if sys.platform.startswith("linux"):
-            self._apply_hidpi_scaling()
-
-        # Stay fully transparent until the first screen is built, mapped,
-        # measured, and settled — then reveal in a single step (see the
-        # update()/_settle_screen()/alpha=1 sequence below). This is what
-        # prevents the window from appearing at a provisional size/layout and
-        # then visibly reconfiguring on startup.
-        try:
-            self.attributes("-alpha", 0.0)
-        except Exception:
-            pass
 
         # Fix Ctrl+A select-all on Linux (Tk default is cursor-to-start)
         patch_linux_keybindings(self)
@@ -218,6 +225,16 @@ class App(AppUI):
             notifications.init()
         except Exception as e:
             logger.warning(f"Failed to initialize system notifications: {e}")
+
+        # Linux: self-install a .desktop entry so the dock tile + notifications
+        # show "Resistine" + our icon (not the default Tkinter "Tk"). No-op
+        # elsewhere and on repeat launches. See utils/linux_desktop.py.
+        try:
+            from utils.linux_desktop import ensure_desktop_entry
+
+            ensure_desktop_entry()
+        except Exception as e:
+            logger.debug(f"Desktop entry setup skipped: {e}")
 
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
 
