@@ -29,8 +29,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtWidgets import (
+    QBoxLayout,
     QComboBox,
     QFrame,
     QGridLayout,
@@ -77,11 +78,32 @@ _THREAT_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "ok": 0}
 _RANK_TO_SEV = {v: k for k, v in _THREAT_RANK.items()}
 
 # Layout constants. The Overview content is a centered column so page elements
-# don't stretch edge-to-edge (which forced horizontal scroll); module tiles sit
-# in a fixed two-column grid within it and stretch to fill each half. The min
-# width guarantees both columns always have room (never collapses to one).
-_CONTENT_MAX_WIDTH = 760
-_CONTENT_MIN_WIDTH = 460
+# don't stretch edge-to-edge; module tiles sit in a RESPONSIVE grid within it
+# whose column count follows the width ladder below (ported from
+# endpoint/design_test2's CTk implementation).
+_CONTENT_MAX_WIDTH = 1240
+_CONTENT_MIN_WIDTH = 320
+
+# Responsive breakpoints (design_test2 parity): the module grid steps
+# 1 -> 2 -> 3 -> 4 columns at these content widths, and two-up chart/detail
+# rows stack vertically below the stack breakpoint.
+_COL_BREAKPOINTS = (480, 680, 1000)
+_STACK_BREAKPOINT = 680
+_CARD_MIN_H = 160
+_CARD_MAX_H = 300
+_RESIZE_DEBOUNCE_MS = 250
+
+
+def _cols_for_width(width: int) -> int:
+    """1..4 column ladder for the module grid (design_test2 parity)."""
+    c1, c2, c3 = _COL_BREAKPOINTS
+    if width < c1:
+        return 1
+    if width < c2:
+        return 2
+    if width < c3:
+        return 3
+    return 4
 
 # Severity name -> badge theme key.
 #   critical -> violet/red   high -> red (error)
@@ -884,21 +906,75 @@ def _rows_scroll():
     return area, lay
 
 
-class _ModuleGrid(QWidget):
-    """Holds the module tiles in a fixed two-column grid. Tiles stretch to fill
-    each half of the centered content column, so it's always paired regardless
-    of window size (the content column's min width keeps both columns viable)."""
+class _ResponsiveStack(QWidget):
+    """Two-widget row that flips horizontal -> vertical below a breakpoint.
 
-    _COLS = 2
+    Ported from design_test2's chart-row / list-detail stacking: at
+    <_STACK_BREAKPOINT px the children stack vertically (equal heights);
+    above it they sit side by side with the given stretch factors. Uses
+    QBoxLayout.setDirection so no rebuild (and no state loss) is needed —
+    the flip is a pure relayout. Debounced so window drags relayout once.
+    """
+
+    def __init__(self, first, second, *, stretches=(1, 1),
+                 breakpoint=_STACK_BREAKPOINT):
+        super().__init__()
+        self.setObjectName("Transparent")
+        self._breakpoint = breakpoint
+        self._stretches = stretches
+        self._stacked = None
+        self._box = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
+        self._box.setContentsMargins(0, 0, 0, 0)
+        self._box.setSpacing(12)
+        self._box.addWidget(first, stretches[0])
+        self._box.addWidget(second, stretches[1])
+        self._debounce = QTimer(self)
+        self._debounce.setSingleShot(True)
+        self._debounce.setInterval(_RESIZE_DEBOUNCE_MS)
+        self._debounce.timeout.connect(self._apply)
+
+    def resizeEvent(self, event):  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        self._debounce.start()
+
+    def _apply(self):
+        stacked = self.width() < self._breakpoint
+        if stacked == self._stacked:
+            return
+        self._stacked = stacked
+        if stacked:
+            self._box.setDirection(QBoxLayout.Direction.TopToBottom)
+            self._box.setStretch(0, 1)
+            self._box.setStretch(1, 1)
+        else:
+            self._box.setDirection(QBoxLayout.Direction.LeftToRight)
+            self._box.setStretch(0, self._stretches[0])
+            self._box.setStretch(1, self._stretches[1])
+
+
+class _ModuleGrid(QWidget):
+    """Holds the module tiles in a responsive grid whose column count follows
+    the 1->2->3->4 width ladder, with card row heights driven off the column
+    width so tiles stay ~square (160-300px clamp). Ported from
+    endpoint/design_test2's _populate_module_grid/_bind_module_aspect_ratio.
+    """
 
     def __init__(self):
         super().__init__()
         self.setObjectName("Transparent")
+        self._cards = []
+        self._cols = None
         self._grid = QGridLayout(self)
         self._grid.setContentsMargins(0, 0, 0, 0)
         self._grid.setSpacing(16)
-        self._grid.setColumnStretch(0, 1)
-        self._grid.setColumnStretch(1, 1)
+        self._debounce = QTimer(self)
+        self._debounce.setSingleShot(True)
+        self._debounce.setInterval(_RESIZE_DEBOUNCE_MS)
+        self._debounce.timeout.connect(self._relayout)
+
+    def resizeEvent(self, event):  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        self._debounce.start()
 
     def set_cards(self, cards):
         # Delete the previous tiles outright — detaching from the layout alone
@@ -910,24 +986,36 @@ class _ModuleGrid(QWidget):
             if w is not None:
                 w.setParent(None)
                 w.deleteLater()
+        self._cards = list(cards)
+        self._cols = None  # force a fresh layout pass
+        self._relayout(force=True)
 
-        n = len(cards)
-        paired = n - (n % self._COLS)
-        for i in range(paired):
-            self._grid.addWidget(cards[i], i // self._COLS, i % self._COLS)
-        # A lone trailing tile would sit left-aligned in column 0; span it across
-        # both columns and center it at ~one column's width so the grid stays
-        # balanced.
-        if n > paired:
-            last = cards[-1]
-            wrap = QWidget()
-            wrap.setObjectName("Transparent")
-            hb = QHBoxLayout(wrap)
-            hb.setContentsMargins(0, 0, 0, 0)
-            hb.addStretch(1)
-            hb.addWidget(last, 2)
-            hb.addStretch(1)
-            self._grid.addWidget(wrap, paired // self._COLS, 0, 1, self._COLS)
+    def _relayout(self, force=False):
+        if not self._cards:
+            return
+        width = max(1, self.width())
+        cols = max(1, min(_cols_for_width(width), len(self._cards)))
+        if not force and cols == self._cols:
+            self._apply_row_heights(cols)
+            return
+        self._cols = cols
+
+        # Re-grid without destroying the cards (state-preserving relayout).
+        while self._grid.count():
+            self._grid.takeAt(0)
+        for c in range(4):
+            self._grid.setColumnStretch(c, 1 if c < cols else 0)
+        for i, card in enumerate(self._cards):
+            self._grid.addWidget(card, i // cols, i % cols)
+        self._apply_row_heights(cols)
+
+    def _apply_row_heights(self, cols):
+        # Square-ish tiles: row height tracks column width, clamped.
+        col_w = max(1, (self.width() - 16 * (cols - 1)) / cols)
+        target_h = max(_CARD_MIN_H, min(_CARD_MAX_H, int(col_w) + 20))
+        rows = (len(self._cards) + cols - 1) // cols
+        for r in range(rows):
+            self._grid.setRowMinimumHeight(r, target_h)
 
 
 # ==============================================================================
@@ -1854,8 +1942,9 @@ class Plugin(BasePlugin):
         self._ev_detail_holder.setObjectName("Transparent")
         QVBoxLayout(self._ev_detail_holder).setContentsMargins(0, 0, 0, 0)
 
-        h.addWidget(list_card, 3)
-        h.addWidget(self._ev_detail_holder, 2)
+        h.addWidget(
+            _ResponsiveStack(
+                list_card, self._ev_detail_holder, stretches=(3, 2)), 1)
         return split
 
     def _event_list_header(self):
@@ -2210,14 +2299,13 @@ class Plugin(BasePlugin):
 
     # ----- charts row: donut + CVSS ------------------------------------------
     def _build_vuln_charts_row(self):
-        wrap = QWidget()
-        wrap.setObjectName("Transparent")
-        h = QHBoxLayout(wrap)
-        h.setContentsMargins(0, 0, 0, 0)
-        h.setSpacing(12)
-        h.addWidget(self._build_vuln_donut_card(), 1)
-        h.addWidget(self._build_vuln_cvss_card(), 1)
-        return wrap
+        # Two-up above the stack breakpoint; stacked vertically below it
+        # (design_test2 parity: graphs stack when the app is too skinny).
+        return _ResponsiveStack(
+            self._build_vuln_donut_card(),
+            self._build_vuln_cvss_card(),
+            stretches=(1, 1),
+        )
 
     def _build_vuln_donut_card(self):
         card = QFrame()
