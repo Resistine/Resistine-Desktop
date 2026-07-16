@@ -73,7 +73,7 @@ class _StoreCard(QFrame):
         self.setObjectName("Card")
         # Cards stretch to fill their grid cell (same behaviour as the
         # Dashboard grid) instead of fixed-size tiles with dead gutters.
-        self.setMinimumSize(280, 230)
+        self.setMinimumSize(230, 230)
         self.setSizePolicy(QSizePolicy.Policy.Expanding,
                            QSizePolicy.Policy.Expanding)
 

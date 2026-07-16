@@ -136,7 +136,9 @@ class CardGrid(QWidget):
     incrementally (Store) can drive it the same way.
     """
 
-    _CARD_STEP = 300  # px of width per column
+    # px of width per column. Sized so TWO columns fit at the minimum
+    # window (820 - 250 sidebar - page margins ≈ 520px of grid width).
+    _CARD_STEP = 250
 
     def __init__(self, parent=None):
         super().__init__(parent)

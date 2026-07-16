@@ -305,7 +305,8 @@ class Plugin(BasePlugin):
             row.addStretch(1)
             lv = QLabel(str(value))
             lv.setStyleSheet("font-size: 13px; font-weight: 700;")
-            row.addWidget(lv, 0, Qt.AlignmentFlag.AlignRight)
+            lv.setWordWrap(True)  # wrap instead of clipping on narrow windows
+            row.addWidget(lv, 1, Qt.AlignmentFlag.AlignRight)
             body.addLayout(row)
 
     # ── Card: Re-enrollment required (account change) ──────────────────

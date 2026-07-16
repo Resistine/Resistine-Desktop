@@ -893,15 +893,16 @@ class Plugin(BasePlugin):
             f"color: {_pick('#111111', '#EEEEEE')}; font-size: 13px; "
             f"font-weight: 700; font-family: {family}; background: transparent;"
         )
-        if wrap:
-            val.setWordWrap(True)
-            val.setAlignment(
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop
-            )
-        else:
-            val.setAlignment(
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-            )
+        # Always allow wrapping: a non-wrapping QLabel is CLIPPED (no
+        # ellipsis) when the two side-by-side panels compress its column on
+        # a narrow window — IPs rendered as "10.11.128." and labels as
+        # "Config Nam". Wrapped values shrink gracefully instead.
+        val.setWordWrap(True)
+        val.setAlignment(
+            Qt.AlignmentFlag.AlignRight
+            | (Qt.AlignmentFlag.AlignTop if wrap
+               else Qt.AlignmentFlag.AlignVCenter)
+        )
         val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         g.addWidget(val, row, 1)
         return row + 1

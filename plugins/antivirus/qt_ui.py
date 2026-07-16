@@ -285,7 +285,8 @@ def build_db_info_card(plugin, col: QVBoxLayout) -> None:
         r.addStretch(1)
         val = QLabel(value)
         val.setStyleSheet("font-weight: 700;")
-        r.addWidget(val)
+        val.setWordWrap(True)  # wrap instead of clipping on narrow windows
+        r.addWidget(val, 1, Qt.AlignmentFlag.AlignRight)
         lay.addLayout(r)
         plugin._db_labels[label] = val
     col.addWidget(frame)

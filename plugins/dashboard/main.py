@@ -40,7 +40,7 @@ class _PluginCard(QFrame):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         # Cards stretch to fill their grid cell so the dashboard uses the
         # whole width (CTk parity: column weights, not fixed tiles).
-        self.setMinimumSize(260, 240)
+        self.setMinimumSize(230, 240)
         self.setSizePolicy(QSizePolicy.Policy.Expanding,
                            QSizePolicy.Policy.Expanding)
 
