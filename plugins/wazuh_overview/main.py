@@ -1160,7 +1160,13 @@ class Plugin(BasePlugin):
         self._inv_body_holder = None
 
         root = QWidget()
-        root.setObjectName("Transparent")
+        # Explicit theme background (NOT Transparent): document-mode QTabBar
+        # ignores background rules on some styles, so the strip showed the
+        # dark ancestor colour as a black band in light mode. Painting the
+        # page root guarantees the bar row sits on the theme background.
+        root.setObjectName("WazuhOverviewRoot")
+        root.setStyleSheet(
+            f"#WazuhOverviewRoot{{background:{theme.color('window_bg')};}}")
         outer = QVBoxLayout(root)
         # Breathing room so the tab bar doesn't sit flush against the window
         # title bar (top) or the content edges (sides).

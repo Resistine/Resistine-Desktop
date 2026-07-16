@@ -268,11 +268,6 @@ def build_db_info_card(plugin, col: QVBoxLayout) -> None:
     frame, lay = card()
     lay.addWidget(section_title("Signature Database"))
     lay.addWidget(divider())
-    # Expanding gap between the title and the content rows. The card is given
-    # the column's vertical stretch (col.addWidget(frame, 1) below), so this
-    # absorbs all the leftover height — growing the title→content padding and
-    # making the panel itself sit flush with the bottom of the screen.
-    lay.addStretch(1)
 
     try:
         engine = clamav.engine_name()
@@ -293,7 +288,8 @@ def build_db_info_card(plugin, col: QVBoxLayout) -> None:
         r.addWidget(val)
         lay.addLayout(r)
         plugin._db_labels[label] = val
-    col.addWidget(frame, 1)  # take the column's vertical slack → flush to bottom
+    col.addWidget(frame)
+    col.addStretch(1)  # keep cards top-packed; slack goes below the last card
 
 
 # ── Settings sub-view ──────────────────────────────────────

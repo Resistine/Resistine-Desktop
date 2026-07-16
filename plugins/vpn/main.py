@@ -810,49 +810,26 @@ class Plugin(BasePlugin):
         return self.main_container
 
     def _rebalance_padding(self):
-        """Set every panel's title→content spacer to one EQUAL height, chosen so
-        the bottom buttons sit flush with the bottom of the viewport.
+        """Keep a small, EQUAL title→content padding in every panel.
 
-        The CLIENT|SERVER pair shares a grid row, so only the taller (CLIENT)
-        counts toward the equal-padding math; SERVER's spacer expands to fill
-        its half of that shared band.
+        Previously this computed large spacer heights so the bottom buttons
+        sat flush with the viewport — which read as huge dead gaps between
+        each panel's title and its rows. Content now sits directly under the
+        titles (matching the original CTk layout); leftover height simply
+        stays below the last row of panels.
         """
         spacers = getattr(self, "_panel_spacers", None)
-        content = getattr(self, "_vpn_content", None)
-        scroll = getattr(self, "_vpn_scroll", None)
         grids = getattr(self, "_panel_grids", [])
-        if not spacers or content is None or scroll is None:
+        if not spacers:
             return
         fixed = QSizePolicy.Policy.Fixed
         mini = QSizePolicy.Policy.Minimum
-        expanding = QSizePolicy.Policy.Expanding
-        # SERVER is the 2nd panel built (index 1); it shares CLIENT's band.
-        pad_idx = [i for i in range(len(spacers)) if i != 1]
-        server_idx = 1 if len(spacers) > 1 else None
         try:
-            # 1) Collapse all spacers and measure the natural content height.
             for sp in spacers:
-                sp.changeSize(0, 0, mini, fixed)
+                sp.changeSize(0, 8, mini, fixed)
             for g in grids:
                 g.invalidate()
             self._vpn_outer_grid.invalidate()
-            content.layout().activate()
-            # 20 = the centered HBox's top+bottom margins (10 + 10).
-            avail = scroll.viewport().height() - 20
-            slack = avail - content.sizeHint().height()
-            n = len(pad_idx) or 1
-            base = max(0, slack // n)
-            rem = max(0, slack - base * n)  # give the remainder to the last one
-            # 2) Apply the equal pad; SERVER expands to match CLIENT's band.
-            for k, i in enumerate(pad_idx):
-                h = base + (rem if k == len(pad_idx) - 1 else 0)
-                spacers[i].changeSize(0, h, mini, fixed)
-            if server_idx is not None:
-                spacers[server_idx].changeSize(0, 0, mini, expanding)
-            for g in grids:
-                g.invalidate()
-            self._vpn_outer_grid.invalidate()
-            content.layout().activate()
         except (RuntimeError, AttributeError):
             return
 

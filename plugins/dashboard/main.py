@@ -13,7 +13,7 @@ Licensed under the GNU General Public License v2 or later
 
 import os
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
 )
 
 from gui import theme
-from gui.qt_widgets import FlowLayout, StatusBadge, scroll_page
+from gui.qt_widgets import StatusBadge, scroll_page
 from plugins.base_plugin import BasePlugin
 
 _DIR = os.path.dirname(os.path.realpath(__file__))
@@ -37,10 +37,11 @@ class _PluginCard(QFrame):
         self._on_click = on_click
         self.setObjectName("Card")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        # Square cards (height matches width) — mirrors the CTk dashboard's
-        # aspect_ratio=1.0.
-        _side = 305
-        self.setFixedSize(_side, _side)
+        # Cards stretch to fill their grid cell so the dashboard uses the
+        # whole width (CTk parity: column weights, not fixed tiles).
+        self.setMinimumSize(260, 240)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding,
+                           QSizePolicy.Policy.Expanding)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(16, 16, 16, 16)
@@ -75,6 +76,50 @@ class _PluginCard(QFrame):
         if event.button() == Qt.MouseButton.LeftButton:
             self._on_click()
         super().mousePressEvent(event)
+
+
+class _CardGrid(QWidget):
+    """Responsive plugin-card grid: 1-4 columns by width, cells stretch to
+    fill the page so there are no dead gutters. 200ms debounced relayout."""
+
+    def __init__(self):
+        super().__init__()
+        self._cards = []
+        self._cols = None
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setSpacing(16)
+        self._debounce = QTimer(self)
+        self._debounce.setSingleShot(True)
+        self._debounce.setInterval(200)
+        self._debounce.timeout.connect(self._relayout)
+
+    def resizeEvent(self, event):  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        self._debounce.start()
+
+    def set_cards(self, cards):
+        self._cards = list(cards)
+        self._cols = None
+        self._relayout()
+
+    def _relayout(self):
+        if not self._cards:
+            return
+        width = max(1, self.width())
+        cols = max(1, min(4, width // 300, len(self._cards)))
+        if cols == self._cols:
+            return
+        self._cols = cols
+        while self._grid.count():
+            self._grid.takeAt(0)
+        rows = (len(self._cards) + cols - 1) // cols
+        for c in range(4):
+            self._grid.setColumnStretch(c, 1 if c < cols else 0)
+        for r in range(rows):
+            self._grid.setRowStretch(r, 1)
+        for i, card in enumerate(self._cards):
+            self._grid.addWidget(card, i // cols, i % cols)
 
 
 class Plugin(BasePlugin):
@@ -113,15 +158,15 @@ class Plugin(BasePlugin):
         v.addWidget(banner)
         v.addSpacing(16)
 
-        # Responsive card grid (FlowLayout reflows like the CTk responsive grid).
-        host = QWidget()
-        flow = FlowLayout(host, margin=0, spacing=16, center=True)
-        for p in self._cards():
-            flow.addWidget(
-                _PluginCard(p, lambda n=p.get_name():
-                            self.app.select_frame_by_name(f"frame_{n}")))
-        v.addWidget(host)
-        v.addStretch(1)
+        # Responsive card grid: column count follows the width ladder and the
+        # cards stretch to fill each cell — no dead gutters at any size.
+        host = _CardGrid()
+        host.set_cards([
+            _PluginCard(p, lambda n=p.get_name():
+                        self.app.select_frame_by_name(f"frame_{n}"))
+            for p in self._cards()
+        ])
+        v.addWidget(host, 1)
         return scroll_page(inner)
 
     def _cards(self):

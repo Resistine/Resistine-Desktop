@@ -199,7 +199,8 @@ class AppWindow(QMainWindow):
                 w * 2, h * 2, Qt.AspectRatioMode.IgnoreAspectRatio,
                 Qt.TransformationMode.SmoothTransformation)
             if not pm.isNull():
-                pm = self._round_pixmap(pm, radius * 2)
+                # Square corners by design — the wordmark banner is shown
+                # as-is (no rounded clip).
                 pm.setDevicePixelRatio(2.0)
                 label.setPixmap(pm)
                 return label
