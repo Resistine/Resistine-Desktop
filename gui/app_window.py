@@ -179,6 +179,10 @@ class AppWindow(QMainWindow):
         layout.addWidget(self.sidebar)
 
     def _logo_widget(self) -> QWidget:
+        # Primary: the blue "Resistine" wordmark banner (4:1). Shown in the
+        # sidebar across the whole app; the shield mark stays reserved for
+        # the login flow / setup wizard.
+        wordmark_path = resource("resources", "icons", "ResistineWordmark.png")
         svg_path = resource("resources", "icons", "ResistineLogo.svg")
         png_path = resource("resources", "icons", "ResistineLogoWhiteText.png")
         label = QLabel()
@@ -186,9 +190,20 @@ class AppWindow(QMainWindow):
         label.setAlignment(Qt.AlignmentFlag.AlignHCenter
                            | Qt.AlignmentFlag.AlignVCenter)
 
-        # The logo art is a 4:1 banner (2500×625). Render it at that ratio.
+        # The logo art is a 4:1 banner. Render at 2x and tag the device pixel
+        # ratio so it stays crisp on Retina displays.
         w, h, radius = 200, 50, 12
         pm = None
+        if os.path.isfile(wordmark_path):
+            pm = QPixmap(wordmark_path).scaled(
+                w * 2, h * 2, Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+            if not pm.isNull():
+                pm = self._round_pixmap(pm, radius * 2)
+                pm.setDevicePixelRatio(2.0)
+                label.setPixmap(pm)
+                return label
+            pm = None
         try:
             if os.path.isfile(svg_path):
                 from PyQt6.QtSvg import QSvgRenderer

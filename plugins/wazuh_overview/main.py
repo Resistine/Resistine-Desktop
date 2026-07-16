@@ -1169,22 +1169,27 @@ class Plugin(BasePlugin):
 
         tabs = QTabWidget()
         tabs.setDocumentMode(True)
-        # Default QTabBar text is near-invisible in dark mode. Paint the tabs
-        # with the theme's card/tile background and explicit, visible text
-        # colours; the active tab gets the accent underline.
+        # Underline tab strip (design_test2 style): no boxed tabs, no dark
+        # band. The bar row gets the theme window background explicitly —
+        # QTabBar in document mode otherwise paints its empty area with the
+        # ancestor/palette colour, which showed as a black strip in light
+        # mode. Contrast comes from text weight/colour + the accent
+        # underline, plus a hairline under the whole strip.
+        _bg = theme.color("window_bg")
+        _hairline = theme.color("border")
         tabs.setStyleSheet(
-            "QTabWidget::pane{border:none;background:transparent;}"
-            "QTabBar{background:transparent;}"
+            f"QTabWidget::pane{{border:none;background:transparent;"
+            f"border-top:1px solid {_hairline};}}"
+            f"QTabBar{{background:{_bg};}}"
             "QTabBar::tab{"
-            f"background:{theme.color('card_bg')};color:{theme.color('text_secondary')};"
-            f"border:1px solid {theme.color('border')};border-bottom:none;"
-            "padding:8px 18px;margin-right:4px;"
-            "border-top-left-radius:8px;border-top-right-radius:8px;font-size:14px;}"
+            f"background:transparent;color:{theme.color('text_secondary')};"
+            "border:none;padding:9px 4px;margin-right:28px;font-size:14px;}"
             "QTabBar::tab:selected{"
-            f"color:{theme.color('text_primary')};font-weight:600;"
+            f"color:{theme.color('accent')};font-weight:700;"
             f"border-bottom:2px solid {theme.color('accent')};"
             "}"
-            f"QTabBar::tab:hover{{background:{theme.color('sidebar_hover_bg')};}}"
+            "QTabBar::tab:!selected{margin-bottom:2px;}"
+            f"QTabBar::tab:hover:!selected{{color:{theme.color('text_primary')};}}"
         )
         for name in _TAB_NAMES:
             page = QWidget()
