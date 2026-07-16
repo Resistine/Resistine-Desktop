@@ -615,9 +615,15 @@ class Plugin(BasePlugin):
         rl.setContentsMargins(8, 4, 4, 4)
         rl.setSpacing(2)
 
-        lbl = QLabel(title)
+        lbl = QLabel()
         lbl.setStyleSheet(
             f"color: {fg}; font-size: 12px; background: transparent;")
+        # Elide long titles: an un-elided QLabel expands past the drawer's
+        # fixed width, pushing the delete ✕ off the right edge.
+        avail = _SIDEBAR_WIDTH - 8 - 4 - 2 - 24 - 16  # margins + ✕ + padding
+        lbl.setText(lbl.fontMetrics().elidedText(
+            title, Qt.TextElideMode.ElideRight, avail))
+        lbl.setToolTip(title)
         lbl.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         lbl.mousePressEvent = lambda _e, s=sid: self._select_chat(s)
         rl.addWidget(lbl, 1)
@@ -627,8 +633,9 @@ class Plugin(BasePlugin):
         del_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         del_btn.setStyleSheet(
             "QPushButton { background: transparent; color: #6B7280; "
-            "border: none; font-size: 11px; }"
-            "QPushButton:hover { color: #DC2626; }")
+            "border: none; border-radius: 6px; font-size: 12px; }"
+            "QPushButton:hover { color: #DC2626; "
+            f"background: {theme.color('sidebar_hover_bg')}; }}")
         del_btn.clicked.connect(lambda _=False, s=sid: self._delete_chat(s))
         rl.addWidget(del_btn)
         return row

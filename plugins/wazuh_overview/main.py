@@ -49,6 +49,7 @@ from PyQt6.QtWidgets import (
 )
 
 from gui import theme
+from gui.qt_widgets import ResponsiveStack
 from gui.qt_widgets import scroll_page
 from plugins.base_plugin import BasePlugin
 from plugins.wazuh_overview import api_client, charts
@@ -907,50 +908,7 @@ def _rows_scroll():
     return area, lay
 
 
-class _ResponsiveStack(QWidget):
-    """Two-widget row that flips horizontal -> vertical below a breakpoint.
-
-    Ported from design_test2's chart-row / list-detail stacking: at
-    <_STACK_BREAKPOINT px the children stack vertically (equal heights);
-    above it they sit side by side with the given stretch factors. Uses
-    QBoxLayout.setDirection so no rebuild (and no state loss) is needed —
-    the flip is a pure relayout. Debounced so window drags relayout once.
-    """
-
-    def __init__(self, first, second, *, stretches=(1, 1),
-                 breakpoint=_STACK_BREAKPOINT):
-        super().__init__()
-        self.setObjectName("Transparent")
-        self._breakpoint = breakpoint
-        self._stretches = stretches
-        self._stacked = None
-        self._box = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
-        self._box.setContentsMargins(0, 0, 0, 0)
-        self._box.setSpacing(12)
-        self._box.addWidget(first, stretches[0])
-        self._box.addWidget(second, stretches[1])
-        self._debounce = QTimer(self)
-        self._debounce.setSingleShot(True)
-        self._debounce.setInterval(_RESIZE_DEBOUNCE_MS)
-        self._debounce.timeout.connect(self._apply)
-
-    def resizeEvent(self, event):  # noqa: N802 - Qt override
-        super().resizeEvent(event)
-        self._debounce.start()
-
-    def _apply(self):
-        stacked = self.width() < self._breakpoint
-        if stacked == self._stacked:
-            return
-        self._stacked = stacked
-        if stacked:
-            self._box.setDirection(QBoxLayout.Direction.TopToBottom)
-            self._box.setStretch(0, 1)
-            self._box.setStretch(1, 1)
-        else:
-            self._box.setDirection(QBoxLayout.Direction.LeftToRight)
-            self._box.setStretch(0, self._stretches[0])
-            self._box.setStretch(1, self._stretches[1])
+# _ResponsiveStack moved to gui.qt_widgets.ResponsiveStack
 
 
 class _ModuleGrid(QWidget):
@@ -1983,7 +1941,7 @@ class Plugin(BasePlugin):
         QVBoxLayout(self._ev_detail_holder).setContentsMargins(0, 0, 0, 0)
 
         h.addWidget(
-            _ResponsiveStack(
+            ResponsiveStack(
                 list_card, self._ev_detail_holder, stretches=(3, 2)), 1)
         return split
 
@@ -2341,7 +2299,7 @@ class Plugin(BasePlugin):
     def _build_vuln_charts_row(self):
         # Two-up above the stack breakpoint; stacked vertically below it
         # (design_test2 parity: graphs stack when the app is too skinny).
-        return _ResponsiveStack(
+        return ResponsiveStack(
             self._build_vuln_donut_card(),
             self._build_vuln_cvss_card(),
             stretches=(1, 1),

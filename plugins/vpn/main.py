@@ -46,7 +46,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 from gui import theme
-from gui.qt_widgets import scroll_page
+from gui.qt_widgets import ResponsiveStack, scroll_page
 from plugins.base_plugin import BasePlugin
 from utils.logger import logger
 
@@ -710,9 +710,7 @@ class Plugin(BasePlugin):
             cr = self._info_row(
                 client_grid, cr, "Status", sys_info.get("Status", "N/A"),
             )
-            grid.addWidget(client_panel, row, 0)
-
-            # Right — SERVER / PEER panel (column 1, same row)
+            # Right — SERVER / PEER panel
             server_panel, server_grid = self._panel()
             sr = self._section_header(server_panel, server_grid, 0, "SERVER / PEER")
             sr = self._info_row(
@@ -723,7 +721,12 @@ class Plugin(BasePlugin):
             sr = self._info_row(
                 server_grid, sr, "Config Name", sys_info.get("Config Name", "N/A"),
             )
-            grid.addWidget(server_panel, row, 1)
+            # Side-by-side on a wide window; stacked vertically when narrow so
+            # neither panel compresses its rows into clipped text
+            # ("10.11.128." / "Config Nam").
+            grid.addWidget(
+                ResponsiveStack(client_panel, server_panel, stretches=(1, 1)),
+                row, 0, 1, 2)
             row += 1
 
             # ── PUBLIC KEYS (spans both columns) ──────────────────────────
@@ -888,10 +891,13 @@ class Plugin(BasePlugin):
         g.addWidget(lbl, row, 0)
 
         val = QLabel(str(value))
-        family = f'"{_MONO_FONT}", monospace' if mono else "inherit"
+        # One family + one weight for every value (mono is intentionally
+        # ignored): the Courier-vs-UI-font mix read as inconsistent sizing
+        # and boldness across rows.
+        _ = mono
         val.setStyleSheet(
             f"color: {_pick('#111111', '#EEEEEE')}; font-size: 13px; "
-            f"font-weight: 700; font-family: {family}; background: transparent;"
+            f"font-weight: 700; background: transparent;"
         )
         # Always allow wrapping: a non-wrapping QLabel is CLIPPED (no
         # ellipsis) when the two side-by-side panels compress its column on

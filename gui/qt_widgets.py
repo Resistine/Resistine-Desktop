@@ -16,6 +16,7 @@ import os
 from PyQt6.QtCore import QTimer, QPoint, QRect, QSize, Qt
 from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (
+    QBoxLayout,
     QGridLayout,
     QFrame,
     QHBoxLayout,
@@ -127,6 +128,52 @@ def centered(inner: QWidget, max_width: int = 760, min_width: int = 420) -> QWid
     h.addWidget(inner, 3)
     h.addStretch(1)
     return wrap
+
+
+class ResponsiveStack(QWidget):
+    """Two-widget row that flips horizontal -> vertical below a breakpoint.
+
+    Ported from design_test2's chart-row / list-detail stacking: at
+    <680 px the children stack vertically (equal heights);
+    above it they sit side by side with the given stretch factors. Uses
+    QBoxLayout.setDirection so no rebuild (and no state loss) is needed —
+    the flip is a pure relayout. Debounced so window drags relayout once.
+    """
+
+    def __init__(self, first, second, *, stretches=(1, 1),
+                 breakpoint=680):
+        super().__init__()
+        self.setObjectName("Transparent")
+        self._breakpoint = breakpoint
+        self._stretches = stretches
+        self._stacked = None
+        self._box = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
+        self._box.setContentsMargins(0, 0, 0, 0)
+        self._box.setSpacing(12)
+        self._box.addWidget(first, stretches[0])
+        self._box.addWidget(second, stretches[1])
+        self._debounce = QTimer(self)
+        self._debounce.setSingleShot(True)
+        self._debounce.setInterval(250)
+        self._debounce.timeout.connect(self._apply)
+
+    def resizeEvent(self, event):  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        self._debounce.start()
+
+    def _apply(self):
+        stacked = self.width() < self._breakpoint
+        if stacked == self._stacked:
+            return
+        self._stacked = stacked
+        if stacked:
+            self._box.setDirection(QBoxLayout.Direction.TopToBottom)
+            self._box.setStretch(0, 1)
+            self._box.setStretch(1, 1)
+        else:
+            self._box.setDirection(QBoxLayout.Direction.LeftToRight)
+            self._box.setStretch(0, self._stretches[0])
+            self._box.setStretch(1, self._stretches[1])
 
 
 class CardGrid(QWidget):
