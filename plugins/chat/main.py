@@ -69,8 +69,12 @@ _STOP_RED = "#EF4444"
 _STOP_RED_HOVER = "#DC2626"
 
 # Bubble width caps (mirror plugins/chat/bubble.py).
-_ASST_MAX = 480
-_USER_MAX = 480
+# Width ceilings for bubbles. The effective width is dynamic — a fraction of
+# the visible chat area, clamped to these caps (see _apply_bubble_widths) —
+# so bubbles use the room they're given instead of wrapping at a fixed 480px.
+_ASST_MAX = 860
+_USER_MAX = 720
+_BUBBLE_FRACTION = 0.78  # of the message-area viewport width
 
 _SIDEBAR_WIDTH = 240
 
@@ -438,7 +442,38 @@ class Plugin(BasePlugin):
         self._messages_lay.setSpacing(2)
         self._messages_lay.addStretch(1)  # bottom spacer keeps rows top-packed
         self._scroll.setWidget(self._messages)
+        # Re-fit every bubble's max width when the chat area resizes.
+        _orig_resize = self._scroll.resizeEvent
+
+        def _on_scroll_resize(event, _orig=_orig_resize):
+            _orig(event)
+            self._apply_bubble_widths()
+
+        self._scroll.resizeEvent = _on_scroll_resize
         return self._scroll
+
+    def _bubble_widths(self) -> tuple[int, int]:
+        """(user, assistant) max widths for the current viewport size."""
+        try:
+            avail = self._scroll.viewport().width() - 24  # row margins
+        except Exception:
+            avail = 0
+        if avail <= 0:
+            return _USER_MAX, _ASST_MAX
+        dyn = int(avail * _BUBBLE_FRACTION)
+        return min(_USER_MAX, dyn), min(_ASST_MAX, dyn)
+
+    def _apply_bubble_widths(self) -> None:
+        user_w, asst_w = self._bubble_widths()
+        lay = getattr(self, "_messages_lay", None)
+        if lay is None:
+            return
+        for i in range(lay.count()):
+            w = lay.itemAt(i).widget()
+            bubble = getattr(w, "bubble", None)
+            if bubble is not None:
+                bubble.set_max_width(
+                    user_w if bubble._is_user else asst_w)
 
     # ---- Input bar --------------------------------------------------------
     def _build_input_bar(self) -> QWidget:
@@ -725,13 +760,13 @@ class Plugin(BasePlugin):
     #  Bubble helpers
     # ===================================================================
     def _add_user_bubble(self, text: str) -> _Bubble:
-        bubble = _Bubble(is_user=True, max_width=_USER_MAX)
+        bubble = _Bubble(is_user=True, max_width=self._bubble_widths()[0])
         bubble.set_text(text)
         self._insert_row(_BubbleRow(bubble, is_user=True))
         return bubble
 
     def _add_assistant_bubble(self, md: str | None = None) -> _Bubble:
-        bubble = _Bubble(is_user=False, max_width=_ASST_MAX)
+        bubble = _Bubble(is_user=False, max_width=self._bubble_widths()[1])
         if md is not None:
             bubble.set_text(md)
         self._insert_row(_BubbleRow(bubble, is_user=False))
