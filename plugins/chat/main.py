@@ -616,13 +616,19 @@ class Plugin(BasePlugin):
         rl.setSpacing(2)
 
         lbl = QLabel()
-        lbl.setStyleSheet(
-            f"color: {fg}; font-size: 12px; background: transparent;")
-        # Elide long titles: an un-elided QLabel expands past the drawer's
-        # fixed width, pushing the delete ✕ off the right edge.
-        avail = _SIDEBAR_WIDTH - 8 - 4 - 2 - 24 - 16  # margins + ✕ + padding
+        # Set the font on the WIDGET (not via QSS): elidedText() must use the
+        # same metrics the label paints with — the stylesheet font-size isn't
+        # reflected in fontMetrics(), which made the elided string ~10px too
+        # wide and pushed the delete ✕ past the drawer edge.
+        _f = lbl.font()
+        _f.setPixelSize(12)
+        lbl.setFont(_f)
+        lbl.setStyleSheet(f"color: {fg}; background: transparent;")
+        # Generous slack: drawer margins + row margins + spacing + the ✕.
+        avail = _SIDEBAR_WIDTH - 80
         lbl.setText(lbl.fontMetrics().elidedText(
             title, Qt.TextElideMode.ElideRight, avail))
+        lbl.setMaximumWidth(avail)  # hard cap — the ✕ always fits
         lbl.setToolTip(title)
         lbl.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         lbl.mousePressEvent = lambda _e, s=sid: self._select_chat(s)

@@ -785,13 +785,16 @@ class Plugin(BasePlugin):
             grid.setRowStretch(row, 1)
 
         # ── Centered ~750 px content column ───────────────────────────────
+        # Content fills the viewport (minus modest margins) on small/medium
+        # windows and caps at 980px on large ones — the old 750px cap with
+        # 1:3:1 stretches left wide dead gutters on a small window.
         centered = QWidget()
         outer = QHBoxLayout(centered)
         outer.setContentsMargins(24, 10, 24, 10)
         outer.addStretch(1)
-        content.setMaximumWidth(750)
+        content.setMaximumWidth(980)
         content.setMinimumWidth(360)
-        outer.addWidget(content, 3)
+        outer.addWidget(content, 12)
         outer.addStretch(1)
 
         self.main_container = scroll_page(centered)
