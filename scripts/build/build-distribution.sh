@@ -526,10 +526,31 @@ PLISTEOF
     # into the gitignored clamav-artifacts/ dir, which download-clamav-artifacts.sh
     # wipes+repopulates each build).
     LAUNCHD_SRC="$CLAMAV_ARTIFACTS_DIR/launchd"
-    mkdir -p "$PYTHON_APP/Contents/Library/LaunchDaemons"
+    DAEMONS_DIR="$PYTHON_APP/Contents/Library/LaunchDaemons"
+    mkdir -p "$DAEMONS_DIR"
     if [ -d "$LAUNCHD_SRC" ]; then
-        cp "$LAUNCHD_SRC/"*.plist "$PYTHON_APP/Contents/Library/LaunchDaemons/"
+        cp "$LAUNCHD_SRC/"*.plist "$DAEMONS_DIR/"
         echo "  - Placed launchd plists in Contents/Library/LaunchDaemons/"
+
+        # Normalize legacy plist names to the com.resistine.desktop.* convention
+        # that clamav-postinstall-darwin.sh (load_daemons step) and the runtime
+        # SMAppService registration both expect. The ClamAV-Mac CI artifact still
+        # ships the pre-migration names (com.resistine.clamd / com.resistine.clamonacc);
+        # only freshclam was migrated. Without this rename the postinstall fails
+        # with "plist not found: com.resistine.desktop.clamd.plist" and antivirus
+        # setup never completes. Renames the file AND rewrites the internal Label
+        # so SMAppService registers under the matching identifier. Idempotent: a
+        # no-op once the upstream artifact ships the .desktop. names.
+        for base in clamd clamonacc; do
+            old="$DAEMONS_DIR/com.resistine.$base.plist"
+            new="$DAEMONS_DIR/com.resistine.desktop.$base.plist"
+            if [ -f "$old" ]; then
+                /usr/bin/sed -i '' \
+                    "s/com\.resistine\.$base/com.resistine.desktop.$base/g" "$old"
+                mv "$old" "$new"
+                echo "  - Normalized com.resistine.$base.plist -> com.resistine.desktop.$base.plist"
+            fi
+        done
     else
         echo "  - Warning: No launchd plists found in artifacts"
     fi

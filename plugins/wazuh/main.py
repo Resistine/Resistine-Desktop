@@ -61,11 +61,13 @@ try:
     if _PLATFORM == "Darwin":
         from plugins.wazuh.agent.wazuh_functions_darwin import (  # noqa: F401
             full_install,
+            get_agent_connection,
             get_agent_group,
             get_agent_name,
             get_agent_status,
             is_agent_installed,
             needs_reenrollment,
+            reenroll_agent,
             restore_client_key_if_needed,
             start_agent,
             stop_agent,
@@ -74,11 +76,13 @@ try:
     elif _PLATFORM == "Linux":
         from plugins.wazuh.agent.wazuh_functions_linux import (  # noqa: F401
             full_install,
+            get_agent_connection,
             get_agent_group,
             get_agent_name,
             get_agent_status,
             is_agent_installed,
             needs_reenrollment,
+            reenroll_agent,
             restore_client_key_if_needed,
             start_agent,
             stop_agent,
@@ -87,11 +91,13 @@ try:
     elif _PLATFORM == "Windows":
         from plugins.wazuh.agent.wazuh_functions_windows import (  # noqa: F401
             full_install,
+            get_agent_connection,
             get_agent_group,
             get_agent_name,
             get_agent_status,
             is_agent_installed,
             needs_reenrollment,
+            reenroll_agent,
             restore_client_key_if_needed,
             start_agent,
             stop_agent,
@@ -166,6 +172,8 @@ class Plugin(BasePlugin):
         self.main_container = None
         # Cheap cached agent-state string; refreshed by the background poll.
         self._cached_state = None
+        self._reconnect_btn = None
+        self._reconnecting = False
         self.status = self.get_status()
 
     # ── Status ─────────────────────────────────────────────────────────
@@ -176,6 +184,16 @@ class Plugin(BasePlugin):
             return None
         state = self._cached_state
         if state == "Running":
+            # "Running" only means the daemon is alive. If we can positively
+            # read that it's not connected to the manager (e.g. its key was
+            # invalidated server-side), surface a Warning so the dashboard tile
+            # and the Reconnect affordance reflect reality. "unknown" (state
+            # file unreadable) is NOT downgraded — we don't guess.
+            try:
+                if get_agent_connection() == "disconnected":
+                    return "Warning"
+            except Exception:
+                pass
             return "OK"
         if state == "Stopped":
             return "Error"
@@ -517,7 +535,21 @@ class Plugin(BasePlugin):
         state = _safe(get_agent_status, "Stopped")
         self._cached_state = state
         is_running = state == "Running"
-        status_color = _COLOR_OK if is_running else _COLOR_ERROR
+        # Live manager-connection status \u2014 distinct from "process running".
+        # "disconnected" is the only reading we treat as a hard fault;
+        # "pending"/"unknown" stay neutral so we never cry wolf (the state
+        # file can be root-owned and unreadable on some installs).
+        connection = get_agent_connection() if is_running else "unknown"
+        not_connected = is_running and connection == "disconnected"
+
+        if not is_running:
+            status_color, status_text = _COLOR_ERROR, "Stopped"
+        elif not_connected:
+            status_color, status_text = _COLOR_ERROR, "Not Connected"
+        elif connection == "connected":
+            status_color, status_text = _COLOR_OK, "Connected"
+        else:
+            status_color, status_text = _COLOR_OK, "Running"
 
         # Header: indicator dot + "SIEM Agent" + Running/Stopped label.
         body.addSpacing(4)
@@ -531,7 +563,7 @@ class Plugin(BasePlugin):
         name.setStyleSheet("font-size: 18px; font-weight: 700;")
         header.addWidget(name, 0, Qt.AlignmentFlag.AlignLeft)
         header.addStretch(1)
-        self._status_label = QLabel("Running" if is_running else "Stopped")
+        self._status_label = QLabel(status_text)
         self._status_label.setStyleSheet(
             f"font-size: 14px; font-weight: 700; color: {_c(status_color)};")
         header.addWidget(self._status_label, 0, Qt.AlignmentFlag.AlignRight)
@@ -554,15 +586,80 @@ class Plugin(BasePlugin):
         body.addLayout(toggle_row)
         body.addSpacing(8)
 
+        # Reconnect affordance. When we can confirm the agent is running but
+        # not connected (e.g. the old agent was deleted server-side after a
+        # reinstall, invalidating the reused key), show a clear warning. The
+        # button re-registers the agent under a fresh identity — the actual
+        # fix, since a plain toggle just restarts the daemon with the same
+        # dead key. Recovery is user-initiated (one admin prompt), never a
+        # surprise background dialog.
+        if is_running:
+            if not_connected:
+                warn = QLabel(
+                    "Agent is running but not connected to the SIEM manager.\n"
+                    "If the old agent was removed on the server, Reconnect to "
+                    "re-register under a new identity.")
+                warn.setWordWrap(True)
+                warn.setStyleSheet(
+                    f"font-size: 13px; color: {_c(_COLOR_ERROR)};")
+                body.addWidget(warn)
+                body.addSpacing(4)
+            self._reconnect_btn = QPushButton("Reconnect")
+            self._reconnect_btn.setMinimumHeight(30)
+            self._reconnect_btn.setMaximumWidth(140)
+            self._reconnect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._reconnect_btn.clicked.connect(self._reconnect_agent)
+            body.addWidget(self._reconnect_btn, 0, Qt.AlignmentFlag.AlignLeft)
+            body.addSpacing(8)
+        else:
+            self._reconnect_btn = None
+
         self._add_separator(body)
 
         self._add_detail_rows(body, {
             "Status": state,
+            "Connection": connection.capitalize(),
             "Agent Name": _safe(get_agent_name, "—"),
             "Agent Group": _safe(get_agent_group, "—"),
             "Manager": WAZUH_MANAGER,
             "Platform": f"{_PLATFORM} {platform.release()}",
         })
+
+    def _reconnect_agent(self):
+        """Force a fresh manager re-enrollment to recover a stuck agent.
+
+        Wipes the (invalidated) key + backups and re-registers under a new
+        unique name via reenroll_agent(), so the manager creates a brand-new
+        record instead of the deleted one. One admin prompt; runs off-thread.
+        """
+        if self._reconnecting:
+            return
+        self._reconnecting = True
+        if self._reconnect_btn is not None:
+            try:
+                self._reconnect_btn.setEnabled(False)
+                self._reconnect_btn.setText("Reconnecting…")
+            except RuntimeError:
+                pass
+
+        def _run():
+            try:
+                ok, msg = reenroll_agent()
+            except Exception as e:
+                ok, msg = False, str(e)
+
+            def _done():
+                self._reconnecting = False
+                self.app.show_notification(
+                    "Re-enrolled — reconnecting to SIEM manager"
+                    if ok else f"Reconnect failed: {msg}",
+                    type="info" if ok else "error",
+                )
+                self._refresh_screen()
+
+            self.app.after(0, _done)
+
+        threading.Thread(target=_run, daemon=True).start()
 
     # ── Key restore (background thread) ────────────────────────────────
 

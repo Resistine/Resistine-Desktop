@@ -270,8 +270,36 @@ class Plugin(BasePlugin):
         app_settings.set("auth", "email", self.email)
         self._save_vpn_config(result)
         app_settings.set("auth", "logged_in", True)
+
+        # Start Wazuh download + ClamAV DB pre-seed while public internet is
+        # available (VPN DNS cannot resolve packages.wazuh.com).
+        if platform.system() == "Darwin":
+            try:
+                from plugins.wazuh.agent.installer_service import (
+                    ensure_download_started,
+                )
+                threading.Thread(
+                    target=ensure_download_started, daemon=True).start()
+            except Exception:
+                pass
+            try:
+                from plugins.antivirus.installer_service import (
+                    ensure_db_seed_started,
+                )
+                threading.Thread(
+                    target=ensure_db_seed_started, daemon=True).start()
+            except Exception:
+                pass
+
         self.app.show_notification("Login successful!", type="info")
-        self.app.create_dashboard()
+
+        # First login on this machine: run the unified setup wizard instead
+        # of dropping the user on the dashboard with everything unconfigured.
+        needs_setup = not app_settings.get("setup", "complete", False)
+        if needs_setup:
+            self._transition_to_setup_wizard()
+        else:
+            self.app.create_dashboard()
 
     def _save_vpn_config(self, result):
         keys = ("vpn_config", "data", "vpn_configuration", "wireguard_config")
@@ -298,3 +326,18 @@ class Plugin(BasePlugin):
         self.app.show_notification(
             "Login skipped — some features may be unavailable", type="warning")
         self.app.create_dashboard()
+
+    def _transition_to_setup_wizard(self):
+        """Transition from login to the unified customer setup wizard.
+
+        The wizard guides the user through every permission/installation
+        their OS needs (VPN, antivirus, Full Disk Access, endpoint
+        monitoring) behind one flow.
+        """
+        from plugins.login.setup_wizard import SetupWizardScreen
+
+        def on_setup_complete():
+            self.app.create_dashboard()
+
+        self._wizard = SetupWizardScreen(self.app, on_setup_complete)
+        self._wizard.show()
