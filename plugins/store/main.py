@@ -56,6 +56,45 @@ class Plugin(BasePlugin):
         self.app = app
         self.status = self.get_status()
 
+    def _widget_scale(self):
+        """Physical→logical scale factor for the app window.
+
+        winfo_width() returns *physical* pixels under CTk's DPI scaling, so it
+        must be divided by the real OS-DPI ratio before being compared against
+        the logical 480/680 column thresholds (mirrors Dashboard._widget_scale).
+        """
+        try:
+            return customtkinter.ScalingTracker.get_widget_scaling(self.app)
+        except Exception:
+            return getattr(self.app, "_hidpi_factor", 1.0) or 1.0
+
+    def _resolve_max_cols(self):
+        """Column count for the current content width.
+
+        Mirrors Dashboard._resolve_max_cols exactly — logical 480/680 content
+        width thresholds — so the Store and Dashboard grids always agree
+        (both drop to 1 column at the 750x350 minsize).
+        """
+        import platform as _plat
+        _sidebar = 250
+        _padding = 60 if _plat.system() == "Windows" else 40
+        _scale = self._widget_scale()
+        window_width = self.app.winfo_width()
+        if window_width <= 1:
+            # Unmapped fallback: default geometry target (33% of screen area,
+            # ~57.5% per side, clamped to the 750 logical minsize).
+            window_width = max(
+                750, int(self.app.winfo_screenwidth() * (0.33 ** 0.5) / _scale)
+            )
+        else:
+            window_width = int(window_width / _scale)
+        content_width = max(1, window_width - _sidebar - _padding)
+        if content_width < 480:
+            return 1
+        if content_width < 680:
+            return 2
+        return 4
+
     def create_main_screen(self):
         """
         @brief Create the main screen for the Store plugin.
@@ -119,18 +158,14 @@ class Plugin(BasePlugin):
         from utils.logger import logger
         logger.info(f"Store: Rendering {len(plugins)} cards. IDs: {[p.id for p in plugins]}")
         
-        # Responsive layout: determine max columns based on window width
-        screen_width = self.app.winfo_screenwidth()
-        window_width = self.app.winfo_width()
-        if window_width <= screen_width * 0.6:
-            max_cols = 2
-            min_cols = None
-        elif window_width >= screen_width * 0.9:
-            max_cols = None
-            min_cols = 4
-        else:
-            max_cols = None
-            min_cols = None
+        # Responsive layout: determine max columns from logical content width
+        # using the same 480/680 thresholds as the Dashboard (_resolve_max_cols),
+        # so both grids agree and drop to 1 column at the 750x350 minsize.
+        # Force pending geometry to be applied so winfo_width() returns the
+        # actual window size rather than a stale pre-layout value.
+        self.app.update_idletasks()
+        max_cols = self._resolve_max_cols()
+        min_cols = None
         rows, cols = self.app.calculate_rows_cols(len(plugins), max_cols=max_cols, min_cols=min_cols)
         
         # Store current column count to detect changes
@@ -318,18 +353,9 @@ class Plugin(BasePlugin):
             except Exception:
                 return
 
-            screen_width = self._cached_screen_width
-            window_width = self.app.winfo_width()
-
-            if window_width <= screen_width * 0.6:
-                max_cols = 2
-                min_cols = None
-            elif window_width >= screen_width * 0.9:
-                max_cols = None
-                min_cols = 4
-            else:
-                max_cols = None
-                min_cols = None
+            # Same logical content-width thresholds as the Dashboard grid.
+            max_cols = self._resolve_max_cols()
+            min_cols = None
 
             target_cols = len(self.app.calculate_rows_cols(
                 len(self._store_plugins), max_cols=max_cols, min_cols=min_cols)[1])
@@ -342,7 +368,6 @@ class Plugin(BasePlugin):
         self._resize_after_id = None
         # Track the last known window dimensions so we can ignore position-only events.
         self._last_win_size = [0, 0]
-        self._cached_screen_width = self.app.winfo_screenwidth()
 
         def debounced_resize(event=None):
             # Filter: ignore Configure events that only changed position, not size.

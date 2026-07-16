@@ -323,7 +323,9 @@ class Plugin(BasePlugin):
             text="Permanently remove Resistine and all associated data from this computer.",
             font=customtkinter.CTkFont(size=13),
             text_color=text_secondary,
-            wraplength=500,
+            # 420 fits the card at the 750-wide minsize window (content ≈ 430
+            # logical after the 250 sidebar + scroll/card padding).
+            wraplength=420,
             justify="left",
         ).grid(row=2, column=0, padx=16, pady=(0, 8), sticky="w")
 

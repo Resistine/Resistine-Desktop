@@ -266,7 +266,7 @@ class Plugin(BasePlugin):
             ),
             font=customtkinter.CTkFont(size=13),
             text_color=_COLOR_ERROR,
-            wraplength=460,
+            wraplength=400,
             justify="left",
         ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 12), sticky="w")
         row += 1
@@ -317,7 +317,7 @@ class Plugin(BasePlugin):
                 "and reports to the Resistine SIEM dashboard."
             ),
             font=customtkinter.CTkFont(size=13),
-            text_color=_COLOR_MUTED, wraplength=460, justify="left",
+            text_color=_COLOR_MUTED, wraplength=400, justify="left",
         ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 12), sticky="w")
         row += 1
 
@@ -398,7 +398,7 @@ class Plugin(BasePlugin):
             customtkinter.CTkLabel(
                 card, text="Log in to enable endpoint protection.",
                 font=customtkinter.CTkFont(size=13),
-                text_color=_COLOR_MUTED, wraplength=460, justify="left",
+                text_color=_COLOR_MUTED, wraplength=400, justify="left",
             ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="w")
             row += 1
 
@@ -406,7 +406,7 @@ class Plugin(BasePlugin):
             customtkinter.CTkLabel(
                 card, text="Downloading security agent...",
                 font=customtkinter.CTkFont(size=13),
-                text_color=_COLOR_ACCENT, wraplength=460, justify="left",
+                text_color=_COLOR_ACCENT, wraplength=400, justify="left",
             ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 8), sticky="w")
             row += 1
             bar = customtkinter.CTkProgressBar(card, mode="indeterminate", width=300)
@@ -425,7 +425,7 @@ class Plugin(BasePlugin):
             customtkinter.CTkLabel(
                 card, text=msg,
                 font=customtkinter.CTkFont(size=13),
-                text_color=_COLOR_ERROR, wraplength=460, justify="left",
+                text_color=_COLOR_ERROR, wraplength=400, justify="left",
             ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 8), sticky="w")
             row += 1
             customtkinter.CTkButton(
@@ -443,13 +443,13 @@ class Plugin(BasePlugin):
                     "that monitors your device for threats."
                 ),
                 font=customtkinter.CTkFont(size=13),
-                text_color=_COLOR_MUTED, wraplength=460, justify="left",
+                text_color=_COLOR_MUTED, wraplength=400, justify="left",
             ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 4), sticky="w")
             row += 1
             customtkinter.CTkLabel(
                 card, text="This requires your password to allow the installation.",
                 font=customtkinter.CTkFont(size=13),
-                text_color=_COLOR_MUTED, wraplength=460, justify="left",
+                text_color=_COLOR_MUTED, wraplength=400, justify="left",
             ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 12), sticky="w")
             row += 1
 
@@ -523,7 +523,7 @@ class Plugin(BasePlugin):
             customtkinter.CTkLabel(
                 card, text=msg,
                 font=customtkinter.CTkFont(size=13),
-                text_color=_COLOR_ERROR, wraplength=460, justify="left",
+                text_color=_COLOR_ERROR, wraplength=400, justify="left",
             ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 8), sticky="w")
             row += 1
 

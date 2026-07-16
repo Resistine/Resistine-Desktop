@@ -52,6 +52,11 @@ class Plugin(BasePlugin):
         self.app = app
         self._dashboard_logo_image = None
         self.status = self.get_status()
+        # Horizontal chrome (scroll padx + scrollbar) around the plugin grid.
+        # Set here (not just in _bind_responsive_resize) so _rebuild_grid can
+        # run even before a resize handler has ever been bound.
+        import platform as _plat
+        self._padding_offset = 60 if _plat.system() == "Windows" else 40
 
     def _effective_appearance_mode(self) -> str:
         # Use user_interface's detection if available
@@ -181,10 +186,14 @@ class Plugin(BasePlugin):
         self.app.update_idletasks()
         window_width = self.app.winfo_width()
         if window_width <= 1:
-            # Window not yet mapped — fall back to the geometry-targeted size
-            # (1920 * 0.7 logical = 1344, then scaled to physical).
-            window_width = int(1344 * _scale)
-        window_width = int(window_width / _scale)
+            # Window not yet mapped — fall back to the default geometry target:
+            # 33% of screen AREA (~57.5% per side), clamped to the 750 logical
+            # minsize. Mirrors the sizing math in main.py.
+            window_width = max(
+                750, int(self.app.winfo_screenwidth() * (0.33 ** 0.5) / _scale)
+            )
+        else:
+            window_width = int(window_width / _scale)
 
         content_width = max(1, window_width - _sidebar - _padding)
         # Set hint for AppUI to use in create_grid synchronously
@@ -264,8 +273,13 @@ class Plugin(BasePlugin):
         _scale = self._widget_scale()
         window_width = self.app.winfo_width()
         if window_width <= 1:
-            window_width = int(1344 * _scale)
-        window_width = int(window_width / _scale)
+            # Unmapped fallback: default geometry target (33% of screen area,
+            # ~57.5% per side, clamped to the 750 logical minsize).
+            window_width = max(
+                750, int(self.app.winfo_screenwidth() * (0.33 ** 0.5) / _scale)
+            )
+        else:
+            window_width = int(window_width / _scale)
         content_width = max(1, window_width - _sidebar - _padding)
         if content_width < 480:
             return 1
