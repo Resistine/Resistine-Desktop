@@ -704,18 +704,21 @@ class Plugin(BasePlugin):
         return w
 
     def _suggestion_chip(self, text: str) -> QWidget:
-        is_dark = theme.is_dark()
-        card_bg = "#2A2A2C" if is_dark else "#F5F5F7"
-        card_hover = "#353538" if is_dark else "#E8E8EC"
+        # Card background + visible outline: the previous fill matched the
+        # page background in light mode, so the chips read as bare text.
+        card_bg = theme.color("card_bg")
+        card_hover = theme.color("sidebar_hover_bg")
         chip_fg = theme.color("text_primary")
         chip = QPushButton(f"  ●   {text}")
         chip.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         chip.setMinimumWidth(360)
         chip.setStyleSheet(
             f"QPushButton {{ background-color: {card_bg}; color: {chip_fg}; "
-            f"border: none; border-radius: 12px; padding: 12px 16px; "
+            f"border: 1px solid {theme.color('border')}; "
+            f"border-radius: 12px; padding: 12px 16px; "
             f"font-size: 15px; font-weight: 500; text-align: left; }}"
-            f"QPushButton:hover {{ background-color: {card_hover}; }}")
+            f"QPushButton:hover {{ background-color: {card_hover}; "
+            f"border-color: {theme.color('accent')}; }}")
         chip.clicked.connect(lambda _=False, s=text: self._use_suggestion(s))
         return chip
 

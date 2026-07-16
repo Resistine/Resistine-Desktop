@@ -73,8 +73,13 @@ class Toast(QLabel):
         parent = self.parentWidget()
         if parent is None:
             return
-        max_w = min(460, parent.width() - 80)
-        self.setMaximumWidth(max(220, max_w))
+        # A word-wrapped QLabel prefers a NARROW sizeHint, so short messages
+        # ("Failed to start VPN") folded into a tall two-line pill. Size the
+        # toast to its actual text width (plus padding) and only wrap when
+        # the message genuinely exceeds the max width.
+        max_w = max(240, min(560, parent.width() - 80))
+        text_w = self.fontMetrics().horizontalAdvance(self.text()) + 56
+        self.setFixedWidth(min(max_w, max(240, text_w)))
         self.adjustSize()
         x = (parent.width() - self.width()) // 2
         y = parent.height() - self.height() - 28

@@ -348,6 +348,32 @@ class AppWindow(QMainWindow):
 
     def apply_theme(self, resolved: str) -> None:
         theme.set_mode(resolved)
+        # Sync the QPalette to the theme, not just the stylesheet. Natively
+        # painted widgets (document-mode QTabBar, menus, native scroll areas)
+        # use the PALETTE — which otherwise follows the macOS system
+        # appearance. With system-dark + app-light that leaked as black
+        # bands/strips in light mode wherever QSS doesn't reach.
+        from PyQt6.QtGui import QColor, QPalette
+        pal = QPalette()
+        window = QColor(theme.color("window_bg"))
+        base = QColor(theme.color("card_bg"))
+        text = QColor(theme.color("text_primary"))
+        muted = QColor(theme.color("text_secondary"))
+        accent = QColor(theme.color("accent"))
+        pal.setColor(QPalette.ColorRole.Window, window)
+        pal.setColor(QPalette.ColorRole.Base, base)
+        pal.setColor(QPalette.ColorRole.AlternateBase, window)
+        pal.setColor(QPalette.ColorRole.Button, base)
+        pal.setColor(QPalette.ColorRole.WindowText, text)
+        pal.setColor(QPalette.ColorRole.Text, text)
+        pal.setColor(QPalette.ColorRole.ButtonText, text)
+        pal.setColor(QPalette.ColorRole.PlaceholderText, muted)
+        pal.setColor(QPalette.ColorRole.Highlight, accent)
+        pal.setColor(QPalette.ColorRole.HighlightedText,
+                     QColor(theme.color("on_accent")))
+        pal.setColor(QPalette.ColorRole.ToolTipBase, base)
+        pal.setColor(QPalette.ColorRole.ToolTipText, text)
+        self._app_qt.setPalette(pal)
         self._app_qt.setStyleSheet(theme.build_qss())
 
     def _resolve_mode(self, mode: str) -> str:
