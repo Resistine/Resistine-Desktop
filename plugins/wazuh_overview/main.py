@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtWidgets import (
+    QStackedWidget,
     QBoxLayout,
     QComboBox,
     QFrame,
@@ -1040,6 +1041,8 @@ class Plugin(BasePlugin):
         )
         self.app = app
         self._tabs = None
+        self._tab_stack = None
+        self._tab_buttons = {}
         self._tab_built = {name: False for name in _TAB_NAMES}
         self._tab_pages = {}
 
@@ -1117,6 +1120,8 @@ class Plugin(BasePlugin):
     def create_main_screen(self):
         self._cancel_pending_ui_callbacks()
         self._tabs = None
+        self._tab_stack = None
+        self._tab_buttons = {}
         self._tab_built = {name: False for name in _TAB_NAMES}
         self._tab_pages = {}
 
@@ -1173,48 +1178,69 @@ class Plugin(BasePlugin):
         outer.setContentsMargins(16, 14, 16, 0)
         outer.setSpacing(0)
 
-        tabs = QTabWidget()
-        tabs.setDocumentMode(True)
-        # Underline tab strip (design_test2 style): no boxed tabs, no dark
-        # band. The bar row gets the theme window background explicitly —
-        # QTabBar in document mode otherwise paints its empty area with the
-        # ancestor/palette colour, which showed as a black strip in light
-        # mode. Contrast comes from text weight/colour + the accent
-        # underline, plus a hairline under the whole strip.
-        _bg = theme.color("window_bg")
-        _hairline = theme.color("border")
-        tabs.setStyleSheet(
-            f"QTabWidget::pane{{border:none;background:transparent;"
-            f"border-top:1px solid {_hairline};}}"
-            f"QTabBar{{background:{_bg};}}"
-            "QTabBar::tab{"
-            f"background:transparent;color:{theme.color('text_secondary')};"
-            "border:none;padding:9px 4px;margin-right:28px;font-size:14px;}"
-            "QTabBar::tab:selected{"
-            f"color:{theme.color('accent')};font-weight:700;"
-            f"border-bottom:2px solid {theme.color('accent')};"
-            "}"
-            "QTabBar::tab:!selected{margin-bottom:2px;}"
-            f"QTabBar::tab:hover:!selected{{color:{theme.color('text_primary')};}}"
-        )
+        # Custom tab strip (plain QPushButtons + accent underline) over a
+        # QStackedWidget. QTabBar paints natively on macOS and repeatedly
+        # ignored both stylesheet AND palette backgrounds (the persistent
+        # black band in light mode) — a hand-rolled strip is fully ours.
+        strip = QWidget()
+        strip.setObjectName("Transparent")
+        strip_lay = QHBoxLayout(strip)
+        strip_lay.setContentsMargins(0, 0, 0, 0)
+        strip_lay.setSpacing(28)
+        self._tab_buttons = {}
+        for name in _TAB_NAMES:
+            btn = QPushButton(name)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFlat(True)
+            btn.clicked.connect(lambda _=False, n=name: self._switch_tab(n))
+            strip_lay.addWidget(btn)
+            self._tab_buttons[name] = btn
+        strip_lay.addStretch(1)
+        outer.addWidget(strip)
+
+        hairline = QFrame()
+        hairline.setFixedHeight(1)
+        hairline.setStyleSheet(f"background:{theme.color('border')};")
+        outer.addWidget(hairline)
+
+        self._tab_stack = QStackedWidget()
         for name in _TAB_NAMES:
             page = QWidget()
             page.setObjectName("Transparent")
             lay = QVBoxLayout(page)
             lay.setContentsMargins(0, 0, 0, 0)
             self._tab_pages[name] = page
-            tabs.addTab(page, name)
-        tabs.currentChanged.connect(self._on_tab_changed)
-        self._tabs = tabs
-        outer.addWidget(tabs)
+            self._tab_stack.addWidget(page)
+        outer.addWidget(self._tab_stack, 1)
+        self._tabs = self._tab_stack  # legacy attr; guarded by _switch_tab
+        self._active_tab = None
+        self._style_tab_buttons("Overview")
 
         # Build the default tab now; others build lazily on first activation.
         self._ensure_tab_built("Overview")
         return root
 
-    def _on_tab_changed(self, index):
-        if 0 <= index < len(_TAB_NAMES):
-            self._ensure_tab_built(_TAB_NAMES[index])
+    def _style_tab_buttons(self, active):
+        """Underline style, painted by us: accent + bold when active."""
+        self._active_tab = active
+        for name, btn in self._tab_buttons.items():
+            try:
+                if name == active:
+                    btn.setStyleSheet(
+                        "QPushButton{background:transparent;border:none;"
+                        f"color:{theme.color('accent')};font-size:14px;"
+                        "font-weight:700;padding:9px 2px 7px 2px;"
+                        f"border-bottom:2px solid {theme.color('accent')};"
+                        "border-radius:0;}")
+                else:
+                    btn.setStyleSheet(
+                        "QPushButton{background:transparent;border:none;"
+                        f"color:{theme.color('text_secondary')};font-size:14px;"
+                        "padding:9px 2px 9px 2px;border-radius:0;}"
+                        "QPushButton:hover{"
+                        f"color:{theme.color('text_primary')};}}")
+            except RuntimeError:
+                pass
 
     def _ensure_tab_built(self, name):
         if self._tab_built.get(name):
@@ -1238,8 +1264,11 @@ class Plugin(BasePlugin):
             self._tab_built[name] = True  # don't retry forever
 
     def _switch_tab(self, name):
-        if name in _TAB_NAMES and self._tabs is not None:
-            self._tabs.setCurrentIndex(_TAB_NAMES.index(name))
+        if name not in _TAB_NAMES or self._tab_stack is None:
+            return
+        self._ensure_tab_built(name)
+        self._tab_stack.setCurrentIndex(_TAB_NAMES.index(name))
+        self._style_tab_buttons(name)
 
     # ----- placeholder panes (Events / Vulnerabilities / Inventory) ----------
     def _build_placeholder_pane(self, page, name):

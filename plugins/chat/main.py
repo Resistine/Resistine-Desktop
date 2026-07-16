@@ -1061,6 +1061,19 @@ class Plugin(BasePlugin):
         except Exception:
             pass
 
+    def on_theme_changed(self) -> None:
+        """Rebuild the chat screen — the drawer, top bar and bubbles resolve
+        theme colours at build time, so a mode toggle otherwise leaves the
+        history drawer (and friends) painted in the previous mode."""
+        try:
+            self._save_current_session()
+        except Exception:
+            pass
+        try:
+            self.app.update_plugin(self.id)
+        except Exception:
+            logger.debug("Chat: theme rebuild failed")
+
     def destroy(self) -> None:
         """Plugin teardown — cancel any in-flight stream and flush state."""
         try:

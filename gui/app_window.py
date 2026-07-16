@@ -278,9 +278,11 @@ class AppWindow(QMainWindow):
         self.stack.setCurrentWidget(screen)
         self._current_main_screen = screen
         self.current_frame_name = f"frame_{name}"
-        btn = self._nav_buttons.get(name)
-        if btn is not None:
-            btn.setChecked(True)
+        # Exclusive selection: uncheck every other nav button. Without this
+        # the checked states accumulated as you navigated (several sidebar
+        # rows rendered "selected").
+        for n, b in self._nav_buttons.items():
+            b.setChecked(n == name)
 
     def refresh_navigation(self) -> None:
         """Rebuild the whole shell (e.g. after install/uninstall)."""
@@ -333,10 +335,21 @@ class AppWindow(QMainWindow):
             return
         self.apply_theme(resolved)
         # Mode-specific icons + logo: rebuild the sidebar buttons' icons.
+        # Also unpolish/repolish each button: the app-wide restyle can leave
+        # a stale hover/underMouse state behind, which rendered several rows
+        # with the hover background as if "selected" after a theme toggle.
         for name, btn in self._nav_buttons.items():
             p = self._plugin_by_name(name)
             if p is not None:
                 btn.setIcon(p.get_icon())
+            try:
+                btn.setAttribute(
+                    Qt.WidgetAttribute.WA_UnderMouse, False)
+                btn.style().unpolish(btn)
+                btn.style().polish(btn)
+                btn.update()
+            except Exception:
+                pass
 
         # Notify plugins of the theme change so they can update custom-coloured UI
         for p in self.plugins:
