@@ -1,39 +1,164 @@
-"""Resistine AI Chat plugin."""
+"""Resistine AI Chat plugin (PyQt6).
+
+Faithful PyQt6 port of the original CustomTkinter chat screen. Reproduces the
+same regions 1:1:
+
+  * Top bar  -- hamburger menu toggle (left), "Resistine AI" title (centre),
+                "+" New Chat button (right).
+  * History drawer -- a collapsible left panel listing saved sessions with
+                select + delete, slid open/closed by the hamburger, dimming the
+                chat behind it.
+  * Message area -- a vertically scrolling list of user bubbles (right-aligned,
+                blue) and assistant bubbles (left-aligned, rendered as MARKDOWN
+                via Qt's MarkdownText format).
+  * Welcome screen -- centred greeting + "TRY ASKING" suggestion chips when the
+                conversation is empty (or an "API key required" panel when no
+                client is configured).
+  * Input bar -- rounded entry "Message Resistine AI..." + a send button that
+                shows "↑" and toggles to a red "■" stop glyph while streaming.
+
+The streaming controller, history manager and markdown utilities are reused
+verbatim from the framework-agnostic backend modules.
+
+Author: Resistine Team
+Copyright (c) Resistine 2025
+Licensed under the GNU General Public License v2 or later
+"""
 from __future__ import annotations
 
 import os
+import random
 
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QCursor
+from PyQt6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
+
+from gui import theme
 from plugins.base_plugin import BasePlugin
-from plugins.chat.bubble import BubbleRow
-from plugins.chat.chat_ui import ChatUIMixin
-from plugins.chat.fonts import RESISTINE_BLUE, _is_dark_mode
 from plugins.chat.history import ChatHistoryManager
 from plugins.chat.streaming import StreamController
+from plugins.chat.suggestions import SUGGESTION_POOL
 from utils import settings
 from utils.logger import logger
+
+# Appended to history when the user navigates away mid-response: the partial
+# text is discarded and this canned marker is stored instead.
+_NAV_AWAY_MSG = (
+    "_(You switched chats before this response could finish. "
+    "Please ask your question again.)_"
+)
 
 _SYSTEM_PROMPT = "You are SOC Copilot specialized in cybersecurity."
 _ICON_DIR = os.path.dirname(os.path.realpath(__file__))
 _SYS_MSG = {"role": "system", "content": _SYSTEM_PROMPT}
 _DEFAULT_BASE_URL = "http://dashboard.resisti.net:8001/v1"
 
-# Canned assistant message when the user navigates away from a chat
-# (switch chat, + New, delete, leave plugin) while a response is still
-# streaming. The partial response is discarded — only this short message
-# is persisted to history, so revisiting the chat tells the user the
-# response was interrupted instead of leaving a confusing truncated stub.
-_NAV_AWAY_MSG = (
-    "_(You switched chats before this response could finish. "
-    "Please ask your question again.)_"
-)
+RESISTINE_BLUE = "#0D5394"
+_ACCENT_HOVER = "#1565B0"
+_STOP_RED = "#EF4444"
+_STOP_RED_HOVER = "#DC2626"
+
+# Bubble width caps (mirror plugins/chat/bubble.py).
+_ASST_MAX = 480
+_USER_MAX = 480
+
+_SIDEBAR_WIDTH = 240
 
 
-class Plugin(ChatUIMixin, BasePlugin):
+# ---------------------------------------------------------------------------
+# Bubble widgets
+# ---------------------------------------------------------------------------
+
+class _Bubble(QFrame):
+    """A single chat bubble — a rounded QLabel-bearing frame in a flow row."""
+
+    def __init__(self, *, is_user: bool, max_width: int):
+        super().__init__()
+        self._is_user = is_user
+        self.setSizePolicy(QSizePolicy.Policy.Maximum,
+                           QSizePolicy.Policy.Preferred)
+
+        is_dark = theme.is_dark()
+        if is_user:
+            bg = theme.color("bubble_user_bg")
+            fg = theme.color("bubble_user_text")
+            border = bg
+        else:
+            bg = theme.color("bubble_ai_bg")
+            fg = theme.color("bubble_ai_text")
+            border = theme.color("border")
+
+        self.setStyleSheet(
+            f"#ChatBubble {{ background-color: {bg}; "
+            f"border: 1px solid {border}; border-radius: 16px; }}")
+        self.setObjectName("ChatBubble")
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 10, 14, 10)
+        lay.setSpacing(0)
+
+        self._label = QLabel()
+        self._label.setObjectName("ChatBubbleText")
+        self._label.setWordWrap(True)
+        self._label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._label.setStyleSheet(
+            f"#ChatBubbleText {{ background: transparent; border: none; "
+            f"color: {fg}; font-size: 14px; }}")
+        if is_user:
+            self._label.setTextFormat(Qt.TextFormat.PlainText)
+        else:
+            self._label.setTextFormat(Qt.TextFormat.MarkdownText)
+        self._label.setMaximumWidth(max_width)
+        lay.addWidget(self._label)
+
+        # Thinking placeholder (assistant only) until first chunk arrives.
+        if not is_user:
+            self._label.setText("…")
+        self._max_width = max_width
+
+    def set_text(self, text: str) -> None:
+        self._label.setText(text)
+
+    def set_max_width(self, max_width: int) -> None:
+        self._max_width = max_width
+        self._label.setMaximumWidth(max_width)
+
+
+class _BubbleRow(QWidget):
+    """Full-width row holding one bubble, aligned left or right."""
+
+    def __init__(self, bubble: _Bubble, *, is_user: bool):
+        super().__init__()
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(12, 4, 12, 4)
+        lay.setSpacing(0)
+        if is_user:
+            lay.addStretch(1)
+            lay.addWidget(bubble)
+        else:
+            lay.addWidget(bubble)
+            lay.addStretch(1)
+        self.bubble = bubble
+
+
+# ---------------------------------------------------------------------------
+# Plugin
+# ---------------------------------------------------------------------------
+
+class Plugin(BasePlugin):
     """Chat plugin -- lets users talk to an OpenAI-compatible AI assistant."""
 
-    # Chat renders asynchronously after build (markdown bubbles self-resize via
-    # after() timers, scroll-to-bottom, .place()'d input bar). Defer the swap
-    # until that settles so switching to Chat doesn't tear mid-render.
     defer_reveal_until_settled = True
 
     def __init__(self, app):
@@ -47,21 +172,20 @@ class Plugin(ChatUIMixin, BasePlugin):
         self.app = app
         self.client = None
         self.conversation_history: list[dict] = []
-        self._bubble_rows: list[BubbleRow] = []
         self._stream_ctrl: StreamController | None = None
-        self._welcome_frame: object | None = None
         self._history = ChatHistoryManager()
         # One-shot cleanup: removes "New Chat"-titled empty sessions left
-        # over from previous runs. Used to fire on every list_sessions()
-        # call from inside the sidebar refresh (load_messages per orphan
-        # = N disk reads per refresh).
-        self._history.cleanup_empty()
+        # over from previous runs.
+        try:
+            self._history.cleanup_empty()
+        except Exception:
+            pass
         self._sidebar_visible = False
         self._accumulated_text = ""
         self._response_persisted = False
-        # Access-gate poller state (VPN + SIEM agent). See chat_ui.py.
-        self._gate_poll_id = None
-        self._gate_unlocked = False
+        self._gate_timer = None
+        self._current_asst_bubble: _Bubble | None = None
+        self._welcome_widget: QWidget | None = None
         self.reinitialize_client()
         self.status = self.get_status()
         active_id = self._history.get_active_id()
@@ -69,26 +193,45 @@ class Plugin(ChatUIMixin, BasePlugin):
             saved = self._history.load_messages(active_id)
             if saved:
                 if self.base_url:
-                    saved = [m for m in saved
-                             if m.get("role") != "system"]
+                    saved = [m for m in saved if m.get("role") != "system"]
                 self.conversation_history = saved
 
+    # ===================================================================
+    #  Status / client
+    # ===================================================================
     def check_status(self):
-        # Chat is only usable when the client is configured AND the same gate
-        # that unlocks the chat screen is satisfied (VPN connected + SIEM agent
-        # running). Mirror that here so the dashboard tile isn't "OK" while chat
-        # is actually locked.
         if not self.client:
             return "Warning"
+        # Access gate: chat is only usable when VPN + agent are both active.
         vpn_on, agent_on = self._chat_access_status()
         return "OK" if (vpn_on and agent_on) else "Warning"
+
+    @staticmethod
+    def _chat_access_status() -> tuple[bool, bool]:
+        """Return (vpn_connected, endpoint_agent_running) for the gate.
+
+        The agent check is "running" (not merely "installed") so that
+        manually toggling the SIEM agent off re-locks chat.
+        """
+        vpn_on = False
+        try:
+            from plugins.vpn.main import is_vpn_connected
+            vpn_on = bool(is_vpn_connected())
+        except Exception:
+            vpn_on = False
+        agent_on = False
+        try:
+            from plugins.wazuh.main import is_agent_running
+            agent_on = bool(is_agent_running())
+        except Exception:
+            agent_on = False
+        return vpn_on, agent_on
 
     def reinitialize_client(self, notify: bool = False):
         """Rebuild the OpenAI client from the current settings."""
         api_key = settings.get_secret("chat", "openai_api_key")
         self.base_url = (
-            settings.get("chat", "openai_base_url") or _DEFAULT_BASE_URL
-        )
+            settings.get("chat", "openai_base_url") or _DEFAULT_BASE_URL)
         self.session_id = None
         if self.base_url:
             self.model, self.conversation_history = "ministral-3:14b", []
@@ -107,37 +250,521 @@ class Plugin(ChatUIMixin, BasePlugin):
         except Exception as e:
             logger.error(f"Chat: client init failed: {e}")
             if notify:
-                self.app.show_notification(
-                    f"Chat Init Error: {e}", type="error")
+                try:
+                    self.app.show_notification(
+                        f"Chat Init Error: {e}", type="error")
+                except Exception:
+                    pass
             self.client = None
+        # Reflect any client change in a live screen's input controls.
+        try:
+            self._sync_input_enabled()
+        except Exception:
+            pass
+
+    # ===================================================================
+    #  Screen construction
+    # ===================================================================
+    def create_main_screen(self):
+        # Access gate: chat is only available when the VPN is connected AND
+        # the SIEM/Endpoint agent is RUNNING. A QTimer poller re-checks while
+        # the screen is alive, so toggling the agent off or dropping the VPN
+        # snaps chat back to the locked screen — and turning them back on
+        # unlocks it — without navigating away and back.
+        vpn_on, agent_on = self._chat_access_status()
+        self._gate_unlocked = bool(vpn_on and agent_on)
+        if not self._gate_unlocked:
+            locked = self._build_locked_screen(vpn_on, agent_on)
+            self._start_gate_poller(locked)
+            self.second_frame = locked
+            return locked
+
+        self._ensure_session()
+
+        root = QWidget()
+        root.setObjectName("ChatRoot")
+        outer = QHBoxLayout(root)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # -- History drawer (collapsible left panel) --
+        self._sidebar = self._build_sidebar()
+        self._sidebar.setVisible(self._sidebar_visible)
+        outer.addWidget(self._sidebar)
+
+        # -- Chat column (top bar + messages + input) --
+        chat_col = QWidget()
+        col = QVBoxLayout(chat_col)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(0)
+
+        col.addWidget(self._build_top_bar())
+        col.addWidget(self._build_message_area(), 1)
+        col.addWidget(self._build_input_bar())
+
+        outer.addWidget(chat_col, 1)
+
+        self.second_frame = root
+        self._restore_history()
+        self._refresh_sidebar()
+        self._sync_input_enabled()
+        self._start_gate_poller(root)
+        return root
+
+    # ---- Access gate -------------------------------------------------------
+    def _start_gate_poller(self, owner: QWidget) -> None:
+        """Re-check the VPN+agent gate every few seconds while chat is shown.
+
+        The QTimer is parented to the screen widget, so it stops and is
+        destroyed with the screen — no manual teardown needed.
+        """
+        timer = QTimer(owner)
+        timer.setInterval(4000)
+
+        def _tick():
+            vpn_on, agent_on = self._chat_access_status()
+            unlocked = bool(vpn_on and agent_on)
+            if unlocked == self._gate_unlocked:
+                return
+            timer.stop()
+            if not unlocked:
+                # Re-locking mid-stream: persist what we can first.
+                try:
+                    self._finalize_in_flight_response(persist=True)
+                except Exception:
+                    pass
+            try:
+                self.status = self.check_status()
+                self.app.update_plugin(self.id)
+            except Exception:
+                logger.debug("Chat: gate refresh failed")
+
+        timer.timeout.connect(_tick)
+        timer.start()
+        self._gate_timer = timer
+
+    def _build_locked_screen(self, vpn_on: bool, agent_on: bool) -> QWidget:
+        """Referral screen shown while the access gate is locked."""
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.addStretch(1)
+
+        title = QLabel("Resistine AI is locked")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet(
+            f"font-size: 20px; font-weight: 700; "
+            f"color: {theme.color('text_primary')};")
+        lay.addWidget(title)
+        lay.addSpacing(8)
+
+        sub = QLabel(
+            "Chat is available when your connection is protected.")
+        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sub.setStyleSheet(
+            f"font-size: 14px; color: {theme.color('text_secondary')};")
+        sub.setWordWrap(True)
+        lay.addWidget(sub)
+        lay.addSpacing(16)
+
+        for ok, txt in (
+            (vpn_on, "VPN connected"),
+            (agent_on, "Endpoint agent running"),
+        ):
+            row = QLabel(("✓  " if ok else "✗  ") + txt)
+            row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            color = "#1E8E3E" if ok else "#C5221F"
+            row.setStyleSheet(f"font-size: 14px; color: {color};")
+            lay.addWidget(row)
+
+        lay.addSpacing(16)
+        hint = QLabel(
+            "Connect the VPN and start the Endpoint agent to unlock chat. "
+            "This screen unlocks automatically.")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setWordWrap(True)
+        hint.setStyleSheet(
+            f"font-size: 12px; color: {theme.color('text_secondary')};")
+        lay.addWidget(hint)
+        lay.addStretch(1)
+        return page
+
+    # ---- Top bar ----------------------------------------------------------
+    def _build_top_bar(self) -> QWidget:
+        bar = QFrame()
+        bar.setFixedHeight(48)
+        bar.setStyleSheet("background: transparent;")
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(12, 6, 12, 6)
+        lay.setSpacing(8)
+
+        self._toggle_btn = self._icon_button("☰")  # hamburger
+        self._toggle_btn.clicked.connect(self._toggle_sidebar)
+        lay.addWidget(self._toggle_btn)
+
+        lay.addStretch(1)
+        title = QLabel("Resistine AI")
+        title.setStyleSheet(
+            f"font-size: 16px; font-weight: 700; "
+            f"color: {theme.color('text_primary')}; background: transparent;")
+        lay.addWidget(title)
+        lay.addStretch(1)
+
+        self._new_chat_btn = self._icon_button("+")
+        self._new_chat_btn.clicked.connect(self._new_chat)
+        lay.addWidget(self._new_chat_btn)
+        return bar
+
+    def _icon_button(self, text: str) -> QPushButton:
+        btn = QPushButton(text)
+        btn.setObjectName("Secondary")
+        btn.setFixedSize(32, 32)
+        btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn.setStyleSheet(
+            "QPushButton { font-size: 18px; font-weight: 700; padding: 0; "
+            "border-radius: 8px; }")
+        return btn
+
+    # ---- Message area -----------------------------------------------------
+    def _build_message_area(self) -> QWidget:
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        self._messages = QWidget()
+        self._messages_lay = QVBoxLayout(self._messages)
+        self._messages_lay.setContentsMargins(0, 8, 0, 8)
+        self._messages_lay.setSpacing(2)
+        self._messages_lay.addStretch(1)  # bottom spacer keeps rows top-packed
+        self._scroll.setWidget(self._messages)
+        return self._scroll
+
+    # ---- Input bar --------------------------------------------------------
+    def _build_input_bar(self) -> QWidget:
+        wrap = QFrame()
+        wrap.setStyleSheet("background: transparent;")
+        outer = QHBoxLayout(wrap)
+        outer.setContentsMargins(16, 8, 16, 14)
+        outer.setSpacing(0)
+        outer.addStretch(1)
+
+        bar = QFrame()
+        bar.setObjectName("ChatInputBar")
+        bar.setMaximumWidth(900)
+        bg = theme.color("input_bg")
+        brd = theme.color("border")
+        bar.setStyleSheet(
+            f"#ChatInputBar {{ background-color: {bg}; border: 1px solid {brd}; "
+            f"border-radius: 22px; }}")
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(8, 6, 8, 6)
+        row.setSpacing(6)
+
+        self.chat_entry = QLineEdit()
+        self.chat_entry.setPlaceholderText("Message Resistine AI...")
+        self.chat_entry.setStyleSheet(
+            "QLineEdit { background: transparent; border: none; "
+            "font-size: 15px; padding: 6px 10px; }")
+        self.chat_entry.returnPressed.connect(self.send_message)
+        row.addWidget(self.chat_entry, 1)
+
+        self.send_button = QPushButton("↑")
+        self.send_button.setFixedSize(36, 36)
+        self.send_button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._style_send_button(stop=False)
+        self.send_button.clicked.connect(self.send_message)
+        row.addWidget(self.send_button)
+
+        outer.addWidget(bar, 6)
+        outer.addStretch(1)
+        return wrap
+
+    def _style_send_button(self, *, stop: bool) -> None:
+        if stop:
+            bg, hover, text = _STOP_RED, _STOP_RED_HOVER, "■"
+        else:
+            bg, hover, text = RESISTINE_BLUE, _ACCENT_HOVER, "↑"
+        self.send_button.setText(text)
+        self.send_button.setStyleSheet(
+            f"QPushButton {{ background-color: {bg}; color: #ffffff; "
+            f"border: none; border-radius: 18px; font-size: 17px; "
+            f"font-weight: 700; padding: 0; }}"
+            f"QPushButton:hover {{ background-color: {hover}; }}"
+            f"QPushButton:disabled {{ background-color: #6B7280; }}")
+
+    # ---- History drawer ---------------------------------------------------
+    def _build_sidebar(self) -> QWidget:
+        panel = QFrame()
+        panel.setObjectName("ChatSidebar")
+        panel.setFixedWidth(_SIDEBAR_WIDTH)
+        bg = theme.color("sidebar_bg")
+        brd = theme.color("divider")
+        panel.setStyleSheet(
+            f"#ChatSidebar {{ background-color: {bg}; "
+            f"border-right: 1px solid {brd}; }}")
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(8, 10, 8, 8)
+        lay.setSpacing(6)
+
+        hdr = QHBoxLayout()
+        hdr.setContentsMargins(4, 0, 0, 0)
+        title = QLabel("HISTORY")
+        title.setStyleSheet(
+            "font-size: 10px; font-weight: 700; color: #6B7280; "
+            "background: transparent;")
+        hdr.addWidget(title)
+        hdr.addStretch(1)
+        new_btn = QPushButton("+ New")
+        new_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        new_btn.setStyleSheet(
+            f"QPushButton {{ background-color: {RESISTINE_BLUE}; color: #fff; "
+            f"border: none; border-radius: 7px; padding: 5px 10px; "
+            f"font-size: 11px; font-weight: 700; }}"
+            f"QPushButton:hover {{ background-color: {_ACCENT_HOVER}; }}")
+        new_btn.clicked.connect(self._new_chat)
+        hdr.addWidget(new_btn)
+        lay.addLayout(hdr)
+
+        self._sidebar_scroll = QScrollArea()
+        self._sidebar_scroll.setWidgetResizable(True)
+        self._sidebar_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._sidebar_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._sidebar_scroll.setStyleSheet("background: transparent;")
+        self._sidebar_list = QWidget()
+        self._sidebar_list_lay = QVBoxLayout(self._sidebar_list)
+        self._sidebar_list_lay.setContentsMargins(0, 0, 0, 0)
+        self._sidebar_list_lay.setSpacing(2)
+        self._sidebar_list_lay.addStretch(1)
+        self._sidebar_scroll.setWidget(self._sidebar_list)
+        lay.addWidget(self._sidebar_scroll, 1)
+        return panel
+
+    def _refresh_sidebar(self) -> None:
+        lay = getattr(self, "_sidebar_list_lay", None)
+        if lay is None:
+            return
+        # Clear existing items (keep the trailing stretch).
+        while lay.count() > 1:
+            item = lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        sessions = self._history.list_sessions()
+        active_id = self._history.get_active_id()
+        if not sessions:
+            empty = QLabel("No conversations")
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty.setStyleSheet(
+                "color: #6B7280; font-size: 12px; background: transparent;")
+            lay.insertWidget(0, empty)
+            return
+        for s in sessions:
+            lay.insertWidget(
+                lay.count() - 1,
+                self._sidebar_item(
+                    s["id"], s.get("title", "New Chat"),
+                    s["id"] == active_id))
+
+    def _sidebar_item(self, sid: str, title: str, active: bool) -> QWidget:
+        is_dark = theme.is_dark()
+        active_bg = "#1A2F45" if is_dark else "#D6E4F0"
+        fg = theme.color("text_primary")
+        row = QFrame()
+        row.setObjectName("ChatHistoryItem")
+        bgrule = f"background-color: {active_bg};" if active else ""
+        row.setStyleSheet(
+            f"#ChatHistoryItem {{ {bgrule} border-radius: 8px; }}")
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(8, 4, 4, 4)
+        rl.setSpacing(2)
+
+        lbl = QLabel(title)
+        lbl.setStyleSheet(
+            f"color: {fg}; font-size: 12px; background: transparent;")
+        lbl.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        lbl.mousePressEvent = lambda _e, s=sid: self._select_chat(s)
+        rl.addWidget(lbl, 1)
+
+        del_btn = QPushButton("✕")
+        del_btn.setFixedSize(24, 24)
+        del_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        del_btn.setStyleSheet(
+            "QPushButton { background: transparent; color: #6B7280; "
+            "border: none; font-size: 11px; }"
+            "QPushButton:hover { color: #DC2626; }")
+        del_btn.clicked.connect(lambda _=False, s=sid: self._delete_chat(s))
+        rl.addWidget(del_btn)
+        return row
+
+    def _toggle_sidebar(self) -> None:
+        self._sidebar_visible = not self._sidebar_visible
+        if getattr(self, "_sidebar", None) is not None:
+            self._sidebar.setVisible(self._sidebar_visible)
+
+    # ===================================================================
+    #  Welcome screen
+    # ===================================================================
+    def _restore_history(self) -> None:
+        has_history = False
+        for msg in self.conversation_history:
+            role = msg.get("role")
+            content = msg.get("content", "")
+            if role == "system":
+                continue
+            has_history = True
+            if role == "user":
+                self._add_user_bubble(content)
+            elif role == "assistant":
+                self._add_assistant_bubble(md=content)
+        if has_history:
+            return
+        if self.client is not None:
+            self._welcome_widget = self._build_welcome_screen()
+        else:
+            self._welcome_widget = self._build_api_missing_screen()
+        self._messages_lay.insertWidget(
+            self._messages_lay.count() - 1, self._welcome_widget,
+            0, Qt.AlignmentFlag.AlignCenter)
+
+    def _clear_welcome(self) -> None:
+        if self._welcome_widget is not None:
+            self._welcome_widget.setParent(None)
+            self._welcome_widget.deleteLater()
+            self._welcome_widget = None
+
+    def _build_welcome_screen(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(24, 24, 24, 24)
+        lay.setSpacing(4)
+        lay.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+
+        greeting = QLabel("How can I help you today?")
+        greeting.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        greeting.setStyleSheet(
+            f"font-size: 24px; font-weight: 700; "
+            f"color: {theme.color('text_primary')}; background: transparent;")
+        lay.addWidget(greeting)
+
+        subtitle = QLabel("Ask me anything about cybersecurity")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        subtitle.setStyleSheet(
+            f"font-size: 14px; color: {theme.color('text_secondary')}; "
+            f"background: transparent;")
+        lay.addWidget(subtitle)
+        lay.addSpacing(14)
+
+        section = QLabel("TRY ASKING")
+        section.setStyleSheet(
+            f"font-size: 11px; font-weight: 700; color: {RESISTINE_BLUE}; "
+            f"background: transparent;")
+        lay.addWidget(section)
+        lay.addSpacing(8)
+
+        for suggestion in random.sample(
+                SUGGESTION_POOL, min(4, len(SUGGESTION_POOL))):
+            lay.addWidget(self._suggestion_chip(suggestion))
+        return w
+
+    def _suggestion_chip(self, text: str) -> QWidget:
+        is_dark = theme.is_dark()
+        card_bg = "#2A2A2C" if is_dark else "#F5F5F7"
+        card_hover = "#353538" if is_dark else "#E8E8EC"
+        chip_fg = theme.color("text_primary")
+        chip = QPushButton(f"  ●   {text}")
+        chip.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        chip.setMinimumWidth(360)
+        chip.setStyleSheet(
+            f"QPushButton {{ background-color: {card_bg}; color: {chip_fg}; "
+            f"border: none; border-radius: 12px; padding: 12px 16px; "
+            f"font-size: 15px; font-weight: 500; text-align: left; }}"
+            f"QPushButton:hover {{ background-color: {card_hover}; }}")
+        chip.clicked.connect(lambda _=False, s=text: self._use_suggestion(s))
+        return chip
+
+    def _build_api_missing_screen(self) -> QWidget:
+        is_dark = theme.is_dark()
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(24, 24, 24, 24)
+        lay.setSpacing(6)
+        lay.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+
+        icon = QLabel("⚠")
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon.setStyleSheet(
+            f"font-size: 36px; color: {'#FBBF24' if is_dark else '#B45309'}; "
+            f"background: transparent;")
+        lay.addWidget(icon)
+
+        title = QLabel("API Key Required")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet(
+            f"font-size: 20px; font-weight: 700; "
+            f"color: {theme.color('text_primary')}; background: transparent;")
+        lay.addWidget(title)
+
+        desc = QLabel("Add an API key in Settings to start chatting.")
+        desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        desc.setWordWrap(True)
+        desc.setStyleSheet(
+            f"font-size: 14px; color: {theme.color('text_secondary')}; "
+            f"background: transparent;")
+        lay.addWidget(desc)
+        lay.addSpacing(12)
+
+        btn = QPushButton("Open Settings")
+        btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn.clicked.connect(self._open_settings)
+        lay.addWidget(btn, 0, Qt.AlignmentFlag.AlignCenter)
+        return w
+
+    # ===================================================================
+    #  Bubble helpers
+    # ===================================================================
+    def _add_user_bubble(self, text: str) -> _Bubble:
+        bubble = _Bubble(is_user=True, max_width=_USER_MAX)
+        bubble.set_text(text)
+        self._insert_row(_BubbleRow(bubble, is_user=True))
+        return bubble
+
+    def _add_assistant_bubble(self, md: str | None = None) -> _Bubble:
+        bubble = _Bubble(is_user=False, max_width=_ASST_MAX)
+        if md is not None:
+            bubble.set_text(md)
+        self._insert_row(_BubbleRow(bubble, is_user=False))
+        return bubble
+
+    def _insert_row(self, row: QWidget) -> None:
+        # Insert before the trailing stretch so rows pack from the top.
+        self._messages_lay.insertWidget(self._messages_lay.count() - 1, row)
+
+    def _scroll_to_bottom(self) -> None:
+        try:
+            bar = self._scroll.verticalScrollBar()
+            QTimer.singleShot(0, lambda: bar.setValue(bar.maximum()))
+        except Exception:
+            pass
+
+    # ===================================================================
+    #  Session management
+    # ===================================================================
+    def _ensure_session(self) -> None:
+        if not self._history.get_active_id():
+            self._history.create_session()
 
     def _save_current_session(self) -> None:
         active_id = self._history.get_active_id()
         if active_id and self.conversation_history:
             self._history.save_messages(active_id, self.conversation_history)
 
-    def _ensure_session(self) -> None:
-        if not self._history.get_active_id():
-            self._history.create_session()
-
     def _finalize_in_flight_response(self, *, persist: bool = True) -> None:
-        """Centralized cancel-and-persist for any code path that interrupts
-        a stream.
+        """Centralized cancel-and-persist for paths that interrupt a stream.
 
-        Persistence semantics (per user request): when the user navigates
-        away mid-response, the PARTIAL response is discarded and a fixed
-        canned message ("you switched chats…") is appended to history
-        instead. Revisiting the chat then shows a clear "this was
-        interrupted, ask again" marker instead of a confusing truncated
-        stub.
-
-        Critically: we do NOT call ``finalize_markdown`` here. Doing so
-        ran ``MarkdownRenderer.render()`` synchronously on the
-        about-to-be-destroyed bubble — a 200–800 ms freeze on the main
-        thread for non-trivial partials. The destroy that follows in
-        _rebuild_chat threw the rendered widget tree away within
-        milliseconds anyway. Skipping the render is the single biggest
-        win for the "freeze on chat-switch mid-stream" complaint.
+        The PARTIAL response is discarded and a fixed canned message is
+        appended to history instead, exactly once (_response_persisted).
         """
         ctrl = self._stream_ctrl
         if ctrl is not None and ctrl.is_active:
@@ -146,55 +773,25 @@ class Plugin(ChatUIMixin, BasePlugin):
                 and not getattr(self, "_response_persisted", False)
                 and self._current_asst_bubble is not None
                 and self._accumulated_text.strip()):
-            # Discard the partial; persist the canned marker. No
-            # finalize_markdown — the bubble is about to be destroyed
-            # in _rebuild_chat.
             self.conversation_history.append(
                 {"role": "assistant", "content": _NAV_AWAY_MSG})
             self._response_persisted = True
-        # Empty-thinking branch: user navigated away before any tokens
-        # arrived. Drop the placeholder bubble silently — no canned
-        # message to persist (the user's prompt was never answered at
-        # all, but it IS in history as a user message; a canned
-        # assistant reply would be noise).
         if self._current_asst_bubble is not None:
             try:
-                self._current_asst_bubble._stop_thinking()
-                self._current_asst_bubble.destroy()
+                self._current_asst_bubble.deleteLater()
             except Exception:
                 pass
         self._current_asst_bubble = None
-        # Reset the per-turn buffers and the idempotency latch. Without
-        # this, a follow-up _clear_conversation -> _new_chat path would
-        # see _response_persisted=True from the prior turn and
-        # short-circuit incorrectly.
         self._accumulated_text = ""
         self._response_persisted = False
-        # Unlock the send button so the next screen rebuild doesn't
-        # leave it stuck in the "Stop" state.
         try:
             self._unlock_input()
         except Exception:
             pass
 
-    def _clear_conversation(self) -> None:
-        """Reset conversation and rebuild."""
-        self._finalize_in_flight_response(persist=True)
-        self.conversation_history = (
-            [] if self.base_url else [dict(_SYS_MSG)])
-        self.session_id = None
-        self._bubble_rows.clear()
-        if hasattr(self, "second_frame") and self.second_frame:
-            self.second_frame.destroy()
-        self.create_main_screen().grid(
-            row=0, column=1, sticky="nsew")
-
     def _new_chat(self) -> None:
         self._finalize_in_flight_response(persist=True)
-        # If the user is mashing "+ New" without sending any messages,
-        # don't manufacture an empty-session orphan every click. Discard
-        # the current session if it has no user message; otherwise
-        # persist it.
+        # Don't orphan empty sessions from spammy "+ New" clicks.
         active_id = self._history.get_active_id()
         if active_id and not any(
                 m.get("role") == "user"
@@ -234,133 +831,88 @@ class Plugin(ChatUIMixin, BasePlugin):
             self._history.create_session()
         self._rebuild_chat()
 
-    def _cancel_pending_chat_timers(self) -> None:
-        """Cancel every chat-scoped after() timer before rebuilding.
-
-        Each (widget_attr, after_attr) pair: the widget we registered
-        the after on, and the attribute holding the after id. Stale ids
-        in plugin attributes have caused permanent state-machine break
-        (e.g. _scroll_dirty_pending sticking True when the chat_scroll
-        it was scheduled against gets destroyed), plus stale layout
-        passes firing 16 ms into the rebuild on the new widget tree.
-        """
-        pairs = (
-            ("chat_scroll", "_resize_after"),
-            ("chat_scroll", "_scroll_btn_after"),
-            ("chat_scroll", "_scroll_redraw_after"),
-            ("chat_scroll", "_restore_after"),
-            ("second_frame", "_sf_cfg_after"),
-            ("app", "_app_cfg_after"),
-        )
-        for widget_attr, after_attr in pairs:
-            aid = getattr(self, after_attr, None)
-            if aid is None:
-                continue
-            widget = getattr(self, widget_attr, None)
-            if widget is not None:
-                try:
-                    widget.after_cancel(aid)
-                except Exception:
-                    pass
-            setattr(self, after_attr, None)
-
     def _rebuild_chat(self) -> None:
-        # If a stream is still in flight (e.g. _select_chat was called
-        # before _finalize_in_flight_response landed), make a last-ditch
-        # cancel — the helper already runs above this in normal paths.
+        """Clear and repopulate the message area for the active session."""
         if self._stream_ctrl and self._stream_ctrl.is_active:
             self._stream_ctrl.cancel()
-        # Cancel every pending after() timer that's keyed to a widget
-        # we're about to destroy. Without this, the previous
-        # _scroll_dirty_pending flag stays True forever (its widget dies
-        # before the idle pump fires), permanently breaking
-        # auto-scroll-to-bottom in the NEXT chat. Same risk for the
-        # other debounces — stale ids are usually harmless on Tk but
-        # accumulate and noisy on Windows.
-        self._cancel_pending_chat_timers()
         self._current_asst_bubble = None
         self._accumulated_text = ""
         self._response_persisted = False
-        self._scroll_dirty_pending = False
-        self._bubble_rows.clear()
-        if hasattr(self, "_chat_area") and self._chat_area:
-            if hasattr(self, "chat_scroll") and self.chat_scroll:
-                try:
-                    self.chat_scroll.unbind("<Configure>")
-                except Exception:
-                    pass
-            self._chat_area.destroy()
-        self._chat_area = self.chat_scroll = self.chat_entry = None
-        self.send_button = self._bottom_spacer = None
-        self._build_chat_area(_is_dark_mode())
+        self._clear_welcome()
+        # Remove every message row (keep the trailing stretch).
+        while self._messages_lay.count() > 1:
+            item = self._messages_lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        self._restore_history()
         self._refresh_sidebar()
-        # The drawer is a sibling overlay that survives the rebuild; the new
-        # chat area is created on top of it, so re-assert its z-order.
-        if self._sidebar_visible:
-            self._show_sidebar()
 
+    # ===================================================================
+    #  Sending / streaming
+    # ===================================================================
     def send_message(self) -> None:
-        user_text = self.chat_entry.get().strip()
+        if self.client is None:
+            return
+        user_text = self.chat_entry.text().strip()
         if not user_text:
             return
         if len(user_text) > 15000:
-            self.app.show_notification(
-                "Message too long (15,000 character limit).",
-                type="warning")
+            try:
+                self.app.show_notification(
+                    "Message too long (15,000 character limit).",
+                    type="warning")
+            except Exception:
+                pass
             return
         if self._stream_ctrl and self._stream_ctrl.is_active:
             self._stop_streaming()
             return
         self._ensure_session()
-        if self._welcome_frame is not None:
-            self._welcome_frame.destroy()
-            self._welcome_frame = None
-        self._show_header()
-        self.chat_entry.delete(0, "end")
-        is_dark = _is_dark_mode()
-        self._add_user_bubble(user_text, is_dark)
-        self._current_asst_bubble = self._add_assistant_bubble(is_dark)
-        self.chat_scroll.after(50, self._scroll_to_last_user_bubble)
-        self.chat_scroll.after(100, self._update_scrollbar_visibility)
+        self._clear_welcome()
+        self.chat_entry.clear()
+
+        self._add_user_bubble(user_text)
+        self._current_asst_bubble = self._add_assistant_bubble()
+        self._scroll_to_bottom()
         self.conversation_history.append(
             {"role": "user", "content": user_text})
-        self.chat_entry.configure(state="disabled")
-        self.send_button.configure(
-            text="\u25a0", fg_color="#EF4444", hover_color="#DC2626",
-            command=self._stop_streaming)
+
+        self.chat_entry.setEnabled(False)
+        self.send_button.setEnabled(True)
+        self._style_send_button(stop=True)
+        try:
+            self.send_button.clicked.disconnect()
+        except Exception:
+            pass
+        self.send_button.clicked.connect(self._stop_streaming)
+
         self._accumulated_text = ""
-        # Idempotency latch: _stop_streaming and _on_stream_done both
-        # try to finalize and append to history. The latch ensures only
-        # the first one wins even if they race.
         self._response_persisted = False
         self._stream_ctrl = StreamController(
             app=self.app, on_chunk=self._on_stream_chunk,
             on_done=self._on_stream_done, on_error=self._on_stream_error)
         msgs = ([{"role": "user", "content": user_text}]
-                if self.base_url
-                else list(self.conversation_history))
+                if self.base_url else list(self.conversation_history))
         extra = ({"session_id": self.session_id}
                  if self.base_url and self.session_id else None)
-        self._stream_ctrl.start(
-            client=self.client, model=self.model, messages=msgs,
-            temperature=0.7, extra_body=extra, base_url=self.base_url)
+        try:
+            self._stream_ctrl.start(
+                client=self.client, model=self.model, messages=msgs,
+                temperature=0.7, extra_body=extra, base_url=self.base_url)
+        except Exception as e:
+            self._on_stream_error(str(e))
 
     def _stop_streaming(self) -> None:
-        if getattr(self, "_response_persisted", False):
-            self._unlock_input()
-            return
         if self._stream_ctrl and self._stream_ctrl.is_active:
             self._stream_ctrl.cancel()
-        if (self._accumulated_text.strip()
-                and self._current_asst_bubble):
-            self._current_asst_bubble.finalize_markdown(
-                self._accumulated_text)
+        if self._accumulated_text.strip() and self._current_asst_bubble:
+            self._current_asst_bubble.set_text(self._accumulated_text)
             self.conversation_history.append(
                 {"role": "assistant", "content": self._accumulated_text})
-            self._response_persisted = True
-        elif self._current_asst_bubble:
-            self._current_asst_bubble._stop_thinking()
-            self._current_asst_bubble.destroy()
+        elif self._current_asst_bubble is not None:
+            self._current_asst_bubble.setParent(None)
+            self._current_asst_bubble.deleteLater()
         self._current_asst_bubble = None
         self._unlock_input()
         self._save_current_session()
@@ -369,56 +921,29 @@ class Plugin(ChatUIMixin, BasePlugin):
     def _on_stream_chunk(self, chunk_text: str) -> None:
         self._accumulated_text += chunk_text
         if self._current_asst_bubble is not None:
-            # Constant-time append per chunk (vs the old O(N^2)
-            # configure(text=full_accumulated)).
-            self._current_asst_bubble.append_streaming_chunk(chunk_text)
-        # Coalesce scroll work to one Tk idle cycle, no matter how many
-        # chunks the poll just dispatched. Two yview() reads + a possible
-        # place()/place_forget() per chunk used to spike CPU on long
-        # responses.
-        self._schedule_scroll_after_chunk()
-
-    def _schedule_scroll_after_chunk(self) -> None:
-        if getattr(self, "_scroll_dirty_pending", False):
-            return
-        self._scroll_dirty_pending = True
-        try:
-            self.chat_scroll.after_idle(self._flush_scroll_after_chunk)
-        except Exception:
-            self._scroll_dirty_pending = False
-
-    def _flush_scroll_after_chunk(self) -> None:
-        self._scroll_dirty_pending = False
-        if self.chat_scroll is None:
-            return
-        try:
-            near = self._is_near_bottom()
-            if near:
-                self._scroll_to_bottom()
-            self._check_scroll_btn()
-        except Exception:
-            pass
+            self._current_asst_bubble.set_text(self._accumulated_text)
+        self._scroll_to_bottom()
 
     def _on_stream_done(self, full_text: str) -> None:
         if getattr(self, "_response_persisted", False):
             return
         if self._current_asst_bubble is not None:
             if not full_text.strip():
-                # Server returned a 200 SSE stream with no content (e.g. the
-                # inference backend is restarting). Surface it instead of
-                # leaving a blank bubble, and don't store an empty turn — but
-                # fall through to the common cleanup below so the input bar
-                # unlocks and the send-arrow returns to its idle state. The
-                # earlier early-return left those stuck in "response loading"
-                # mode after an empty SSE, which made the chat look frozen.
-                self._current_asst_bubble.finalize_markdown(
-                    "No response received from the server. Please try again in a moment.")
+                # Empty SSE: server closed the stream without content. Show a
+                # user-facing message instead of a blank bubble, and unlock.
+                self._current_asst_bubble.set_text(
+                    "No response received from the server. "
+                    "Please try again in a moment.")
                 self._current_asst_bubble = None
-                self.app.show_notification(
-                    "The server returned an empty response.", type="warning")
                 self._response_persisted = True
+                try:
+                    self.app.show_notification(
+                        "The server returned an empty response.",
+                        type="warning")
+                except Exception:
+                    pass
             else:
-                self._current_asst_bubble.finalize_markdown(full_text)
+                self._current_asst_bubble.set_text(full_text)
                 self._current_asst_bubble = None
                 self.conversation_history.append(
                     {"role": "assistant", "content": full_text})
@@ -426,30 +951,24 @@ class Plugin(ChatUIMixin, BasePlugin):
         self._unlock_input()
         self._save_current_session()
         self._refresh_sidebar()
-        # Only chase the last user bubble if the user is still near the
-        # bottom — otherwise we'd yank them back from wherever they
-        # scrolled to while the response was rendering.
-        if self._is_near_bottom():
-            self.chat_scroll.after(50, self._scroll_to_last_user_bubble)
-            self.chat_scroll.after(200, self._scroll_to_last_user_bubble)
-        self.chat_scroll.after(250, self._update_scrollbar_visibility)
+        self._scroll_to_bottom()
 
     def _on_stream_error(self, error_msg: str) -> None:
         if getattr(self, "_response_persisted", False):
             return
         if (self._accumulated_text.strip()
                 and self._current_asst_bubble is not None):
-            self._current_asst_bubble.finalize_markdown(
-                self._accumulated_text)
+            self._current_asst_bubble.set_text(self._accumulated_text)
             self.conversation_history.append(
                 {"role": "assistant", "content": self._accumulated_text})
-            self._response_persisted = True
-            self.app.show_notification(
-                "Response may be incomplete.", type="warning")
+            try:
+                self.app.show_notification(
+                    "Response may be incomplete.", type="warning")
+            except Exception:
+                pass
         elif self._current_asst_bubble is not None:
             try:
-                self._current_asst_bubble.set_streaming_text(
-                    f"Error: {error_msg}")
+                self._current_asst_bubble.set_text(f"Error: {error_msg}")
             except Exception:
                 pass
         self._current_asst_bubble = None
@@ -458,50 +977,59 @@ class Plugin(ChatUIMixin, BasePlugin):
 
     def _unlock_input(self) -> None:
         try:
-            self.chat_entry.configure(state="normal")
-            self.send_button.configure(
-                text="\u2191", state="normal",
-                fg_color=RESISTINE_BLUE,
-                hover_color="#1565B0",
-                command=self.send_message)
-            self.chat_entry.focus_set()
+            self.chat_entry.setEnabled(True)
+            self._style_send_button(stop=False)
+            self.send_button.setEnabled(True)
+            try:
+                self.send_button.clicked.disconnect()
+            except Exception:
+                pass
+            self.send_button.clicked.connect(self.send_message)
+            self.chat_entry.setFocus()
         except Exception:
             pass
+
+    # ===================================================================
+    #  Misc
+    # ===================================================================
+    def _sync_input_enabled(self) -> None:
+        """Enable/disable the input controls to match client availability."""
+        entry = getattr(self, "chat_entry", None)
+        btn = getattr(self, "send_button", None)
+        if entry is None or btn is None:
+            return
+        if self.client is None:
+            entry.setEnabled(False)
+            entry.setPlaceholderText("API key required — see Settings")
+            btn.setEnabled(False)
+        else:
+            entry.setEnabled(True)
+            entry.setPlaceholderText("Message Resistine AI...")
+            btn.setEnabled(True)
 
     def _use_suggestion(self, text: str) -> None:
-        self.chat_entry.delete(0, "end")
-        self.chat_entry.insert(0, text)
+        if self.client is None:
+            return
+        self.chat_entry.setText(text)
         self.send_message()
 
-    def destroy(self) -> None:
-        """Plugin teardown — cancel any in-flight stream and flush state.
-
-        Called by PluginManager on uninstall/reload, and (if the app
-        teardown is wired through plugin_list, which is the right
-        direction) on app shutdown. Today it at least guarantees a
-        graceful uninstall: the worker thread sees cancel_event, the
-        HTTP socket is released on a daemon thread, and any partial
-        response gets the canned marker so a reopen shows the right
-        state.
-        """
+    def _open_settings(self) -> None:
         try:
-            self._stop_gate_poller()
+            sp = next((p for p in self.app.plugin_list
+                       if p.get_name() == "Settings"), None)
+            if sp:
+                self.app.select_frame_by_name(
+                    "frame_Settings", button=sp.get_button())
         except Exception:
             pass
+
+    def destroy(self) -> None:
+        """Plugin teardown — cancel any in-flight stream and flush state."""
         try:
             self._finalize_in_flight_response(persist=True)
         except Exception:
             pass
         try:
             self._save_current_session()
-        except Exception:
-            pass
-        super().destroy()
-
-    def _open_settings(self) -> None:
-        try:
-            sp = next((p for p in self.app.plugin_list if p.get_name() == "Settings"), None)
-            if sp:
-                self.app.select_frame_by_name("frame_Settings", button=sp.get_button())
         except Exception:
             pass

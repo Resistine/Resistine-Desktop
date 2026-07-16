@@ -1,0 +1,9 @@
+Package: resistine
+Version: ${VERSION}
+Section: utils
+Priority: optional
+Architecture: amd64
+Depends: wireguard-tools, libxcb-cursor0
+Maintainer: Resistine Team <info@resistine.com>
+Description: Resistine Desktop Application
+ Resistine is a security endpoint and VPN manager.
