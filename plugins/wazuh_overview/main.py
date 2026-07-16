@@ -1074,7 +1074,9 @@ class Plugin(BasePlugin):
         root = QWidget()
         root.setObjectName("Transparent")
         outer = QVBoxLayout(root)
-        outer.setContentsMargins(0, 0, 0, 0)
+        # Breathing room so the tab bar doesn't sit flush against the window
+        # title bar (top) or the content edges (sides).
+        outer.setContentsMargins(16, 14, 16, 0)
         outer.setSpacing(0)
 
         tabs = QTabWidget()
