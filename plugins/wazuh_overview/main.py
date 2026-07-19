@@ -1489,13 +1489,14 @@ class Plugin(BasePlugin):
 
     def _module_cards(self):
         """Compute module-card data from the live /me/* responses."""
+        # File Integrity, Rootcheck and Hotfixes are hidden for now. The
+        # hotfixes endpoint is still fetched (it's part of _READY_ALL and the
+        # Overview loading progress); only its card is withheld. Re-add the
+        # three entries here to bring them back — _hotfix_card() is kept below.
         cards = [
             self._security_alerts_card(),
             self._vuln_card(),
             self._sca_card(),
-            _unavailable_card("File Integrity", "Created · added/modified · deleted"),
-            _unavailable_card("Rootcheck", "Recent rootkit / process detection"),
-            self._hotfix_card(),
             self._inventory_card(),
             self._agent_health_card(),
             self._manager_card(),
