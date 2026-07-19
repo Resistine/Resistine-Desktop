@@ -51,6 +51,7 @@ from gui.qt_widgets import FlowLayout, scroll_page
 from plugins.base_plugin import BasePlugin
 from plugins.wazuh_overview import api_client, charts
 from plugins.wazuh_overview.config import MAX_PARALLEL_FETCHES
+from plugins.wazuh_overview.loading import LoadingScreen, RampProgress
 from utils.logger import logger
 
 _PLUGIN_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -934,10 +935,14 @@ class Plugin(BasePlugin):
         self._tabs = None
         self._tab_built = {name: False for name in _TAB_NAMES}
         self._tab_pages = {}
+        # Per-tab synthetic progress ramps for loaders that only signal
+        # done/not-done. Created lazily, reset when a tab reloads.
+        self._tab_ramps = {}
 
         # Overview state
         self._overview_ready_mask = -1
         self._overview_poll_token = None
+        self._overview_page_widget = None  # the tab page (for loading→content swap)
         self._device_holder = None
         self._alert_holder = None
         self._module_grid = None
@@ -1012,7 +1017,10 @@ class Plugin(BasePlugin):
         self._tab_built = {name: False for name in _TAB_NAMES}
         self._tab_pages = {}
 
+        self._tab_ramps = {}
+
         self._overview_poll_token = None
+        self._overview_page_widget = None
         self._device_holder = None
         self._alert_holder = None
         self._module_grid = None
@@ -1092,8 +1100,17 @@ class Plugin(BasePlugin):
         return root
 
     def _on_tab_changed(self, index):
-        if 0 <= index < len(_TAB_NAMES):
-            self._ensure_tab_built(_TAB_NAMES[index])
+        if not (0 <= index < len(_TAB_NAMES)):
+            return
+        name = _TAB_NAMES[index]
+        already_built = self._tab_built.get(name, False)
+        self._ensure_tab_built(name)
+        # The timeline chart's date window is anchored to "today"; re-render it
+        # when revisiting the tab so it tracks the current date rather than
+        # staying frozen at the date the pane was first built. (First build
+        # already renders it, so only refresh on later visits.)
+        if name == "Vulnerabilities" and already_built and self._vuln_cvss_ax is not None:
+            self._render_vuln_cvss()
 
     def _ensure_tab_built(self, name):
         if self._tab_built.get(name):
@@ -1120,6 +1137,39 @@ class Plugin(BasePlugin):
         if name in _TAB_NAMES and self._tabs is not None:
             self._tabs.setCurrentIndex(_TAB_NAMES.index(name))
 
+    # ----- loading screens ---------------------------------------------------
+    def _tab_ramp(self, name, *, restart=False):
+        """The synthetic progress ramp for ``name``, created on first use.
+
+        ``restart`` re-zeroes the curve, so a refresh replays the animation
+        instead of resuming wherever the previous load left off.
+        """
+        ramp = self._tab_ramps.get(name)
+        if ramp is None:
+            ramp = RampProgress()
+            self._tab_ramps[name] = ramp
+        elif restart:
+            ramp.reset()
+        return ramp
+
+    def _overview_progress(self):
+        """Overview fill: the real share of completed /me/* slots, floored by a
+        ramp so the ring still moves before the first response lands."""
+        landed = bin(_ready_mask()).count("1") / 6.0
+        return max(landed, self._tab_ramp("Overview")())
+
+    def _mount_loading_screen(self, page, title, subtitle, progress_fn, done_fn):
+        """Make a circular-progress loading screen the page's only content.
+
+        The caller keeps ownership of the swap to real content — every tab
+        already polls its own readiness event and rebuilds the pane.
+        """
+        screen = LoadingScreen(
+            title, subtitle, progress_fn=progress_fn, done_fn=done_fn
+        )
+        page.layout().addWidget(screen)
+        return screen
+
     # ----- placeholder panes (Events / Vulnerabilities / Inventory) ----------
     def _build_placeholder_pane(self, page, name):
         inner = QWidget()
@@ -1139,6 +1189,26 @@ class Plugin(BasePlugin):
 
     # ----- Overview pane -----------------------------------------------------
     def _build_overview_pane(self, page, _name="Overview"):
+        _clear_layout(page.layout())
+        self._overview_page_widget = page
+        self._module_grid = None
+
+        # Nothing has landed yet — show the ring rather than a grid of cards
+        # that all read "Loading…". Once the first endpoint returns we fall
+        # through to the real pane, which keeps painting progressively as the
+        # remaining slots arrive.
+        _kick_overview_api_loader()
+        if _ready_mask() == 0:
+            self._mount_loading_screen(
+                page,
+                "Loading overview…",
+                "Fetching your device's security posture",
+                self._overview_progress,
+                lambda: _ready_mask() != 0,
+            )
+            self._schedule_overview_poll(force=True)
+            return
+
         # Full-width page (Dashboard margins), so the module grid below can
         # reflow across the whole content area instead of being capped to two
         # columns. The device card / alert bar span the width like the CTk
@@ -1175,8 +1245,7 @@ class Plugin(BasePlugin):
         self._rebuild_alert_bar()
         self._populate_module_grid()
 
-        # Kick the loader (idempotent) and poll for readiness.
-        _kick_overview_api_loader()
+        # Loader already kicked above; poll for the remaining slots.
         if _ready_mask() == _READY_ALL and _overview_has_errors():
             logger.info(
                 "[WAZUH-OVERVIEW] Cached preload had errors — auto-refreshing on tab open"
@@ -1192,9 +1261,18 @@ class Plugin(BasePlugin):
 
         def check():
             self._overview_poll_token = None
-            if self._module_grid is None:
-                return
             mask = _ready_mask()
+            if self._module_grid is None:
+                # Loading screen is still up. Swap it for the real pane as soon
+                # as the first endpoint lands; keep polling until then.
+                page = self._overview_page_widget
+                if page is None:
+                    return
+                if mask != 0:
+                    self._build_overview_pane(page)
+                else:
+                    self._overview_poll_token = self.app.after(150, check)
+                return
             if mask != self._overview_ready_mask:
                 self._overview_ready_mask = mask
                 self._rebuild_device_card()
@@ -1209,6 +1287,9 @@ class Plugin(BasePlugin):
     def request_refresh(self):
         """Dev refresh button: re-fetch every endpoint and repaint as it lands."""
         refresh_all_remote_data()
+        # Replay the ring animation from zero rather than resuming the old curve.
+        for name in _TAB_NAMES:
+            self._tab_ramp(name, restart=True)
         if self._refresh_button is not None:
             self._refresh_button.setEnabled(False)
         # Repaint a few times across the eager (~500ms) + lazy (~2-6s) window.
@@ -1581,14 +1662,13 @@ class Plugin(BasePlugin):
         self._ev_page_widget = page
 
         if not _remote_vuln_events_ready.is_set():
-            msg = QWidget()
-            msg.setObjectName("Transparent")
-            ml = QVBoxLayout(msg)
-            ml.addStretch(1)
-            ml.addWidget(_label("Loading events…", size=14, secondary=True),
-                         alignment=Qt.AlignmentFlag.AlignCenter)
-            ml.addStretch(1)
-            page.layout().addWidget(msg)
+            self._mount_loading_screen(
+                page,
+                "Loading events…",
+                "Collecting security alerts across your devices",
+                self._tab_ramp("Events"),
+                _remote_vuln_events_ready.is_set,
+            )
             self._schedule_events_ready_check()
             return
 
@@ -2109,7 +2189,13 @@ class Plugin(BasePlugin):
         _kick_vulns_loader()
 
         if not _remote_vulns_ready.is_set():
-            self._vuln_centered(page, "Loading vulnerabilities…")
+            self._mount_loading_screen(
+                page,
+                "Loading vulnerabilities…",
+                "Scanning each device for known CVEs",
+                self._tab_ramp("Vulnerabilities"),
+                _remote_vulns_ready.is_set,
+            )
             self._schedule_vuln_ready_check()
             return
         if _REMOTE_VULNS_ERROR:
@@ -2346,6 +2432,20 @@ class Plugin(BasePlugin):
         fig.patch.set_facecolor(ct["bg"])
         ax.set_facecolor(ct["bg"])
         self._vuln_cvss_fig, self._vuln_cvss_canvas, self._vuln_cvss_ax = fig, canvas, ax
+        self._render_vuln_cvss()
+        return card
+
+    def _render_vuln_cvss(self):
+        """Draw (or redraw) the 30-day 'first detected' timeline onto the CVSS
+        axis. The date window is anchored to the current day, so this is re-run
+        on every tab visit to keep the right edge on today instead of freezing
+        at the date the pane was first built."""
+        ax = self._vuln_cvss_ax
+        if ax is None:
+            return
+        ct = charts.chart_theme()
+        ax.clear()
+        ax.set_facecolor(ct["bg"])
 
         buckets, counts = self._bucket_vulns_daily()
         x = list(range(len(buckets)))
@@ -2357,8 +2457,10 @@ class Plugin(BasePlugin):
                 ax.bar(x, heights, bottom=bottoms, width=0.85,
                        color=_segment_color(level), edgecolor="none")
                 bottoms = [a + b for a, b in zip(bottoms, heights)]
+            # Anchor ticks to the right edge (today) and step backwards, so the
+            # newest day is always the labelled rightmost tick.
             step = max(1, len(buckets) // 6)
-            ticks = list(range(0, len(buckets), step))
+            ticks = sorted(range(len(buckets) - 1, -1, -step))
             ax.set_xticks(ticks)
             ax.set_xticklabels([buckets[i].strftime("%b %d") for i in ticks],
                                fontsize=8, color=ct["text"])
@@ -2377,9 +2479,8 @@ class Plugin(BasePlugin):
         ax.spines["bottom"].set_color(ct["text"])
         ax.yaxis.grid(True, color=ct["grid"], linewidth=0.4, alpha=0.5)
         ax.set_axisbelow(True)
-        fig.tight_layout()
-        canvas.draw_idle()
-        return card
+        self._vuln_cvss_fig.tight_layout()
+        self._vuln_cvss_canvas.draw_idle()
 
     # ----- table header + device selector ------------------------------------
     def _build_vuln_table_header(self):
@@ -2744,14 +2845,13 @@ class Plugin(BasePlugin):
         _kick_agents_loader()
 
         if not _agents_ready.is_set():
-            msg = QWidget()
-            msg.setObjectName("Transparent")
-            v = QVBoxLayout(msg)
-            v.addStretch(1)
-            v.addWidget(_label("Loading devices…", size=14, secondary=True),
-                        alignment=Qt.AlignmentFlag.AlignCenter)
-            v.addStretch(1)
-            page.layout().addWidget(msg)
+            self._mount_loading_screen(
+                page,
+                "Loading devices…",
+                "Gathering hardware and software inventory",
+                self._tab_ramp("Inventory"),
+                _agents_ready.is_set,
+            )
             self._schedule_inventory_ready_check()
             return
 
