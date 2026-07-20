@@ -50,7 +50,7 @@ from gui import theme
 from gui.qt_widgets import FlowLayout, scroll_page
 from plugins.base_plugin import BasePlugin
 from plugins.wazuh_overview import api_client, charts
-from plugins.wazuh_overview.config import MAX_PARALLEL_FETCHES
+from plugins.wazuh_overview.config import EVENTS_WINDOW_HOURS, MAX_PARALLEL_FETCHES
 from plugins.wazuh_overview.loading import LoadingScreen, RampProgress
 from utils.logger import logger
 
@@ -63,6 +63,10 @@ _WAZUH_DIR = os.path.join(os.path.dirname(_PLUGIN_DIR), "wazuh")
 _SHOW_DEV_REFRESH_BUTTON = True
 
 _TAB_NAMES = ("Overview", "Events", "Vulnerabilities", "Inventory")
+# Tabs that show a circular-progress loading screen. Overview is excluded on
+# purpose: it paints a full skeleton immediately and fills it in as endpoints
+# land, which beats blocking on a ring.
+_LOADING_TABS = ("Events", "Vulnerabilities", "Inventory")
 _LEGEND_KEYS = ("critical", "error", "warning", "info")
 _SEVERITY_LEVELS = ("critical", "high", "medium", "low")
 # Severity bucket -> displayed badge label. Shared by the Overview cards and the
@@ -360,6 +364,7 @@ _remote_hotfixes_ready = threading.Event()
 # Vulnerability detection events. Two-phase load: phase-1 (local device) fires
 # _remote_vuln_events_ready; phase-2 (rest of group) fires _..._complete.
 _REMOTE_VULN_EVENTS = []
+_REMOTE_VULN_EVENTS_ERROR = None
 _remote_vuln_events_ready = threading.Event()
 _remote_vuln_events_complete = threading.Event()
 
@@ -468,11 +473,15 @@ def _load_overview_early_async():
 def _load_vuln_events_phase1_async():
     """Eager Phase 1: pull the LOCAL device's vuln-detection events, then set
     _remote_vuln_events_ready so the Events tab can render immediately."""
-    global _vuln_events_phase2_started
+    global _vuln_events_phase2_started, _REMOTE_VULN_EVENTS_ERROR
 
     _remote_agent_ready.wait()
     local_id = (_REMOTE_AGENT or {}).get("id") if isinstance(_REMOTE_AGENT, dict) else None
     if not local_id:
+        logger.warning(
+            "[WAZUH-OVERVIEW] No local agent id — skipping vuln-events fetch"
+        )
+        _REMOTE_VULN_EVENTS_ERROR = "no local agent"
         _remote_vuln_events_ready.set()
         _remote_vuln_events_complete.set()
         with _vuln_events_phase2_lock:
@@ -480,8 +489,17 @@ def _load_vuln_events_phase1_async():
         return
 
     global _REMOTE_VULN_EVENTS
-    local_events, err = api_client.fetch_device_vulnerability_events(local_id)
-    if not err:
+    local_events, err = api_client.fetch_device_vulnerability_events(
+        local_id, hours=EVENTS_WINDOW_HOURS
+    )
+    _REMOTE_VULN_EVENTS_ERROR = err
+    if err:
+        # Without this the tab renders an empty stream that's indistinguishable
+        # from a genuine "no events in the window".
+        logger.warning(
+            f"[WAZUH-OVERVIEW] Vuln-events fetch for local agent {local_id} failed: {err}"
+        )
+    else:
         normalized = [_normalize_wazuh_hit(h) for h in (local_events or [])]
         normalized.sort(key=lambda e: e.get("timestamp") or "", reverse=True)
         _REMOTE_VULN_EVENTS = normalized
@@ -508,7 +526,11 @@ def _load_vuln_events_phase2_async():
     workers = min(len(other_ids), MAX_PARALLEL_FETCHES)
     with ThreadPoolExecutor(max_workers=workers) as ex:
         future_to_aid = {
-            ex.submit(api_client.fetch_device_vulnerability_events, aid): aid
+            ex.submit(
+                api_client.fetch_device_vulnerability_events,
+                aid,
+                hours=EVENTS_WINDOW_HOURS,
+            ): aid
             for aid in other_ids
         }
         for future in as_completed(future_to_aid):
@@ -600,6 +622,9 @@ def refresh_all_remote_data():
     keeps showing stale values (no "Loading…" flash) until fresh data lands."""
     global _overview_early_loader_started, _vulns_loader_started
     global _vuln_events_phase2_started, _agents_loader_started
+    global _REMOTE_VULN_EVENTS_ERROR
+
+    _REMOTE_VULN_EVENTS_ERROR = None
 
     with _overview_early_loader_lock:
         _overview_early_loader_started = False
@@ -938,11 +963,12 @@ class Plugin(BasePlugin):
         # Per-tab synthetic progress ramps for loaders that only signal
         # done/not-done. Created lazily, reset when a tab reloads.
         self._tab_ramps = {}
+        # Mounted loading screens, by tab name. Popped when swapped for content.
+        self._loading_screens = {}
 
         # Overview state
         self._overview_ready_mask = -1
         self._overview_poll_token = None
-        self._overview_page_widget = None  # the tab page (for loading→content swap)
         self._device_holder = None
         self._alert_holder = None
         self._module_grid = None
@@ -1018,9 +1044,9 @@ class Plugin(BasePlugin):
         self._tab_pages = {}
 
         self._tab_ramps = {}
+        self._loading_screens = {}
 
         self._overview_poll_token = None
-        self._overview_page_widget = None
         self._device_holder = None
         self._alert_holder = None
         self._module_grid = None
@@ -1152,23 +1178,29 @@ class Plugin(BasePlugin):
             ramp.reset()
         return ramp
 
-    def _overview_progress(self):
-        """Overview fill: the real share of completed /me/* slots, floored by a
-        ramp so the ring still moves before the first response lands."""
-        landed = bin(_ready_mask()).count("1") / 6.0
-        return max(landed, self._tab_ramp("Overview")())
-
-    def _mount_loading_screen(self, page, title, subtitle, progress_fn, done_fn):
-        """Make a circular-progress loading screen the page's only content.
-
-        The caller keeps ownership of the swap to real content — every tab
-        already polls its own readiness event and rebuilds the pane.
-        """
+    def _mount_loading_screen(self, name, page, title, subtitle, done_fn):
+        """Make a circular-progress loading screen the page's only content."""
         screen = LoadingScreen(
-            title, subtitle, progress_fn=progress_fn, done_fn=done_fn
+            title, subtitle, progress_fn=self._tab_ramp(name), done_fn=done_fn
         )
+        self._loading_screens[name] = screen
         page.layout().addWidget(screen)
         return screen
+
+    def _finish_loading(self, name, rebuild):
+        """Run ``name``'s loading ring to 100%, then swap in the real content.
+
+        Falls straight through to ``rebuild`` when no ring is mounted (the tab
+        built its content directly) or when the widget is already gone.
+        """
+        screen = self._loading_screens.pop(name, None)
+        if screen is None:
+            rebuild()
+            return
+        try:
+            screen.complete(rebuild)
+        except RuntimeError:
+            rebuild()  # C++ side already deleted
 
     # ----- placeholder panes (Events / Vulnerabilities / Inventory) ----------
     def _build_placeholder_pane(self, page, name):
@@ -1189,26 +1221,13 @@ class Plugin(BasePlugin):
 
     # ----- Overview pane -----------------------------------------------------
     def _build_overview_pane(self, page, _name="Overview"):
-        _clear_layout(page.layout())
-        self._overview_page_widget = page
-        self._module_grid = None
-
-        # Nothing has landed yet — show the ring rather than a grid of cards
-        # that all read "Loading…". Once the first endpoint returns we fall
-        # through to the real pane, which keeps painting progressively as the
-        # remaining slots arrive.
-        _kick_overview_api_loader()
-        if _ready_mask() == 0:
-            self._mount_loading_screen(
-                page,
-                "Loading overview…",
-                "Fetching your device's security posture",
-                self._overview_progress,
-                lambda: _ready_mask() != 0,
-            )
-            self._schedule_overview_poll(force=True)
-            return
-
+        # No loading screen here, deliberately: this pane paints its full
+        # skeleton immediately (device card, alert bar, module cards all
+        # reading "Loading…") and fills each section in as its endpoint lands.
+        # A blocking ring would replace a useful page with an empty one and
+        # make the same wait feel longer. The other three tabs have no such
+        # skeleton to fall back on, so they do get the ring.
+        #
         # Full-width page (Dashboard margins), so the module grid below can
         # reflow across the whole content area instead of being capped to two
         # columns. The device card / alert bar span the width like the CTk
@@ -1245,7 +1264,8 @@ class Plugin(BasePlugin):
         self._rebuild_alert_bar()
         self._populate_module_grid()
 
-        # Loader already kicked above; poll for the remaining slots.
+        # Kick the loader (idempotent) and poll for readiness.
+        _kick_overview_api_loader()
         if _ready_mask() == _READY_ALL and _overview_has_errors():
             logger.info(
                 "[WAZUH-OVERVIEW] Cached preload had errors — auto-refreshing on tab open"
@@ -1261,18 +1281,9 @@ class Plugin(BasePlugin):
 
         def check():
             self._overview_poll_token = None
-            mask = _ready_mask()
             if self._module_grid is None:
-                # Loading screen is still up. Swap it for the real pane as soon
-                # as the first endpoint lands; keep polling until then.
-                page = self._overview_page_widget
-                if page is None:
-                    return
-                if mask != 0:
-                    self._build_overview_pane(page)
-                else:
-                    self._overview_poll_token = self.app.after(150, check)
                 return
+            mask = _ready_mask()
             if mask != self._overview_ready_mask:
                 self._overview_ready_mask = mask
                 self._rebuild_device_card()
@@ -1288,7 +1299,7 @@ class Plugin(BasePlugin):
         """Dev refresh button: re-fetch every endpoint and repaint as it lands."""
         refresh_all_remote_data()
         # Replay the ring animation from zero rather than resuming the old curve.
-        for name in _TAB_NAMES:
+        for name in _LOADING_TABS:
             self._tab_ramp(name, restart=True)
         if self._refresh_button is not None:
             self._refresh_button.setEnabled(False)
@@ -1664,10 +1675,10 @@ class Plugin(BasePlugin):
 
         if not _remote_vuln_events_ready.is_set():
             self._mount_loading_screen(
+                "Events",
                 page,
                 "Loading events…",
                 "Collecting security alerts across your devices",
-                self._tab_ramp("Events"),
                 _remote_vuln_events_ready.is_set,
             )
             self._schedule_events_ready_check()
@@ -1713,8 +1724,8 @@ class Plugin(BasePlugin):
                 if self._ev_rows_layout is not None:
                     self._refresh_events_content()
                 else:
-                    # Loading placeholder still up — build the full pane now.
-                    self._build_events_pane(page)
+                    # Ring still up — run it to 100%, then build the full pane.
+                    self._finish_loading("Events", lambda: self._build_events_pane(page))
                     return
             if _remote_vuln_events_complete.is_set():
                 return
@@ -1931,10 +1942,13 @@ class Plugin(BasePlugin):
         head.setObjectName("Transparent")
         h = QHBoxLayout(head)
         h.setContentsMargins(6, 4, 6, 4)
-        for text, stretch in (("", 0), ("RULE", 0), ("DESCRIPTION", 1), ("METRIC", 0), ("WHEN", 0)):
+        # No DESCRIPTION column — it's the headline of the detail card on the
+        # right instead. The freed space becomes a stretch so METRIC and WHEN
+        # stay right-aligned. Column widths must match _add_event_row.
+        for text, stretch in (("", 0), ("RULE", 0), ("", 1), ("METRIC", 0), ("WHEN", 0)):
             lbl = _label(text, size=10, bold=True, secondary=True)
             h.addWidget(lbl, stretch)
-            if text == "":
+            if text == "" and stretch == 0:
                 lbl.setFixedWidth(14)
             elif text == "RULE":
                 lbl.setFixedWidth(70)
@@ -2012,6 +2026,18 @@ class Plugin(BasePlugin):
             ev = next((e for e in events if e["id"] == self._ev_selected_id), events[0])
             self._render_event_detail(ev)
         else:
+            # Say why the stream is empty. A failed fetch and a genuinely quiet
+            # window both render zero rows, and they need different responses.
+            if _REMOTE_VULN_EVENTS_ERROR:
+                msg = f"Couldn't load events — {_REMOTE_VULN_EVENTS_ERROR}"
+            elif _REMOTE_VULN_EVENTS:
+                msg = "No events match the current filters"
+            else:
+                days = EVENTS_WINDOW_HOURS // 24
+                msg = f"No security events in the last {days} days"
+            empty = _label(msg, size=13, secondary=True)
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lay.insertWidget(lay.count() - 1, empty)
             self._render_event_detail(None)
 
     def _set_event_page(self, page):
@@ -2045,8 +2071,8 @@ class Plugin(BasePlugin):
         rule = _label(str(ev.get("rule_id", "—")), size=12, bold=True)
         rule.setFixedWidth(70)
         h.addWidget(rule)
-        desc = _label(ev.get("description", "—"), size=12)
-        h.addWidget(desc, 1)
+        # Description lives in the detail card on the right, not in the row.
+        h.addStretch(1)
         metric = (ev.get("mitre") or [None])[0] or ev.get("ip") or "—"
         m = _label(metric, size=11, secondary=True)
         m.setFixedWidth(90)
@@ -2191,10 +2217,10 @@ class Plugin(BasePlugin):
 
         if not _remote_vulns_ready.is_set():
             self._mount_loading_screen(
+                "Vulnerabilities",
                 page,
                 "Loading vulnerabilities…",
                 "Scanning each device for known CVEs",
-                self._tab_ramp("Vulnerabilities"),
                 _remote_vulns_ready.is_set,
             )
             self._schedule_vuln_ready_check()
@@ -2240,7 +2266,9 @@ class Plugin(BasePlugin):
             if page is None:
                 return
             if _remote_vulns_ready.is_set():
-                self._build_vulnerabilities_pane(page)
+                self._finish_loading(
+                    "Vulnerabilities", lambda: self._build_vulnerabilities_pane(page)
+                )
             else:
                 self._vuln_ready_token = self.app.after(120, check)
 
@@ -2847,10 +2875,10 @@ class Plugin(BasePlugin):
 
         if not _agents_ready.is_set():
             self._mount_loading_screen(
+                "Inventory",
                 page,
                 "Loading devices…",
                 "Gathering hardware and software inventory",
-                self._tab_ramp("Inventory"),
                 _agents_ready.is_set,
             )
             self._schedule_inventory_ready_check()
@@ -2868,7 +2896,7 @@ class Plugin(BasePlugin):
             if page is None:
                 return
             if _agents_ready.is_set():
-                self._build_inventory_pane(page)
+                self._finish_loading("Inventory", lambda: self._build_inventory_pane(page))
             else:
                 self._inv_ready_token = self.app.after(120, check)
 

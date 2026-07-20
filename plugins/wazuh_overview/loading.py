@@ -19,7 +19,7 @@ from __future__ import annotations
 import math
 import time
 
-from PyQt6.QtCore import QRectF, Qt, QTimer
+from PyQt6.QtCore import QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
@@ -31,11 +31,19 @@ _RING_THICKNESS = 8
 # Displayed value chases the target at this fraction per frame (~60fps), which
 # reads as a smooth catch-up rather than a jump when an endpoint lands.
 _EASE = 0.14
+# Faster chase once the data has landed, so filling the last stretch to 100%
+# reads as "finishing" (~400ms) rather than padding the wait.
+_EASE_FINISH = 0.30
 _FRAME_MS = 16
+# How long 100% stays on screen before the tab swaps to content.
+_HOLD_MS = 220
 
 
 class CircularProgress(QWidget):
     """A determinate ring with the percentage drawn in the middle."""
+
+    #: Emitted when the displayed value finishes easing onto its target.
+    settled = pyqtSignal()
 
     def __init__(self, size=_RING_SIZE, thickness=_RING_THICKNESS, parent=None):
         super().__init__(parent)
@@ -43,6 +51,7 @@ class CircularProgress(QWidget):
         self._thickness = thickness
         self._target = 0.0
         self._shown = 0.0
+        self._ease = _EASE
         self.setFixedSize(size, size)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
@@ -64,8 +73,10 @@ class CircularProgress(QWidget):
         if abs(delta) < 0.001:
             self._shown = self._target
             self._anim.stop()
-        else:
-            self._shown += delta * _EASE
+            self.update()
+            self.settled.emit()
+            return
+        self._shown += delta * self._ease
         self.update()
 
     def paintEvent(self, event):  # noqa: N802 - Qt override
@@ -126,8 +137,9 @@ class LoadingScreen(QWidget):
 
     ``progress_fn`` returns a float 0.0-1.0. ``done_fn`` (optional) returns True
     once the underlying data is ready; the ring then completes and polling
-    stops. The caller is responsible for swapping this widget out for content —
-    the existing per-tab readiness checks already do that.
+    stops. The caller is responsible for swapping this widget out for content,
+    and should do so via :meth:`complete` so the ring is never yanked away
+    mid-sweep — the existing per-tab readiness checks call it.
     """
 
     _POLL_MS = 120
@@ -137,6 +149,8 @@ class LoadingScreen(QWidget):
         self.setObjectName("Transparent")
         self._progress_fn = progress_fn or RampProgress()
         self._done_fn = done_fn
+        self._completing = False
+        self._on_done = None
 
         col = QVBoxLayout(self)
         col.setContentsMargins(24, 24, 24, 24)
@@ -163,6 +177,35 @@ class LoadingScreen(QWidget):
         self._poll.timeout.connect(self._tick)
         self._poll.start()
         self._tick()
+
+    def complete(self, on_done):
+        """Fill the ring to 100%, hold it briefly, then invoke ``on_done``.
+
+        Swapping straight to content the instant data lands makes the ring
+        flash away at whatever value it happened to be showing. Running it to
+        100% first gives the load a visible finish. Idempotent — a second call
+        while completing is ignored.
+        """
+        if self._completing:
+            return
+        self._completing = True
+        self._on_done = on_done
+        self._poll.stop()
+        self.ring._ease = _EASE_FINISH
+        self.ring.settled.connect(self._on_ring_settled)
+        self.ring.set_value(1.0)
+
+    def _on_ring_settled(self):
+        if not self._completing or self._on_done is None:
+            return
+        # Hand off on a fresh timer: the caller tears this widget down, which
+        # must not happen inside the ring's own signal emission.
+        QTimer.singleShot(_HOLD_MS, self._emit_done)
+
+    def _emit_done(self):
+        cb, self._on_done = self._on_done, None
+        if cb is not None:
+            cb()
 
     def _tick(self):
         if self._done_fn is not None and self._done_fn():
