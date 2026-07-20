@@ -408,11 +408,15 @@ class Plugin(BasePlugin):
         # windows.
         container = QWidget()
         h = QHBoxLayout(container)
-        # Left-anchored like the Endpoint page (20px off the sidebar);
-        # only the RIGHT side absorbs leftover width once the 700px cap hits.
+        # CTk-style: centered (pulled off the sidebar) once the window is
+        # wide enough for the 700px cap to engage — leftover space splits
+        # equally between the side stretches. Below the cap the 50:1 weights
+        # collapse the gutters to ~nothing, so a squished window shows the
+        # same ~20px margin on BOTH sides (matching the Endpoint page).
         h.setContentsMargins(20, 10, 20, 10)
+        h.addStretch(1)
         self._view_stack.setMaximumWidth(700)
-        h.addWidget(self._view_stack, 12)
+        h.addWidget(self._view_stack, 50)
         h.addStretch(1)
         self.main_container = container
 

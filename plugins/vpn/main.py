@@ -812,11 +812,15 @@ class Plugin(BasePlugin):
         # centers on wide windows instead of stretching edge-to-edge.
         centered = QWidget()
         outer = QHBoxLayout(centered)
-        # Left-anchored like the Endpoint page (20px off the sidebar);
-        # only the RIGHT side absorbs leftover width once the 700px cap hits.
+        # CTk-style: centered (pulled off the sidebar) once the window is
+        # wide enough for the 700px cap to engage — leftover space splits
+        # equally between the side stretches. Below the cap the 50:1 weights
+        # collapse the gutters to ~nothing, so a squished window shows the
+        # same ~20px margin on BOTH sides (matching the Endpoint page).
         outer.setContentsMargins(20, 10, 20, 10)
+        outer.addStretch(1)
         content.setMaximumWidth(700)
-        outer.addWidget(content, 12)
+        outer.addWidget(content, 50)
         outer.addStretch(1)
 
         self.main_container = scroll_page(centered)
