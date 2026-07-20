@@ -62,7 +62,33 @@ _NAV_AWAY_MSG = (
 _SYSTEM_PROMPT = "You are SOC Copilot specialized in cybersecurity."
 _ICON_DIR = os.path.dirname(os.path.realpath(__file__))
 _SYS_MSG = {"role": "system", "content": _SYSTEM_PROMPT}
-_DEFAULT_BASE_URL = "http://dashboard.resisti.net:8001/v1"
+_DEFAULT_BASE_URL = "https://dashboard.resisti.net:8002/v1"
+
+
+def _tls_verify() -> str | bool:
+    """httpx ``verify`` value for the HTTPS chat endpoint.
+
+    The dashboard serves a leaf-only certificate (no intermediate) signed
+    by the internal Resistine root CA, so the default certifi store cannot
+    validate it. Resolution order: RESISTINE_CA_BUNDLE env var, a
+    ``certs/resistine-rootCA.pem`` override in the config dir, then the
+    root CA bundled with the app. If all are missing (shouldn't happen --
+    the bundled cert ships in resources/), fall back to standard
+    verification rather than disabling it.
+    """
+    ca = os.environ.get("RESISTINE_CA_BUNDLE")
+    if ca and os.path.isfile(ca):
+        return ca
+    ca = os.path.join(
+        settings.get_config_dir(), "certs", "resistine-rootCA.pem")
+    if os.path.isfile(ca):
+        return ca
+    from utils.functions import get_resource_path
+    ca = get_resource_path(
+        os.path.join("resources", "certs", "resistine-rootCA.pem"))
+    if os.path.isfile(ca):
+        return ca
+    return True
 
 RESISTINE_BLUE = "#0D5394"
 _ACCENT_HOVER = "#1565B0"
@@ -93,7 +119,6 @@ class _Bubble(QFrame):
         self.setSizePolicy(QSizePolicy.Policy.Maximum,
                            QSizePolicy.Policy.Preferred)
 
-        is_dark = theme.is_dark()
         if is_user:
             bg = theme.color("bubble_user_bg")
             fg = theme.color("bubble_user_text")
@@ -250,6 +275,11 @@ class Plugin(BasePlugin):
             kwargs: dict = {"api_key": api_key or "unused"}
             if self.base_url:
                 kwargs["base_url"] = self.base_url
+                if self.base_url.lower().startswith("https://"):
+                    # Internal root CA for the HTTPS dashboard endpoint.
+                    import httpx
+                    kwargs["http_client"] = httpx.Client(
+                        verify=_tls_verify())
             from openai import OpenAI
             self.client = OpenAI(**kwargs)
         except Exception as e:

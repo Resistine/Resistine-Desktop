@@ -16,7 +16,9 @@ import tkinter as tk
 import customtkinter
 
 from plugins.chat.assistant_bubble import AssistantBubble  # noqa: F401
-from plugins.chat.fonts import _BASE_SIZE, get_theme_colors, ui_family
+from plugins.chat.fonts import (
+    _BASE_SIZE, get_theme_colors, ui_family, widget_scale,
+)
 from plugins.chat.markdown_widgets import SelectableLabel
 
 # ---------------------------------------------------------------------------
@@ -117,7 +119,9 @@ class UserBubble(customtkinter.CTkFrame):
         # SelectableLabel is a raw tk.Text — CTk's auto-scaling doesn't apply
         # to its font or to pack(). Scale these manually so the bubble's
         # visible size matches what the rest of the UI does at HiDPI.
-        self._scale = getattr(self.winfo_toplevel(), "_hidpi_factor", 1.0)
+        # widget_scale (CTk's own factor) — NOT bare _hidpi_factor, which is
+        # only set on Linux and left the text at half size on Windows HiDPI.
+        self._scale = widget_scale(self)
         self._label = SelectableLabel(
             self, text=text, bg=self._bg, fg=self._fg,
             font=customtkinter.CTkFont(family=ui_family(), size=int(_BASE_SIZE * self._scale)),
@@ -142,8 +146,9 @@ class UserBubble(customtkinter.CTkFrame):
         # tk.Text doesn't get CTk's auto-scaling for its font, so the text
         # and emoji glyphs render too small on HiDPI. Scale ONLY the font and
         # emoji image size — the bubble's own dimensions (max_width, insets)
-        # are already correct and must not be scaled.
-        self._scale = getattr(self.winfo_toplevel(), "_hidpi_factor", 1.0)
+        # are already correct and must not be scaled. widget_scale, not bare
+        # _hidpi_factor (Linux-only attribute; 1.0 on Windows HiDPI).
+        self._scale = widget_scale(self)
         _user_font = customtkinter.CTkFont(
             family=ui_family(), size=int(_BASE_SIZE * self._scale))
         tw = tk.Text(

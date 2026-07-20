@@ -80,6 +80,26 @@ def _is_dark_mode() -> bool:
     return False
 
 
+def widget_scale(widget) -> float:
+    """Scale factor CTk re-applies to *widget*'s fonts and geometry.
+
+    ``ScalingTracker.get_widget_scaling`` is the factor CTk actually
+    multiplies into configure()/place()/font sizes (1.25–2x on Windows
+    HiDPI, equal to ``_hidpi_factor`` on Linux, 1.0 on macOS). The bare
+    ``_hidpi_factor`` attribute is only set on Linux, so it is a FALLBACK,
+    never the primary source — relying on it alone left raw-tk fonts and
+    manual pixel math unscaled on Windows HiDPI.
+    """
+    try:
+        return customtkinter.ScalingTracker.get_widget_scaling(widget) or 1.0
+    except Exception:
+        try:
+            return getattr(
+                widget.winfo_toplevel(), "_hidpi_factor", 1.0) or 1.0
+        except Exception:
+            return 1.0
+
+
 def _named(name: str, **kw: object) -> tkFont.Font:
     """Create or retrieve a named Tk font."""
     try:

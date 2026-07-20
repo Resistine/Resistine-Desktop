@@ -162,6 +162,10 @@ def main() -> int:
 
     if args.debug or functions.is_running_in_ide():
         DEBUG = True
+        # Plugins can't import main's DEBUG global (circular import), so
+        # expose debug mode through the environment. The VPN plugin uses
+        # this to auto-connect on macOS in dev runs. (Grafted from develop.)
+        os.environ["RESISTINE_DEBUG"] = "1"
 
     log_level = args.log_level
     if DEBUG and log_level == "INFO" and not any(

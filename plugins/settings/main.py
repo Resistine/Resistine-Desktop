@@ -37,7 +37,7 @@ from utils.i18n import get_text
 from utils.logger import logger
 
 _DIR = os.path.dirname(os.path.realpath(__file__))
-_DEFAULT_BASE = "http://dashboard.resisti.net:8001/v1"
+_DEFAULT_BASE = "https://dashboard.resisti.net:8002/v1"
 
 
 def _t(key, fallback):
