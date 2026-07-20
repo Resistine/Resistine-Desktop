@@ -29,7 +29,7 @@ from __future__ import annotations
 import os
 import random
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import QSize, Qt, QTimer
 from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import (
     QStyle,

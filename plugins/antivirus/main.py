@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QMessageBox,
     QPushButton,
     QStackedWidget,
@@ -401,15 +402,13 @@ class Plugin(BasePlugin):
 
         self._view_stack.setCurrentWidget(self._main_view)
 
-        # Centered column container.
+        # Full-width column — same edge margins as the Endpoint page. The old
+        # centered 750px cap left wide gutters and its 420px floor clipped
+        # the cards at narrow window sizes.
         container = QWidget()
         h = QHBoxLayout(container)
-        h.setContentsMargins(24, 10, 24, 10)
-        h.addStretch(1)
-        self._view_stack.setMaximumWidth(750)
-        self._view_stack.setMinimumWidth(420)
-        h.addWidget(self._view_stack, 3)
-        h.addStretch(1)
+        h.setContentsMargins(20, 10, 20, 10)
+        h.addWidget(self._view_stack)
         self.main_container = container
 
         # Populate live data after build (non-blocking, marshalled).
@@ -624,7 +623,10 @@ class Plugin(BasePlugin):
         else:
             self._banner_action_btn.hide()
 
-        can_scan = bool(status.get("installed") and status.get("db_present"))
+        # An active scan wins: the recurring status poll must not re-enable
+        # the scan buttons mid-scan.
+        can_scan = bool(status.get("installed") and status.get("db_present")
+                        and not self._scanning)
         self._set_scan_buttons_state("normal" if can_scan else "disabled")
 
     def _get_setup_banner_cfg(self, setup_state, status) -> dict:
@@ -1225,14 +1227,33 @@ class Plugin(BasePlugin):
     # ── File / Directory Scan ─────────────────────────────────
 
     def _pick_scan_targets(self) -> list[str]:
-        """Pick files or a directory to scan via Qt dialogs."""
-        files, _ = QFileDialog.getOpenFileNames(
-            self.app, "Select Files to Scan")
-        if files:
+        """Pick files or a folder to scan via Qt dialogs.
+
+        A small menu on the Scan… button makes the folder option explicit —
+        the old flow only reached the folder dialog after CANCELLING the
+        file dialog, which nobody discovers.
+        """
+        menu = QMenu(self.app)
+        act_files = menu.addAction("Scan Files…")
+        act_folder = menu.addAction("Scan Folder…")
+        btn = getattr(self, "_action_buttons", {}).get("scan")
+        if btn is not None:
+            pos = btn.mapToGlobal(btn.rect().bottomLeft())
+        else:  # fallback: at the cursor
+            from PyQt6.QtGui import QCursor
+            pos = QCursor.pos()
+        chosen = menu.exec(pos)
+        if chosen is act_files:
+            files, _ = QFileDialog.getOpenFileNames(
+                None,  # no parent: movable panel, not a fixed macOS sheet
+                "Select Files to Scan")
             return list(files)
-        directory = QFileDialog.getExistingDirectory(
-            self.app, "Select Folder to Scan")
-        return [directory] if directory else []
+        if chosen is act_folder:
+            directory = QFileDialog.getExistingDirectory(
+                None,  # no parent: movable panel, not a fixed macOS sheet
+                "Select Folder to Scan")
+            return [directory] if directory else []
+        return []
 
     def _start_scan(self):
         if self._scanning:
@@ -1635,7 +1656,8 @@ class Plugin(BasePlugin):
 
     def _add_whitelist_entry(self):
         path = QFileDialog.getExistingDirectory(
-            self.app, "Select Folder to Whitelist")
+            None,  # no parent: movable panel, not a fixed macOS sheet
+            "Select Folder to Whitelist")
         if not path:
             return
         try:
@@ -1870,7 +1892,8 @@ class Plugin(BasePlugin):
     def _restore_quarantined(self, qpath: str):
         name = os.path.basename(qpath).replace(".quarantined", "")
         dest = QFileDialog.getExistingDirectory(
-            self.app, f"Restore '{name}' to...")
+            None,  # no parent: movable panel, not a fixed macOS sheet
+            f"Restore '{name}' to...")
         if not dest:
             return
         target = os.path.join(dest, name)

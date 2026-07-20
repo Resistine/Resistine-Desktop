@@ -37,7 +37,7 @@ from PyQt6.QtWidgets import (
 
 from gui import theme
 from gui.qt_toast import Toast
-from gui.qt_widgets import load_icon, resource
+from gui.qt_widgets import resource
 from utils.logger import logger
 
 
@@ -253,6 +253,11 @@ class AppWindow(QMainWindow):
     def select_frame_by_name(self, name: str, button=None) -> None:
         plugin = self.frames.get(name)
         if plugin is None:
+            return
+        # Login is a full-window flow (no sidebar), not an in-shell screen —
+        # e.g. the Dashboard's sign-in card routes here when logged out.
+        if plugin.get_name() == "Login":
+            self.show_login()
             return
         self.navigate(plugin.get_name())
 

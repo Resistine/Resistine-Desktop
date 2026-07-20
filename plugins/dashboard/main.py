@@ -126,6 +126,18 @@ class Plugin(BasePlugin):
         v.addWidget(host, 1)
         return scroll_page(inner)
 
+    def on_theme_changed(self) -> None:
+        """Rebuild the screen so card icons/colours re-tint for the new theme.
+
+        Cards bake the tinted icon pixmap and secondary-text colour in at
+        build time — without a rebuild a theme toggle leaves dark icons on
+        dark cards (same bug the Store had).
+        """
+        try:
+            self.app.update_plugin()  # rebuilds the Dashboard screen
+        except Exception:
+            pass
+
     def _cards(self):
         from utils import settings as app_settings
         plugins = getattr(self.app, "plugins", [])

@@ -15,6 +15,7 @@ import sys
 import webbrowser
 
 from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtGui import QTextCursor, QTextFormat
 from PyQt6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -25,7 +26,6 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from gui import theme
 from plugins.base_plugin import BasePlugin
 from utils.logger import logger
 
@@ -33,6 +33,48 @@ _DIR = os.path.dirname(os.path.realpath(__file__))
 
 # Root files to add to the dropdown (mirrors MarkdownViewer.root_files).
 _ROOT_FILES = ["README.md", "LICENSE.md"]
+
+# Structural box-drawing characters that mark ASCII-art diagram lines.
+# Deliberately excludes arrows (→ ← ▼ ▲) and em-dash, which appear inline
+# in normal prose.
+_BOX_CHARS = set("│┌┐└┘├┤┬┴┼═║╔╗╚╝")
+
+
+def _fence_ascii_art(text: str) -> str:
+    """Wrap bare box-drawing diagrams in code fences.
+
+    Several docs paste ASCII diagrams directly into the markdown without a
+    ``` fence; Qt then renders them as proportional-font paragraphs with
+    collapsed whitespace — unreadable garbage. Runs of 2+ consecutive lines
+    containing structural box-drawing characters (outside existing fences)
+    get fenced so they render as monospace code blocks.
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    in_fence = False
+    run: list[str] = []
+
+    def flush():
+        if len(run) >= 2:
+            out.append("```")
+            out.extend(run)
+            out.append("```")
+        else:
+            out.extend(run)
+        run.clear()
+
+    for line in lines:
+        if line.lstrip().startswith("```"):
+            flush()
+            in_fence = not in_fence
+            out.append(line)
+        elif not in_fence and any(c in _BOX_CHARS for c in line):
+            run.append(line)
+        else:
+            flush()
+            out.append(line)
+    flush()
+    return "\n".join(out)
 
 
 def _resource_path(relative_path: str) -> str:
@@ -202,10 +244,39 @@ class Plugin(BasePlugin):
             return
 
         if file_path.endswith(".md"):
-            self.browser.setMarkdown(content)
+            self.browser.setMarkdown(_fence_ascii_art(content))
         else:
             # Plain text → render as a code block (mirrors the CTk viewer).
             self.browser.setMarkdown(f"```\n{content}\n```")
+        self._harden_code_blocks()
+
+    def _harden_code_blocks(self):
+        """Stop fenced code blocks from soft-wrapping.
+
+        Qt's markdown importer emits each code-fence line as its own
+        wrappable block, so wide ASCII/box-drawing diagrams reflow into
+        garbage at narrow widths. Marking those blocks non-breakable keeps
+        every line intact (the browser scrolls horizontally instead).
+        """
+        doc = self.browser.document()
+        cursor = QTextCursor(doc)
+        block = doc.begin()
+        while block.isValid():
+            fmt = block.blockFormat()
+            char = block.charFormat()
+            # Qt's markdown importer marks code blocks with the fence/language
+            # properties and a 'monospace' font family (fixedPitch is NOT set).
+            is_code = (
+                fmt.hasProperty(QTextFormat.Property.BlockCodeLanguage)
+                or fmt.hasProperty(QTextFormat.Property.BlockCodeFence)
+                or char.fontFixedPitch()
+                or "monospace" in [f.lower() for f in (char.fontFamilies() or [])]
+            )
+            if is_code and not fmt.nonBreakableLines():
+                fmt.setNonBreakableLines(True)
+                cursor.setPosition(block.position())
+                cursor.setBlockFormat(fmt)
+            block = block.next()
 
     def _on_anchor_clicked(self, url: QUrl):
         target = url.toString()

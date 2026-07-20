@@ -147,10 +147,7 @@ def is_vpn_connected():
 
 
 # --- Config Manager (module-level for use in init) ---
-from plugins.vpn.config_manager import (  # noqa: E402
-    RESISTINE_CONFIG_NAME,
-    VPNConfigManager,
-)
+from plugins.vpn.config_manager import VPNConfigManager  # noqa: E402
 
 _config_manager = VPNConfigManager(wireguard_folder)
 try:
@@ -376,7 +373,7 @@ class Plugin(BasePlugin):
         global my_vpn_status, active_client_name
 
         file_path, _ = QFileDialog.getOpenFileName(
-            self.app,
+            None,  # no parent: a movable panel, not a fixed macOS sheet
             "Select WireGuard Config",
             "",
             "WireGuard Config (*.conf);;All Files (*.*)",
@@ -784,18 +781,13 @@ class Plugin(BasePlugin):
         if not selected_conf_file:
             grid.setRowStretch(row, 1)
 
-        # ── Centered ~750 px content column ───────────────────────────────
-        # Content fills the viewport (minus modest margins) on small/medium
-        # windows and caps at 980px on large ones — the old 750px cap with
-        # 1:3:1 stretches left wide dead gutters on a small window.
+        # ── Full-width content column ─────────────────────────────────────
+        # Same edge margins as the Endpoint page — no centering gutters or
+        # width cap; the panels track the window edge-to-edge.
         centered = QWidget()
         outer = QHBoxLayout(centered)
-        outer.setContentsMargins(24, 10, 24, 10)
-        outer.addStretch(1)
-        content.setMaximumWidth(980)
-        content.setMinimumWidth(360)
-        outer.addWidget(content, 12)
-        outer.addStretch(1)
+        outer.setContentsMargins(20, 10, 20, 10)
+        outer.addWidget(content)
 
         self.main_container = scroll_page(centered)
 

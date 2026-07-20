@@ -58,10 +58,21 @@ def _btn_style(light_bg, dark_bg, light_hover, dark_hover) -> str:
     )
 
 
-_INFO_STYLE = _btn_style("#3B8ED0", "#1F6AA5", "#367EBB", "#144870")
-_INSTALL_STYLE = _btn_style("#2ECC71", "#27AE60", "#27AE60", "#219150")
-_UNINSTALL_STYLE = _btn_style("#FF4444", "#C73636", "#C73636", "#9E2A2A")
-_CANCEL_STYLE = _btn_style("#808080", "#606060", "#707070", "#505050")
+# Evaluated per call (not at import) so buttons restyle on theme toggle.
+def _info_style() -> str:
+    return _btn_style("#3B8ED0", "#1F6AA5", "#367EBB", "#144870")
+
+
+def _install_style() -> str:
+    return _btn_style("#2ECC71", "#27AE60", "#27AE60", "#219150")
+
+
+def _uninstall_style() -> str:
+    return _btn_style("#FF4444", "#C73636", "#C73636", "#9E2A2A")
+
+
+def _cancel_style() -> str:
+    return _btn_style("#808080", "#606060", "#707070", "#505050")
 
 
 class _StoreCard(QFrame):
@@ -213,6 +224,16 @@ class Plugin(BasePlugin):
         self._flow.addWidget(card)
         self.plugin_cards[plugin.id] = card
 
+    def on_theme_changed(self) -> None:
+        """Re-tint card icons, desc colours and button styles on theme toggle.
+
+        Cards bake theme colours in at build time (icon tint, secondary text,
+        button QSS), so the cached screen must be rebuilt — otherwise dark
+        mode shows the light-mode near-black icons (and vice versa).
+        """
+        if getattr(self, "_flow", None):
+            self._rebuild_grid()
+
     # ===================================================================
     #  Plugin list composition (NO network I/O — safe on the build path)
     # ===================================================================
@@ -336,7 +357,7 @@ class Plugin(BasePlugin):
 
             info = QPushButton("Info")
             info.setCursor(Qt.CursorShape.PointingHandCursor)
-            info.setStyleSheet(_INFO_STYLE)
+            info.setStyleSheet(_info_style())
             info.clicked.connect(
                 lambda: self.show_remote_info(p) if is_remote
                 else self._show_local_info(p))
@@ -345,13 +366,13 @@ class Plugin(BasePlugin):
             if is_remote or is_uninstalled:
                 install = QPushButton("Install")
                 install.setCursor(Qt.CursorShape.PointingHandCursor)
-                install.setStyleSheet(_INSTALL_STYLE)
+                install.setStyleSheet(_install_style())
                 install.clicked.connect(lambda: self.handle_install(p))
                 card.button_row.addWidget(install, 1)
             elif getattr(p, "uninstall_enabled", True):
                 uninstall = QPushButton("Uninstall")
                 uninstall.setCursor(Qt.CursorShape.PointingHandCursor)
-                uninstall.setStyleSheet(_UNINSTALL_STYLE)
+                uninstall.setStyleSheet(_uninstall_style())
                 uninstall.clicked.connect(show_confirm_buttons)
                 card.button_row.addWidget(uninstall, 1)
 
@@ -359,13 +380,13 @@ class Plugin(BasePlugin):
             card.clear_buttons()
             cancel = QPushButton("Cancel")
             cancel.setCursor(Qt.CursorShape.PointingHandCursor)
-            cancel.setStyleSheet(_CANCEL_STYLE)
+            cancel.setStyleSheet(_cancel_style())
             cancel.clicked.connect(show_normal_buttons)
             card.button_row.addWidget(cancel, 1)
 
             confirm = QPushButton("Confirm")
             confirm.setCursor(Qt.CursorShape.PointingHandCursor)
-            confirm.setStyleSheet(_UNINSTALL_STYLE)
+            confirm.setStyleSheet(_uninstall_style())
             confirm.clicked.connect(confirm_uninstall)
             card.button_row.addWidget(confirm, 1)
 
@@ -429,13 +450,21 @@ class Plugin(BasePlugin):
 
         try:
             url = getattr(remote_plugin, "url", None)
-            if not url:
+            if url:
+                success, message = (
+                    self.app.get_plugin_manager().download_plugin(
+                        url, remote_plugin.id, remote_plugin.get_name()))
+            elif not isinstance(remote_plugin, RemotePluginWrapper):
+                # Local plugin marked uninstalled (files still on disk) —
+                # re-enable it instead of downloading.
+                success, message = (
+                    self.app.get_plugin_manager().reinstall_plugin(
+                        remote_plugin.id))
+            else:
                 self.app.show_notification(
                     f"Cannot install {remote_plugin.get_name()}: "
                     "remote source unknown.", type="error")
                 return
-            success, message = self.app.get_plugin_manager().download_plugin(
-                url, remote_plugin.id, remote_plugin.get_name())
         except Exception as e:
             logger.error(f"Store: install failed for "
                          f"{getattr(remote_plugin, 'id', '?')}: {e}")
@@ -500,9 +529,11 @@ class RemotePluginWrapper:
         path = (os.path.join(_DIR, "store_dark.png") if theme.is_dark()
                 else os.path.join(_DIR, "store_light.png"))
         if path and os.path.isfile(path):
-            return QPixmap(path).scaled(
+            # Tint like BasePlugin.get_icon_pixmap() does — without it the
+            # raw glyph renders black on dark cards (invisible).
+            return BasePlugin._tint(QPixmap(path).scaled(
                 size, size,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
-            )
+            ))
         return QPixmap()
