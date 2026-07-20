@@ -611,6 +611,31 @@ def activate_system_daemons() -> tuple[bool, str]:
     )
 
 
+def build_deactivate_script() -> str:
+    """Build the privileged shell that stops+disables the ClamAV daemons.
+
+    Returns "" when systemd isn't available.  Split out from
+    deactivate_system_daemons so the app uninstaller can batch these commands
+    into a single privilege-escalation prompt.
+    """
+    if not _has_systemd():
+        return ""
+    clamd_svc, fresh_svc, onacc_svc = _service_names()
+    return (
+        f"systemctl disable --now {onacc_svc} 2>/dev/null || true; "
+        f"systemctl disable --now {clamd_svc} 2>/dev/null || true; "
+        f"systemctl disable --now {fresh_svc} 2>/dev/null || true"
+    )
+
+
+def is_any_service_active() -> bool:
+    """Return True if any of our ClamAV services is currently active."""
+    try:
+        return any(_systemctl_is_active(s) for s in _service_names())
+    except Exception:
+        return False
+
+
 def deactivate_system_daemons() -> tuple[bool, str]:
     """Stop and disable system-level ClamAV daemons.
 
@@ -619,12 +644,7 @@ def deactivate_system_daemons() -> tuple[bool, str]:
     if not _has_systemd():
         return False, "systemd is not available."
 
-    clamd_svc, fresh_svc, onacc_svc = _service_names()
-    script = (
-        f"systemctl disable --now {onacc_svc} 2>/dev/null || true; "
-        f"systemctl disable --now {clamd_svc} 2>/dev/null || true; "
-        f"systemctl disable --now {fresh_svc} 2>/dev/null || true"
-    )
+    script = build_deactivate_script()
     ok, out = _run_privileged(["sh", "-c", script], timeout=60)
     if ok:
         return True, "Protection deactivated."
