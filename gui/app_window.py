@@ -105,7 +105,20 @@ class AppWindow(QMainWindow):
             logger.error(f"Failed to load login plugin: {e}")
             self.create_dashboard()
             return
+        # Cancel plugin timers BEFORE the swap deletes their widgets —
+        # a re-arming poll firing into a deleted widget tree is a hard
+        # crash (access violation) on Windows, not a catchable exception.
+        self._teardown_plugins()
         self.setCentralWidget(screen)
+
+    def _teardown_plugins(self) -> None:
+        """Stop plugin timers/polls ahead of a central-widget swap."""
+        for p in getattr(self, "plugins", []):
+            if hasattr(p, "destroy"):
+                try:
+                    p.destroy()
+                except Exception as e:
+                    logger.warning(f"{p.get_name()} teardown failed: {e}")
 
     def create_dashboard(self) -> None:
         """Build (or rebuild) the main sidebar+content shell and show Dashboard.
@@ -117,6 +130,9 @@ class AppWindow(QMainWindow):
         self.navigate("Dashboard")
 
     def _build_main_ui(self) -> None:
+        # Rebuilding replaces (deletes) the old central widget — stop the
+        # old plugin set's timers first (same crash hazard as show_login).
+        self._teardown_plugins()
         pm = self.get_plugin_manager()
         self.plugins = sorted(pm.plugins, key=lambda p: p.order)
         self.plugin_list = self.plugins

@@ -427,9 +427,31 @@ class Plugin(BasePlugin):
         self._title(body, "Security Agent")
         body.addSpacing(2)
 
-        if state == STATE_NOT_STARTED and not logged_in:
+        # Without login the download normally never starts, but a user who
+        # imported a VPN config manually (or removed the Login plugin) still
+        # has a valid path to enrollment — offer an explicit install attempt
+        # instead of the log-in dead end.
+        can_attempt = (self._has_vpn_config()
+                       or not self._login_plugin_installed())
+
+        if state == STATE_NOT_STARTED and not logged_in and not can_attempt:
             self._paragraph(
                 body, "Log in to enable endpoint protection.", _COLOR_MUTED)
+            body.addSpacing(8)
+
+        elif state == STATE_NOT_STARTED and not logged_in:
+            self._paragraph(
+                body,
+                "You're not signed in, but a VPN configuration is available "
+                "— you can install the security agent now.",
+                _COLOR_MUTED,
+            )
+            body.addSpacing(8)
+            install_btn = QPushButton("Download && Install Agent")
+            install_btn.setMinimumHeight(40)
+            install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            install_btn.clicked.connect(self._force_download_start)
+            body.addWidget(install_btn)
             body.addSpacing(8)
 
         elif state in (STATE_NOT_STARTED, STATE_DOWNLOADING):
@@ -825,6 +847,34 @@ class Plugin(BasePlugin):
             self._refresh_screen()
         else:
             self.app.after(3000, self._poll_install)
+
+    def _has_vpn_config(self) -> bool:
+        """True if any WireGuard config has been imported/registered."""
+        try:
+            from plugins.vpn.main import _config_manager
+            return bool(_config_manager.get_active_config_name()
+                        or _config_manager.list_configs())
+        except Exception:
+            return False
+
+    def _login_plugin_installed(self) -> bool:
+        """True if the Login plugin (id 007) is installed."""
+        return any(
+            getattr(p, "id", None) == "007"
+            for p in getattr(self.app, "plugins", None)
+            or getattr(self.app, "plugin_list", [])
+            or []
+        )
+
+    def _force_download_start(self):
+        """Explicit user request: start the agent download without login."""
+        from plugins.wazuh.agent.installer_service import (
+            ensure_download_started,
+        )
+        threading.Thread(
+            target=lambda: _safe(lambda: ensure_download_started(force=True)),
+            daemon=True).start()
+        self.app.after(500, self._refresh_screen)
 
     def _retry_download(self):
         """User clicked Retry on download failure."""

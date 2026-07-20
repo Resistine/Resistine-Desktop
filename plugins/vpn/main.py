@@ -740,6 +740,8 @@ class Plugin(BasePlugin):
             sr = self._info_row(
                 server_grid, sr, "Config Name", sys_info.get("Config Name", "N/A"),
             )
+            client_grid.setRowStretch(cr, 1)
+            server_grid.setRowStretch(sr, 1)
             # Side-by-side on a wide window; stacked vertically when narrow so
             # neither panel compresses its rows into clipped text
             # ("10.11.128." / "Config Nam").
@@ -759,6 +761,7 @@ class Plugin(BasePlugin):
                 keys_grid, kr, "Server",
                 data.get("public_key", "N/A"), mono=True, wrap=True,
             )
+            keys_grid.setRowStretch(kr, 1)
             grid.addWidget(keys_panel, row, 0, 1, 2)
             row += 1
 
@@ -769,6 +772,7 @@ class Plugin(BasePlugin):
                 allowed_grid, ar, "Routes",
                 data.get("allowed_ips", "N/A"), mono=True, wrap=True,
             )
+            allowed_grid.setRowStretch(ar, 1)
             grid.addWidget(allowed_panel, row, 0, 1, 2)
             row += 1
 
@@ -796,12 +800,11 @@ class Plugin(BasePlugin):
         grid.addLayout(buttons_row, row, 0, 1, 2)
         row += 1
 
-        # With detail panels present, the panel bands above absorb all the
-        # vertical slack (equal title→content padding), so the buttons sit flush
-        # at the bottom. Without panels there's nothing to distribute into, so
-        # fall back to a trailing stretch to keep the layout top-aligned.
-        if not selected_conf_file:
-            grid.setRowStretch(row, 1)
+        # Keep the layout top-aligned: a trailing stretch row swallows any
+        # leftover viewport height so the panels stay at their natural
+        # (compact) heights instead of being inflated to fill the page —
+        # tall windows were stretching huge gaps into every panel.
+        grid.setRowStretch(row, 1)
 
         # ── Capped content column (mirrors CTk's MAX_CONTENT_WIDTH) ───────
         # Compresses freely at small windows (same 20px edge margins as the
