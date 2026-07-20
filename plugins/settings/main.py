@@ -117,13 +117,15 @@ class Plugin(BasePlugin):
             self.logout_button.setStyleSheet(
                 "background-color: #DC3545; color: white; border: none;"
                 "border-radius: 8px; padding: 8px 16px; font-weight: 600;")
-            # Sign-out icon only shown when logged in.
-            for variant in ("signout_light.png", "signout_dark.png"):
-                p = os.path.join(_DIR, variant)
-                if os.path.isfile(p) and (
-                        (variant.endswith("light.png")) == (not theme.is_dark())):
-                    self.logout_button.setIcon(QIcon(p))
-                    self.logout_button.setIconSize(QSize(18, 18))
+            # Sign-out icon only shown when logged in. The button is red with
+            # white text in BOTH themes, so the icon must always be the light
+            # glyph (signout_dark.png) to match that white text — picking by
+            # app theme gave a dark, low-contrast glyph in light mode and never
+            # updated on a theme toggle.
+            p = os.path.join(_DIR, "signout_dark.png")
+            if os.path.isfile(p):
+                self.logout_button.setIcon(QIcon(p))
+                self.logout_button.setIconSize(QSize(18, 18))
             self.logout_button.clicked.connect(self._handle_logout)
         else:
             self.logout_button = QPushButton("Log In")

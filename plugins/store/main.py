@@ -167,9 +167,10 @@ class Plugin(BasePlugin):
         tp_lay.setContentsMargins(20, 20, 20, 20)
         self.title_label = QLabel("Store")
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.title_label.setStyleSheet(
-            "font-size: 30px; font-weight: 700; "
-            f"color: {theme.color('text_primary')};")
+        # No inline color — inherit the app-wide QSS `QWidget { color: … }`,
+        # which is re-applied on every theme toggle. Baking text_primary in
+        # here froze the title at its build-time colour across theme changes.
+        self.title_label.setStyleSheet("font-size: 30px; font-weight: 700;")
         tp_lay.addWidget(self.title_label)
         title_row.addWidget(title_panel, 1)  # ~50% via the two stretches
         title_row.addStretch(1)
