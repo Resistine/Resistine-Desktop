@@ -287,17 +287,18 @@ class _VPNStepMac(_VPNStepBase):
 
 class _VPNStepWindows(_VPNStepBase):
     title = "Set Up & Connect VPN"
-    subtitle = "Install WireGuard to secure your connection"
+    subtitle = "Secure your connection with a private tunnel"
     detail = (
-        "Resistine's VPN is powered by WireGuard. Install it once and Resistine "
-        "connects and manages the secure tunnel for you."
+        "Resistine's VPN is powered by WireGuard. We'll install and configure "
+        "it for you, then connect your secure tunnel — just approve the Windows "
+        "prompt."
     )
     instructions = [
-        "Click “Download WireGuard” to open the installer page.",
-        "Run the WireGuard installer and accept the prompts.",
-        "This step continues and connects automatically once installed.",
+        "Click “Set Up VPN” to begin.",
+        "Approve the Windows permission prompt for WireGuard.",
+        "Resistine installs, configures, and connects — automatically.",
     ]
-    primary_label = "Download WireGuard"
+    primary_label = "Set Up VPN"
     working_label = "Setting up VPN…"
 
     def _perm_ready(self) -> bool:
@@ -308,16 +309,60 @@ class _VPNStepWindows(_VPNStepBase):
         from plugins.vpn.wireguard.vpn_functions_windows import check_wireguard_installed
         if check_wireguard_installed():
             return True
-        webbrowser.open("https://www.wireguard.com/install/")
-        on_status("Install WireGuard — this continues automatically once done.")
+        # Resistine ships the WireGuard installer — run it for the user instead
+        # of sending them off to a download page. Silent install; Windows shows
+        # a single elevation (UAC) prompt.
+        on_status("Installing WireGuard — approve the Windows prompt if asked…")
+        launched = self._install_bundled_wireguard()
+        if not launched:
+            # No bundled installer available (e.g. a stripped build): fall back
+            # to the official download page so the user can still finish.
+            logger.warning("[VPN-SETUP] bundled WireGuard install unavailable; "
+                           "opening download page")
+            webbrowser.open("https://www.wireguard.com/install/")
+            on_status("Install WireGuard — this continues automatically once done.")
         import time
         deadline = time.time() + 300
         while time.time() < deadline:
+            if self.cancelled():
+                return False
             if check_wireguard_installed():
                 return True
             time.sleep(3)
         self._failed = "WireGuard wasn't installed. You can try again or skip."
         return False
+
+    def _install_bundled_wireguard(self) -> bool:
+        """Silently install the WireGuard MSI that ships with Resistine.
+
+        Mirrors the Windows installer's own invocation
+        (``msiexec /i … /qn /norestart DO_NOT_LAUNCH=1``). Elevates via
+        ShellExecute "runas" (one UAC prompt) and returns as soon as the
+        installer is launched — the caller polls for completion. Returns False
+        if the MSI can't be found or launched.
+        """
+        import os
+
+        from utils.functions import get_resource_path
+        msi = get_resource_path(
+            os.path.join("packaging", "windows", "deps", "wireguard-amd64.msi"))
+        if not os.path.exists(msi):
+            logger.warning(f"[VPN-SETUP] bundled WireGuard MSI not found at {msi}")
+            return False
+        try:
+            import ctypes
+            params = f'/i "{msi}" /qn /norestart DO_NOT_LAUNCH=1'
+            # ShellExecuteW returns >32 on success (installer launched elevated).
+            rc = ctypes.windll.shell32.ShellExecuteW(
+                None, "runas", "msiexec.exe", params, None, 0)
+            if int(rc) > 32:
+                logger.info("[VPN-SETUP] launched bundled WireGuard installer")
+                return True
+            logger.warning(f"[VPN-SETUP] ShellExecute for WireGuard MSI returned {rc}")
+            return False
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[VPN-SETUP] bundled WireGuard install failed: {e}")
+            return False
 
 
 class _VPNStepLinux(_VPNStepBase):

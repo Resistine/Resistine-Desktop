@@ -257,7 +257,16 @@ def parse_and_create_vpn_config(
         if not vpn_config_json_string:
             raise ValueError("Empty API response")
 
-        vpn_config = json.loads(vpn_config_json_string)
+        # The server may hand us the config already parsed (a dict) or as a
+        # JSON string. macOS handled both; Windows only handled the string, so
+        # a dict response blew up on json.loads() and the config was silently
+        # dropped — the "No VPN configuration found" the wizard then reports.
+        if isinstance(vpn_config_json_string, (bytes, bytearray)):
+            vpn_config_json_string = vpn_config_json_string.decode("utf-8")
+        if isinstance(vpn_config_json_string, dict):
+            vpn_config = vpn_config_json_string
+        else:
+            vpn_config = json.loads(vpn_config_json_string)
 
         interface = vpn_config.get("Interface")
         peer = vpn_config.get("Peer")
