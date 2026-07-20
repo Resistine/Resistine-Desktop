@@ -174,8 +174,18 @@ for attempt in $(seq 1 "$MAX_ENROLL_ATTEMPTS"); do
         || grep -q "Connection refused" "$AGENT_AUTH_LOG" \
         || grep -q "Network is unreachable" "$AGENT_AUTH_LOG"; then
         ENROLLMENT_ERROR="manager_unreachable"
-    elif [ -z "$ENROLLMENT_ERROR" ]; then
+    else
         ENROLLMENT_ERROR="enroll_rc_${AUTH_RC}"
+    fi
+
+    # Transient failures (TLS handshake / routing not settled right after the
+    # VPN comes up) reliably succeed on a second attempt — previously only
+    # duplicate_name retried and every other error bailed on attempt 1, which
+    # made users see "enrollment failed (code 1)" and then succeed manually.
+    if [ "$attempt" -lt "$MAX_ENROLL_ATTEMPTS" ]; then
+        echo "agent-auth attempt ${attempt} failed (${ENROLLMENT_ERROR}); retrying in 3s" >&2
+        sleep 3
+        continue
     fi
     break
 done

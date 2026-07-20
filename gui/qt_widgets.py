@@ -67,7 +67,13 @@ class StatusBadge(QLabel):
         if not status:
             self.hide()
             return
-        self.show()
+        # Only explicitly show() when parented — show() on a parentless
+        # widget makes it a visible TOP-LEVEL window, and on macOS spawning
+        # a window while fullscreen kicks the app out of its Space (the
+        # "window disappears when opening the Store" bug). Once added to a
+        # layout the badge becomes visible with its parent anyway.
+        if self.parent() is not None:
+            self.show()
         self.setText(str(status).title())
         self.setProperty("badge", str(status).lower())
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
