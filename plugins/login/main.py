@@ -28,9 +28,7 @@ from plugins.login.api import LoginAPI
 from utils.functions import get_resource_path
 from utils.logger import logger
 
-_SIGNUP_URL = (
-    "https://resistine-main2-v3-33249814.dev.odoo.com/web/signup?redirect=%2Fodoo%3F"
-)
+_SIGNUP_URL = "https://resistine-main2-v3-34632416.dev.odoo.com/"
 
 if platform.system() == "Windows":
     from plugins.vpn.wireguard.vpn_functions_windows import (
