@@ -803,13 +803,17 @@ class Plugin(BasePlugin):
         if not selected_conf_file:
             grid.setRowStretch(row, 1)
 
-        # ── Full-width content column ─────────────────────────────────────
-        # Same edge margins as the Endpoint page — no centering gutters or
-        # width cap; the panels track the window edge-to-edge.
+        # ── Capped content column (mirrors CTk's MAX_CONTENT_WIDTH) ───────
+        # Compresses freely at small windows (same 20px edge margins as the
+        # Endpoint page, no minimum floor), but stops growing at 750px and
+        # centers on wide windows instead of stretching edge-to-edge.
         centered = QWidget()
         outer = QHBoxLayout(centered)
         outer.setContentsMargins(20, 10, 20, 10)
-        outer.addWidget(content)
+        outer.addStretch(1)
+        content.setMaximumWidth(750)
+        outer.addWidget(content, 12)
+        outer.addStretch(1)
 
         self.main_container = scroll_page(centered)
 
