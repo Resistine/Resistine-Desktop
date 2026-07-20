@@ -404,13 +404,13 @@ class Plugin(BasePlugin):
 
         # Capped content column: compresses freely at small windows (20px
         # edge margins, NO minimum floor — the old 420px floor clipped cards
-        # at narrow sizes), but stops growing at 1000px and centers on wide
+        # at narrow sizes), but stops growing at 700px and centers on wide
         # windows.
         container = QWidget()
         h = QHBoxLayout(container)
         h.setContentsMargins(20, 10, 20, 10)
         h.addStretch(1)
-        self._view_stack.setMaximumWidth(1000)
+        self._view_stack.setMaximumWidth(700)
         h.addWidget(self._view_stack, 12)
         h.addStretch(1)
         self.main_container = container

@@ -808,13 +808,13 @@ class Plugin(BasePlugin):
 
         # ── Capped content column ─────────────────────────────────────────
         # Compresses freely at small windows (same 20px edge margins as the
-        # Endpoint page, no minimum floor), but stops growing at 1000px and
+        # Endpoint page, no minimum floor), but stops growing at 700px and
         # centers on wide windows instead of stretching edge-to-edge.
         centered = QWidget()
         outer = QHBoxLayout(centered)
         outer.setContentsMargins(20, 10, 20, 10)
         outer.addStretch(1)
-        content.setMaximumWidth(1000)
+        content.setMaximumWidth(700)
         outer.addWidget(content, 12)
         outer.addStretch(1)
 
