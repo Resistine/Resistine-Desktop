@@ -36,7 +36,7 @@ from PyQt6.QtWidgets import (
 )
 
 from gui import theme
-from gui.qt_widgets import CardGrid, StatusBadge, scroll_page
+from gui.qt_widgets import CardGrid, StatusBadge, heading, muted, scroll_page
 from plugins.base_plugin import BasePlugin
 
 _DIR = os.path.dirname(os.path.realpath(__file__))
@@ -165,27 +165,26 @@ class Plugin(BasePlugin):
         col.setContentsMargins(20, 0, 20, 20)
         col.setSpacing(0)
 
-        # 1. Top spacer — move content down, away from the header.
-        col.addSpacing(30)
+        # 1. Generous top padding — the header is a prominent centred band.
+        col.addSpacing(40)
 
-        # 2. Centered "Store" title panel (a card, ~50% width, centered).
-        title_row = QHBoxLayout()
-        title_row.setContentsMargins(0, 0, 0, 0)
-        title_row.addStretch(1)
-        title_panel = QFrame()
-        title_panel.setObjectName("Surface")
-        tp_lay = QVBoxLayout(title_panel)
-        tp_lay.setContentsMargins(20, 20, 20, 20)
-        self.title_label = QLabel("Store")
+        # 2. Centred page header: title + muted subtitle + divider. No inline
+        #    colours or fonts — H1/Muted inherit the app-wide font family and
+        #    theme colours from the global QSS, so the title uses the exact
+        #    same heading style as the rest of the app and recolours on every
+        #    light/dark toggle.
+        self.title_label = heading("Store")  # QLabel#H1 (24px/700)
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        # No inline color — inherit the app-wide QSS `QWidget { color: … }`,
-        # which is re-applied on every theme toggle. Baking text_primary in
-        # here froze the title at its build-time colour across theme changes.
-        self.title_label.setStyleSheet("font-size: 30px; font-weight: 700;")
-        tp_lay.addWidget(self.title_label)
-        title_row.addWidget(title_panel, 1)  # ~50% via the two stretches
-        title_row.addStretch(1)
-        col.addLayout(title_row)
+        col.addWidget(self.title_label)
+        col.addSpacing(4)
+        subtitle = muted("Browse and install plugins to extend Resistine.")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        col.addWidget(subtitle)
+        col.addSpacing(40)
+        divider = QFrame()
+        divider.setObjectName("Divider")
+        divider.setFixedHeight(1)
+        col.addWidget(divider)
         col.addSpacing(20)
 
         # 3. Responsive grid of plugin cards. Build with whatever remote data we
