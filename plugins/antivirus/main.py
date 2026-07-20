@@ -408,8 +408,9 @@ class Plugin(BasePlugin):
         # windows.
         container = QWidget()
         h = QHBoxLayout(container)
+        # Left-anchored like the Endpoint page (20px off the sidebar);
+        # only the RIGHT side absorbs leftover width once the 700px cap hits.
         h.setContentsMargins(20, 10, 20, 10)
-        h.addStretch(1)
         self._view_stack.setMaximumWidth(700)
         h.addWidget(self._view_stack, 12)
         h.addStretch(1)

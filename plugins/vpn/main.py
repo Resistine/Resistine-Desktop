@@ -812,8 +812,9 @@ class Plugin(BasePlugin):
         # centers on wide windows instead of stretching edge-to-edge.
         centered = QWidget()
         outer = QHBoxLayout(centered)
+        # Left-anchored like the Endpoint page (20px off the sidebar);
+        # only the RIGHT side absorbs leftover width once the 700px cap hits.
         outer.setContentsMargins(20, 10, 20, 10)
-        outer.addStretch(1)
         content.setMaximumWidth(700)
         outer.addWidget(content, 12)
         outer.addStretch(1)
