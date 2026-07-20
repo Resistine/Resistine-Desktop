@@ -17,6 +17,8 @@
 # Licensed under the GNU General Public License v2 or later
 
 import os
+import sys
+import tkinter.font as tkFont
 
 import customtkinter
 from PIL import Image
@@ -32,9 +34,48 @@ _GREEN = "#1E8E3E"
 _GREEN_HOVER = "#177B33"
 _POLL_MS = 2000
 
+_WIN = sys.platform.startswith("win")
+_UI_FAMILY = None
+
+
+def _ui_family():
+    """Resolve a real, installed UI font family for this platform.
+
+    "Inter" is referenced throughout the app but is never bundled or
+    registered, so Tk silently falls back — beautifully to macOS's system
+    font, but on Windows to a tiny, ugly default face. That single fallback is
+    why this wizard looked great on macOS and cramped on Windows. Pick a real
+    per-OS family instead (mirrors plugins/chat/fonts.py). Cached; requires a
+    Tk root, which exists well before the wizard builds.
+    """
+    global _UI_FAMILY
+    if _UI_FAMILY is not None:
+        return _UI_FAMILY
+    try:
+        available = {f.lower() for f in tkFont.families()}
+    except Exception:  # noqa: BLE001
+        available = set()
+    if sys.platform == "darwin":
+        prefs = ["Inter", "SF Pro Text", "Helvetica Neue", ".AppleSystemUIFont"]
+    elif _WIN:
+        prefs = ["Inter", "Segoe UI"]
+    else:
+        prefs = ["Inter", "DejaVu Sans", "Noto Sans", "Cantarell"]
+    chosen = next((p for p in prefs if p.lower() in available), None)
+    # macOS hides system fonts from families(); Tk still resolves this name.
+    if chosen is None and sys.platform == "darwin":
+        chosen = ".AppleSystemUIFont"
+    _UI_FAMILY = chosen or ("Segoe UI" if _WIN else "TkDefaultFont")
+    return _UI_FAMILY
+
 
 def _font(size, weight="normal"):
-    return customtkinter.CTkFont(family="Inter", size=size, weight=weight)
+    # Segoe UI renders denser than macOS's system font at the same point size,
+    # so nudge Windows up a touch to preserve the hierarchy the wizard was
+    # tuned for on macOS.
+    if _WIN and size >= 14:
+        size += 1
+    return customtkinter.CTkFont(family=_ui_family(), size=size, weight=weight)
 
 
 class SetupWizardScreen:
@@ -58,7 +99,12 @@ class SetupWizardScreen:
         self.frame = customtkinter.CTkFrame(
             self.app, corner_radius=0, fg_color=self.app.cget("fg_color")
         )
-        self.frame.grid(row=0, column=0, sticky="nsew")
+        # The app uses a two-column layout (nav sidebar in column 0, content in
+        # column 1). Span both columns so the wizard fills the full window
+        # width — otherwise its centered content is pushed left of the true
+        # window centre by whatever occupies column 1, and the shield/logo at
+        # the top makes that offset obvious.
+        self.frame.grid(row=0, column=0, columnspan=2, sticky="nsew")
         self.app.grid_rowconfigure(0, weight=1)
         self.app.grid_columnconfigure(0, weight=1)
         self.frame.lift()
@@ -119,17 +165,19 @@ class SetupWizardScreen:
 
     def _checklist_row(self, parent, i, step, done):
         row = customtkinter.CTkFrame(parent, fg_color="transparent")
-        pady = (14 if i == 0 else 6, 14 if i == len(self.steps) - 1 else 6)
+        pady = (16 if i == 0 else 7, 16 if i == len(self.steps) - 1 else 7)
         row.grid(row=i, column=0, padx=18, pady=pady, sticky="ew")
         row.grid_columnconfigure(1, weight=1)
 
-        customtkinter.CTkLabel(
-            row, text=step.icon, font=_font(20), width=32,
-        ).grid(row=0, column=0, rowspan=2, padx=(0, 12))
+        # Fixed-size icon badge. A constant footprint means every title starts
+        # at exactly the same x, so the icon column stays perfectly aligned no
+        # matter how wide each emoji glyph happens to render.
+        self._icon_badge(row, step.icon, done).grid(
+            row=0, column=0, rowspan=2, padx=(0, 14))
 
         customtkinter.CTkLabel(
             row, text=step.title, font=_font(14, "bold"),
-            text_color=("#333333", "#EEEEEE"), anchor="w",
+            text_color=("#1A1A1A", "#F5F5F5"), anchor="w",
         ).grid(row=0, column=1, sticky="w")
 
         customtkinter.CTkLabel(
@@ -137,11 +185,38 @@ class SetupWizardScreen:
             text_color=("#777777", "#999999"), anchor="w",
         ).grid(row=1, column=1, sticky="w")
 
-        customtkinter.CTkLabel(
-            row, text="✓ Ready" if done else "•",
-            font=_font(12, "bold" if done else "normal"),
-            text_color=(_GREEN, "#2CC985") if done else ("#BBBBBB", "#666666"),
-        ).grid(row=0, column=2, rowspan=2, padx=(12, 0))
+        self._status_pill(row, done, ready_text="✓ Ready", pending_text="Pending").grid(
+            row=0, column=2, rowspan=2, padx=(12, 0))
+
+    def _icon_badge(self, parent, icon, done, size=40):
+        """A fixed-size rounded chip with the emoji centred inside.
+
+        The fixed width/height (with propagation off) is what keeps the icon
+        column aligned; ``.place`` centres the glyph regardless of its advance
+        width, so lock / shield / antenna all line up.
+        """
+        tint = ("#E6F4EA", "#16331F") if done else ("#EAF1F8", "#1B2A3B")
+        badge = customtkinter.CTkFrame(
+            parent, width=size, height=size, corner_radius=size // 2,
+            fg_color=tint,
+        )
+        badge.grid_propagate(False)
+        badge.pack_propagate(False)
+        customtkinter.CTkLabel(badge, text=icon, font=_font(18)).place(
+            relx=0.5, rely=0.5, anchor="center")
+        return badge
+
+    def _status_pill(self, parent, done, ready_text="✓ Enabled",
+                     pending_text="Skipped"):
+        if done:
+            return customtkinter.CTkLabel(
+                parent, text=ready_text, font=_font(12, "bold"),
+                text_color=(_GREEN, "#2CC985"),
+            )
+        return customtkinter.CTkLabel(
+            parent, text=pending_text, font=_font(12),
+            text_color=("#999999", "#888888"),
+        )
 
     # ── Flow control ────────────────────────────────────────────────
 
@@ -378,20 +453,16 @@ class SetupWizardScreen:
             done = self.results.get(step.key) == "done" or self._safe(
                 step.is_complete, False)
             line = customtkinter.CTkFrame(summary, fg_color="transparent")
-            pad = (14 if i == 0 else 6, 14 if i == len(self.steps) - 1 else 6)
+            pad = (16 if i == 0 else 7, 16 if i == len(self.steps) - 1 else 7)
             line.grid(row=i, column=0, padx=18, pady=pad, sticky="ew")
             line.grid_columnconfigure(1, weight=1)
-            customtkinter.CTkLabel(line, text=step.icon, font=_font(18), width=30).grid(
-                row=0, column=0, padx=(0, 12))
+            self._icon_badge(line, step.icon, done, size=36).grid(
+                row=0, column=0, padx=(0, 14))
             customtkinter.CTkLabel(
                 line, text=step.title, font=_font(13, "bold"),
-                text_color=("#333333", "#EEEEEE"), anchor="w",
+                text_color=("#1A1A1A", "#F5F5F5"), anchor="w",
             ).grid(row=0, column=1, sticky="w")
-            customtkinter.CTkLabel(
-                line, text="✓ Enabled" if done else "Skipped",
-                font=_font(12, "bold" if done else "normal"),
-                text_color=(_GREEN, "#2CC985") if done else ("#999999", "#888888"),
-            ).grid(row=0, column=2, padx=(12, 0))
+            self._status_pill(line, done).grid(row=0, column=2, padx=(12, 0))
 
         customtkinter.CTkButton(
             c, text="Go to Dashboard", command=self._finish,
