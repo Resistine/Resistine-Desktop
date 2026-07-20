@@ -806,15 +806,15 @@ class Plugin(BasePlugin):
         # tall windows were stretching huge gaps into every panel.
         grid.setRowStretch(row, 1)
 
-        # ── Capped content column (mirrors CTk's MAX_CONTENT_WIDTH) ───────
+        # ── Capped content column ─────────────────────────────────────────
         # Compresses freely at small windows (same 20px edge margins as the
-        # Endpoint page, no minimum floor), but stops growing at 750px and
+        # Endpoint page, no minimum floor), but stops growing at 1000px and
         # centers on wide windows instead of stretching edge-to-edge.
         centered = QWidget()
         outer = QHBoxLayout(centered)
         outer.setContentsMargins(20, 10, 20, 10)
         outer.addStretch(1)
-        content.setMaximumWidth(750)
+        content.setMaximumWidth(1000)
         outer.addWidget(content, 12)
         outer.addStretch(1)
 
@@ -870,7 +870,7 @@ class Plugin(BasePlugin):
         g = QGridLayout(panel)
         g.setContentsMargins(0, 0, 0, 8)
         g.setHorizontalSpacing(6)
-        g.setVerticalSpacing(0)
+        g.setVerticalSpacing(10)
         g.setColumnStretch(0, 0)
         g.setColumnStretch(1, 1)
         return panel, g
