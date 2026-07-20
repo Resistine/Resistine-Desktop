@@ -138,6 +138,32 @@ def needs_reenrollment():
         return True
     return False
 
+def _set_ossec_agent_name(ossec_conf, agent_name):
+    """Shell that pins wazuh-agentd's enrollment <agent_name> in ossec.conf.
+
+    The stock Wazuh agent config ships with NO <agent_name> — and often no
+    <enrollment> block at all (e.g. the RPM's CentOS-profile config) — so a
+    plain sed-replace is a no-op and wazuh-agentd's built-in auto-enrollment
+    falls back to the bare hostname ('archlinux' instead of the unique
+    'archlinux-<uuid>'). Worst on Arch, where bsdtar extraction runs no postinst
+    to apply WAZUH_AGENT_NAME. Handle all three shapes:
+
+      1. <agent_name> already present  -> replace it
+      2. <enrollment> present, no name -> insert <agent_name> into it
+      3. neither                       -> insert a full <enrollment> block
+                                          before </client>
+    """
+    return (
+        f"if grep -q '<agent_name>' '{ossec_conf}'; then "
+        f"sed -i 's|<agent_name>.*</agent_name>|<agent_name>{agent_name}</agent_name>|' '{ossec_conf}'; "
+        f"elif grep -q '<enrollment>' '{ossec_conf}'; then "
+        f"sed -i 's|<enrollment>|<enrollment>\\n      <agent_name>{agent_name}</agent_name>|' '{ossec_conf}'; "
+        f"else "
+        f"sed -i 's|</client>|  <enrollment>\\n      <agent_name>{agent_name}</agent_name>\\n    </enrollment>\\n  </client>|' '{ossec_conf}'; "
+        f"fi"
+    )
+
+
 def _get_os_info():
     """Determine package family (deb, rpm, arch) using LinuxDistro utility.
 
@@ -464,16 +490,18 @@ def full_install(progress_callback=None):
 
     # Always re-enroll so the manager receives the group on every install.
     # The key backup is still written for future repair/recovery flows.
+    # -p is the port flag; -P (uppercase) is the password-FILE path — passing
+    # the port to -P is a no-op that only works because 1515 is the default.
     enrollment_script = f"""
             rm -f '{_CLIENT_KEYS}'
-            '{agent_auth}' -m '{WAZUH_MANAGER}' -P '{WAZUH_REGISTRATION_PORT}' -A '{agent_name}' -G '{agent_group}'
+            '{agent_auth}' -m '{WAZUH_MANAGER}' -p '{WAZUH_REGISTRATION_PORT}' -A '{agent_name}' -G '{agent_group}'
             mkdir -p '{backup_dir}' && cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}'
             chown {os.getuid()}:{os.getgid()} '{_KEY_BACKUP}' 2>/dev/null
         """
 
     script = f"""
         {install_cmd}
-        sed -i 's|<agent_name>.*</agent_name>|<agent_name>{agent_name}</agent_name>|' '{ossec_conf}'
+        {_set_ossec_agent_name(ossec_conf, agent_name)}
         {enrollment_script}
         systemctl daemon-reload
         systemctl enable wazuh-agent
@@ -520,11 +548,11 @@ def reenroll_agent():
         systemctl stop wazuh-agent 2>/dev/null
         pkill -9 -f '{LINUX_WAZUH_DIR}/bin/wazuh-' 2>/dev/null
         rm -f '{_CLIENT_KEYS}' '{_KEY_BACKUP}'
-        '{agent_auth}' -m '{WAZUH_MANAGER}' -P '{WAZUH_REGISTRATION_PORT}' -A '{new_name}' -G '{group}'
+        '{agent_auth}' -m '{WAZUH_MANAGER}' -p '{WAZUH_REGISTRATION_PORT}' -A '{new_name}' -G '{group}'
         if [ ! -s '{_CLIENT_KEYS}' ]; then echo REENROLL_NO_KEY; exit 1; fi
         chmod 640 '{_CLIENT_KEYS}'
         chown wazuh:wazuh '{_CLIENT_KEYS}' 2>/dev/null || chown root:wazuh '{_CLIENT_KEYS}' 2>/dev/null
-        sed -i 's|<agent_name>.*</agent_name>|<agent_name>{new_name}</agent_name>|' '{ossec_conf}' 2>/dev/null || true
+        {_set_ossec_agent_name(ossec_conf, new_name)}
         mkdir -p '{backup_dir}'; cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}' 2>/dev/null
         chown {os.getuid()}:{os.getgid()} '{_KEY_BACKUP}' 2>/dev/null
         systemctl enable wazuh-agent 2>/dev/null
