@@ -48,6 +48,21 @@ def _t(key, fallback):
         return fallback
 
 
+class _NoScrollComboBox(QComboBox):
+    """A combo box whose value never changes on mouse-wheel scroll.
+
+    On Windows, rolling the wheel while the cursor is over a QComboBox cycles
+    its selection — so scrolling the settings page would silently flip the
+    appearance mode between System/Light/Dark. Ignore wheel events so the
+    value only changes on click, and let the wheel scroll the page instead.
+    (The dropdown popup is a separate widget, so its own scrolling is
+    unaffected when it's open.)
+    """
+
+    def wheelEvent(self, event):  # noqa: N802 - Qt override
+        event.ignore()
+
+
 class Plugin(BasePlugin):
     """Settings plugin."""
 
@@ -180,7 +195,7 @@ class Plugin(BasePlugin):
     def _appearance_card(self) -> QWidget:
         card, lay = self._card("Appearance")
         lay.addWidget(self._muted("Mode:"))
-        self.appearance_combo = QComboBox()
+        self.appearance_combo = _NoScrollComboBox()
         self.appearance_combo.addItems(["System", "Light", "Dark"])
         self.appearance_combo.setCurrentText(
             settings.get("ui", "appearance_mode", "System"))
