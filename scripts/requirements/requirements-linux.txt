@@ -20,7 +20,6 @@ jeepney
 jiter
 keyring
 markdown
-matplotlib
 more-itertools
 openai
 packaging

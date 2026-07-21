@@ -119,12 +119,56 @@ a = Analysis(
         'customtkinter',
         'tkinterweb',
         'html2text',
+        # Unused Qt module — no QtPdf usage anywhere in the app.
+        'PyQt6.QtPdf',
+        'PyQt6.QtPdfWidgets',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
     noarchive=False,
 )
+
+# ── Strip dead weight PyInstaller auto-scooped into the bundle ──────────────
+# PyInstaller's binary/data scanner over-collects: on Windows it grabs the
+# Swift-for-Windows runtime off the build machine's PATH (the app has no Swift
+# component there — the Swift VPN CLI is macOS-only and added separately by the
+# build script), and every platform pulls Qt's PDF module, its ~40-language
+# translation catalogs (we ship our own i18n in utils/i18n), and Pillow's AVIF
+# codec (images go through webp/cairosvg). None of it runs. Filter it out.
+
+def _basename(dest):
+    return dest.replace('\\', '/').rsplit('/', 1)[-1].lower()
+
+def _is_dead_binary(dest):
+    name = _basename(dest)
+    path = dest.replace('\\', '/').lower()
+    # Pillow AVIF codec (~7.6MB) — unused.
+    if '_avif' in name:
+        return True
+    # Qt PDF viewer module — unused.
+    if 'qtpdf' in name or 'qt6pdf' in name:
+        return True
+    # Swift-for-Windows runtime — false positive from the build toolchain on PATH.
+    if IS_WINDOWS and name.endswith('.dll'):
+        if name.startswith('swift'):
+            return True
+        if name in {
+            'foundation.dll', 'foundationnetworking.dll', 'foundationxml.dll',
+            '_foundationicu.dll', 'blocksruntime.dll', 'dispatch.dll',
+        }:
+            return True
+    return False
+
+def _is_dead_data(dest):
+    # Qt's bundled UI translations (~6.5MB) — the app ships its own i18n.
+    return 'qt6/translations' in dest.replace('\\', '/').lower()
+
+_bin_before, _data_before = len(a.binaries), len(a.datas)
+a.binaries = [e for e in a.binaries if not _is_dead_binary(e[0])]
+a.datas = [e for e in a.datas if not _is_dead_data(e[0])]
+print(f"[spec] stripped {_bin_before - len(a.binaries)} dead binaries, "
+      f"{_data_before - len(a.datas)} dead data files")
 
 # Remove duplicate files
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
