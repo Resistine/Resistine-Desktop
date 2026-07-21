@@ -9,22 +9,7 @@ import customtkinter
 
 from plugins.chat.fonts import RESISTINE_BLUE, ui_family, widget_scale
 
-# Pool of suggestion prompts shown on the welcome screen.
-# 4 are picked at random each time the chat is opened.
-SUGGESTION_POOL = [
-    "Explain what a zero-day exploit is",
-    "How do I harden my Linux server?",
-    "Analyze a suspicious network log",
-    "What are common phishing indicators?",
-    "How does a man-in-the-middle attack work?",
-    "What is the MITRE ATT&CK framework?",
-    "Explain the difference between IDS and IPS",
-    "How do I set up a firewall with iptables?",
-    "What are best practices for password security?",
-    "How do I detect lateral movement in a network?",
-    "Explain DNS tunneling and how to detect it",
-    "What is ransomware and how do I prevent it?",
-]
+from plugins.chat.suggestions import SUGGESTION_POOL  # noqa: F401
 
 def _secondary_color(is_dark: bool) -> str:
     return "#9CA3AF" if is_dark else "#6B7280"

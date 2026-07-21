@@ -154,6 +154,34 @@ class PluginManager:
             refresh_ui()
         return True, "Plugin uninstalled successfully."
 
+    def reinstall_plugin(self, plugin_id):
+        """Re-enable a locally-present plugin that was marked uninstalled.
+
+        Bundled plugins are never deleted on uninstall — only flagged in the
+        state file — so "installing" one back is just clearing the flag and
+        reloading. Nothing to download.
+        """
+        state = self._load_state()
+        if plugin_id in state.get("uninstalled", []):
+            state["uninstalled"].remove(plugin_id)
+            self._save_state(state)
+
+        # Defer the UI refresh to keep the UI responsive (same pattern as
+        # download_plugin).
+        def refresh_ui():
+            self.plugins = sorted(
+                self.load_plugins(reload=True), key=lambda x: x.order)
+            if hasattr(self.app, "refresh_navigation"):
+                self.app.refresh_navigation()
+            elif hasattr(self.app, "create_dashboard"):
+                self.app.create_dashboard()
+
+        if hasattr(self.app, "after"):
+            self.app.after(100, refresh_ui)
+        else:
+            refresh_ui()
+        return True, "Plugin installed."
+
     def download_plugin(self, url, plugin_id=None, plugin_name=None):
         """
         Download a plugin and extract it to the USER'S plugins directory.

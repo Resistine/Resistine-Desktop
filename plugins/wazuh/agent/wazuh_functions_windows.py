@@ -493,7 +493,7 @@ def reenroll_agent():
         f"Remove-Item -Path '{_CLIENT_KEYS}','{_KEY_BACKUP}' -Force "
         f"-ErrorAction SilentlyContinue; "
         f"if (Test-Path '{_AGENT_AUTH}') {{ & '{_AGENT_AUTH}' -m '{WAZUH_MANAGER}' "
-        f"-P '{WAZUH_REGISTRATION_PORT}' -A '{new_name}' -G '{group}' }}; "
+        f"-p '{WAZUH_REGISTRATION_PORT}' -A '{new_name}' -G '{group}' }}; "
         f"if (-not (Test-Path '{_CLIENT_KEYS}') -or "
         f"((Get-Item '{_CLIENT_KEYS}').Length -eq 0)) "
         f"{{ Write-Output 'REENROLL_NO_KEY'; exit 1 }}; "
@@ -623,7 +623,7 @@ def _build_install_script(sysmon, msi_path, agent_name, agent_group, backup_dir)
     parts.append(_guard(
         f"if (Test-Path '{_AGENT_AUTH}') {{ "
         f"& '{_AGENT_AUTH}' -m '{WAZUH_MANAGER}' "
-        f"-P '{WAZUH_REGISTRATION_PORT}' "
+        f"-p '{WAZUH_REGISTRATION_PORT}' "
         f"-A '{agent_name}' -G '{agent_group}' }}"
     ))
 

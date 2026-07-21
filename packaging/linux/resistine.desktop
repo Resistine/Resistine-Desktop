@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Resistine
+Comment=Resistine Security Desktop
+Exec=resistine
+Icon=resistine
+Terminal=false
+Categories=Security;System;Utility;
+StartupWMClass=resistine

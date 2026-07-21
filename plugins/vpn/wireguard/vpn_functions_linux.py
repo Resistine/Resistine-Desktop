@@ -247,8 +247,16 @@ def parse_and_create_vpn_config(vpn_config_json_string, config_name="resistine")
         str: Path to created config file, or None if failed
     """
     try:
-        # Parse the VPN config JSON string
-        vpn_config = json.loads(vpn_config_json_string)
+        # Accept the config either already parsed (a dict) or as a JSON string,
+        # like macOS does. Blindly calling json.loads() on a dict raises
+        # TypeError, which silently dropped the config and left the setup
+        # wizard reporting "No VPN configuration found".
+        if isinstance(vpn_config_json_string, (bytes, bytearray)):
+            vpn_config_json_string = vpn_config_json_string.decode("utf-8")
+        if isinstance(vpn_config_json_string, dict):
+            vpn_config = vpn_config_json_string
+        else:
+            vpn_config = json.loads(vpn_config_json_string)
 
         # Extract Peer configuration
         peer_config = vpn_config.get("Peer", {})
