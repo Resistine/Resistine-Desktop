@@ -1245,12 +1245,20 @@ class Plugin(BasePlugin):
         copy_btn = QPushButton("Copy to Clipboard")
         copy_btn.setMinimumHeight(36)
 
+        def _reset_copy_label():
+            # Fires 2s later; the dialog (and this button) may be closed by
+            # then, leaving a deleted C++ object — setText would raise.
+            try:
+                copy_btn.setText("Copy to Clipboard")
+            except RuntimeError:
+                pass
+
         def copy_to_clipboard():
             clip = QGuiApplication.clipboard()
             if clip is not None:
                 clip.setText(content)
             copy_btn.setText("Copied!")
-            self.app.after(2000, lambda: copy_btn.setText("Copy to Clipboard"))
+            self.app.after(2000, _reset_copy_label)
 
         copy_btn.clicked.connect(copy_to_clipboard)
         lay.addWidget(copy_btn)
