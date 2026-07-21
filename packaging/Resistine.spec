@@ -119,6 +119,10 @@ a = Analysis(
         'customtkinter',
         'tkinterweb',
         'html2text',
+        # The app is fully PyQt6 — the tkinter runtime (Tcl/Tk, ~4.6MB) is dead.
+        'tkinter',
+        '_tkinter',
+        'tkinter.ttk',
         # Unused Qt module — no QtPdf usage anywhere in the app.
         'PyQt6.QtPdf',
         'PyQt6.QtPdfWidgets',
@@ -149,6 +153,12 @@ def _is_dead_binary(dest):
     # Qt PDF viewer module — unused.
     if 'qtpdf' in name or 'qt6pdf' in name:
         return True
+    # tkinter runtime — the app is fully PyQt6. Match the _tkinter extension,
+    # the Tcl/Tk framework binaries (basename 'tcl'/'tk'), and libtcl*/libtk*.
+    if name.startswith('_tkinter') or name.startswith('libtcl') or name.startswith('libtk'):
+        return True
+    if name in {'tcl', 'tk'} or path.rsplit('/', 2)[0].endswith(('tcl.framework', 'tk.framework')):
+        return True
     # Swift-for-Windows runtime — false positive from the build toolchain on PATH.
     if IS_WINDOWS and name.endswith('.dll'):
         if name.startswith('swift'):
@@ -161,8 +171,14 @@ def _is_dead_binary(dest):
     return False
 
 def _is_dead_data(dest):
+    path = dest.replace('\\', '/').lower()
     # Qt's bundled UI translations (~6.5MB) — the app ships its own i18n.
-    return 'qt6/translations' in dest.replace('\\', '/').lower()
+    if 'qt6/translations' in path:
+        return True
+    # Tcl/Tk runtime data — the app is PyQt6; nothing imports tkinter anymore.
+    if path.startswith('tcl/') or path.startswith('tk/') or '/tcl8' in path or '/tk8' in path:
+        return True
+    return False
 
 _bin_before, _data_before = len(a.binaries), len(a.datas)
 a.binaries = [e for e in a.binaries if not _is_dead_binary(e[0])]

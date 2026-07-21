@@ -685,12 +685,9 @@ def prompt_helper_approval(service):
     """Prompt user to approve helper in System Settings"""
     try:
         from gui.dialogs import ask_yes_no
-        import tkinter as tk
 
-        try:
-            root = tk._default_root
-        except:
-            root = None
+        # The PyQt6 dialog resolves its own parent window; no explicit root needed.
+        root = None
 
         def on_confirm(confirmed):
             if confirmed:
