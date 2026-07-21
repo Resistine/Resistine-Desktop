@@ -171,6 +171,7 @@ class StreamController:
         n_chars = 0
         prev_t = t0
         max_gap = 0.0        # largest silence between chunks (s)
+        raw_parts: list[str] = []  # full response text, logged at completion
         logger.info(
             f"[CHAT-STREAM] → POST {endpoint} model={model} "
             f"messages={len(messages)} session={(extra_body or {}).get('session_id')}")
@@ -205,6 +206,7 @@ class StreamController:
                         content = chunk.choices[0].delta.content
                         n_chunks += 1
                         n_chars += len(content)
+                        raw_parts.append(content)
                         if ttfb is None:
                             ttfb = now - t0
                             logger.info(
@@ -251,6 +253,15 @@ class StreamController:
                     f"max_gap={max_gap * 1000:.0f}ms, ~{rate:.0f} ch/s)"
                     + ("  ⚠ looks BUFFERED upstream (arrived in one burst, "
                        "not incrementally streamed)" if buffered else ""))
+                # Full raw response text, verbatim (markdown source, incl. any
+                # injected tool-status lines) — fenced so multi-line replies
+                # are obvious in the log.
+                raw = "".join(raw_parts)
+                logger.info(
+                    "[CHAT-STREAM] raw response text:\n"
+                    "----- BEGIN RESPONSE -----\n"
+                    f"{raw}\n"
+                    "----- END RESPONSE -----")
             self._safe_put(("done", _DONE))
 
         except Exception as e:

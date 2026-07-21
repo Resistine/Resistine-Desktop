@@ -29,18 +29,27 @@ from __future__ import annotations
 import os
 import random
 
-from PyQt6.QtCore import QSize, Qt, QTimer
+from PyQt6.QtCore import (
+    QEasingCurve,
+    QPropertyAnimation,
+    QSize,
+    Qt,
+    QTimer,
+    pyqtSignal,
+)
 from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import (
     QApplication,
     QStyle,
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QTextBrowser,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -48,6 +57,7 @@ from PyQt6.QtWidgets import (
 from gui import theme
 from plugins.base_plugin import BasePlugin
 from plugins.chat.history import ChatHistoryManager
+from plugins.chat.qt_markdown import markdown_to_html, stylesheet
 from plugins.chat.streaming import StreamController
 from plugins.chat.suggestions import SUGGESTION_POOL
 from utils import settings
@@ -73,6 +83,9 @@ _DEFAULT_BASE_URL = "https://dashboard.resisti.net:8002/v1"
 # made the bubble visibly jitter.
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _SPINNER_MS = 80
+
+# Message-arrival animation: fade + 12px slide, OutQuad, one beat.
+_ARRIVE_MS = 200
 
 
 def _tls_verify() -> str | bool:
@@ -121,77 +134,117 @@ _SIDEBAR_WIDTH = 240
 # ---------------------------------------------------------------------------
 
 class _Bubble(QFrame):
-    """A single chat bubble — a rounded QLabel-bearing frame in a flow row."""
+    """A single chat bubble.
 
-    def __init__(self, *, is_user: bool, max_width: int, animate: bool = True):
+    User messages are a filled blue pill (QLabel, plain text). Assistant
+    messages are panel-less rich text rendered from markdown via a styled,
+    auto-sized QTextBrowser (Claude-style — reads as the app talking, not a
+    card floating over the page).
+    """
+
+    def __init__(self, *, is_user: bool, max_width: int):
         super().__init__()
         self._is_user = is_user
-        # Animations only apply to assistant bubbles (spinner + typing cursor).
-        self._animate = animate and not is_user
-        self.setSizePolicy(QSizePolicy.Policy.Maximum,
-                           QSizePolicy.Policy.Preferred)
-
-        if is_user:
-            bg = theme.color("bubble_user_bg")
-            fg = theme.color("bubble_user_text")
-            border = bg
-        else:
-            bg = theme.color("bubble_ai_bg")
-            fg = theme.color("bubble_ai_text")
-            border = theme.color("border")
-
-        self.setStyleSheet(
-            f"#ChatBubble {{ background-color: {bg}; "
-            f"border: 1px solid {border}; border-radius: 16px; }}")
-        self.setObjectName("ChatBubble")
-
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 10, 14, 10)
-        lay.setSpacing(0)
-
-        self._label = QLabel()
-        self._label.setObjectName("ChatBubbleText")
-        self._label.setWordWrap(True)
-        # Select by mouse drag AND keyboard (Cmd/Ctrl+A, shift-arrows) so the
-        # user can highlight their own inputs and copy them out.
-        self._label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-            | Qt.TextInteractionFlag.TextSelectableByKeyboard)
-        self._label.setCursor(QCursor(Qt.CursorShape.IBeamCursor))
-        self._fg = fg
-        self._label.setStyleSheet(
-            f"#ChatBubbleText {{ background: transparent; border: none; "
-            f"color: {fg}; font-size: 14px; }}")
-        if is_user:
-            self._label.setTextFormat(Qt.TextFormat.PlainText)
-        else:
-            self._label.setTextFormat(Qt.TextFormat.MarkdownText)
-        self._label.setMaximumWidth(max_width)
-        lay.addWidget(self._label)
-
-        # Raw source text (markdown for AI, plain for user) — copied verbatim
-        # by the copy button rather than the rendered rich text.
+        self._max_width = max_width
         self._raw_text = ""
+        self._has_content = False  # gates copy/hover until real text lands
 
-        # Thinking-spinner state (assistant only) + streaming width lock.
+        # Thinking-spinner state (assistant only).
         self._spinner_idx = 0
         self._spinner_timer: QTimer | None = None
         self._thinking = False
-        self._width_locked = False
 
-        # Copy button under AI responses only. Hidden until real content
-        # arrives so it doesn't sit under the thinking indicator.
-        self._copy_btn: QPushButton | None = None
-        if not is_user:
-            self._start_thinking()
-            self._copy_btn = self._build_copy_button()
-            copy_row = QHBoxLayout()
-            copy_row.setContentsMargins(0, 4, 0, 0)
-            copy_row.setSpacing(0)
-            copy_row.addWidget(self._copy_btn)
-            copy_row.addStretch(1)
-            lay.addLayout(copy_row)
-        self._max_width = max_width
+        self.setSizePolicy(QSizePolicy.Policy.Maximum,
+                           QSizePolicy.Policy.Preferred)
+        self.setObjectName("ChatBubble")
+
+        lay = QVBoxLayout(self)
+        lay.setSpacing(0)
+
+        if is_user:
+            self._build_user(lay, max_width)
+        else:
+            self._build_assistant(lay, max_width)
+
+    # -- construction ------------------------------------------------------
+
+    def _build_user(self, lay: QVBoxLayout, max_width: int) -> None:
+        bg = theme.color("bubble_user_bg")
+        self._fg = theme.color("bubble_user_text")
+        self.setStyleSheet(
+            f"#ChatBubble {{ background-color: {bg}; "
+            f"border: 1px solid {bg}; border-radius: 16px; }}"
+            f"#ChatBubble:hover {{ background-color: {_ACCENT_HOVER}; "
+            f"border-color: {_ACCENT_HOVER}; }}")
+        lay.setContentsMargins(14, 10, 14, 10)
+
+        self._label = QLabel()
+        self._view = None
+        self._label.setObjectName("ChatBubbleText")
+        self._label.setWordWrap(True)
+        # Highlight-by-mouse only — no keyboard flag, so a click doesn't
+        # plant a blinking caret and read as an editable field.
+        self._label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._label.setCursor(QCursor(Qt.CursorShape.IBeamCursor))
+        self._label.setStyleSheet(
+            f"#ChatBubbleText {{ background: transparent; border: none; "
+            f"color: {self._fg}; font-size: 14px; }}")
+        self._label.setTextFormat(Qt.TextFormat.PlainText)
+        self._label.setMaximumWidth(max_width)
+        lay.addWidget(self._label)
+
+        # No copy button on user bubbles.
+        self._copy_btn = None
+        self._copy_eff = None
+        self._copy_anim = None
+        self._copy_row = None
+
+    def _build_assistant(self, lay: QVBoxLayout, max_width: int) -> None:
+        self._fg = theme.color("bubble_ai_text")
+        # Panel-less: transparent frame, text sits on the page.
+        self.setStyleSheet("#ChatBubble { background: transparent; }")
+        lay.setContentsMargins(12, 2, 12, 2)
+
+        self._label = None
+        self._view = QTextBrowser()
+        self._view.setObjectName("ChatBubbleText")
+        self._view.setFrameShape(QFrame.Shape.NoFrame)
+        self._view.setOpenExternalLinks(True)  # markdown links → browser
+        self._view.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._view.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Read-only browser shows no caret; mouse-select + link-click only.
+        self._view.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.LinksAccessibleByMouse)
+        self._view.document().setDocumentMargin(3)
+        self._view.document().setDefaultStyleSheet(stylesheet(self._fg))
+        self._view.setStyleSheet(
+            "QTextBrowser#ChatBubbleText { background: transparent; "
+            f"border: none; color: {self._fg}; font-size: 14px; }}")
+        # Fixed full-column width from the start: only height grows as text
+        # streams in, so there is zero horizontal jitter (the old width-lock,
+        # now inherent to the sized browser).
+        self._view.setFixedWidth(max_width)
+        lay.addWidget(self._view)
+
+        self._start_thinking()
+
+        # Copy button below the response — space reserved from the start so
+        # the bubble height never jumps; opacity fades it in on hover.
+        self._copy_btn = self._build_copy_button()
+        self._copy_eff = QGraphicsOpacityEffect(self._copy_btn)
+        self._copy_eff.setOpacity(0.0)
+        self._copy_btn.setGraphicsEffect(self._copy_eff)
+        self._copy_anim = None
+        self._copy_row = QHBoxLayout()
+        self._copy_row.setContentsMargins(0, 2, 0, 0)
+        self._copy_row.setSpacing(4)
+        self._copy_row.addWidget(self._copy_btn)
+        self._copy_row.addStretch(1)
+        lay.addLayout(self._copy_row)
 
     def _build_copy_button(self) -> QPushButton:
         muted = theme.color("text_secondary")
@@ -203,11 +256,15 @@ class _Bubble(QFrame):
             "#ChatCopyBtn { background: transparent; border: none; "
             f"color: {muted}; font-size: 12px; padding: 2px 4px; }}"
             "#ChatCopyBtn:hover { text-decoration: underline; }")
-        btn.setVisible(False)
+        # Stays visible (space reserved) from construction — hiding it and
+        # revealing at first content made the bubble height jump mid-stream.
+        # It's invisible anyway until hover fades its opacity up.
         btn.clicked.connect(self._copy_to_clipboard)
         return btn
 
     def _copy_to_clipboard(self) -> None:
+        if not self._has_content:
+            return  # nothing to copy while thinking
         QApplication.clipboard().setText(self._raw_text)
         if self._copy_btn is None:
             return
@@ -216,32 +273,67 @@ class _Bubble(QFrame):
             1500,
             lambda: self._copy_btn and self._copy_btn.setText("⧉  Copy"))
 
-    # -- thinking spinner + typing cursor ---------------------------------
+    # -- hover: fade the copy button in/out --------------------------------
 
-    def _label_style(self, *, muted: bool, italic: bool) -> str:
-        color = theme.color("text_secondary") if muted else self._fg
-        extra = "font-style: italic; " if italic else ""
-        return ("#ChatBubbleText { background: transparent; border: none; "
-                f"color: {color}; font-size: 14px; {extra}}}")
+    def enterEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().enterEvent(event)
+        self._fade_copy(1.0)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().leaveEvent(event)
+        self._fade_copy(0.0)
+
+    def _fade_copy(self, target: float) -> None:
+        if (self._copy_eff is None or self._copy_btn is None
+                or not self._has_content):
+            return
+        anim = QPropertyAnimation(self._copy_eff, b"opacity", self)
+        anim.setDuration(120)
+        anim.setEndValue(target)
+        anim.setEasingCurve(QEasingCurve.Type.OutQuad)
+        anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+        self._copy_anim = anim  # keep a ref so it isn't GC'd mid-flight
+
+    def add_retry(self, callback) -> None:
+        """Swap the copy affordance for a Retry button (error bubbles)."""
+        if self._copy_row is None:
+            return
+        muted = theme.color("text_secondary")
+        btn = QPushButton("↻  Retry")
+        btn.setObjectName("ChatRetryBtn")
+        btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn.setFlat(True)
+        btn.setStyleSheet(
+            f"#ChatRetryBtn {{ background: transparent; border: none; "
+            f"color: {muted}; font-size: 12px; padding: 2px 4px; }}"
+            f"#ChatRetryBtn:hover {{ text-decoration: underline; }}")
+        btn.clicked.connect(callback)
+        if self._copy_btn is not None:
+            self._copy_btn.setVisible(False)
+        self._copy_row.insertWidget(0, btn)
+
+    # -- thinking spinner --------------------------------------------------
 
     def _start_thinking(self) -> None:
-        """Show the pre-response indicator: an animated braille spinner, or a
-        static 'Thinking…' when animations are disabled."""
+        """Show the animated braille thinking spinner (assistant only).
+
+        Always animated — the Settings 'Disable typing animation' toggle
+        governs how the response TEXT renders (stream-in vs all-at-once),
+        not this loading indicator.
+        """
         self._thinking = True
-        self._label.setTextFormat(Qt.TextFormat.PlainText)
-        self._label.setStyleSheet(self._label_style(muted=True, italic=True))
         self._render_thinking()
-        if self._animate:
-            self._spinner_timer = QTimer(self)
-            self._spinner_timer.timeout.connect(self._tick_spinner)
-            self._spinner_timer.start(_SPINNER_MS)
+        self._spinner_timer = QTimer(self)
+        self._spinner_timer.timeout.connect(self._tick_spinner)
+        self._spinner_timer.start(_SPINNER_MS)
 
     def _render_thinking(self) -> None:
-        if self._animate:
-            frame = _SPINNER_FRAMES[self._spinner_idx % len(_SPINNER_FRAMES)]
-            self._label.setText(f"Thinking  {frame}")
-        else:
-            self._label.setText("Thinking…")
+        frame = _SPINNER_FRAMES[self._spinner_idx % len(_SPINNER_FRAMES)]
+        muted = theme.color("text_secondary")
+        self._view.setHtml(
+            f'<span style="color:{muted}; font-style:italic;">'
+            f"Thinking &nbsp; {frame}</span>")
+        self._fit_height()
 
     def _tick_spinner(self) -> None:
         self._spinner_idx += 1
@@ -252,65 +344,46 @@ class _Bubble(QFrame):
         if self._spinner_timer is not None:
             self._spinner_timer.stop()
             self._spinner_timer = None
-        self._label.setStyleSheet(self._label_style(muted=False, italic=False))
-        self._label.setTextFormat(Qt.TextFormat.MarkdownText)
-        # Content is about to stream in — pin the width NOW so the bubble
-        # never resizes horizontally again for this response.
-        self._lock_width()
 
-    def _lock_width(self) -> None:
-        """Pin the bubble to its full column width for the response.
+    def _fit_height(self) -> None:
+        """Size the browser to its content (no internal scrolling).
 
-        A word-wrapped QLabel recomputes its natural width on every
-        setText, so a streaming bubble changes width chunk-by-chunk and
-        visibly jitters side-to-side. Locking the width up front means
-        only height grows as text streams in — the stable, professional
-        behavior of Claude/ChatGPT response blocks.
+        Lay the document out at the STABLE ``_max_width`` — reading
+        ``self._view.width()`` mid-stream can return a transient value
+        before the layout settles, which makes the document wrap
+        differently than it renders and clips the last line. A one-line
+        floor + bottom padding covers block margins and descenders.
         """
-        self._width_locked = True
-        self._label.setMinimumWidth(self._max_width)
-
-    def set_animate(self, animate: bool) -> None:
-        """Toggle the thinking spinner on an in-flight bubble (Settings
-        changed live). Only meaningful while the turn is active."""
-        animate = animate and not self._is_user
-        if animate == self._animate:
-            return
-        self._animate = animate
-        if not animate:
-            if self._spinner_timer is not None:
-                self._spinner_timer.stop()
-                self._spinner_timer = None
-            if self._thinking:
-                self._render_thinking()  # static "Thinking…"
-        elif self._thinking:
-            self._render_thinking()
-            self._spinner_timer = QTimer(self)
-            self._spinner_timer.timeout.connect(self._tick_spinner)
-            self._spinner_timer.start(_SPINNER_MS)
+        doc = self._view.document()
+        doc.setTextWidth(self._max_width)
+        line = self._view.fontMetrics().lineSpacing()
+        h = max(doc.size().height(), line)
+        self._view.setFixedHeight(int(h) + 8)
 
     def set_text(self, text: str, *, streaming: bool = False) -> None:
-        # `streaming` is accepted for call-site clarity; rendering is
-        # identical either way — the width lock does the stabilizing.
-        del streaming
-        # Strip leading whitespace/newlines: the backend prefixes tool turns
-        # with an indented "Running <tool>…" status, and Qt's Markdown
-        # renderer honors that leading whitespace as a first-line indent —
-        # which is what makes the first line of tool replies look pushed in.
+        del streaming  # accepted for call-site clarity; no behavioural effect
+        if self._is_user:
+            self._raw_text = text
+            self._label.setText(text)
+            return
+        # Assistant: strip the leading whitespace the backend sometimes emits
+        # (renders as a first-line indent), then render styled HTML.
         text = text.lstrip()
         self._raw_text = text
-        if not self._is_user and self._thinking and text:
+        if self._thinking and text:
             self._end_thinking()
-        self._label.setText(text)
-        # Reveal the copy button once the assistant has real content.
-        if self._copy_btn is not None and text and text != "…":
-            self._copy_btn.setVisible(True)
+        self._view.setHtml(markdown_to_html(text) if text else "")
+        self._fit_height()
+        if text and text != "…":
+            self._has_content = True  # enables copy + hover reveal
 
     def set_max_width(self, max_width: int) -> None:
         self._max_width = max_width
-        self._label.setMaximumWidth(max_width)
-        if self._width_locked:
-            self._label.setMinimumWidth(max_width)
+        if self._is_user:
+            self._label.setMaximumWidth(max_width)
+        else:
+            self._view.setFixedWidth(max_width)
+            self._fit_height()
 
 
 class _BubbleRow(QWidget):
@@ -318,6 +391,8 @@ class _BubbleRow(QWidget):
 
     def __init__(self, bubble: _Bubble, *, is_user: bool):
         super().__init__()
+        self._is_user = is_user
+        self._anims: tuple | None = None
         lay = QHBoxLayout(self)
         lay.setContentsMargins(12, 4, 12, 4)
         lay.setSpacing(0)
@@ -328,6 +403,106 @@ class _BubbleRow(QWidget):
             lay.addWidget(bubble)
             lay.addStretch(1)
         self.bubble = bubble
+
+    def play_arrival(self) -> None:
+        """Fade the bubble into place (~200ms, OutQuad).
+
+        Fade ONLY — an earlier version also slid the bubble by animating
+        the row's layout margins, but that forces a full layout pass of
+        the message column every frame (60fps × two rows + the scroll
+        animation), which showed up as vertical twitching. Opacity is a
+        pure paint effect: zero relayout. The effect is removed on finish
+        so streaming renders on the normal fast path afterwards.
+        """
+        eff = QGraphicsOpacityEffect(self.bubble)
+        self.bubble.setGraphicsEffect(eff)
+        eff.setOpacity(0.0)
+        fade = QPropertyAnimation(eff, b"opacity", self)
+        fade.setDuration(_ARRIVE_MS)
+        fade.setStartValue(0.0)
+        fade.setEndValue(1.0)
+        fade.setEasingCurve(QEasingCurve.Type.OutQuad)
+        fade.finished.connect(
+            lambda: self.bubble.setGraphicsEffect(None))
+        fade.start()
+        self._anims = (fade,)  # keep ref — GC'd anims never finish
+
+
+class _ChatInput(QTextEdit):
+    """Multi-line auto-expanding chat input.
+
+    - Grows with content up to ``_MAX_LINES`` lines, then scrolls internally.
+    - Enter sends (``send_requested``); Shift+Enter inserts a newline.
+    - Tab moves focus (send button next) instead of inserting \\t.
+    - ``focus_changed`` lets the owner draw a focus ring on the input bar.
+
+    Exposes ``text()``/``setText()`` so existing QLineEdit call sites keep
+    working unchanged.
+    """
+
+    send_requested = pyqtSignal()
+    focus_changed = pyqtSignal(bool)
+
+    _MAX_LINES = 5
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setAcceptRichText(False)
+        self.setTabChangesFocus(True)
+        self.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding,
+                           QSizePolicy.Policy.Fixed)
+        self.document().setDocumentMargin(2)
+        self.textChanged.connect(self._fit_height)
+        self._fit_height()
+
+    # QLineEdit-compatible accessors -----------------------------------
+    def text(self) -> str:
+        return self.toPlainText()
+
+    def setText(self, text: str) -> None:  # noqa: N802 (Qt-style name)
+        self.setPlainText(text)
+        # Jump the cursor to the end, like QLineEdit.setText felt.
+        cursor = self.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        self.setTextCursor(cursor)
+
+    # Key handling ------------------------------------------------------
+    def keyPressEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not (
+                event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
+            self.send_requested.emit()
+            return
+        super().keyPressEvent(event)
+
+    def focusInEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().focusInEvent(event)
+        self.focus_changed.emit(True)
+
+    def focusOutEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().focusOutEvent(event)
+        self.focus_changed.emit(False)
+
+    # Auto-expand -------------------------------------------------------
+    def _fit_height(self) -> None:
+        line = self.fontMetrics().lineSpacing()
+        pad = 16  # stylesheet padding + document margin allowance
+        min_h = int(line + pad)
+        max_h = int(line * self._MAX_LINES + pad)
+        doc_h = self.document().size().height()
+        if doc_h <= 0:
+            # Document layout not ready yet (widget not shown) — fall back
+            # to hard newline count; soft wraps are re-fit on resize/show.
+            doc_h = self.document().blockCount() * line + 4
+        self.setFixedHeight(max(min_h, min(int(doc_h) + pad - 4, max_h)))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        # Width changes alter soft-wrapping, which changes needed height.
+        super().resizeEvent(event)
+        self._fit_height()
 
 
 # ---------------------------------------------------------------------------
@@ -614,6 +789,18 @@ class Plugin(BasePlugin):
         self._scroll.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # Thin, minimal scrollbar: 6px, rounded handle, no arrow buttons.
+        handle = theme.color("border")
+        self._scroll.setStyleSheet(
+            "QScrollArea { background: transparent; }"
+            "QScrollBar:vertical { background: transparent; width: 6px; "
+            "margin: 2px 0; }"
+            f"QScrollBar::handle:vertical {{ background: {handle}; "
+            f"border-radius: 3px; min-height: 24px; }}"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical "
+            "{ height: 0; }"
+            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical "
+            "{ background: transparent; }")
 
         self._messages = QWidget()
         self._messages_lay = QVBoxLayout(self._messages)
@@ -672,21 +859,21 @@ class Plugin(BasePlugin):
         bar = QFrame()
         bar.setObjectName("ChatInputBar")
         bar.setMaximumWidth(900)
-        bg = theme.color("input_bg")
-        brd = theme.color("border")
-        bar.setStyleSheet(
-            f"#ChatInputBar {{ background-color: {bg}; border: 1px solid {brd}; "
-            f"border-radius: 22px; }}")
+        self._input_bar_frame = bar
+        self._style_input_bar(focused=False)
         row = QHBoxLayout(bar)
         row.setContentsMargins(8, 6, 8, 6)
         row.setSpacing(6)
 
-        self.chat_entry = QLineEdit()
+        self.chat_entry = _ChatInput()
         self.chat_entry.setPlaceholderText("Message Resistine AI...")
         self.chat_entry.setStyleSheet(
-            "QLineEdit { background: transparent; border: none; "
-            "font-size: 15px; padding: 6px 10px; }")
-        self.chat_entry.returnPressed.connect(self.send_message)
+            "QTextEdit { background: transparent; border: none; "
+            "font-size: 15px; padding: 4px 8px; }")
+        self.chat_entry.send_requested.connect(self.send_message)
+        self.chat_entry.textChanged.connect(self._on_input_changed)
+        self.chat_entry.focus_changed.connect(self._set_input_focus_ring)
+        self.chat_entry._fit_height()  # re-fit now the stylesheet font is set
         row.addWidget(self.chat_entry, 1)
 
         self.send_button = QPushButton("↑")
@@ -694,24 +881,64 @@ class Plugin(BasePlugin):
         self.send_button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._style_send_button(stop=False)
         self.send_button.clicked.connect(self.send_message)
-        row.addWidget(self.send_button)
+        # Bottom-align so the button stays anchored while the input grows.
+        row.addWidget(self.send_button, 0, Qt.AlignmentFlag.AlignBottom)
 
         outer.addWidget(bar, 6)
         outer.addStretch(1)
         return wrap
 
+    def _style_input_bar(self, *, focused: bool) -> None:
+        """Focus ring: 2px accent border while the input has focus."""
+        bg = theme.color("input_bg")
+        brd = theme.color("accent") if focused else theme.color("border")
+        width = 2 if focused else 1
+        self._input_bar_frame.setStyleSheet(
+            f"#ChatInputBar {{ background-color: {bg}; "
+            f"border: {width}px solid {brd}; border-radius: 22px; }}")
+
+    def _set_input_focus_ring(self, focused: bool) -> None:
+        try:
+            self._style_input_bar(focused=focused)
+        except Exception:
+            pass
+
+    def _on_input_changed(self) -> None:
+        """Send button: disabled when empty, enabled with content.
+
+        While streaming, the button is the Stop control and stays enabled
+        regardless of input content.
+        """
+        if self._stream_ctrl is not None and self._stream_ctrl.is_active:
+            return
+        try:
+            self.send_button.setEnabled(
+                bool(self.chat_entry.text().strip())
+                and self.client is not None)
+        except Exception:
+            pass
+
     def _style_send_button(self, *, stop: bool) -> None:
         if stop:
+            # Smaller square glyph — at 17px the "■" sat below the optical
+            # centre and looked pasted-on.
             bg, hover, text = _STOP_RED, _STOP_RED_HOVER, "■"
+            size, pad = 13, "0px"
         else:
+            # Bigger, semi-bold arrow, nudged up 2px to optically centre it.
             bg, hover, text = RESISTINE_BLUE, _ACCENT_HOVER, "↑"
+            size, pad = 20, "0px 0px 2px 0px"
         self.send_button.setText(text)
         self.send_button.setStyleSheet(
             f"QPushButton {{ background-color: {bg}; color: #ffffff; "
-            f"border: none; border-radius: 18px; font-size: 17px; "
-            f"font-weight: 700; padding: 0; }}"
+            f"border: none; border-radius: 18px; font-size: {size}px; "
+            f"font-weight: 600; padding: {pad}; text-align: center; }}"
             f"QPushButton:hover {{ background-color: {hover}; }}"
-            f"QPushButton:disabled {{ background-color: #6B7280; }}")
+            # Disabled = same blue at reduced opacity, not gray — it should
+            # still read as the send button, just inactive.
+            f"QPushButton:disabled {{ "
+            f"background-color: rgba(13, 83, 148, 0.45); "
+            f"color: rgba(255, 255, 255, 0.7); }}")
 
     # ---- History drawer ---------------------------------------------------
     def _build_sidebar(self) -> QWidget:
@@ -794,8 +1021,15 @@ class Plugin(BasePlugin):
         row = QFrame()
         row.setObjectName("ChatHistoryItem")
         bgrule = f"background-color: {active_bg};" if active else ""
+        hover_bg = theme.color("sidebar_hover_bg")
         row.setStyleSheet(
-            f"#ChatHistoryItem {{ {bgrule} border-radius: 8px; }}")
+            f"#ChatHistoryItem {{ {bgrule} border-radius: 8px; }}"
+            f"#ChatHistoryItem:hover {{ background-color: {hover_bg}; }}")
+        # The WHOLE row selects the chat, not just the text label — clicking
+        # the padding around the title previously did nothing, which made
+        # the drawer feel broken.
+        row.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        row.mousePressEvent = lambda _e, s=sid: self._select_chat(s)
         rl = QHBoxLayout(row)
         rl.setContentsMargins(8, 4, 4, 4)
         rl.setSpacing(2)
@@ -974,9 +1208,7 @@ class Plugin(BasePlugin):
         return bubble
 
     def _add_assistant_bubble(self, md: str | None = None) -> _Bubble:
-        bubble = _Bubble(
-            is_user=False, max_width=self._bubble_widths()[1],
-            animate=self._animations_enabled())
+        bubble = _Bubble(is_user=False, max_width=self._bubble_widths()[1])
         if md is not None:
             bubble.set_text(md)
         self._insert_row(_BubbleRow(bubble, is_user=False))
@@ -984,19 +1216,29 @@ class Plugin(BasePlugin):
 
     @staticmethod
     def _animations_enabled() -> bool:
-        """Read once per bubble (not per frame — settings.get hits disk)."""
+        """The Settings 'Disable typing animation' toggle, inverted.
+
+        Governs how response TEXT renders: enabled → stream in as tokens
+        arrive; disabled → keep the spinner and show the full response at
+        once when it completes. (The spinner itself always animates.)
+        Read once per send, not per chunk — settings.get hits disk.
+        """
         try:
             return not bool(settings.get("chat", "disable_animation", False))
         except Exception:
             return True
 
     def apply_animation_setting(self) -> None:
-        """Apply the 'Disable typing animation' toggle to an in-flight
-        response immediately. Called by the Settings plugin on toggle."""
-        bubble = self._current_asst_bubble
-        if bubble is not None:
+        """Apply the toggle to an in-flight response immediately. Called by
+        the Settings plugin on toggle."""
+        self._text_anim = self._animations_enabled()
+        # Re-enabling mid-stream: flush what has accumulated so the bubble
+        # catches up instead of staying on the spinner until the next chunk.
+        if (self._text_anim and self._accumulated_text
+                and self._current_asst_bubble is not None):
             try:
-                bubble.set_animate(self._animations_enabled())
+                self._current_asst_bubble.set_text(
+                    self._accumulated_text, streaming=True)
             except Exception:
                 pass
 
@@ -1041,10 +1283,18 @@ class Plugin(BasePlugin):
         QTimer.singleShot(0, _do)
 
     def _apply_pin(self, row: QWidget) -> None:
+        """Smoothly animate the viewport so *row* lands at the top."""
         try:
             bar = self._scroll.verticalScrollBar()
             top = row.mapTo(self._messages, row.rect().topLeft()).y()
-            bar.setValue(min(top, bar.maximum()))
+            target = min(top, bar.maximum())
+            anim = QPropertyAnimation(bar, b"value", self._scroll)
+            anim.setDuration(260)
+            anim.setStartValue(bar.value())
+            anim.setEndValue(target)
+            anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
+            anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+            self._scroll_anim = anim  # ref: GC'd animations never finish
         except Exception:
             pass
 
@@ -1177,6 +1427,13 @@ class Plugin(BasePlugin):
 
         user_row = self._add_user_bubble(user_text).parentWidget()
         self._current_asst_bubble = self._add_assistant_bubble()
+        # Arrival fades are motion polish, not typing animation — they run
+        # regardless of the Settings text-animation toggle.
+        try:
+            user_row.play_arrival()
+            self._current_asst_bubble.parentWidget().play_arrival()
+        except Exception:
+            pass
         # Pin the just-sent message to the top of the viewport; the reply
         # streams into the reserved space below it.
         self._pin_row_to_top(user_row)
@@ -1194,6 +1451,7 @@ class Plugin(BasePlugin):
 
         self._accumulated_text = ""
         self._response_persisted = False
+        self._text_anim = self._animations_enabled()  # per-send snapshot
         self._stream_ctrl = StreamController(
             app=self.app, on_chunk=self._on_stream_chunk,
             on_done=self._on_stream_done, on_error=self._on_stream_error)
@@ -1201,6 +1459,7 @@ class Plugin(BasePlugin):
                 if self.base_url else list(self.conversation_history))
         extra = ({"session_id": self.session_id}
                  if self.base_url and self.session_id else None)
+        self._last_payload = (msgs, extra)  # kept for error-bubble Retry
         try:
             self._stream_ctrl.start(
                 client=self.client, model=self.model, messages=msgs,
@@ -1225,6 +1484,10 @@ class Plugin(BasePlugin):
 
     def _on_stream_chunk(self, chunk_text: str) -> None:
         self._accumulated_text += chunk_text
+        # Typing animation OFF → leave the spinner up; the full text lands
+        # in one go at _on_stream_done.
+        if not getattr(self, "_text_anim", True):
+            return
         if self._current_asst_bubble is not None:
             self._current_asst_bubble.set_text(
                 self._accumulated_text, streaming=True)
@@ -1278,18 +1541,64 @@ class Plugin(BasePlugin):
                 pass
         elif self._current_asst_bubble is not None:
             try:
-                self._current_asst_bubble.set_text(f"Error: {error_msg}")
+                bubble = self._current_asst_bubble
+                bubble.set_text(f"⚠ {error_msg}")
+                row = bubble.parentWidget()
+                bubble.add_retry(
+                    lambda _=False, r=row: self._retry_after_error(r))
             except Exception:
                 pass
         self._current_asst_bubble = None
         self._unlock_input()
         self._save_current_session()
 
+    def _retry_after_error(self, error_row: QWidget) -> None:
+        """Replace an error bubble and re-run the failed request."""
+        if self.client is None or (
+                self._stream_ctrl is not None
+                and self._stream_ctrl.is_active):
+            return
+        payload = getattr(self, "_last_payload", None)
+        if not payload:
+            return
+        try:
+            error_row.deleteLater()
+        except Exception:
+            pass
+        self._current_asst_bubble = self._add_assistant_bubble()
+        try:
+            self._current_asst_bubble.parentWidget().play_arrival()
+        except Exception:
+            pass
+        self.chat_entry.setEnabled(False)
+        self.send_button.setEnabled(True)
+        self._style_send_button(stop=True)
+        try:
+            self.send_button.clicked.disconnect()
+        except Exception:
+            pass
+        self.send_button.clicked.connect(self._stop_streaming)
+        self._accumulated_text = ""
+        self._response_persisted = False
+        self._text_anim = self._animations_enabled()
+        msgs, extra = payload
+        self._stream_ctrl = StreamController(
+            app=self.app, on_chunk=self._on_stream_chunk,
+            on_done=self._on_stream_done, on_error=self._on_stream_error)
+        try:
+            self._stream_ctrl.start(
+                client=self.client, model=self.model, messages=msgs,
+                temperature=0.7, extra_body=extra, base_url=self.base_url)
+        except Exception as e:
+            self._on_stream_error(str(e))
+
     def _unlock_input(self) -> None:
         try:
             self.chat_entry.setEnabled(True)
             self._style_send_button(stop=False)
-            self.send_button.setEnabled(True)
+            # Empty input → send stays disabled until the user types.
+            self.send_button.setEnabled(
+                bool(self.chat_entry.text().strip()))
             try:
                 self.send_button.clicked.disconnect()
             except Exception:
@@ -1315,7 +1624,8 @@ class Plugin(BasePlugin):
         else:
             entry.setEnabled(True)
             entry.setPlaceholderText("Message Resistine AI...")
-            btn.setEnabled(True)
+            # Disabled-when-empty: only enable if there's content to send.
+            btn.setEnabled(bool(entry.text().strip()))
 
     def _use_suggestion(self, text: str) -> None:
         if self.client is None:
