@@ -260,6 +260,14 @@ class Plugin(BasePlugin):
 
     def change_appearance_mode(self, new_mode: str):
         settings.set("ui", "appearance_mode", new_mode)
+        # Defer the actual restyle by one event-loop tick. This signal fires
+        # while the QComboBox popup is still closing; applying an app-wide
+        # stylesheet/palette right now re-polishes that still-open popup and
+        # makes its little dropdown window flash repeatedly on Windows. Letting
+        # the popup fully dismiss first removes the flicker.
+        self.app.after(0, lambda: self._apply_appearance_mode(new_mode))
+
+    def _apply_appearance_mode(self, new_mode: str):
         try:
             self.app.set_appearance_mode(new_mode)
         except Exception as e:
