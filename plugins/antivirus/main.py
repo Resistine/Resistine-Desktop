@@ -293,7 +293,7 @@ class Plugin(BasePlugin):
     _INITIAL_POLL_INTERVAL = 2
 
     def _poll_initial_status(self):
-        """Poll daemon state so the sidebar shows the right icon."""
+        """Poll daemon state so the sidebar icon AND dashboard tile are right."""
         self._init_ready.wait(timeout=10)
         for attempt in range(1 + self._INITIAL_POLL_RETRIES):
             try:
@@ -303,7 +303,18 @@ class Plugin(BasePlugin):
                 return
             self._last_state = status.get("state")
             self._last_status = status
-            self.status = self.check_status()
+            new_status = self.check_status()
+            # Refresh the dashboard tile when the real status finally lands.
+            # Without this, the tile keeps the stale "Warning" set in __init__
+            # (before this async poll ran) — visible on macOS, where the poll
+            # waits up to 10s for daemon init before the first read.
+            if new_status != self.status:
+                self.status = new_status
+                try:
+                    self.app.after(
+                        0, lambda: self.app.update_plugin(self.id))
+                except Exception:
+                    pass
 
             if status.get("runtime_state") != "offline":
                 return

@@ -178,6 +178,37 @@ class Plugin(BasePlugin):
         self._reconnect_btn = None
         self._reconnecting = False
         self.status = self.get_status()
+        # Populate the cache in the background so the DASHBOARD tile shows the
+        # real status without the user first opening the Endpoint screen.
+        # Without this the cache stays None until _build_status_section runs,
+        # so the tile reads "Warning" on a fresh dashboard (was macOS-visible;
+        # the per-screen poll only exists once the screen is built).
+        if _platform_supported:
+            threading.Thread(
+                target=self._probe_initial_status, daemon=True).start()
+
+    def _probe_initial_status(self):
+        """One-shot background status read to seed the dashboard tile."""
+        state = _safe(get_agent_status)
+        if state is None:
+            return
+        conn = (_safe(get_agent_connection, "unknown")
+                if state == "Running" else "unknown")
+
+        def _apply(s=state, c=conn):
+            if self._destroyed:
+                return
+            self._cached_state = s
+            self._cached_conn = c
+            new_status = self.check_status()
+            if new_status != self.status:
+                self.status = new_status
+                self.app.update_plugin(self.id)
+
+        try:
+            self.app.after(0, _apply)
+        except Exception:
+            pass
 
     # ── Status ─────────────────────────────────────────────────────────
 
