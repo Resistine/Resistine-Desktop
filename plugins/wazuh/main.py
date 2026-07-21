@@ -114,6 +114,7 @@ _COLOR_MUTED = ("#666666", "#aaaaaa")
 _COLOR_ERROR = ("#C5221F", "#FF474C")
 _COLOR_OK = ("#1E8E3E", "#2CC985")
 _COLOR_ACCENT = ("#3a7ebf", "#5b9bd5")
+_COLOR_WARN = ("#B45309", "#FBBF24")
 
 _POLL_INTERVAL_MS = 10_000
 
@@ -173,6 +174,7 @@ class Plugin(BasePlugin):
         self.main_container = None
         # Cheap cached agent-state string; refreshed by the background poll.
         self._cached_state = None
+        self._cached_conn = None
         self._reconnect_btn = None
         self._reconnecting = False
         self.status = self.get_status()
@@ -185,16 +187,21 @@ class Plugin(BasePlugin):
             return None
         state = self._cached_state
         if state == "Running":
-            # "Running" only means the daemon is alive. If we can positively
-            # read that it's not connected to the manager (e.g. its key was
-            # invalidated server-side), surface a Warning so the dashboard tile
-            # and the Reconnect affordance reflect reality. "unknown" (state
-            # file unreadable) is NOT downgraded — we don't guess.
-            try:
-                if get_agent_connection() == "disconnected":
-                    return "Warning"
-            except Exception:
-                pass
+            # "Running" only means the daemon is alive. If we positively know
+            # it's not connected to the manager (e.g. its key was invalidated
+            # server-side), surface a Warning so the dashboard tile and the
+            # Reconnect affordance reflect reality. "unknown" is NOT
+            # downgraded — we don't guess. Uses the poll-maintained cache;
+            # falls back to a live read the first time through.
+            conn = self._cached_conn
+            if conn is None:
+                try:
+                    conn = get_agent_connection()
+                except Exception:
+                    conn = "unknown"
+                self._cached_conn = conn
+            if conn == "disconnected":
+                return "Warning"
             return "OK"
         if state == "Stopped":
             return "Error"
@@ -570,10 +577,13 @@ class Plugin(BasePlugin):
         self._cached_state = state
         is_running = state == "Running"
         # Live manager-connection status \u2014 distinct from "process running".
-        # "disconnected" is the only reading we treat as a hard fault;
-        # "pending"/"unknown" stay neutral so we never cry wolf (the state
-        # file can be root-owned and unreadable on some installs).
-        connection = get_agent_connection() if is_running else "unknown"
+        # Resolution: wazuh-agentd.state file → unprivileged socket probe
+        # (the state file is root-owned on macOS/Linux GUI sessions, which
+        # used to read as "Unknown" on perfectly healthy agents) →
+        # ossec.log tail. "disconnected" remains the only hard fault.
+        connection = (_safe(get_agent_connection, "unknown")
+                      if is_running else "unknown")
+        self._cached_conn = connection
         not_connected = is_running and connection == "disconnected"
 
         if not is_running:
@@ -582,6 +592,8 @@ class Plugin(BasePlugin):
             status_color, status_text = _COLOR_ERROR, "Not Connected"
         elif connection == "connected":
             status_color, status_text = _COLOR_OK, "Connected"
+        elif connection == "pending":
+            status_color, status_text = _COLOR_WARN, "Connecting…"
         else:
             status_color, status_text = _COLOR_OK, "Running"
 
@@ -620,44 +632,69 @@ class Plugin(BasePlugin):
         body.addLayout(toggle_row)
         body.addSpacing(8)
 
-        # Reconnect affordance. When we can confirm the agent is running but
-        # not connected (e.g. the old agent was deleted server-side after a
-        # reinstall, invalidating the reused key), show a clear warning. The
-        # button re-registers the agent under a fresh identity — the actual
-        # fix, since a plain toggle just restarts the daemon with the same
-        # dead key. Recovery is user-initiated (one admin prompt), never a
-        # surprise background dialog.
-        if is_running:
-            if not_connected:
-                warn = QLabel(
-                    "Agent is running but not connected to the SIEM manager.\n"
-                    "If the old agent was removed on the server, Reconnect to "
-                    "re-register under a new identity.")
-                warn.setWordWrap(True)
-                warn.setStyleSheet(
-                    f"font-size: 13px; color: {_c(_COLOR_ERROR)};")
-                body.addWidget(warn)
-                body.addSpacing(4)
-            self._reconnect_btn = QPushButton("Reconnect")
-            self._reconnect_btn.setMinimumHeight(30)
-            self._reconnect_btn.setMaximumWidth(140)
-            self._reconnect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            self._reconnect_btn.clicked.connect(self._reconnect_agent)
-            body.addWidget(self._reconnect_btn, 0, Qt.AlignmentFlag.AlignLeft)
-            body.addSpacing(8)
-        else:
-            self._reconnect_btn = None
-
         self._add_separator(body)
 
         self._add_detail_rows(body, {
             "Status": state,
-            "Connection": connection.capitalize(),
+            # "Unknown" reads as a fault to users; a quiet dash is honest
+            # ("we can't read it") without implying something is wrong.
+            "Connection": ("—" if connection == "unknown"
+                           else connection.capitalize()),
             "Agent Name": _safe(get_agent_name, "—"),
             "Agent Group": _safe(get_agent_group, "—"),
             "Manager": WAZUH_MANAGER,
             "Platform": f"{_PLATFORM} {platform.release()}",
         })
+
+        # Recovery affordance — bottom of the card, and ONLY when the
+        # connection is not confirmed healthy. A connected agent shows no
+        # Reconnect at all. Running-but-not-connected (e.g. the key was
+        # invalidated server-side after a reinstall) gets an explanation +
+        # button; the button re-registers under a fresh identity — the
+        # actual fix, since a plain toggle restarts the daemon with the
+        # same dead key. Recovery is user-initiated (one admin prompt),
+        # never a surprise background dialog.
+        if is_running and connection != "connected":
+            body.addSpacing(12)
+            self._add_separator(body)
+            if not_connected:
+                warn = QLabel(
+                    "Agent is running but not connected to the SIEM "
+                    "manager. If the old agent was removed on the server, "
+                    "reconnect to re-register under a new identity.")
+                warn.setStyleSheet(
+                    f"font-size: 13px; color: {_c(_COLOR_ERROR)};")
+            else:
+                warn = QLabel(
+                    "Connection can't be confirmed. If the dashboard "
+                    "shows this device offline, reconnect to re-register "
+                    "the agent.")
+                warn.setStyleSheet(
+                    f"font-size: 13px; color: {_c(_COLOR_MUTED)};")
+            warn.setWordWrap(True)
+
+            self._reconnect_btn = QPushButton("Reconnect")
+            self._reconnect_btn.setMinimumHeight(32)
+            self._reconnect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            accent = _c(_COLOR_ACCENT)
+            self._reconnect_btn.setStyleSheet(
+                f"QPushButton {{ background: transparent; color: {accent}; "
+                f"border: 1px solid {accent}; border-radius: 8px; "
+                f"padding: 4px 18px; font-size: 13px; font-weight: 600; }}"
+                f"QPushButton:hover {{ background-color: {accent}; "
+                f"color: #ffffff; }}"
+                f"QPushButton:disabled {{ color: {_c(_COLOR_MUTED)}; "
+                f"border-color: {_c(_COLOR_MUTED)}; }}")
+            self._reconnect_btn.clicked.connect(self._reconnect_agent)
+
+            recover_row = QHBoxLayout()
+            recover_row.setSpacing(16)
+            recover_row.addWidget(warn, 1, Qt.AlignmentFlag.AlignVCenter)
+            recover_row.addWidget(
+                self._reconnect_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+            body.addLayout(recover_row)
+        else:
+            self._reconnect_btn = None
 
     def _reconnect_agent(self):
         """Force a fresh manager re-enrollment to recover a stuck agent.
@@ -1026,26 +1063,40 @@ class Plugin(BasePlugin):
 
         def _check():
             state = _safe(get_agent_status)
-            self.app.after(0, lambda s=state: self._on_poll_result(s))
+            # Connection is only meaningful while the daemon runs; reading
+            # it here (worker thread) keeps netstat/file I/O off the GUI.
+            conn = (_safe(get_agent_connection, "unknown")
+                    if state == "Running" else "unknown")
+            self.app.after(
+                0, lambda s=state, c=conn: self._on_poll_result(s, c))
 
         threading.Thread(target=_check, daemon=True).start()
 
-    def _on_poll_result(self, state):
+    def _on_poll_result(self, state, conn="unknown"):
         if self._destroyed:
             self._status_poll_id = None
             return
+        changed = False
         if state is not None and state != self._cached_state:
             self._cached_state = state
+            changed = True
+        if conn is not None and conn != self._cached_conn:
+            # Connection transitions (connected → disconnected and back)
+            # matter even when the process state hasn't changed — they flip
+            # the header label and the Reconnect affordance.
+            self._cached_conn = conn
+            changed = True
+        if changed:
             new_status = self.check_status()
-            if new_status != self.status:
-                logger.info(
-                    f"SIEM agent status changed: {self.status} -> {new_status}")
-                self.status = new_status
-                self.app.update_plugin(self.id)
-                # update_plugin rebuilds this screen; the new instance arms its
-                # own poll, so stop here.
-                self._status_poll_id = None
-                return
+            logger.info(
+                f"SIEM agent poll: state={state} conn={conn} "
+                f"tile {self.status} -> {new_status}")
+            self.status = new_status
+            self.app.update_plugin(self.id)
+            # update_plugin rebuilds this screen; the new instance arms its
+            # own poll, so stop here.
+            self._status_poll_id = None
+            return
         self._status_poll_id = self.app.after(
             _POLL_INTERVAL_MS, self._poll_tick)
 
