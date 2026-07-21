@@ -682,6 +682,17 @@ class Plugin(BasePlugin):
             except Exception as e:
                 ok, msg = False, str(e)
 
+            # reenroll_agent() already restarts the service. Wait for it to
+            # actually report Running before refreshing, so the toggle shows ON
+            # and the user isn't left flipping it back on (a second admin
+            # prompt). systemctl restart can return while still "activating".
+            if ok:
+                import time as _t
+                for _ in range(10):
+                    if _safe(get_agent_status) == "Running":
+                        break
+                    _t.sleep(0.5)
+
             def _done():
                 self._reconnecting = False
                 self.app.show_notification(

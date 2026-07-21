@@ -246,6 +246,16 @@ if [ "$BOOTSTRAP_RC" -ne 0 ]; then
     exit 1
 fi
 
+# --- Make live agent state readable for the UI's connection status ---
+# wazuh-agentd.state + ossec.log are root-owned and /Library/Ossec/var/run isn't
+# traversable by the (non-root) app, so get_agent_connection() reads "unknown".
+# Loosen the dirs + files so the UI can show connected/pending/disconnected.
+# wazuh-agentd truncate-writes the state file, so the mode persists.
+sleep 2
+chmod o+rx /Library/Ossec/var /Library/Ossec/var/run /Library/Ossec/logs 2>/dev/null || true
+chmod o+r /Library/Ossec/var/run/wazuh-agentd.state 2>/dev/null || true
+chmod o+r /Library/Ossec/logs/ossec.log 2>/dev/null || true
+
 # --- Done ---
 write_status "{\"status\":\"success\",\"step\":\"done\",\"enrollment\":\"${ENROLLMENT_RESULT}\",\"agent_name\":\"${AGENT_NAME}\"}"
 

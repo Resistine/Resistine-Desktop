@@ -164,6 +164,49 @@ def _set_ossec_agent_name(ossec_conf, agent_name):
     )
 
 
+def _set_ossec_enrollment(ossec_conf, agent_name, agent_group):
+    """Pin BOTH <agent_name> and <groups> in the <enrollment> block.
+
+    agent-auth's -A/-G only set the name/group for that one explicit
+    registration. wazuh-agentd's built-in auto-enrollment (which fires on a
+    plain restart with no valid key — e.g. a region switch or key wipe) reads
+    <enrollment><agent_name>/<groups> from ossec.conf instead. The stock config
+    has neither tag, so auto-enrollment lands under the bare hostname with NO
+    group. Setting both here keeps every enrollment path (explicit or auto) on
+    the same unique name AND the correct group. Runs after _set_ossec_agent_name
+    so the <enrollment> block is guaranteed to exist for the <groups> insert.
+    """
+    return (
+        _set_ossec_agent_name(ossec_conf, agent_name)
+        + "\n"
+        + (
+            f"if grep -q '<groups>' '{ossec_conf}'; then "
+            f"sed -i 's|<groups>.*</groups>|<groups>{agent_group}</groups>|' '{ossec_conf}'; "
+            f"else "
+            f"sed -i 's|<enrollment>|<enrollment>\\n      <groups>{agent_group}</groups>|' '{ossec_conf}'; "
+            f"fi"
+        )
+    )
+
+
+def _make_agent_state_readable():
+    """Best-effort shell to let the (non-root) app read the agent's live state.
+
+    wazuh-agentd.state + ossec.log are root-owned and /var/ossec/var/run isn't
+    even traversable by the app user, so the UI's connection status reads as
+    'unknown'. Make the dirs traversable and the files world-readable so
+    get_agent_connection() can report connected/pending/disconnected. Guarded so
+    a permissions quirk never fails the enroll. (wazuh-agentd truncate-writes
+    the state file, so the mode persists across updates.)
+    """
+    run = f"{LINUX_WAZUH_DIR}/var/run"
+    return (
+        f"chmod o+rx '{LINUX_WAZUH_DIR}/var' '{run}' '{LINUX_WAZUH_DIR}/logs' 2>/dev/null || true; "
+        f"chmod o+r '{run}/wazuh-agentd.state' 2>/dev/null || true; "
+        f"chmod o+r '{LINUX_WAZUH_DIR}/logs/ossec.log' 2>/dev/null || true"
+    )
+
+
 def _get_os_info():
     """Determine package family (deb, rpm, arch) using LinuxDistro utility.
 
@@ -501,11 +544,13 @@ def full_install(progress_callback=None):
 
     script = f"""
         {install_cmd}
-        {_set_ossec_agent_name(ossec_conf, agent_name)}
+        {_set_ossec_enrollment(ossec_conf, agent_name, agent_group)}
         {enrollment_script}
         systemctl daemon-reload
         systemctl enable wazuh-agent
         systemctl restart wazuh-agent
+        sleep 2
+        {_make_agent_state_readable()}
     """
     
     if progress_callback:
@@ -552,11 +597,13 @@ def reenroll_agent():
         if [ ! -s '{_CLIENT_KEYS}' ]; then echo REENROLL_NO_KEY; exit 1; fi
         chmod 640 '{_CLIENT_KEYS}'
         chown wazuh:wazuh '{_CLIENT_KEYS}' 2>/dev/null || chown root:wazuh '{_CLIENT_KEYS}' 2>/dev/null
-        {_set_ossec_agent_name(ossec_conf, new_name)}
+        {_set_ossec_enrollment(ossec_conf, new_name, group)}
         mkdir -p '{backup_dir}'; cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}' 2>/dev/null
         chown {os.getuid()}:{os.getgid()} '{_KEY_BACKUP}' 2>/dev/null
         systemctl enable wazuh-agent 2>/dev/null
         systemctl restart wazuh-agent
+        sleep 2
+        {_make_agent_state_readable()}
         echo REENROLL_OK
     """
     success, output = run_privileged_command(["sh", "-c", script])
