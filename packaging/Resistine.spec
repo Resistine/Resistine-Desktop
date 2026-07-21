@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
 PyInstaller spec file for Resistine Desktop Application
-This bundles the Python Tkinter UI with all dependencies
+This bundles the Python PyQt6 UI with all dependencies
 Swift components (CLI, XPC, Network Extension) are added by build script
 """
 
@@ -47,11 +47,7 @@ datas = [
 
 # Hidden imports (modules not auto-detected)
 hiddenimports = [
-    'tkinter',
-    'tkinter.ttk',
-    'customtkinter',
     'PIL',
-    'PIL._tkinter_finder',
     'cryptography',
     'keyring',
     'keyring.backends',
@@ -64,10 +60,10 @@ hiddenimports = [
     'idna',
     'openai',
     'markdown',
-    'tkinterweb',
-    'html2text',
     'loguru',
     # OpenTelemetry (logger.py imports these; PyInstaller can't trace the submodules)
+    # Only the HTTP OTLP exporter is used — the grpc exporter (grpcio, ~18MB) is
+    # intentionally NOT bundled (see excludes below).
     'opentelemetry',
     'opentelemetry._logs',
     'opentelemetry.exporter.otlp.proto.http._log_exporter',
@@ -115,6 +111,14 @@ a = Analysis(
         'scipy',
         'pytest',
         'setuptools',
+        # OTLP grpc exporter path — only the HTTP exporter is used. grpcio ships
+        # an ~18MB compiled cygrpc extension; keep it out of the bundle.
+        'grpc',
+        'grpcio',
+        # Dead CustomTkinter-era GUI deps, removed in the PyQt6 migration.
+        'customtkinter',
+        'tkinterweb',
+        'html2text',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

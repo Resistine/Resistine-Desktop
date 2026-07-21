@@ -10,7 +10,6 @@ decorator
 distro
 elevate
 h11
-html2text
 httpcore
 httpx
 idna
@@ -37,14 +36,13 @@ requests
 secretstorage
 sniffio
 tee
-tkinterweb
 tqdm
 typing_extensions
 urllib3
 loguru
 opentelemetry-api
 opentelemetry-sdk
-opentelemetry-exporter-otlp
+opentelemetry-exporter-otlp-proto-http
 cairosvg
 uharfbuzz
 blackrenderer
