@@ -32,6 +32,7 @@ import random
 from PyQt6.QtCore import QSize, Qt, QTimer
 from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import (
+    QApplication,
     QStyle,
     QFrame,
     QHBoxLayout,
@@ -63,6 +64,15 @@ _SYSTEM_PROMPT = "You are SOC Copilot specialized in cybersecurity."
 _ICON_DIR = os.path.dirname(os.path.realpath(__file__))
 _SYS_MSG = {"role": "system", "content": _SYSTEM_PROMPT}
 _DEFAULT_BASE_URL = "https://dashboard.resisti.net:8002/v1"
+
+# Thinking spinner (braille) shown while waiting for the first token, ported
+# in spirit from the CustomTkinter build's AssistantBubble. Suppressed when
+# the user ticks "Disable typing animation" in Settings. Deliberately NO
+# in-text blinking cursor during streaming: appending/removing a glyph to a
+# word-wrapped Markdown label re-wraps the whole document every blink, which
+# made the bubble visibly jitter.
+_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+_SPINNER_MS = 80
 
 
 def _tls_verify() -> str | bool:
@@ -113,9 +123,11 @@ _SIDEBAR_WIDTH = 240
 class _Bubble(QFrame):
     """A single chat bubble — a rounded QLabel-bearing frame in a flow row."""
 
-    def __init__(self, *, is_user: bool, max_width: int):
+    def __init__(self, *, is_user: bool, max_width: int, animate: bool = True):
         super().__init__()
         self._is_user = is_user
+        # Animations only apply to assistant bubbles (spinner + typing cursor).
+        self._animate = animate and not is_user
         self.setSizePolicy(QSizePolicy.Policy.Maximum,
                            QSizePolicy.Policy.Preferred)
 
@@ -140,8 +152,13 @@ class _Bubble(QFrame):
         self._label = QLabel()
         self._label.setObjectName("ChatBubbleText")
         self._label.setWordWrap(True)
+        # Select by mouse drag AND keyboard (Cmd/Ctrl+A, shift-arrows) so the
+        # user can highlight their own inputs and copy them out.
         self._label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse)
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+        self._label.setCursor(QCursor(Qt.CursorShape.IBeamCursor))
+        self._fg = fg
         self._label.setStyleSheet(
             f"#ChatBubbleText {{ background: transparent; border: none; "
             f"color: {fg}; font-size: 14px; }}")
@@ -152,17 +169,148 @@ class _Bubble(QFrame):
         self._label.setMaximumWidth(max_width)
         lay.addWidget(self._label)
 
-        # Thinking placeholder (assistant only) until first chunk arrives.
+        # Raw source text (markdown for AI, plain for user) — copied verbatim
+        # by the copy button rather than the rendered rich text.
+        self._raw_text = ""
+
+        # Thinking-spinner state (assistant only) + streaming width lock.
+        self._spinner_idx = 0
+        self._spinner_timer: QTimer | None = None
+        self._thinking = False
+        self._width_locked = False
+
+        # Copy button under AI responses only. Hidden until real content
+        # arrives so it doesn't sit under the thinking indicator.
+        self._copy_btn: QPushButton | None = None
         if not is_user:
-            self._label.setText("…")
+            self._start_thinking()
+            self._copy_btn = self._build_copy_button()
+            copy_row = QHBoxLayout()
+            copy_row.setContentsMargins(0, 4, 0, 0)
+            copy_row.setSpacing(0)
+            copy_row.addWidget(self._copy_btn)
+            copy_row.addStretch(1)
+            lay.addLayout(copy_row)
         self._max_width = max_width
 
-    def set_text(self, text: str) -> None:
+    def _build_copy_button(self) -> QPushButton:
+        muted = theme.color("text_secondary")
+        btn = QPushButton("⧉  Copy")
+        btn.setObjectName("ChatCopyBtn")
+        btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn.setFlat(True)
+        btn.setStyleSheet(
+            "#ChatCopyBtn { background: transparent; border: none; "
+            f"color: {muted}; font-size: 12px; padding: 2px 4px; }}"
+            "#ChatCopyBtn:hover { text-decoration: underline; }")
+        btn.setVisible(False)
+        btn.clicked.connect(self._copy_to_clipboard)
+        return btn
+
+    def _copy_to_clipboard(self) -> None:
+        QApplication.clipboard().setText(self._raw_text)
+        if self._copy_btn is None:
+            return
+        self._copy_btn.setText("✓  Copied")
+        QTimer.singleShot(
+            1500,
+            lambda: self._copy_btn and self._copy_btn.setText("⧉  Copy"))
+
+    # -- thinking spinner + typing cursor ---------------------------------
+
+    def _label_style(self, *, muted: bool, italic: bool) -> str:
+        color = theme.color("text_secondary") if muted else self._fg
+        extra = "font-style: italic; " if italic else ""
+        return ("#ChatBubbleText { background: transparent; border: none; "
+                f"color: {color}; font-size: 14px; {extra}}}")
+
+    def _start_thinking(self) -> None:
+        """Show the pre-response indicator: an animated braille spinner, or a
+        static 'Thinking…' when animations are disabled."""
+        self._thinking = True
+        self._label.setTextFormat(Qt.TextFormat.PlainText)
+        self._label.setStyleSheet(self._label_style(muted=True, italic=True))
+        self._render_thinking()
+        if self._animate:
+            self._spinner_timer = QTimer(self)
+            self._spinner_timer.timeout.connect(self._tick_spinner)
+            self._spinner_timer.start(_SPINNER_MS)
+
+    def _render_thinking(self) -> None:
+        if self._animate:
+            frame = _SPINNER_FRAMES[self._spinner_idx % len(_SPINNER_FRAMES)]
+            self._label.setText(f"Thinking  {frame}")
+        else:
+            self._label.setText("Thinking…")
+
+    def _tick_spinner(self) -> None:
+        self._spinner_idx += 1
+        self._render_thinking()
+
+    def _end_thinking(self) -> None:
+        self._thinking = False
+        if self._spinner_timer is not None:
+            self._spinner_timer.stop()
+            self._spinner_timer = None
+        self._label.setStyleSheet(self._label_style(muted=False, italic=False))
+        self._label.setTextFormat(Qt.TextFormat.MarkdownText)
+        # Content is about to stream in — pin the width NOW so the bubble
+        # never resizes horizontally again for this response.
+        self._lock_width()
+
+    def _lock_width(self) -> None:
+        """Pin the bubble to its full column width for the response.
+
+        A word-wrapped QLabel recomputes its natural width on every
+        setText, so a streaming bubble changes width chunk-by-chunk and
+        visibly jitters side-to-side. Locking the width up front means
+        only height grows as text streams in — the stable, professional
+        behavior of Claude/ChatGPT response blocks.
+        """
+        self._width_locked = True
+        self._label.setMinimumWidth(self._max_width)
+
+    def set_animate(self, animate: bool) -> None:
+        """Toggle the thinking spinner on an in-flight bubble (Settings
+        changed live). Only meaningful while the turn is active."""
+        animate = animate and not self._is_user
+        if animate == self._animate:
+            return
+        self._animate = animate
+        if not animate:
+            if self._spinner_timer is not None:
+                self._spinner_timer.stop()
+                self._spinner_timer = None
+            if self._thinking:
+                self._render_thinking()  # static "Thinking…"
+        elif self._thinking:
+            self._render_thinking()
+            self._spinner_timer = QTimer(self)
+            self._spinner_timer.timeout.connect(self._tick_spinner)
+            self._spinner_timer.start(_SPINNER_MS)
+
+    def set_text(self, text: str, *, streaming: bool = False) -> None:
+        # `streaming` is accepted for call-site clarity; rendering is
+        # identical either way — the width lock does the stabilizing.
+        del streaming
+        # Strip leading whitespace/newlines: the backend prefixes tool turns
+        # with an indented "Running <tool>…" status, and Qt's Markdown
+        # renderer honors that leading whitespace as a first-line indent —
+        # which is what makes the first line of tool replies look pushed in.
+        text = text.lstrip()
+        self._raw_text = text
+        if not self._is_user and self._thinking and text:
+            self._end_thinking()
         self._label.setText(text)
+        # Reveal the copy button once the assistant has real content.
+        if self._copy_btn is not None and text and text != "…":
+            self._copy_btn.setVisible(True)
 
     def set_max_width(self, max_width: int) -> None:
         self._max_width = max_width
         self._label.setMaximumWidth(max_width)
+        if self._width_locked:
+            self._label.setMinimumWidth(max_width)
 
 
 class _BubbleRow(QWidget):
@@ -471,7 +619,13 @@ class Plugin(BasePlugin):
         self._messages_lay = QVBoxLayout(self._messages)
         self._messages_lay.setContentsMargins(0, 8, 0, 8)
         self._messages_lay.setSpacing(2)
-        self._messages_lay.addStretch(1)  # bottom spacer keeps rows top-packed
+        # Reserved space below the last turn so a freshly-sent user message can
+        # always scroll to the top of the viewport (Claude/ChatGPT feel), even
+        # when the AI reply is still short. Height is set on each send.
+        self._bottom_spacer = QWidget()
+        self._bottom_spacer.setFixedHeight(0)
+        self._messages_lay.addWidget(self._bottom_spacer)
+        self._messages_lay.addStretch(1)  # keeps rows top-packed when sparse
         self._scroll.setWidget(self._messages)
         # Re-fit every bubble's max width when the chat area resizes.
         _orig_resize = self._scroll.resizeEvent
@@ -820,20 +974,77 @@ class Plugin(BasePlugin):
         return bubble
 
     def _add_assistant_bubble(self, md: str | None = None) -> _Bubble:
-        bubble = _Bubble(is_user=False, max_width=self._bubble_widths()[1])
+        bubble = _Bubble(
+            is_user=False, max_width=self._bubble_widths()[1],
+            animate=self._animations_enabled())
         if md is not None:
             bubble.set_text(md)
         self._insert_row(_BubbleRow(bubble, is_user=False))
         return bubble
 
+    @staticmethod
+    def _animations_enabled() -> bool:
+        """Read once per bubble (not per frame — settings.get hits disk)."""
+        try:
+            return not bool(settings.get("chat", "disable_animation", False))
+        except Exception:
+            return True
+
+    def apply_animation_setting(self) -> None:
+        """Apply the 'Disable typing animation' toggle to an in-flight
+        response immediately. Called by the Settings plugin on toggle."""
+        bubble = self._current_asst_bubble
+        if bubble is not None:
+            try:
+                bubble.set_animate(self._animations_enabled())
+            except Exception:
+                pass
+
     def _insert_row(self, row: QWidget) -> None:
-        # Insert before the trailing stretch so rows pack from the top.
-        self._messages_lay.insertWidget(self._messages_lay.count() - 1, row)
+        # Insert above the reserved bottom spacer (and trailing stretch) so
+        # rows pack from the top and the spacer always stays last. If the
+        # spacer was somehow torn down, recreate it rather than crash.
+        try:
+            idx = self._messages_lay.indexOf(self._bottom_spacer)
+        except RuntimeError:
+            idx = -1
+        if idx < 0:
+            self._bottom_spacer = QWidget()
+            self._bottom_spacer.setFixedHeight(0)
+            self._messages_lay.insertWidget(
+                self._messages_lay.count() - 1, self._bottom_spacer)
+            idx = self._messages_lay.indexOf(self._bottom_spacer)
+        self._messages_lay.insertWidget(idx, row)
 
     def _scroll_to_bottom(self) -> None:
         try:
             bar = self._scroll.verticalScrollBar()
             QTimer.singleShot(0, lambda: bar.setValue(bar.maximum()))
+        except Exception:
+            pass
+
+    def _pin_row_to_top(self, row: QWidget) -> None:
+        """Scroll so *row* sits at the top of the viewport (Claude-style).
+
+        The bottom spacer is grown to a full viewport height first so the
+        row can actually reach the top even when the reply below it is still
+        short; the assistant response then streams into the space below.
+        """
+        def _do() -> None:
+            try:
+                vp_h = self._scroll.viewport().height()
+                self._bottom_spacer.setFixedHeight(vp_h)
+                # Let the layout re-run with the enlarged spacer, then scroll.
+                QTimer.singleShot(0, lambda: self._apply_pin(row))
+            except Exception:
+                pass
+        QTimer.singleShot(0, _do)
+
+    def _apply_pin(self, row: QWidget) -> None:
+        try:
+            bar = self._scroll.verticalScrollBar()
+            top = row.mapTo(self._messages, row.rect().topLeft()).y()
+            bar.setValue(min(top, bar.maximum()))
         except Exception:
             pass
 
@@ -928,12 +1139,15 @@ class Plugin(BasePlugin):
         self._accumulated_text = ""
         self._response_persisted = False
         self._clear_welcome()
-        # Remove every message row (keep the trailing stretch).
-        while self._messages_lay.count() > 1:
-            item = self._messages_lay.takeAt(0)
-            w = item.widget()
-            if w is not None:
+        # Remove every message row, but keep the reserved bottom spacer and
+        # the trailing stretch. Reset the spacer so a loaded conversation
+        # scrolls normally instead of opening with a screen of blank space.
+        for i in reversed(range(self._messages_lay.count())):
+            w = self._messages_lay.itemAt(i).widget()
+            if w is not None and w is not self._bottom_spacer:
+                self._messages_lay.takeAt(i)
                 w.deleteLater()
+        self._bottom_spacer.setFixedHeight(0)
         self._restore_history()
         self._refresh_sidebar()
 
@@ -961,9 +1175,11 @@ class Plugin(BasePlugin):
         self._clear_welcome()
         self.chat_entry.clear()
 
-        self._add_user_bubble(user_text)
+        user_row = self._add_user_bubble(user_text).parentWidget()
         self._current_asst_bubble = self._add_assistant_bubble()
-        self._scroll_to_bottom()
+        # Pin the just-sent message to the top of the viewport; the reply
+        # streams into the reserved space below it.
+        self._pin_row_to_top(user_row)
         self.conversation_history.append(
             {"role": "user", "content": user_text})
 
@@ -1010,8 +1226,12 @@ class Plugin(BasePlugin):
     def _on_stream_chunk(self, chunk_text: str) -> None:
         self._accumulated_text += chunk_text
         if self._current_asst_bubble is not None:
-            self._current_asst_bubble.set_text(self._accumulated_text)
-        self._scroll_to_bottom()
+            self._current_asst_bubble.set_text(
+                self._accumulated_text, streaming=True)
+        # No auto-scroll here: the user message stays pinned to the top and
+        # the reply streams into the reserved space below it. Chasing the
+        # bottom on every chunk would yank the view away from what's being
+        # read.
 
     def _on_stream_done(self, full_text: str) -> None:
         if getattr(self, "_response_persisted", False):
@@ -1040,7 +1260,8 @@ class Plugin(BasePlugin):
         self._unlock_input()
         self._save_current_session()
         self._refresh_sidebar()
-        self._scroll_to_bottom()
+        # Leave the view where it is — the user message stays pinned near the
+        # top with the completed reply below it, matching Claude/ChatGPT.
 
     def _on_stream_error(self, error_msg: str) -> None:
         if getattr(self, "_response_persisted", False):

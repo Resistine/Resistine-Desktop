@@ -224,6 +224,15 @@ class Plugin(BasePlugin):
     def save_animation_setting(self):
         settings.set("chat", "disable_animation",
                      self.disable_animation_checkbox.isChecked())
+        # Apply to an in-flight chat response right away, not just next turn.
+        for plugin in getattr(self.app, "plugin_list", []):
+            if plugin.get_name() == "Chat" and hasattr(
+                    plugin, "apply_animation_setting"):
+                try:
+                    plugin.apply_animation_setting()
+                except Exception:
+                    pass
+                break
 
     def save_api_key(self):
         api_key = self.api_key_entry.text().strip()

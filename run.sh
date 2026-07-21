@@ -86,6 +86,13 @@ CYGWIN* | MINGW* | MSYS*)
 	;;
 esac
 
+# Chat debugging: make the OpenAI-compatible client log the raw HTTP
+# request/response for every chat turn — you'll see whether stream:true
+# is sent, each streamed chunk, and exactly when the server closes the
+# stream (e.g. after a background run_security_diagnostic kickoff).
+# Override with `OPENAI_LOG=info ./run.sh` to quiet it down.
+export OPENAI_LOG="${OPENAI_LOG:-debug}"
+
 # Run the application
 python main.py "$@"
 
