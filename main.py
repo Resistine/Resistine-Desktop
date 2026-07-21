@@ -149,6 +149,12 @@ def _resume_macos_installs() -> None:
 def main() -> int:
     global DEBUG
 
+    # Before anything can spawn a child process: on Windows, default every
+    # subprocess to CREATE_NO_WINDOW so the windowed build stops flashing
+    # console windows. No-op on other platforms.
+    from utils.win_console import suppress_child_console_windows
+    suppress_child_console_windows()
+
     parser = argparse.ArgumentParser(
         description="Resistine Desktop Application",
         formatter_class=argparse.RawDescriptionHelpFormatter,
