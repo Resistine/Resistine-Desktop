@@ -296,7 +296,7 @@ class Plugin(BasePlugin):
             # Request extension activation once the Qt loop is running.
             self.app.after(1000, self._activate_extension_if_needed)
             # Debug-mode convenience: auto-connect the VPN so VPN-gated
-            # features (chat, wazuh_overview) work without a manual toggle.
+            # features (chat) work without a manual toggle.
             # Scheduled after extension activation has had time to settle.
             if os.environ.get("RESISTINE_DEBUG") == "1":
                 self.app.after(3000, self._debug_auto_connect)

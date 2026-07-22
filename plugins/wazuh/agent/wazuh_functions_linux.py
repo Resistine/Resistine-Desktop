@@ -68,12 +68,6 @@ def run_privileged_command(command, timeout=120):
         logger.warning(f"Error running pkexec: {e}")
 
     logger.info("Falling back to sudo with themed password prompt")
-    import tkinter as tk
-    try:
-        root = tk._default_root
-    except:
-        root = None
-    
     dialog = CTkPasswordDialog(title="Authentication Required", text="Enter password to modify Wazuh Agent settings:")
     password = dialog.get_input()
 

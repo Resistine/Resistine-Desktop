@@ -65,8 +65,8 @@ Darwin*)
 	# already holds the tunnel up, this process's traffic routes through the
 	# system tunnel even though *this* instance's internal VPN state stays
 	# "Stopped". Setting this var makes plugins.vpn.main.is_vpn_connected()
-	# return True so VPN-gated features (the chat access gate, wazuh_overview
-	# API fetches, etc.) actually run. If the .pkg tunnel ISN'T up the
+	# return True so VPN-gated features (the chat access gate, etc.)
+	# actually run. If the .pkg tunnel ISN'T up the
 	# downstream network calls will just fail — the obvious and expected
 	# failure mode in dev. Linux/Windows have different VPN backends, so
 	# this export is intentionally scoped to the Darwin arm only.
