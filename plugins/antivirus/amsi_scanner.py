@@ -144,14 +144,3 @@ def _read_file(filepath: str, max_bytes: int = 64 * 1024 * 1024) -> bytes:
             return head + tail
     with open(filepath, "rb") as f:
         return f.read()
-
-
-def close_session():
-    """Close the current thread's AMSI session."""
-    session = getattr(_session_local, "session", None)
-    if session is not None and _amsi is not None:
-        try:
-            _amsi.AmsiCloseSession(_context, session)
-        except Exception:
-            pass
-        _session_local.session = None

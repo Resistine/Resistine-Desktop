@@ -1290,13 +1290,6 @@ class Plugin(BasePlugin):
             idx = self._messages_lay.indexOf(self._bottom_spacer)
         self._messages_lay.insertWidget(idx, row)
 
-    def _scroll_to_bottom(self) -> None:
-        try:
-            bar = self._scroll.verticalScrollBar()
-            QTimer.singleShot(0, lambda: bar.setValue(bar.maximum()))
-        except Exception:
-            pass
-
     def _pin_row_to_top(self, row: QWidget) -> None:
         """Scroll so *row* sits at the top of the viewport (Claude-style).
 

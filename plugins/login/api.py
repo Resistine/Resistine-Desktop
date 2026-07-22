@@ -25,7 +25,7 @@ class LoginAPI:
 
             logger.info(f"[LOGIN] send_otp -> POST {api_url} | email={email}")
             response = requests.post(api_url, json=payload, timeout=90)
-            logger.info(f"[LOGIN] send_otp <- HTTP {response.status_code} | body={response.text}")
+            logger.info(f"[LOGIN] send_otp <- HTTP {response.status_code}")
 
             if response.ok:
                 try:
@@ -91,13 +91,15 @@ class LoginAPI:
 
             logger.info(f"[LOGIN] verify_otp -> POST {api_url} | email={email} | hostname={payload['hostname']}")
             response = requests.post(api_url, json=payload, timeout=90)
-            logger.info(f"[LOGIN] verify_otp <- HTTP {response.status_code} | body={response.text}")
+            # Do NOT log response.text — the verify-OTP body contains the VPN
+            # configuration (including the WireGuard private key).
+            logger.info(f"[LOGIN] verify_otp <- HTTP {response.status_code}")
 
             if response.ok:
                 try:
                     result = response.json()
                 except json.JSONDecodeError:
-                    logger.warning(f"[LOGIN] verify_otp: non-JSON response body: {response.text}")
+                    logger.warning(f"[LOGIN] verify_otp: non-JSON response ({len(response.text)} bytes)")
                     result = {}
 
                 status = result.get("status", "").lower()

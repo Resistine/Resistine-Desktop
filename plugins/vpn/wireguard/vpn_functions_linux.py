@@ -118,27 +118,6 @@ def run_privileged_command(command_args):
         return None
 
 
-def run_as_admin(file_path):
-    """
-    Attempt to elevate the script to admin privileges on Linux.
-
-    :param file_path: The path to the script file.
-    :return: True if elevation is successful, False otherwise.
-    """
-    if is_admin():
-        logger.info("Already running as root.")
-        return True
-    else:
-        logger.info("Attempting to elevate to root...")
-        result = run_privileged_command([sys.executable, file_path])
-        if result and result.returncode == 0:
-            logger.info("Elevation request accepted.")
-            return True
-        else:
-            logger.info("Elevation request denied or failed.")
-            return False
-
-
 def run_installer_as_admin(file_path):
     """
     Run an installer file with admin privileges.

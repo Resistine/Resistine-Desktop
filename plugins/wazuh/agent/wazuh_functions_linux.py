@@ -228,10 +228,6 @@ def get_package_url():
         # Arch uses the RPM artifact and extracts it with bsdtar (libarchive); upstream Wazuh ships no pacman package
         arch_suffix = LINUX_PKG_ARCH_MAP_RPM.get(arch, "x86_64")
         return LINUX_WAZUH_RPM_URL.format(arch=arch_suffix)
-    elif os_type == "arch":
-        # Wazuh doesn't have an official Arch package, usually installed via AUR
-        # or we might need a specific handling. For now, mark as unsupported.
-        return None
     return None
 
 def is_agent_installed():

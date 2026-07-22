@@ -608,42 +608,6 @@ class ResistineVPNService(win32serviceutil.ServiceFramework):
 
         servicemanager.LogInfoMsg("ResistineVPN stopped")
 
-    def _auto_start(self):
-        """Auto-start default tunnel on service startup."""
-        try:
-            tunnel = find_default_tunnel()
-            if not tunnel:
-                logger.info("No tunnel config in ProgramData — skipping auto-start")
-                return
-
-            logger.info(f"Auto-start: tunnel='{tunnel}'")
-            state = status_tunnel(tunnel)
-            logger.info(f"Auto-start: state={state}")
-
-            if state == "Running":
-                logger.info("Tunnel already running")
-                return
-
-            ok, msg = install_tunnel(tunnel)
-            if not ok:
-                logger.error(f"Auto-start install failed: {msg}")
-                return
-
-            state = status_tunnel(tunnel)
-            if state == "Running":
-                logger.info("Tunnel running after install")
-                return
-
-            ok, msg = start_tunnel(tunnel)
-            if ok:
-                logger.info(f"Auto-start succeeded: {msg}")
-            else:
-                logger.error(f"Auto-start failed: {msg}")
-
-        except Exception as e:
-            logger.exception("Auto-start exception")
-            servicemanager.LogErrorMsg(f"Auto-start failed: {repr(e)}")
-
 
 if __name__ == "__main__":
     _init_runtime()
