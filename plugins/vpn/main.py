@@ -86,7 +86,6 @@ try:
             connect,
             disconnect,
             get_status,
-            toggle,
         )
     elif IS_LINUX:
         from plugins.vpn.wireguard.vpn_functions_linux import (  # noqa: F401

@@ -22,7 +22,7 @@ from utils.logger import logger
 
 # Import client functions so main.py can use check_service_status etc.
 # without importing from two places
-from plugins.vpn.wireguard.vpn_windows_client import get_status, connect, disconnect, toggle
+from plugins.vpn.wireguard.vpn_windows_client import get_status, connect, disconnect
 
 
 # ----------------------------------------------------------------
