@@ -266,6 +266,18 @@ class StreamController:
 
         except Exception as e:
             elapsed = time.monotonic() - t0
+            # Cancellation teardown, not a failure. cancel() closes the HTTP
+            # response from another thread, so the read we were blocked on
+            # blows up mid-flight — on Windows as WinError 10038 ("not a
+            # socket"), elsewhere as a generic ReadError. That's expected when
+            # the user switches sessions / leaves chat / the stream is stopped;
+            # surface it as a clean cancel, not a red error the user sees.
+            if self._cancel_event.is_set():
+                logger.debug(
+                    f"[CHAT-STREAM] stream cancelled during teardown after "
+                    f"{elapsed:.2f}s ({type(e).__name__})")
+                self._safe_put(("cancel", _CANCELLED))
+                return
             raw = re.sub(r'sk-[A-Za-z0-9]+', 'sk-***', str(e))
             status = getattr(e, "status_code", None)
             try:
