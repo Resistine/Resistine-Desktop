@@ -110,6 +110,18 @@ def _build_app() -> tuple[QApplication, object]:
     except Exception as e:
         logger.warning(f"Failed to start auto-updater: {e}")
 
+    # Native system tray (Windows). Replaces the old standalone pystray tray
+    # that the packaged build never launched. Closing the window then hides to
+    # the tray; only the tray's Quit exits. See gui/system_tray.py.
+    if sys.platform == "win32":
+        try:
+            from gui.system_tray import SystemTray
+            tray = SystemTray(window)
+            if tray.install():
+                window._tray = tray  # window.closeEvent hides to it
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Failed to start system tray: {e}")
+
     return qt_app, window
 
 
