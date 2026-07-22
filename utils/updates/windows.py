@@ -21,8 +21,18 @@ _dll = None
 _initialized = False
 _app = None
 
-# Same Ed25519 public key used by macOS Sparkle and Linux updater
-_ED25519_PUBLIC_KEY = "2eiUHVoMgl+qqhEWO8iix5SUcRAKfkWYESh9F7jG6ls="
+# Windows Sparkle EdDSA public key.
+#
+# ROTATED 2026-07-21: Windows now uses its own key, independent of the
+# macOS/Linux key ("2eiUHVoMgl+qqhEWO8iix5SUcRAKfkWYESh9F7jG6ls=", which those
+# platforms still embed). WinSparkle only verifies sparkle:os="windows" items,
+# so the platforms can diverge safely.
+#
+# Rollout is a bridge release: this build embeds (trusts) the NEW key, but its
+# own appcast enclosure is signed with the OLD key so already-installed clients
+# — which still trust the OLD key — accept the update. Every release AFTER the
+# bridge is signed with the NEW private key.
+_ED25519_PUBLIC_KEY = "u1NveZW8YMzHMidBLjFzvJ5XRjGCa6Q9Z2K/v2WYTXo="
 
 APPCAST_URL = "https://resistine.github.io/appcast.xml"
 
