@@ -14,6 +14,14 @@ API_BASE_URL = "http://dashboard.resisti.net:8899"
 # --- Network ---
 REQUEST_TIMEOUT = 10.0
 
+# Server-side time window (hours) for the Events tab's vuln-detection fetch.
+# Vuln-detection events are sparse — they fire only when a CVE is detected or
+# resolved — so the API's own 24h default routinely returns nothing and the tab
+# renders empty. A 7-day window keeps the stream populated; the timeline chart
+# still clips to its own rolling 24h view, so widening this only affects the
+# event list and the severity pills.
+EVENTS_WINDOW_HOURS = 168
+
 # Per-host concurrency cap for per-device fan-out (vulnerabilities + inventory
 # detail). Stays at/under urllib3's default pool_maxsize=10 so no Session
 # tuning is needed. Empirically 8 is past the efficiency knee for this API

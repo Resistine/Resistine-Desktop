@@ -53,7 +53,8 @@ from gui.qt_widgets import ResponsiveStack
 from gui.qt_widgets import scroll_page
 from plugins.base_plugin import BasePlugin
 from plugins.wazuh_overview import api_client, charts
-from plugins.wazuh_overview.config import MAX_PARALLEL_FETCHES
+from plugins.wazuh_overview.config import EVENTS_WINDOW_HOURS, MAX_PARALLEL_FETCHES
+from plugins.wazuh_overview.loading import LoadingScreen, RampProgress
 from utils.logger import logger
 
 _PLUGIN_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -65,6 +66,10 @@ _WAZUH_DIR = os.path.join(os.path.dirname(_PLUGIN_DIR), "wazuh")
 _SHOW_DEV_REFRESH_BUTTON = True
 
 _TAB_NAMES = ("Overview", "Events", "Vulnerabilities", "Inventory")
+# Tabs that show a circular-progress loading screen. Overview is excluded on
+# purpose: it paints a full skeleton immediately and fills it in as endpoints
+# land, which beats blocking on a ring.
+_LOADING_TABS = ("Events", "Vulnerabilities", "Inventory")
 _LEGEND_KEYS = ("critical", "error", "warning", "info")
 _SEVERITY_LEVELS = ("critical", "high", "medium", "low")
 # Severity bucket -> displayed badge label. Shared by the Overview cards and the
@@ -390,6 +395,7 @@ _remote_hotfixes_ready = threading.Event()
 # Vulnerability detection events. Two-phase load: phase-1 (local device) fires
 # _remote_vuln_events_ready; phase-2 (rest of group) fires _..._complete.
 _REMOTE_VULN_EVENTS = []
+_REMOTE_VULN_EVENTS_ERROR = None
 _remote_vuln_events_ready = threading.Event()
 _remote_vuln_events_complete = threading.Event()
 
@@ -498,11 +504,15 @@ def _load_overview_early_async():
 def _load_vuln_events_phase1_async():
     """Eager Phase 1: pull the LOCAL device's vuln-detection events, then set
     _remote_vuln_events_ready so the Events tab can render immediately."""
-    global _vuln_events_phase2_started
+    global _vuln_events_phase2_started, _REMOTE_VULN_EVENTS_ERROR
 
     _remote_agent_ready.wait()
     local_id = (_REMOTE_AGENT or {}).get("id") if isinstance(_REMOTE_AGENT, dict) else None
     if not local_id:
+        logger.warning(
+            "[WAZUH-OVERVIEW] No local agent id — skipping vuln-events fetch"
+        )
+        _REMOTE_VULN_EVENTS_ERROR = "no local agent"
         _remote_vuln_events_ready.set()
         _remote_vuln_events_complete.set()
         with _vuln_events_phase2_lock:
@@ -510,8 +520,17 @@ def _load_vuln_events_phase1_async():
         return
 
     global _REMOTE_VULN_EVENTS
-    local_events, err = api_client.fetch_device_vulnerability_events(local_id)
-    if not err:
+    local_events, err = api_client.fetch_device_vulnerability_events(
+        local_id, hours=EVENTS_WINDOW_HOURS
+    )
+    _REMOTE_VULN_EVENTS_ERROR = err
+    if err:
+        # Without this the tab renders an empty stream that's indistinguishable
+        # from a genuine "no events in the window".
+        logger.warning(
+            f"[WAZUH-OVERVIEW] Vuln-events fetch for local agent {local_id} failed: {err}"
+        )
+    else:
         normalized = [_normalize_wazuh_hit(h) for h in (local_events or [])]
         normalized.sort(key=lambda e: e.get("timestamp") or "", reverse=True)
         _REMOTE_VULN_EVENTS = normalized
@@ -538,7 +557,11 @@ def _load_vuln_events_phase2_async():
     workers = min(len(other_ids), MAX_PARALLEL_FETCHES)
     with ThreadPoolExecutor(max_workers=workers) as ex:
         future_to_aid = {
-            ex.submit(api_client.fetch_device_vulnerability_events, aid): aid
+            ex.submit(
+                api_client.fetch_device_vulnerability_events,
+                aid,
+                hours=EVENTS_WINDOW_HOURS,
+            ): aid
             for aid in other_ids
         }
         for future in as_completed(future_to_aid):
@@ -630,6 +653,9 @@ def refresh_all_remote_data():
     keeps showing stale values (no "Loading…" flash) until fresh data lands."""
     global _overview_early_loader_started, _vulns_loader_started
     global _vuln_events_phase2_started, _agents_loader_started
+    global _REMOTE_VULN_EVENTS_ERROR
+
+    _REMOTE_VULN_EVENTS_ERROR = None
 
     with _overview_early_loader_lock:
         _overview_early_loader_started = False
@@ -654,10 +680,14 @@ def _ready_mask():
         | (4 if _remote_sca_ready.is_set() else 0)
         | (8 if _remote_inventory_ready.is_set() else 0)
         | (16 if _remote_hotfixes_ready.is_set() else 0)
+        # Phase-1 vuln events back the Security Alerts card. Included so the
+        # readiness poll keeps repainting until they land (they arrive after the
+        # agent fetch, so they're usually the last slot to complete).
+        | (32 if _remote_vuln_events_ready.is_set() else 0)
     )
 
 
-_READY_ALL = 31  # all 5 slots set
+_READY_ALL = 63  # all 6 slots set
 
 
 def _overview_has_errors():
@@ -1003,6 +1033,11 @@ class Plugin(BasePlugin):
         self._tab_buttons = {}
         self._tab_built = {name: False for name in _TAB_NAMES}
         self._tab_pages = {}
+        # Per-tab synthetic progress ramps for loaders that only signal
+        # done/not-done. Created lazily, reset when a tab reloads.
+        self._tab_ramps = {}
+        # Mounted loading screens, by tab name. Popped when swapped for content.
+        self._loading_screens = {}
 
         # Overview state
         self._overview_ready_mask = -1
@@ -1082,6 +1117,9 @@ class Plugin(BasePlugin):
         self._tab_buttons = {}
         self._tab_built = {name: False for name in _TAB_NAMES}
         self._tab_pages = {}
+
+        self._tab_ramps = {}
+        self._loading_screens = {}
 
         self._overview_poll_token = None
         self._device_holder = None
@@ -1224,9 +1262,55 @@ class Plugin(BasePlugin):
     def _switch_tab(self, name):
         if name not in _TAB_NAMES or self._tab_stack is None:
             return
+        already_built = self._tab_built.get(name, False)
         self._ensure_tab_built(name)
+        # The timeline chart's date window is anchored to "today"; re-render it
+        # when revisiting the Vulnerabilities tab so it tracks the current date
+        # rather than freezing at the date the pane was first built. (First
+        # build already renders it, so only refresh on later visits.)
+        if name == "Vulnerabilities" and already_built and self._vuln_cvss_ax is not None:
+            self._render_vuln_cvss()
         self._tab_stack.setCurrentIndex(_TAB_NAMES.index(name))
         self._style_tab_buttons(name)
+
+    # ----- loading screens ---------------------------------------------------
+    def _tab_ramp(self, name, *, restart=False):
+        """The synthetic progress ramp for ``name``, created on first use.
+
+        ``restart`` re-zeroes the curve, so a refresh replays the animation
+        instead of resuming wherever the previous load left off.
+        """
+        ramp = self._tab_ramps.get(name)
+        if ramp is None:
+            ramp = RampProgress()
+            self._tab_ramps[name] = ramp
+        elif restart:
+            ramp.reset()
+        return ramp
+
+    def _mount_loading_screen(self, name, page, title, subtitle, done_fn):
+        """Make a circular-progress loading screen the page's only content."""
+        screen = LoadingScreen(
+            title, subtitle, progress_fn=self._tab_ramp(name), done_fn=done_fn
+        )
+        self._loading_screens[name] = screen
+        page.layout().addWidget(screen)
+        return screen
+
+    def _finish_loading(self, name, rebuild):
+        """Run ``name``'s loading ring to 100%, then swap in the real content.
+
+        Falls straight through to ``rebuild`` when no ring is mounted (the tab
+        built its content directly) or when the widget is already gone.
+        """
+        screen = self._loading_screens.pop(name, None)
+        if screen is None:
+            rebuild()
+            return
+        try:
+            screen.complete(rebuild)
+        except RuntimeError:
+            rebuild()  # C++ side already deleted
 
     # ----- placeholder panes (Events / Vulnerabilities / Inventory) ----------
     def _build_placeholder_pane(self, page, name):
@@ -1247,6 +1331,13 @@ class Plugin(BasePlugin):
 
     # ----- Overview pane -----------------------------------------------------
     def _build_overview_pane(self, page, _name="Overview"):
+        # No loading screen here, deliberately: this pane paints its full
+        # skeleton immediately (device card, alert bar, module cards all
+        # reading "Loading…") and fills each section in as its endpoint lands.
+        # A blocking ring would replace a useful page with an empty one and
+        # make the same wait feel longer. The other three tabs have no such
+        # skeleton to fall back on, so they do get the ring.
+        #
         # Centered, max-width column so page elements don't stretch edge-to-edge
         # (which triggered horizontal scroll on this build's wider default size).
         inner = QWidget()
@@ -1328,6 +1419,9 @@ class Plugin(BasePlugin):
     def request_refresh(self):
         """Dev refresh button: re-fetch every endpoint and repaint as it lands."""
         refresh_all_remote_data()
+        # Replay the ring animation from zero rather than resuming the old curve.
+        for name in _LOADING_TABS:
+            self._tab_ramp(name, restart=True)
         if self._refresh_button is not None:
             self._refresh_button.setEnabled(False)
         # Repaint a few times across the eager (~500ms) + lazy (~2-6s) window.
@@ -1527,22 +1621,43 @@ class Plugin(BasePlugin):
 
     def _module_cards(self):
         """Compute module-card data from the live /me/* responses."""
+        # File Integrity, Rootcheck and Hotfixes are hidden for now. The
+        # hotfixes endpoint is still fetched (it's part of _READY_ALL and the
+        # Overview loading progress); only its card is withheld. Re-add the
+        # three entries here to bring them back — _hotfix_card() is kept below.
         cards = [
-            _unavailable_card(
-                "Security Alerts",
-                "Threats and security incidents detected",
-                target_tab="Events",
-            ),
+            self._security_alerts_card(),
             self._vuln_card(),
             self._sca_card(),
-            _unavailable_card("File Integrity", "Created · added/modified · deleted"),
-            _unavailable_card("Rootcheck", "Recent rootkit / process detection"),
-            self._hotfix_card(),
             self._inventory_card(),
             self._agent_health_card(),
             self._manager_card(),
         ]
         return cards
+
+    def _security_alerts_card(self):
+        """Summarise the vuln-detection events (same data the Events tab paints)
+        as a severity breakdown, so the Overview card mirrors that tab."""
+        title, desc, target = (
+            "Security Alerts",
+            "Threats and security incidents detected",
+            "Events",
+        )
+        if not _remote_vuln_events_ready.is_set():
+            return _loading_card(title, desc, target_tab=target)
+
+        counts = _bucket_by_severity(_REMOTE_VULN_EVENTS)
+        total = sum(counts.values())
+        if total == 0:
+            return {
+                "title": title, "status": "OK", "description": desc,
+                "stats": (("No alerts", "ok"),), "target_tab": target,
+            }
+        highest = next((s for s in _SEVERITY_LEVELS if counts.get(s, 0) > 0), "low")
+        return {
+            "title": title, "status": _SEV_TO_STATUS[highest], "description": desc,
+            "stats": _severity_stats(counts), "target_tab": target,
+        }
 
     def _vuln_card(self):
         title, desc, target = "Vulnerabilities", "CVEs across installed packages", "Vulnerabilities"
@@ -1680,14 +1795,13 @@ class Plugin(BasePlugin):
         self._ev_page_widget = page
 
         if not _remote_vuln_events_ready.is_set():
-            msg = QWidget()
-            msg.setObjectName("Transparent")
-            ml = QVBoxLayout(msg)
-            ml.addStretch(1)
-            ml.addWidget(_label("Loading events…", size=14, secondary=True),
-                         alignment=Qt.AlignmentFlag.AlignCenter)
-            ml.addStretch(1)
-            page.layout().addWidget(msg)
+            self._mount_loading_screen(
+                "Events",
+                page,
+                "Loading events…",
+                "Collecting security alerts across your devices",
+                _remote_vuln_events_ready.is_set,
+            )
             self._schedule_events_ready_check()
             return
 
@@ -1731,8 +1845,8 @@ class Plugin(BasePlugin):
                 if self._ev_rows_layout is not None:
                     self._refresh_events_content()
                 else:
-                    # Loading placeholder still up — build the full pane now.
-                    self._build_events_pane(page)
+                    # Ring still up — run it to 100%, then build the full pane.
+                    self._finish_loading("Events", lambda: self._build_events_pane(page))
                     return
             if _remote_vuln_events_complete.is_set():
                 return
@@ -1950,10 +2064,13 @@ class Plugin(BasePlugin):
         head.setObjectName("Transparent")
         h = QHBoxLayout(head)
         h.setContentsMargins(6, 4, 6, 4)
-        for text, stretch in (("", 0), ("RULE", 0), ("DESCRIPTION", 1), ("METRIC", 0), ("WHEN", 0)):
+        # No DESCRIPTION column — it's the headline of the detail card on the
+        # right instead. The freed space becomes a stretch so METRIC and WHEN
+        # stay right-aligned. Column widths must match _add_event_row.
+        for text, stretch in (("", 0), ("RULE", 0), ("", 1), ("METRIC", 0), ("WHEN", 0)):
             lbl = _label(text, size=10, bold=True, secondary=True)
             h.addWidget(lbl, stretch)
-            if text == "":
+            if text == "" and stretch == 0:
                 lbl.setFixedWidth(14)
             elif text == "RULE":
                 lbl.setFixedWidth(70)
@@ -2031,6 +2148,18 @@ class Plugin(BasePlugin):
             ev = next((e for e in events if e["id"] == self._ev_selected_id), events[0])
             self._render_event_detail(ev)
         else:
+            # Say why the stream is empty. A failed fetch and a genuinely quiet
+            # window both render zero rows, and they need different responses.
+            if _REMOTE_VULN_EVENTS_ERROR:
+                msg = f"Couldn't load events — {_REMOTE_VULN_EVENTS_ERROR}"
+            elif _REMOTE_VULN_EVENTS:
+                msg = "No events match the current filters"
+            else:
+                days = EVENTS_WINDOW_HOURS // 24
+                msg = f"No security events in the last {days} days"
+            empty = _label(msg, size=13, secondary=True)
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lay.insertWidget(lay.count() - 1, empty)
             self._render_event_detail(None)
 
     def _set_event_page(self, page):
@@ -2064,8 +2193,8 @@ class Plugin(BasePlugin):
         rule = _label(str(ev.get("rule_id", "—")), size=12, bold=True)
         rule.setFixedWidth(70)
         h.addWidget(rule)
-        desc = _label(ev.get("description", "—"), size=12)
-        h.addWidget(desc, 1)
+        # Description lives in the detail card on the right, not in the row.
+        h.addStretch(1)
         metric = (ev.get("mitre") or [None])[0] or ev.get("ip") or "—"
         m = _label(metric, size=11, secondary=True)
         m.setFixedWidth(90)
@@ -2209,7 +2338,13 @@ class Plugin(BasePlugin):
         _kick_vulns_loader()
 
         if not _remote_vulns_ready.is_set():
-            self._vuln_centered(page, "Loading vulnerabilities…")
+            self._mount_loading_screen(
+                "Vulnerabilities",
+                page,
+                "Loading vulnerabilities…",
+                "Scanning each device for known CVEs",
+                _remote_vulns_ready.is_set,
+            )
             self._schedule_vuln_ready_check()
             return
         if _REMOTE_VULNS_ERROR:
@@ -2253,7 +2388,9 @@ class Plugin(BasePlugin):
             if page is None:
                 return
             if _remote_vulns_ready.is_set():
-                self._build_vulnerabilities_pane(page)
+                self._finish_loading(
+                    "Vulnerabilities", lambda: self._build_vulnerabilities_pane(page)
+                )
             else:
                 self._vuln_ready_token = self.app.after(120, check)
 
@@ -2445,6 +2582,20 @@ class Plugin(BasePlugin):
         fig.patch.set_facecolor(ct["bg"])
         ax.set_facecolor(ct["bg"])
         self._vuln_cvss_fig, self._vuln_cvss_canvas, self._vuln_cvss_ax = fig, canvas, ax
+        self._render_vuln_cvss()
+        return card
+
+    def _render_vuln_cvss(self):
+        """Draw (or redraw) the 30-day 'first detected' timeline onto the CVSS
+        axis. The date window is anchored to the current day, so this is re-run
+        on every tab visit to keep the right edge on today instead of freezing
+        at the date the pane was first built."""
+        ax = self._vuln_cvss_ax
+        if ax is None:
+            return
+        ct = charts.chart_theme()
+        ax.clear()
+        ax.set_facecolor(ct["bg"])
 
         buckets, counts = self._bucket_vulns_daily()
         x = list(range(len(buckets)))
@@ -2456,8 +2607,10 @@ class Plugin(BasePlugin):
                 ax.bar(x, heights, bottom=bottoms, width=0.85,
                        color=_segment_color(level), edgecolor="none")
                 bottoms = [a + b for a, b in zip(bottoms, heights)]
+            # Anchor ticks to the right edge (today) and step backwards, so the
+            # newest day is always the labelled rightmost tick.
             step = max(1, len(buckets) // 6)
-            ticks = list(range(0, len(buckets), step))
+            ticks = sorted(range(len(buckets) - 1, -1, -step))
             ax.set_xticks(ticks)
             ax.set_xticklabels([buckets[i].strftime("%b %d") for i in ticks],
                                fontsize=8, color=ct["text"])
@@ -2476,9 +2629,8 @@ class Plugin(BasePlugin):
         ax.spines["bottom"].set_color(ct["text"])
         ax.yaxis.grid(True, color=ct["grid"], linewidth=0.4, alpha=0.5)
         ax.set_axisbelow(True)
-        fig.tight_layout()
-        canvas.draw_idle()
-        return card
+        self._vuln_cvss_fig.tight_layout()
+        self._vuln_cvss_canvas.draw_idle()
 
     # ----- table header + device selector ------------------------------------
     def _build_vuln_table_header(self):
@@ -2843,14 +2995,13 @@ class Plugin(BasePlugin):
         _kick_agents_loader()
 
         if not _agents_ready.is_set():
-            msg = QWidget()
-            msg.setObjectName("Transparent")
-            v = QVBoxLayout(msg)
-            v.addStretch(1)
-            v.addWidget(_label("Loading devices…", size=14, secondary=True),
-                        alignment=Qt.AlignmentFlag.AlignCenter)
-            v.addStretch(1)
-            page.layout().addWidget(msg)
+            self._mount_loading_screen(
+                "Inventory",
+                page,
+                "Loading devices…",
+                "Gathering hardware and software inventory",
+                _agents_ready.is_set,
+            )
             self._schedule_inventory_ready_check()
             return
 
@@ -2866,7 +3017,7 @@ class Plugin(BasePlugin):
             if page is None:
                 return
             if _agents_ready.is_set():
-                self._build_inventory_pane(page)
+                self._finish_loading("Inventory", lambda: self._build_inventory_pane(page))
             else:
                 self._inv_ready_token = self.app.after(120, check)
 
