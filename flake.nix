@@ -70,6 +70,16 @@
         packages = rec {
           default = resistine;
 
+          # The exact ClamAV the wrapper below puts on the app's PATH, exported
+          # so a system config can install *this* one rather than whatever its
+          # own nixpkgs carries. That matters: the launcher extends PATH with
+          # --suffix, so a clamav in the system profile wins, and older builds
+          # (e.g. 1.4.3 in nixpkgs 25.11) ship no share/clamav/certs/clamav.crt
+          # — which is exactly what plugins/antivirus/clamav_platform_linux.py
+          # needs to find for freshclam to verify CVD signatures. Installing
+          # this attribute keeps both paths on one version that has the cert.
+          inherit (pkgs) clamav;
+
           resistine = pkgs.stdenv.mkDerivation {
             pname = "resistine";
             inherit version;
