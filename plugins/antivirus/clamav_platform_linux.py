@@ -279,7 +279,41 @@ def find_binary(name: str) -> str | None:
 
 
 def find_certs_dir() -> str | None:
-    """Distro-packaged freshclam uses the system CA bundle — no override."""
+    """Locate the CVD signing-cert directory (the one holding clamav.crt).
+
+    ClamAV >= 1.4 verifies *detached CVD signatures* against a dedicated root
+    CA cert, which is a different thing from the system TLS CA bundle handled
+    by clamav_env(). Returning None here made clamav_common.run_freshclam()
+    bail out before ever invoking freshclam — on every Linux distro, not just
+    ones with an unusual layout.
+
+    Distro packages ship the cert at <prefix>/share/clamav/certs, so derive
+    the prefix from the resolved binary rather than hardcoding /usr. That also
+    covers non-FHS prefixes (Nix store, /usr/local, custom builds), where the
+    path is not knowable ahead of time.
+    """
+    candidates: list[str] = []
+
+    # freshclam's own env override wins, if the user set one.
+    env_dir = os.environ.get("CVD_CERTS_DIR")
+    if env_dir:
+        candidates.append(env_dir)
+
+    binary = find_binary("freshclam") or find_binary("clamd")
+    if binary:
+        prefix = os.path.dirname(os.path.dirname(os.path.realpath(binary)))
+        candidates.append(os.path.join(prefix, "share", "clamav", "certs"))
+
+    candidates += [
+        "/usr/share/clamav/certs",
+        "/usr/local/share/clamav/certs",
+        "/var/lib/clamav/certs",
+    ]
+
+    for directory in candidates:
+        if os.path.isfile(os.path.join(directory, "clamav.crt")):
+            return directory
+
     return None
 
 
