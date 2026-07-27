@@ -1127,6 +1127,10 @@ class Plugin(BasePlugin):
         self._vuln_cvss_canvas = None
         self._vuln_cvss_ax = None
         self._vuln_cvss_bars = []        # (bar_container, severity) pairs
+        self._vuln_cvss_hover_annot = None  # matplotlib tooltip annotation
+        self._vuln_cvss_hover_key = None    # (bucket_idx, severity) under cursor
+        self._vuln_cvss_buckets = []        # date per x-index (for the tooltip)
+        self._vuln_cvss_counts = {}         # bucket date -> {severity: count}
         self._vuln_rows_layout = None
         self._vuln_row_frames = {}
         self._vuln_detail_holder = None
@@ -1197,6 +1201,10 @@ class Plugin(BasePlugin):
         self._vuln_cvss_canvas = None
         self._vuln_cvss_ax = None
         self._vuln_cvss_bars = []
+        self._vuln_cvss_hover_annot = None
+        self._vuln_cvss_hover_key = None
+        self._vuln_cvss_buckets = []
+        self._vuln_cvss_counts = {}
         self._vuln_rows_layout = None
         self._vuln_row_frames = {}
         self._vuln_detail_holder = None
@@ -2432,6 +2440,8 @@ class Plugin(BasePlugin):
         self._vuln_sev_sel.clear()
         self._vuln_donut_wedges = []
         self._vuln_cvss_bars = []
+        self._vuln_cvss_hover_annot = None
+        self._vuln_cvss_hover_key = None
 
         _kick_overview_api_loader()
         _kick_vulns_loader()
@@ -2684,7 +2694,7 @@ class Plugin(BasePlugin):
         card.setMinimumHeight(210)
         cl = QVBoxLayout(card)
         cl.setContentsMargins(14, 12, 14, 12)
-        cl.addWidget(_label("FIRST DETECTED — LAST 30 DAYS", size=11, bold=True, secondary=True))
+        cl.addWidget(_label("Recent Detection Timeline", size=11, bold=True, secondary=True))
 
         ct = charts.chart_theme()
         fig, canvas, ax = charts.make_canvas(card, (5.5, 2.2), facecolor=ct["bg"])
@@ -2709,6 +2719,8 @@ class Plugin(BasePlugin):
         # Clicking a severity segment on the timeline filters the whole tab, exactly
         # like clicking the matching donut wedge (shared self._vuln_sev_sel).
         canvas.mpl_connect("button_press_event", self._on_vuln_cvss_click)
+        # Hovering a severity segment shows a small tooltip with its date + count.
+        canvas.mpl_connect("motion_notify_event", self._on_vuln_cvss_hover)
         # Add the canvas to the card layout so Qt manages its geometry. Without
         # this the canvas stays an unmanaged child at its native figure size
         # (~550px) pinned top-left: the card clips its right edge (hiding the
@@ -2771,6 +2783,11 @@ class Plugin(BasePlugin):
         ax.set_facecolor(ct["bg"])
 
         buckets, counts = self._bucket_vulns_daily()
+        # Stash for the hover tooltip (maps an x-index → date and its counts). The
+        # ax.clear() above dropped any prior annotation, so reset the hover state.
+        self._vuln_cvss_buckets, self._vuln_cvss_counts = buckets, counts
+        self._vuln_cvss_hover_annot = None
+        self._vuln_cvss_hover_key = None
         x = list(range(len(buckets)))
         bottoms = [0] * len(buckets)
         # Right-anchored visible window: today (the last bucket) is always at the
@@ -2792,6 +2809,19 @@ class Plugin(BasePlugin):
                             color=_segment_color(level), edgecolor="none", alpha=alpha)
                 self._vuln_cvss_bars.append((bc, level))
                 bottoms = [a + b for a, b in zip(bottoms, heights)]
+            # Hover tooltip: hidden until the cursor is over a segment. Centered
+            # just above the bar top; theme-aware bubble.
+            annot = ax.annotate(
+                "", xy=(0, 0), xytext=(0, 8), textcoords="offset points",
+                ha="center", va="bottom", fontsize=8, color=ct["text"], zorder=10,
+                bbox=dict(boxstyle="round,pad=0.4", fc=ct["bg"], ec=ct["grid"], lw=0.8),
+            )
+            # Pure overlay: exclude it from the figure's tight-layout engine so
+            # showing/hiding the tooltip never reflows the axes (it would otherwise
+            # reserve/release margin space on each draw and shift the whole graph).
+            annot.set_in_layout(False)
+            annot.set_visible(False)
+            self._vuln_cvss_hover_annot = annot
             # Anchor ticks to the right edge (today) and step backwards within the
             # visible window, so the newest day is always the labelled rightmost tick.
             step = max(1, n // 6)
@@ -2848,6 +2878,42 @@ class Plugin(BasePlugin):
                 if contains:
                     self._vuln_sev_sel.toggle(level)
                     return
+
+    def _on_vuln_cvss_hover(self, event):
+        annot = self._vuln_cvss_hover_annot
+        canvas = self._vuln_cvss_canvas
+        if annot is None or canvas is None:
+            return
+        # Find the stacked segment under the cursor (zero-height bars can't contain
+        # the point, so empty days/severities are naturally skipped).
+        hovered = None
+        if event.inaxes is self._vuln_cvss_ax:
+            for bc, level in self._vuln_cvss_bars:
+                for i, patch in enumerate(bc):
+                    contains, _ = patch.contains(event)
+                    if contains:
+                        hovered = (i, level, patch)
+                        break
+                if hovered is not None:
+                    break
+        # Motion events fire per pixel; only redraw when the hovered segment
+        # actually changes, so mouse movement within one bar doesn't thrash.
+        key = (hovered[0], hovered[1]) if hovered is not None else None
+        if key == self._vuln_cvss_hover_key:
+            return
+        self._vuln_cvss_hover_key = key
+        if hovered is not None:
+            i, level, patch = hovered
+            date = self._vuln_cvss_buckets[i]
+            count = self._vuln_cvss_counts.get(date, {}).get(level, 0)
+            annot.xy = (patch.get_x() + patch.get_width() / 2.0,
+                        patch.get_y() + patch.get_height())
+            noun = "threat" if count == 1 else "threats"
+            annot.set_text(f"{date.strftime('%b %d, %Y')}\n{count} {level} {noun}")
+            annot.set_visible(True)
+        else:
+            annot.set_visible(False)
+        canvas.draw_idle()
 
     # ----- table header + device selector ------------------------------------
     def _build_vuln_table_header(self):
