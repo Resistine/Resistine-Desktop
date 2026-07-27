@@ -35,6 +35,7 @@ from PyQt6.QtWidgets import (
     QBoxLayout,
     QComboBox,
     QFrame,
+    QGraphicsOpacityEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -72,6 +73,10 @@ _TAB_NAMES = ("Overview", "Events", "Vulnerabilities", "Inventory")
 _LOADING_TABS = ("Events", "Vulnerabilities", "Inventory")
 _LEGEND_KEYS = ("critical", "error", "warning", "info")
 _SEVERITY_LEVELS = ("critical", "high", "medium", "low")
+# Opacity a non-selected severity fades to when a threat level is selected. Shared
+# by the Vulnerabilities donut/timeline and the Events chart/header pills so the
+# fade looks identical across the whole plugin.
+_SEV_DIM_ALPHA = 0.25
 # Severity bucket -> displayed badge label. Shared by the Overview cards and the
 # (later) Inventory device rows.
 _SEV_TO_STATUS = {
@@ -733,14 +738,20 @@ def _format_relative(iso_ts):
 
 
 def _format_timestamp(iso_ts):
-    """Format an ISO-8601 timestamp as 'MMM DD HH:MM:SS'."""
+    """Format an ISO-8601 timestamp as 'MMM DD HH:MM:SS' in local time.
+
+    Wazuh timestamps are UTC (trailing 'Z'); render them in the viewer's local
+    timezone so the displayed date/time matches their wall clock rather than
+    reading a few hours (and sometimes a whole calendar day) off."""
     if not iso_ts:
         return "—"
     try:
         dt = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
     except ValueError:
         return iso_ts
-    return dt.strftime("%b %d %H:%M:%S")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone().strftime("%b %d %H:%M:%S")
 
 
 def _short_benchmark_name(name):
@@ -922,6 +933,37 @@ class _ClickableFrame(QFrame):
         super().mousePressEvent(event)
 
 
+class SeveritySelection:
+    """Single source of truth for a 'one severity level or none' filter.
+
+    Owned per-tab: the Vulnerabilities donut/timeline and the Events header pills
+    each hold an instance and pass an ``on_change`` callback that repaints *their*
+    own widgets and re-renders *their* own list. The toggle rule and the row
+    predicate live here once, so the three widgets are thin call sites rather than
+    three copies of the same logic. Zero-count guarding is the caller's job (it
+    mirrors how a zero-height chart bar is naturally unclickable)."""
+
+    def __init__(self, on_change=None):
+        self.selected = None            # str | None, lowercase severity level
+        self._on_change = on_change
+
+    def toggle(self, level):
+        # Clicking the active level clears it; clicking another switches to it.
+        self.selected = None if self.selected == level else level
+        if self._on_change:
+            self._on_change()
+
+    def clear(self):
+        # Silent reset (no on_change) — used at pane (re)build time, before the
+        # widgets on_change would repaint exist.
+        self.selected = None
+
+    def matches(self, severity):
+        if self.selected is None:
+            return True
+        return (severity or "").lower() == self.selected
+
+
 def _rows_scroll():
     """A vertical QScrollArea + a top-aligned rows container. Returns
     (scroll_area, rows_layout) — clear/repopulate rows_layout to refresh."""
@@ -1053,6 +1095,8 @@ class Plugin(BasePlugin):
         self._ev_search_token = None     # debounce handle
         self._ev_count_label = None
         self._ev_pill_labels = {}        # severity -> count QLabel
+        self._ev_pill_frames = {}        # severity -> clickable pill QFrame
+        self._ev_sev_sel = SeveritySelection(self._on_ev_severity_change)
         self._ev_rows_layout = None      # QVBoxLayout holding event rows
         self._ev_row_frames = {}         # event id -> row QFrame
         self._ev_detail_holder = None    # QWidget wrapping the detail card
@@ -1074,7 +1118,7 @@ class Plugin(BasePlugin):
         self._vuln_search = None
         self._vuln_search_token = None
         self._vuln_count_label = None
-        self._vuln_severity_filter = None
+        self._vuln_sev_sel = SeveritySelection(self._on_vuln_severity_change)
         self._vuln_donut_fig = None
         self._vuln_donut_canvas = None
         self._vuln_donut_ax = None
@@ -1082,6 +1126,7 @@ class Plugin(BasePlugin):
         self._vuln_cvss_fig = None
         self._vuln_cvss_canvas = None
         self._vuln_cvss_ax = None
+        self._vuln_cvss_bars = []        # (bar_container, severity) pairs
         self._vuln_rows_layout = None
         self._vuln_row_frames = {}
         self._vuln_detail_holder = None
@@ -1131,6 +1176,8 @@ class Plugin(BasePlugin):
         self._ev_search = None
         self._ev_count_label = None
         self._ev_pill_labels = {}
+        self._ev_pill_frames = {}
+        self._ev_sev_sel = SeveritySelection(self._on_ev_severity_change)
         self._ev_rows_layout = None
         self._ev_row_frames = {}
         self._ev_detail_holder = None
@@ -1142,13 +1189,14 @@ class Plugin(BasePlugin):
         self._vuln_page_widget = None
         self._vuln_search = None
         self._vuln_count_label = None
-        self._vuln_severity_filter = None
+        self._vuln_sev_sel = SeveritySelection(self._on_vuln_severity_change)
         self._vuln_donut_fig = None
         self._vuln_donut_canvas = None
         self._vuln_donut_ax = None
         self._vuln_cvss_fig = None
         self._vuln_cvss_canvas = None
         self._vuln_cvss_ax = None
+        self._vuln_cvss_bars = []
         self._vuln_rows_layout = None
         self._vuln_row_frames = {}
         self._vuln_detail_holder = None
@@ -1621,17 +1669,15 @@ class Plugin(BasePlugin):
 
     def _module_cards(self):
         """Compute module-card data from the live /me/* responses."""
-        # File Integrity, Rootcheck and Hotfixes are hidden for now. The
-        # hotfixes endpoint is still fetched (it's part of _READY_ALL and the
-        # Overview loading progress); only its card is withheld. Re-add the
-        # three entries here to bring them back — _hotfix_card() is kept below.
+        # File Integrity, Rootcheck, Hotfixes, Compliance·SCA and Manager are
+        # hidden for now. Their endpoints are still fetched (part of _READY_ALL and
+        # the Overview loading progress); only the cards are withheld. Re-add the
+        # entries here to bring them back — the card methods are kept below.
         cards = [
             self._security_alerts_card(),
             self._vuln_card(),
-            self._sca_card(),
             self._inventory_card(),
             self._agent_health_card(),
-            self._manager_card(),
         ]
         return cards
 
@@ -1793,6 +1839,8 @@ class Plugin(BasePlugin):
 
         _clear_layout(page.layout())
         self._ev_page_widget = page
+        # Fresh visit starts unfiltered; silent clear (pills don't exist yet).
+        self._ev_sev_sel.clear()
 
         if not _remote_vuln_events_ready.is_set():
             self._mount_loading_screen(
@@ -1868,15 +1916,22 @@ class Plugin(BasePlugin):
     def _build_severity_pills(self):
         counts = self._severity_counts()
         self._ev_pill_labels = {}
+        self._ev_pill_frames = {}
         bar = QWidget()
         bar.setObjectName("Transparent")
         h = QHBoxLayout(bar)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(8)
         for level in _SEVERITY_LEVELS:
-            bg, fg = theme.badge_colors(_BADGE_KEY.get(level, level))
-            pill = QFrame()
-            pill.setStyleSheet(f"QFrame{{background-color:{bg};border-radius:10px;}}")
+            _bg, fg = theme.badge_colors(_BADGE_KEY.get(level, level))
+            # Clickable pill: selecting a threat level filters the events list
+            # below, mirroring the Vulnerabilities donut/timeline. Default-arg
+            # capture binds `level` per iteration (late-binding closure guard).
+            pill = _ClickableFrame(lambda lvl=level: self._on_pill_clicked(lvl))
+            # Named so the stylesheet targets only the pill frame. A bare QFrame{}
+            # selector would cascade onto the inner labels too (QLabel subclasses
+            # QFrame), drawing the border around the title/count/bullet as well.
+            pill.setObjectName("SeverityPill")
             ph = QHBoxLayout(pill)
             ph.setContentsMargins(14, 8, 14, 8)
             ph.addWidget(_label("●", size=13, color=fg))
@@ -1885,8 +1940,57 @@ class Plugin(BasePlugin):
             count_lbl = _label(str(counts[level]), size=20, bold=True, color=fg)
             self._ev_pill_labels[level] = count_lbl
             ph.addWidget(count_lbl)
+            self._ev_pill_frames[level] = pill
             h.addWidget(pill, 1)
+        # Single styling path for both the initial paint and later updates.
+        self._refresh_severity_pills_selection()
         return bar
+
+    def _on_ev_severity_change(self):
+        # on_change for the shared SeveritySelection on the Events tab: repaint the
+        # pill selection state, reset to page 1, and re-filter the events list.
+        self._refresh_severity_pills_selection()
+        self._ev_page = 1
+        self._render_event_list()
+
+    def _on_pill_clicked(self, level):
+        # Zero-count pills are unselectable, mirroring zero-height chart bars. Uses
+        # live counts so a pill that fills in after a Phase-2 merge becomes usable.
+        if self._severity_counts().get(level, 0) <= 0:
+            return
+        self._ev_sev_sel.toggle(level)
+
+    def _refresh_severity_pills_selection(self):
+        """Paint each pill's selected/dimmed state: the selected pill keeps full
+        colour with a coloured outline; the others fade to ~30% opacity. Parity
+        with the donut/timeline set_alpha dimming (see _refresh_vuln_donut_alpha)."""
+        sel = self._ev_sev_sel.selected
+        counts = self._severity_counts()
+        for level, pill in self._ev_pill_frames.items():
+            try:
+                bg, fg = theme.badge_colors(_BADGE_KEY.get(level, level))
+                selected = level == sel
+                # A 2px border is always present (transparent when unselected) so
+                # toggling selection never nudges the pill's geometry.
+                border = fg if selected else "transparent"
+                # ID selector: styles the pill only, never the inner labels (a
+                # bare QFrame{} selector matches QLabel too and borders them).
+                pill.setStyleSheet(
+                    f"QFrame#SeverityPill{{background-color:{bg};border-radius:10px;"
+                    f"border:2px solid {border};}}"
+                )
+                # Dim the non-selected pills only while a selection is active.
+                dim = sel is not None and not selected
+                eff = QGraphicsOpacityEffect(pill)
+                eff.setOpacity(_SEV_DIM_ALPHA if dim else 1.0)
+                pill.setGraphicsEffect(eff)
+                # Only offer the hand cursor on selectable (non-zero) pills.
+                pill.setCursor(
+                    Qt.CursorShape.PointingHandCursor if counts.get(level, 0) > 0
+                    else Qt.CursorShape.ArrowCursor
+                )
+            except RuntimeError:
+                pass  # widget torn down mid-refresh
 
     def _update_severity_pills(self):
         counts = self._severity_counts()
@@ -1895,6 +1999,12 @@ class Plugin(BasePlugin):
                 lbl.setText(str(counts[level]))
             except RuntimeError:
                 pass
+        # If a Phase-2 rebind emptied the selected level, drop the selection so the
+        # list doesn't stay filtered to zero rows; then repaint pill selection.
+        sel = self._ev_sev_sel.selected
+        if sel is not None and counts.get(sel, 0) <= 0:
+            self._ev_sev_sel.clear()
+        self._refresh_severity_pills_selection()
 
     # ----- 24h hourly stacked bar chart --------------------------------------
     def _bucket_events_24h_hourly(self):
@@ -1931,6 +2041,9 @@ class Plugin(BasePlugin):
 
         self._ev_buckets, self._ev_counts = self._bucket_events_24h_hourly()
         fig, canvas, ax = charts.make_canvas(card, (8, 1.7), facecolor=ct["bg"])
+        # Recompute margins on every draw so labels aren't clipped when the
+        # canvas resizes (see _build_vuln_cvss_card for the same rationale).
+        fig.set_layout_engine("tight")
         canvas.setMinimumHeight(150)
         canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         canvas.mpl_connect("button_press_event", self._on_chart_click)
@@ -1956,7 +2069,7 @@ class Plugin(BasePlugin):
             heights = [counts[b][level] for b in buckets]
             rgb = mcolors.to_rgb(_segment_color(level))
             colors = [
-                (rgb[0], rgb[1], rgb[2], 1.0 if (sel is None or b == sel) else 0.25)
+                (rgb[0], rgb[1], rgb[2], 1.0 if (sel is None or b == sel) else _SEV_DIM_ALPHA)
                 for b in buckets
             ]
             ax.bar(x, heights, bottom=bottoms, width=0.9, color=colors,
@@ -1981,7 +2094,7 @@ class Plugin(BasePlugin):
         ax.spines["bottom"].set_color(ct["text"])
         ax.yaxis.grid(True, color=ct["grid"], linewidth=0.4, alpha=0.5)
         ax.set_axisbelow(True)
-        self._ev_chart_fig.tight_layout()
+        # Tight layout engine (set in the chart builder) handles margins on draw.
         canvas.draw_idle()
 
     def _on_chart_click(self, event):
@@ -2097,6 +2210,10 @@ class Plugin(BasePlugin):
                     continue
                 if floored != sel:
                     continue
+            # AND the header severity selection alongside the hour-bucket + search
+            # filters (symmetric with _filter_vulns' device+severity+search).
+            if not self._ev_sev_sel.matches(ev.get("severity")):
+                continue
             if q and q not in " ".join(str(f) for f in (
                 ev.get("rule_id", ""), ev.get("description", ""), ev.get("ip", ""),
                 (ev.get("severity") or ""), " ".join(ev.get("mitre", []) or []),
@@ -2288,28 +2405,9 @@ class Plugin(BasePlugin):
         raw.setFixedHeight(90)
         raw.setStyleSheet("font-family:'Courier New',monospace;font-size:11px;")
         cl.addWidget(raw)
-
-        footer = QHBoxLayout()
-        footer.addStretch(1)
-        ack = QPushButton("Acknowledge")
-        ack.setCursor(Qt.CursorShape.PointingHandCursor)
-        ack.clicked.connect(lambda _c, eid=ev["id"]: self._on_acknowledge(eid))
-        footer.addWidget(ack)
-        view = QPushButton("View in manager")
-        view.setObjectName("Secondary")
-        view.setCursor(Qt.CursorShape.PointingHandCursor)
-        view.clicked.connect(lambda _c, eid=ev["id"]: self._on_view_in_manager(eid))
-        footer.addWidget(view)
-        cl.addLayout(footer)
         cl.addStretch(1)
 
         holder.layout().addWidget(card)
-
-    def _on_acknowledge(self, event_id):
-        logger.info(f"Wazuh Overview: Acknowledge clicked for {event_id} (placeholder)")
-
-    def _on_view_in_manager(self, event_id):
-        logger.info(f"Wazuh Overview: View in manager clicked for {event_id} (placeholder)")
 
     # ======================================================================
     #  Vulnerabilities pane
@@ -2331,8 +2429,9 @@ class Plugin(BasePlugin):
         self._vuln_selected_key = None
         self._vuln_row_frames = {}
         self._vuln_detail_holder = None
-        self._vuln_severity_filter = None
+        self._vuln_sev_sel.clear()
         self._vuln_donut_wedges = []
+        self._vuln_cvss_bars = []
 
         _kick_overview_api_loader()
         _kick_vulns_loader()
@@ -2495,12 +2594,12 @@ class Plugin(BasePlugin):
             ax.text(0, 0, "No CVEs", ha="center", va="center", color=ct["text"], fontsize=11)
             self._vuln_donut_wedges = []
         else:
-            sel = self._vuln_severity_filter
+            sel = self._vuln_sev_sel.selected
             sizes = [counts[lvl] for lvl in _SEVERITY_LEVELS]
             rgba = []
             for lvl in _SEVERITY_LEVELS:
                 rgb = mcolors.to_rgb(_segment_color(lvl))
-                alpha = 1.0 if (sel is None or lvl == sel) else 0.25
+                alpha = 1.0 if (sel is None or lvl == sel) else _SEV_DIM_ALPHA
                 rgba.append((rgb[0], rgb[1], rgb[2], alpha))
             wedges, _t = ax.pie(sizes, colors=rgba, startangle=90, counterclock=False,
                                 wedgeprops={"width": 0.32, "edgecolor": ct["bg"]})
@@ -2520,32 +2619,41 @@ class Plugin(BasePlugin):
                 continue
             contains, _ = wedge.contains(event)
             if contains:
-                self._toggle_vuln_severity_filter(level)
+                self._vuln_sev_sel.toggle(level)
                 return
 
-    def _toggle_vuln_severity_filter(self, level):
-        self._vuln_severity_filter = None if self._vuln_severity_filter == level else level
+    def _on_vuln_severity_change(self):
+        # on_change for the shared SeveritySelection: clicking a level on the donut
+        # or the timeline mutates the same state, then this dims the non-selected
+        # segments on BOTH charts and re-filters the table. Either chart is a valid
+        # entry point; the visual selection and the table stay in lockstep.
         self._refresh_vuln_donut_alpha()
+        self._refresh_vuln_cvss_alpha()
         self._vuln_page = 1
         self._render_vuln_list()
 
     def _refresh_vuln_donut_alpha(self):
-        sel = self._vuln_severity_filter
+        sel = self._vuln_sev_sel.selected
         for wedge, level in self._vuln_donut_wedges:
             try:
-                wedge.set_alpha(1.0 if (sel is None or level == sel) else 0.25)
+                wedge.set_alpha(1.0 if (sel is None or level == sel) else _SEV_DIM_ALPHA)
             except Exception:
                 pass
         if self._vuln_donut_canvas is not None:
             self._vuln_donut_canvas.draw_idle()
 
     def _bucket_vulns_daily(self):
-        """Group CVEs into 30 daily buckets ending today (UTC) by
+        """Group CVEs into 30 daily buckets ending today (local date) by
         first_detected_at. That field may be unpopulated by the per-device
-        endpoint, in which case the chart renders its empty state."""
+        endpoint, in which case the chart renders its empty state.
+
+        Both the "today" anchor and each detection are resolved in the viewer's
+        local timezone. Anchoring in UTC would put "today" a calendar day ahead
+        whenever UTC has already rolled over (evenings in western timezones),
+        labelling the newest bucket with a future date."""
         from datetime import timedelta
 
-        today = datetime.now(timezone.utc).date()
+        today = datetime.now().astimezone().date()
         device = self._vuln_device
         buckets = [today - timedelta(days=i) for i in range(29, -1, -1)]
         counts = {b: {lvl: 0 for lvl in _SEVERITY_LEVELS} for b in buckets}
@@ -2557,9 +2665,12 @@ class Plugin(BasePlugin):
             if not ts:
                 continue
             try:
-                d = datetime.fromisoformat(ts.replace("Z", "+00:00")).date()
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
             except (ValueError, AttributeError):
                 continue
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            d = dt.astimezone().date()
             if d < first or d > today:
                 continue
             sev = (v.get("severity") or "").lower()
@@ -2577,13 +2688,75 @@ class Plugin(BasePlugin):
 
         ct = charts.chart_theme()
         fig, canvas, ax = charts.make_canvas(card, (5.5, 2.2), facecolor=ct["bg"])
+        # Persistent tight layout: recompute margins on every draw so the axis —
+        # and the rightmost "today" tick label sitting at the edge — stays fully
+        # visible when the canvas resizes to the card's real width/height. A
+        # one-shot tight_layout() only fits the initial figsize and then clips
+        # once the widget grows or shrinks.
+        fig.set_layout_engine("tight")
         canvas.setMinimumHeight(160)
         canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         fig.patch.set_facecolor(ct["bg"])
         ax.set_facecolor(ct["bg"])
         self._vuln_cvss_fig, self._vuln_cvss_canvas, self._vuln_cvss_ax = fig, canvas, ax
+        # The visible day-span scales with window width (see _vuln_visible_days),
+        # so re-window the x-axis whenever the canvas resizes. Guarded inline in
+        # the handler rather than debounced — the Windows modal-resize loop
+        # starves QTimer-based debounces (unlike ModuleGrid's grid relayout,
+        # this only redraws when the day-count actually crosses a threshold).
+        self._vuln_cvss_days = None
+        canvas.mpl_connect("resize_event", self._on_vuln_cvss_resize)
+        # Clicking a severity segment on the timeline filters the whole tab, exactly
+        # like clicking the matching donut wedge (shared self._vuln_sev_sel).
+        canvas.mpl_connect("button_press_event", self._on_vuln_cvss_click)
+        # Add the canvas to the card layout so Qt manages its geometry. Without
+        # this the canvas stays an unmanaged child at its native figure size
+        # (~550px) pinned top-left: the card clips its right edge (hiding the
+        # newest days, incl. today) and it never resizes with the window, so the
+        # width-driven day-span never kicks in. Every other chart here does this
+        # (events chart, donut card) — this one was missing it.
+        cl.addWidget(canvas, 1)
         self._render_vuln_cvss()
         return card
+
+    def _vuln_visible_days(self):
+        """Number of trailing days the timeline should show, driven by the app
+        window width: 7 days at the app's DEFAULT (native) window width, growing
+        linearly to the full 30 days once the window reaches ~2/3 of the screen
+        width. Today stays pinned to the right edge; a wider window reveals more
+        history on the left. Anchoring on the default size (not the hard minimum)
+        means a freshly-opened window shows ~1 week rather than most of the month."""
+        canvas = self._vuln_cvss_canvas
+        if canvas is None:
+            return 30
+        win = canvas.window()
+        if win is None:
+            return 30
+        screen = canvas.screen()
+        screen_w = screen.availableGeometry().width() if screen is not None else 1920
+        # Lower anchor = the app's default window width (the size it opens at),
+        # sourced from the shared constant with a 1120 fallback. Lazy import keeps
+        # this off the plugin's import path (avoids a startup import cycle).
+        try:
+            from gui.app_window import DEFAULT_WINDOW_SIZE
+            anchor_lo = DEFAULT_WINDOW_SIZE[0]
+        except Exception:
+            anchor_lo = 1120
+        anchor_hi = (2.0 / 3.0) * screen_w
+        if anchor_hi <= anchor_lo:
+            # Tiny screen: the default window already meets/exceeds the 2/3 mark.
+            return 30
+        frac = (win.width() - anchor_lo) / (anchor_hi - anchor_lo)
+        frac = max(0.0, min(1.0, frac))
+        return int(round(7 + frac * (30 - 7)))
+
+    def _on_vuln_cvss_resize(self, _event):
+        """Re-window the timeline on canvas resize, but only redraw when the
+        computed day-count actually changes (limits redraws to a handful across
+        the full width range instead of one per resize pixel)."""
+        if self._vuln_visible_days() == self._vuln_cvss_days:
+            return
+        self._render_vuln_cvss()
 
     def _render_vuln_cvss(self):
         """Draw (or redraw) the 30-day 'first detected' timeline onto the CVSS
@@ -2600,21 +2773,37 @@ class Plugin(BasePlugin):
         buckets, counts = self._bucket_vulns_daily()
         x = list(range(len(buckets)))
         bottoms = [0] * len(buckets)
+        # Right-anchored visible window: today (the last bucket) is always at the
+        # right edge; the number of trailing days shown scales with window width.
+        n = self._vuln_visible_days()
+        self._vuln_cvss_days = n
+        start = len(buckets) - n
+        ax.set_xlim(start - 0.5, len(buckets) - 0.5)
         has_data = any(sum(counts[b].values()) for b in buckets)
+        # (bar_container, severity) pairs, mirroring the donut's wedge tracking so
+        # clicks can be hit-tested and the selection dim can be refreshed in place.
+        self._vuln_cvss_bars = []
         if has_data:
+            sel = self._vuln_sev_sel.selected
             for level in _SEVERITY_LEVELS:
                 heights = [counts[b][level] for b in buckets]
-                ax.bar(x, heights, bottom=bottoms, width=0.85,
-                       color=_segment_color(level), edgecolor="none")
+                alpha = 1.0 if (sel is None or level == sel) else _SEV_DIM_ALPHA
+                bc = ax.bar(x, heights, bottom=bottoms, width=0.85,
+                            color=_segment_color(level), edgecolor="none", alpha=alpha)
+                self._vuln_cvss_bars.append((bc, level))
                 bottoms = [a + b for a, b in zip(bottoms, heights)]
-            # Anchor ticks to the right edge (today) and step backwards, so the
-            # newest day is always the labelled rightmost tick.
-            step = max(1, len(buckets) // 6)
-            ticks = sorted(range(len(buckets) - 1, -1, -step))
+            # Anchor ticks to the right edge (today) and step backwards within the
+            # visible window, so the newest day is always the labelled rightmost tick.
+            step = max(1, n // 6)
+            ticks = sorted(range(len(buckets) - 1, start - 1, -step))
             ax.set_xticks(ticks)
             ax.set_xticklabels([buckets[i].strftime("%b %d") for i in ticks],
                                fontsize=8, color=ct["text"])
-            max_h = max(bottoms) if bottoms else 1
+            # Scale the y-axis to the visible window only, so a tall bar scrolled
+            # off the left edge doesn't squash the bars actually on screen.
+            visible = bottoms[start:]
+            max_h = max(visible) if visible else 1
+            max_h = max(1, max_h)
             ax.set_ylim(0, max_h + 1)
             ax.set_yticks(range(0, max_h + 2, max(1, (max_h + 1) // 4)))
         else:
@@ -2629,8 +2818,36 @@ class Plugin(BasePlugin):
         ax.spines["bottom"].set_color(ct["text"])
         ax.yaxis.grid(True, color=ct["grid"], linewidth=0.4, alpha=0.5)
         ax.set_axisbelow(True)
-        self._vuln_cvss_fig.tight_layout()
+        # Margins are recomputed on draw by the figure's tight layout engine
+        # (set in _build_vuln_cvss_card), so no one-shot tight_layout() here.
         self._vuln_cvss_canvas.draw_idle()
+
+    def _refresh_vuln_cvss_alpha(self):
+        """Dim the non-selected severities on the timeline to match the donut,
+        without recomputing buckets or re-windowing — just retint the existing
+        bar patches (the donut does the same via _refresh_vuln_donut_alpha)."""
+        sel = self._vuln_sev_sel.selected
+        for bc, level in self._vuln_cvss_bars:
+            alpha = 1.0 if (sel is None or level == sel) else _SEV_DIM_ALPHA
+            for patch in bc:
+                try:
+                    patch.set_alpha(alpha)
+                except Exception:
+                    pass
+        if self._vuln_cvss_canvas is not None:
+            self._vuln_cvss_canvas.draw_idle()
+
+    def _on_vuln_cvss_click(self, event):
+        if event.inaxes is None or not self._vuln_cvss_bars:
+            return
+        # Hit-test each severity's stacked segments; zero-height bars can't contain
+        # a click, so empty severities are naturally unselectable.
+        for bc, level in self._vuln_cvss_bars:
+            for patch in bc:
+                contains, _ = patch.contains(event)
+                if contains:
+                    self._vuln_sev_sel.toggle(level)
+                    return
 
     # ----- table header + device selector ------------------------------------
     def _build_vuln_table_header(self):
@@ -2726,13 +2943,12 @@ class Plugin(BasePlugin):
     def _filter_vulns(self, query):
         q = (query or "").lower().strip()
         device_filter = self._vuln_device
-        sev_filter = self._vuln_severity_filter
         out = []
         for v in _REMOTE_VULNS:
             if device_filter and device_filter != self._VULN_DEVICE_ALL \
                     and v.get("agent_name") != device_filter:
                 continue
-            if sev_filter and (v.get("severity") or "").lower() != sev_filter:
+            if not self._vuln_sev_sel.matches(v.get("severity")):
                 continue
             if q and q not in " ".join(str(f) for f in (
                 v.get("id", ""), v.get("package_name", ""), v.get("package_version", ""),

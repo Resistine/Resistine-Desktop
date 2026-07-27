@@ -40,6 +40,11 @@ from gui.qt_toast import Toast
 from gui.qt_widgets import resource
 from utils.logger import logger
 
+# Default (native) window size the app opens at, in logical pixels. Exposed as a
+# constant so width-driven UI (e.g. the vulnerabilities timeline's day-span
+# scaling) can anchor on the real opening size rather than the hard minimum.
+DEFAULT_WINDOW_SIZE = (1120, 720)
+
 
 class AppWindow(QMainWindow):
     # (ms, token, callable) marshalled onto the GUI thread for after().
@@ -67,7 +72,7 @@ class AppWindow(QMainWindow):
         self._current_main_screen = None
 
         self.setWindowTitle("Resistine")
-        self.resize(1120, 720)
+        self.resize(*DEFAULT_WINDOW_SIZE)
         self.setMinimumSize(820, 480)
         icon_png = resource("resources", "icons", "app_icon.png")
         if os.path.isfile(icon_png):
