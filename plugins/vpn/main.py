@@ -606,9 +606,11 @@ class Plugin(BasePlugin):
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
 
-        # Collected by _section_header for the equal-padding pass below.
+        # Detail-panel bookkeeping for the content-aware padding pass: the
+        # title→content spacers and their grids.
         self._panel_spacers = []
         self._panel_grids = []
+        panel_rows = []
 
         row = 0
 
@@ -739,14 +741,13 @@ class Plugin(BasePlugin):
             sr = self._info_row(
                 server_grid, sr, "Config Name", sys_info.get("Config Name", "N/A"),
             )
-            client_grid.setRowStretch(cr, 1)
-            server_grid.setRowStretch(sr, 1)
             # Side-by-side on a wide window; stacked vertically when narrow so
             # neither panel compresses its rows into clipped text
             # ("10.11.128." / "Config Nam").
-            grid.addWidget(
-                ResponsiveStack(client_panel, server_panel, stretches=(1, 1)),
-                row, 0, 1, 2)
+            self._vpn_stack = ResponsiveStack(
+                client_panel, server_panel, stretches=(1, 1))
+            grid.addWidget(self._vpn_stack, row, 0, 1, 2)
+            panel_rows.append(row)
             row += 1
 
             # ── PUBLIC KEYS (spans both columns) ──────────────────────────
@@ -760,8 +761,8 @@ class Plugin(BasePlugin):
                 keys_grid, kr, "Server",
                 data.get("public_key", "N/A"), mono=True, wrap=True,
             )
-            keys_grid.setRowStretch(kr, 1)
             grid.addWidget(keys_panel, row, 0, 1, 2)
+            panel_rows.append(row)
             row += 1
 
             # ── ALLOWED IPs (spans both columns) ──────────────────────────
@@ -771,9 +772,15 @@ class Plugin(BasePlugin):
                 allowed_grid, ar, "Routes",
                 data.get("allowed_ips", "N/A"), mono=True, wrap=True,
             )
-            allowed_grid.setRowStretch(ar, 1)
             grid.addWidget(allowed_panel, row, 0, 1, 2)
+            panel_rows.append(row)
             row += 1
+
+            # For the content-aware padding pass: the individual Client/Server
+            # panels (measured directly, since their side-by-side stack lays out
+            # async) and the number of vertical panel rows (they share one).
+            self._vpn_client, self._vpn_server = client_panel, server_panel
+            self._panel_row_count = len(panel_rows)
 
         # ── 4. ACTION BUTTONS (spans both columns) ────────────────────────
         buttons_row = QHBoxLayout()
@@ -799,10 +806,9 @@ class Plugin(BasePlugin):
         grid.addLayout(buttons_row, row, 0, 1, 2)
         row += 1
 
-        # Keep the layout top-aligned: a trailing stretch row swallows any
-        # leftover viewport height so the panels stay at their natural
-        # (compact) heights instead of being inflated to fill the page —
-        # tall windows were stretching huge gaps into every panel.
+        # Trailing stretch: holds the panels at their natural (content) heights
+        # and swallows any leftover the padding pass doesn't place into the gaps
+        # (and, when content overflows, this is 0 and the page scrolls).
         grid.setRowStretch(row, 1)
 
         # ── Capped content column ─────────────────────────────────────────
@@ -824,18 +830,19 @@ class Plugin(BasePlugin):
 
         self.main_container = scroll_page(centered)
 
-        # Equalise the panels' title→content padding so the bottom buttons stay
-        # flush — recomputed whenever the viewport is resized.
+        # Content-aware padding: the same header→content gap in every panel,
+        # sized so the bottom buttons stay flush. Recompute on every resize.
         self._vpn_content = content
         self._vpn_outer_grid = grid
         self._vpn_scroll = self.main_container
         _orig_resize = self.main_container.resizeEvent
-        self._rebalance_padding() # unconditional cuz revisiting from theme change doesn't resize
+
         def _on_resize(event, _o=_orig_resize):
             _o(event)
-            self._rebalance_padding() # rebalance on a resize too or it WILL misalign itself
+            self._rebalance_padding()
 
         self.main_container.resizeEvent = _on_resize
+        self._rebalance_padding()
         self.app.after(0, self._rebalance_padding)
 
         # Start the re-arming status poll.
@@ -843,27 +850,62 @@ class Plugin(BasePlugin):
 
         return self.main_container
 
-    def _rebalance_padding(self):
-        """Keep a small, EQUAL title→content padding in every panel.
+    def _natural_height(self) -> int:
+        """Total content height with minimum gaps — summed from the outer grid's
+        INDIVIDUAL rows (each widget's own sizeHint is reliable). The async
+        Client/Server ResponsiveStack is the one exception: its aggregate flips
+        between side-by-side and stacked, so we take the taller of the two
+        panels measured directly instead of trusting the stack.
+        """
+        g = self._vpn_outer_grid
+        row_h: dict[int, int] = {}
+        for i in range(g.count()):
+            r = g.getItemPosition(i)[0]
+            item = g.itemAt(i)
+            w = item.widget()
+            if w is self._vpn_stack:
+                h = max(self._vpn_client.sizeHint().height(),
+                        self._vpn_server.sizeHint().height())
+            elif w is not None:
+                h = w.sizeHint().height()
+            else:
+                h = item.sizeHint().height()  # nested layout (buttons row)
+            row_h[r] = max(row_h.get(r, 0), h)
+        m = g.contentsMargins()
+        return (sum(row_h.values())
+                + (len(row_h) - 1) * g.verticalSpacing()
+                + m.top() + m.bottom())
 
-        Previously this computed large spacer heights so the bottom buttons
-        sat flush with the viewport — which read as huge dead gaps between
-        each panel's title and its rows. Content now sits directly under the
-        titles (matching the original CTk layout); leftover height simply
-        stays below the last row of panels.
+    def _rebalance_padding(self):
+        """Give every detail panel the SAME header→content gap, sized so the
+        bottom buttons land flush. Panels keep their natural heights (content
+        directly under the gap, nothing trailing); the leftover viewport height
+        is split across the vertical rows (Client/Server share one) as an equal
+        fixed gap. When content overflows, the gap stays minimum and it scrolls.
         """
         spacers = getattr(self, "_panel_spacers", None)
         grids = getattr(self, "_panel_grids", [])
-        if not spacers:
+        rows = getattr(self, "_panel_row_count", 0)
+        if not spacers or rows <= 0:
             return
-        fixed = QSizePolicy.Policy.Fixed
         mini = QSizePolicy.Policy.Minimum
-        try:
+        fixed = QSizePolicy.Policy.Fixed
+        base_pad = 8
+
+        def set_all(h):
             for sp in spacers:
-                sp.changeSize(0, 8, mini, fixed)
+                sp.changeSize(0, int(h), mini, fixed)
             for g in grids:
                 g.invalidate()
             self._vpn_outer_grid.invalidate()
+
+        try:
+            set_all(base_pad)
+            avail_h = self._vpn_scroll.viewport().height() - 20
+            leftover = avail_h - self._natural_height()
+            if leftover <= 0:
+                return  # content fills/overflows → keep minimum gap, scroll
+            set_all(base_pad + leftover / rows)
         except (RuntimeError, AttributeError):
             return
 
@@ -891,18 +933,23 @@ class Plugin(BasePlugin):
         div.setFixedHeight(1)
         div.setObjectName("Divider")
         g.addWidget(div, row + 1, 0, 1, 2)
-        # Spacer between the title/divider and the content rows. Its height is
-        # assigned later by _rebalance_padding() to an EQUAL value across every
-        # panel (so all title→content paddings match) chosen so the bottom
-        # buttons sit flush with the bottom of the screen. Equal *row stretch*
-        # can't do this — it yields equal total panel heights, hence unequal
-        # padding — so we compute and set fixed spacer heights instead.
+        # Fixed spacer between the header/divider and the content rows. Its
+        # height is set to an EQUAL value across every panel by
+        # _rebalance_padding (the same gap in each) chosen so the bottom action
+        # buttons sit flush with the bottom of the screen — panels keep their
+        # natural (content) heights, so there's no trailing empty space.
         spacer = QSpacerItem(
-            0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+            0, 8, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         g.addItem(spacer, row + 2, 0, 1, 2)
         self._panel_spacers.append(spacer)
         self._panel_grids.append(g)
-        return row + 3
+        # Leading stretch, just below the fixed gap: when this panel is forced
+        # taller than its content (the shorter half of the side-by-side
+        # Client/Server row), the extra height collects HERE — right before the
+        # first descriptor — bottom-aligning the content, instead of trailing
+        # below it or spreading between the rows. Zero for natural-height panels.
+        g.setRowStretch(row + 3, 1)
+        return row + 4
 
     def _info_row(
         self, g: QGridLayout, row: int, label: str, value: str,
