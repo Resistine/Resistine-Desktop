@@ -1118,7 +1118,6 @@ class Plugin(BasePlugin):
 
         # Vulnerabilities state
         self._vuln_page_widget = None
-        self._vuln_device = None         # resolved lazily once data lands
         self._vuln_search = None
         self._vuln_search_token = None
         self._vuln_count_label = None
@@ -1170,6 +1169,17 @@ class Plugin(BasePlugin):
         self._tab_buttons = {}
         self._tab_built = {name: False for name in _TAB_NAMES}
         self._tab_pages = {}
+
+        # Global device filter shared by every tab (strip selector). Tracks the
+        # scope each built tab was last rendered at so a scope change made on one
+        # tab re-applies to the others when they're next shown. Defaults to the
+        # local device once the roster lands, unless the user picks something
+        # first (_device_scope_user_set guards against overriding their choice).
+        self._device_scope = self._DEVICE_ALL
+        self._device_scope_user_set = False
+        self._device_combo = None
+        self._tab_rendered_scope = {}
+        self._active_tab = None
 
         self._tab_ramps = {}
         self._loading_screens = {}
@@ -1252,6 +1262,20 @@ class Plugin(BasePlugin):
             strip_lay.addWidget(btn)
             self._tab_buttons[name] = btn
         strip_lay.addStretch(1)
+
+        # Global device selector, pinned top-right of the strip so it's easy to
+        # find and applies to every tab (see _on_device_scope_change). Starts with
+        # just "All devices" and fills in via _refresh_device_combo as the device
+        # roster lands (the strip is built before inventory is ready).
+        self._device_combo = QComboBox()
+        self._device_combo.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._device_combo.setMaximumWidth(240)
+        self._device_combo.addItem(self._DEVICE_ALL)
+        self._device_combo.setCurrentText(self._device_scope)
+        self._device_combo.currentTextChanged.connect(self._on_device_scope_change)
+        strip_lay.addWidget(self._device_combo, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._refresh_device_combo()
+
         outer.addWidget(strip)
 
         hairline = QFrame()
@@ -1315,6 +1339,7 @@ class Plugin(BasePlugin):
         try:
             builder(page, name)
             self._tab_built[name] = True
+            self._tab_rendered_scope[name] = self._device_scope
         except Exception as e:
             logger.error(f"Wazuh Overview: building '{name}' pane failed: {e}")
             self._tab_built[name] = True  # don't retry forever
@@ -1324,14 +1349,103 @@ class Plugin(BasePlugin):
             return
         already_built = self._tab_built.get(name, False)
         self._ensure_tab_built(name)
+        # A device scope picked while another tab was showing hasn't been applied
+        # here yet — re-render this tab at the current scope on the way in.
+        scope_changed = (already_built
+                         and self._tab_rendered_scope.get(name) != self._device_scope)
+        if scope_changed:
+            self._apply_scope_to_tab(name)
         # The timeline chart's date window is anchored to "today"; re-render it
         # when revisiting the Vulnerabilities tab so it tracks the current date
         # rather than freezing at the date the pane was first built. (First
-        # build already renders it, so only refresh on later visits.)
-        if name == "Vulnerabilities" and already_built and self._vuln_cvss_ax is not None:
+        # build already renders it, so only refresh on later visits. A scope
+        # rebuild above already re-rendered it, so skip the double draw.)
+        elif name == "Vulnerabilities" and already_built and self._vuln_cvss_ax is not None:
             self._render_vuln_cvss()
         self._tab_stack.setCurrentIndex(_TAB_NAMES.index(name))
         self._style_tab_buttons(name)
+
+    # ----- global device selector --------------------------------------------
+    def _default_device_scope(self, roster):
+        """The scope to select by default: the local device when it's in the
+        roster, else 'All devices'."""
+        if isinstance(_REMOTE_AGENT, dict):
+            local = _REMOTE_AGENT.get("name")
+            if local and local in roster:
+                return local
+        return self._DEVICE_ALL
+
+    def _refresh_device_combo(self):
+        """Sync the strip selector's items with the current device roster,
+        preserving the selection. Called by the tab pollers as devices land.
+        The first time the roster carries real devices, the scope defaults to
+        the local device (unless the user has already picked one)."""
+        combo = self._device_combo
+        if combo is None:
+            return
+        roster = self._device_roster()
+        if not self._device_scope_user_set and self._device_scope == self._DEVICE_ALL:
+            default = self._default_device_scope(roster)
+            if default != self._device_scope:
+                self._device_scope = default
+                # Re-render the visible tab so it reflects the resolved default.
+                if self._active_tab and self._tab_built.get(self._active_tab):
+                    self._apply_scope_to_tab(self._active_tab)
+        if self._device_scope not in roster:
+            self._device_scope = self._DEVICE_ALL
+        current = [combo.itemText(i) for i in range(combo.count())]
+        if current == roster and combo.currentText() == self._device_scope:
+            return
+        combo.blockSignals(True)
+        try:
+            combo.clear()
+            combo.addItems(roster)
+            combo.setCurrentText(self._device_scope)
+        finally:
+            combo.blockSignals(False)
+
+    def _on_device_scope_change(self, name):
+        if not name or name == self._device_scope:
+            return
+        self._device_scope = name
+        self._device_scope_user_set = True
+        # A narrowed list should start at its first page on every tab.
+        self._ev_page = 1
+        self._vuln_page = 1
+        self._inv_page = 1
+        # Re-render the visible tab now; the rest re-render on their next visit
+        # (tracked via _tab_rendered_scope in _switch_tab).
+        if self._active_tab:
+            self._apply_scope_to_tab(self._active_tab)
+
+    def _apply_scope_to_tab(self, name):
+        """Re-render tab ``name`` at the current device scope, using each tab's
+        cheapest in-place refresh where one exists."""
+        if not self._tab_built.get(name):
+            return
+        page = self._tab_pages.get(name)
+        try:
+            if name == "Overview":
+                self._rebuild_device_card()
+                self._rebuild_alert_bar()
+                self._populate_module_grid()
+            elif name == "Events":
+                if self._ev_page_widget is not None and _remote_vuln_events_ready.is_set():
+                    self._update_severity_pills()
+                    self._ev_buckets, self._ev_counts = self._bucket_events_24h_hourly()
+                    self._render_event_chart()
+                    self._render_event_list()
+            elif name == "Vulnerabilities":
+                if page is not None:
+                    self._build_vulnerabilities_pane(page)
+            elif name == "Inventory":
+                if self._inv_body_holder is not None:
+                    self._render_inventory_body()
+                elif page is not None:
+                    self._build_inventory_pane(page)
+        except Exception as e:
+            logger.error(f"Wazuh Overview: applying scope to '{name}' failed: {e}")
+        self._tab_rendered_scope[name] = self._device_scope
 
     # ----- loading screens ---------------------------------------------------
     def _tab_ramp(self, name, *, restart=False):
@@ -1464,6 +1578,7 @@ class Plugin(BasePlugin):
             self._overview_poll_token = None
             if self._module_grid is None:
                 return
+            self._refresh_device_combo()
             mask = _ready_mask()
             if mask != self._overview_ready_mask:
                 self._overview_ready_mask = mask
@@ -1518,12 +1633,17 @@ class Plugin(BasePlugin):
         lay.setContentsMargins(20, 16, 20, 16)
         lay.setSpacing(10)
 
-        if not _remote_agent_ready.is_set():
-            return self._device_placeholder(card, lay, "Loading device info…")
-        if _REMOTE_AGENT_ERROR or not _REMOTE_AGENT:
-            return self._device_placeholder(card, lay, "Couldn't load device info")
+        bi, loading, error = self._scoped_device_info()
+        # "THIS DEVICE" for the local agent; a scoped remote device is labelled
+        # "SELECTED DEVICE" so the card never misrepresents someone else's box.
+        local = _REMOTE_AGENT.get("name") if isinstance(_REMOTE_AGENT, dict) else None
+        card_label = ("THIS DEVICE" if (not self._device_active()
+                      or self._device_scope == local) else "SELECTED DEVICE")
+        if loading:
+            return self._device_placeholder(card, lay, "Loading device info…", card_label)
+        if error or not bi:
+            return self._device_placeholder(card, lay, "Couldn't load device info", card_label)
 
-        bi = _REMOTE_AGENT
         os_info = bi.get("os") or {}
         name = bi.get("name") or "(unknown device)"
         os_name = os_info.get("name") or ""
@@ -1566,7 +1686,7 @@ class Plugin(BasePlugin):
         top.setContentsMargins(0, 0, 0, 0)
         left = QVBoxLayout()
         left.setSpacing(2)
-        left.addWidget(_label("THIS DEVICE", size=10, bold=True, secondary=True))
+        left.addWidget(_label(card_label, size=10, bold=True, secondary=True))
         left.addWidget(_label(name, size=22, bold=True))
         if meta_text:
             left.addWidget(_label(meta_text, size=12, secondary=True))
@@ -1587,8 +1707,8 @@ class Plugin(BasePlugin):
         lay.addWidget(_label(facts_text, size=12, secondary=True, wrap=True))
         return card
 
-    def _device_placeholder(self, card, lay, message):
-        lay.addWidget(_label("THIS DEVICE", size=10, bold=True, secondary=True))
+    def _device_placeholder(self, card, lay, message, label="THIS DEVICE"):
+        lay.addWidget(_label(label, size=10, bold=True, secondary=True))
         lay.addWidget(_label(message, size=14, secondary=True))
         return card
 
@@ -1609,19 +1729,17 @@ class Plugin(BasePlugin):
             h.setContentsMargins(14, 10, 12, 10)
             return f, h
 
-        if not _remote_agent_ready.is_set() or _REMOTE_AGENT_ERROR or not _REMOTE_AGENT:
+        bi, loading, error = self._scoped_device_info()
+        if loading or error or not bi:
             muted_bg = theme.color("protect_warn_bg")
             f, h = bar(muted_bg)
-            msg = (
-                "Loading agent status…"
-                if not _remote_agent_ready.is_set()
-                else "Couldn't load agent status."
-            )
+            msg = "Loading agent status…" if loading else "Couldn't load agent status."
             h.addWidget(_label(msg, size=13, color=theme.color("text_secondary")))
             h.addStretch(1)
             return f
 
-        bi = _REMOTE_AGENT
+        local = _REMOTE_AGENT.get("name") if isinstance(_REMOTE_AGENT, dict) else None
+        is_local = not self._device_active() or self._device_scope == local
         is_connected = (bi.get("status") or "").lower() in ("active", "connected")
         if is_connected:
             bg, txt = theme.color("protect_ok_bg"), theme.color("protect_ok_text")
@@ -1637,7 +1755,7 @@ class Plugin(BasePlugin):
         f, h = bar(bg)
         h.addWidget(_label(msg, size=12, color=txt, wrap=True))
         h.addStretch(1)
-        if not is_connected:
+        if not is_connected and is_local:
             btn = QPushButton("Reconnect agent")
             btn.setObjectName("Danger")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1703,7 +1821,7 @@ class Plugin(BasePlugin):
         if not _remote_vuln_events_ready.is_set():
             return _loading_card(title, desc, target_tab=target)
 
-        counts = _bucket_by_severity(_REMOTE_VULN_EVENTS)
+        counts = _bucket_by_severity(self._scope_records(_REMOTE_VULN_EVENTS, "agent"))
         total = sum(counts.values())
         if total == 0:
             return {
@@ -1718,16 +1836,24 @@ class Plugin(BasePlugin):
 
     def _vuln_card(self):
         title, desc, target = "Vulnerabilities", "CVEs across installed packages", "Vulnerabilities"
-        if not _remote_vulns_summary_ready.is_set():
-            return _loading_card(title, desc, target_tab=target)
-        if _REMOTE_VULNS_SUMMARY_ERROR or not isinstance(_REMOTE_VULNS_SUMMARY, dict):
-            return _error_card(title, desc, target_tab=target)
-
-        by_sev = _REMOTE_VULNS_SUMMARY.get("by_severity") or {}
-        counts = {
-            lvl: int(by_sev.get(lvl.capitalize(), by_sev.get(lvl, 0)) or 0)
-            for lvl in _SEVERITY_LEVELS
-        }
+        if self._device_active():
+            # The pre-aggregated summary has no per-device breakdown, so a scoped
+            # card must re-bucket the full per-device CVE list instead.
+            if not _remote_vulns_ready.is_set():
+                return _loading_card(title, desc, target_tab=target)
+            if _REMOTE_VULNS_ERROR:
+                return _error_card(title, desc, target_tab=target)
+            counts = _bucket_by_severity(self._scope_records(_REMOTE_VULNS, "agent_name"))
+        else:
+            if not _remote_vulns_summary_ready.is_set():
+                return _loading_card(title, desc, target_tab=target)
+            if _REMOTE_VULNS_SUMMARY_ERROR or not isinstance(_REMOTE_VULNS_SUMMARY, dict):
+                return _error_card(title, desc, target_tab=target)
+            by_sev = _REMOTE_VULNS_SUMMARY.get("by_severity") or {}
+            counts = {
+                lvl: int(by_sev.get(lvl.capitalize(), by_sev.get(lvl, 0)) or 0)
+                for lvl in _SEVERITY_LEVELS
+            }
         total = sum(counts.values())
         if total == 0:
             return {
@@ -1791,7 +1917,7 @@ class Plugin(BasePlugin):
             return _loading_card(title, desc, target_tab=target)
         if _REMOTE_INVENTORY_ERROR:
             return _error_card(title, desc, target_tab=target)
-        total = int(_REMOTE_INVENTORY.get("total") or 0)
+        total = 1 if self._device_active() else int(_REMOTE_INVENTORY.get("total") or 0)
         if total == 0:
             return {"title": title, "status": "INFO", "description": desc,
                     "stats": (("No devices", "muted"),), "target_tab": target}
@@ -1838,6 +1964,9 @@ class Plugin(BasePlugin):
             segments = [("No data available", "muted")]
         return {"title": title, "status": "OK" if config_synced else "INFO",
                 "description": desc, "stats": tuple(segments)}
+
+    # Shared "all devices" sentinel for the global device selector (§ tab strip).
+    _DEVICE_ALL = "All devices"
 
     # ======================================================================
     #  Events pane
@@ -1895,6 +2024,7 @@ class Plugin(BasePlugin):
             page = self._ev_page_widget
             if page is None:
                 return
+            self._refresh_device_combo()
             if not _remote_vuln_events_ready.is_set():
                 self._ev_ready_token = self.app.after(120, check)
                 return
@@ -1922,7 +2052,7 @@ class Plugin(BasePlugin):
 
     # ----- severity pills ----------------------------------------------------
     def _severity_counts(self):
-        return _bucket_by_severity(_REMOTE_VULN_EVENTS)
+        return _bucket_by_severity(self._scope_records(_REMOTE_VULN_EVENTS, "agent"))
 
     def _build_severity_pills(self):
         counts = self._severity_counts()
@@ -2029,7 +2159,7 @@ class Plugin(BasePlugin):
         left_edge = right_edge - timedelta(hours=24)
         buckets = [left_edge + timedelta(hours=i) for i in range(24)]
         counts = {b: {lvl: 0 for lvl in _SEVERITY_LEVELS} for b in buckets}
-        for ev in _REMOTE_VULN_EVENTS:
+        for ev in self._scope_records(_REMOTE_VULN_EVENTS, "agent"):
             try:
                 dt = datetime.fromisoformat((ev["timestamp"]).replace("Z", "+00:00"))
             except (KeyError, ValueError, AttributeError):
@@ -2208,7 +2338,7 @@ class Plugin(BasePlugin):
         sel = self._ev_selected_bucket
         q = (query or "").lower().strip()
         out = []
-        for ev in _REMOTE_VULN_EVENTS:
+        for ev in self._scope_records(_REMOTE_VULN_EVENTS, "agent"):
             if sel is not None:
                 ts = ev.get("timestamp")
                 if not ts:
@@ -2251,7 +2381,7 @@ class Plugin(BasePlugin):
 
         events = self._filter_events(query)
         if self._ev_count_label is not None:
-            total = len(_REMOTE_VULN_EVENTS)
+            total = len(self._scope_records(_REMOTE_VULN_EVENTS, "agent"))
             shown = len(events)
             text = f"{shown} events" if shown == total else f"{shown}/{total} events"
             if self._ev_selected_bucket is not None:
@@ -2423,7 +2553,6 @@ class Plugin(BasePlugin):
     # ======================================================================
     #  Vulnerabilities pane
     # ======================================================================
-    _VULN_DEVICE_ALL = "All devices"
 
     def _build_vulnerabilities_pane(self, page, _name="Vulnerabilities"):
         # Drop any prior figures so a rebuild (device switch) doesn't leak.
@@ -2463,9 +2592,6 @@ class Plugin(BasePlugin):
             self._vuln_centered(page, "Couldn't load vulnerabilities", _REMOTE_VULNS_ERROR)
             return
 
-        if self._vuln_device is None or self._vuln_device not in self._vuln_device_values():
-            self._vuln_device = self._default_vuln_device()
-
         inner = QWidget()
         inner.setObjectName("Transparent")
         col = QVBoxLayout(inner)
@@ -2499,6 +2625,7 @@ class Plugin(BasePlugin):
             page = self._vuln_page_widget
             if page is None:
                 return
+            self._refresh_device_combo()
             if _remote_vulns_ready.is_set():
                 self._finish_loading(
                     "Vulnerabilities", lambda: self._build_vulnerabilities_pane(page)
@@ -2508,41 +2635,81 @@ class Plugin(BasePlugin):
 
         self._vuln_ready_token = self.app.after(120, check)
 
-    # ----- device scope helpers ----------------------------------------------
-    def _vuln_device_values(self):
-        seen = {v.get("agent_name") for v in _REMOTE_VULNS if v.get("agent_name")}
-        return [self._VULN_DEVICE_ALL] + sorted(seen)
+    # ----- global device scope (shared by every tab) -------------------------
+    def _device_active(self):
+        """True when a specific device is selected (i.e. not 'All devices')."""
+        return bool(self._device_scope and self._device_scope != self._DEVICE_ALL)
 
-    def _default_vuln_device(self):
-        values = self._vuln_device_values()
-        if isinstance(_REMOTE_AGENT, dict):
-            local_name = _REMOTE_AGENT.get("name")
-            if local_name and local_name in values:
-                return local_name
-        return self._VULN_DEVICE_ALL
+    def _scope_records(self, records, field):
+        """Filter a record list to the globally-selected device. Returns the list
+        unchanged for 'All devices'. ``field`` is the per-record key holding the
+        device/agent name — CVEs use ``agent_name``, events use ``agent``. This is
+        the single abstracted filter every tab reuses."""
+        if not self._device_active():
+            return records
+        scope = self._device_scope
+        return [r for r in records if r.get(field) == scope]
+
+    def _device_roster(self):
+        """The unified device list for the strip selector: 'All devices' + every
+        device name known to the account. Sourced from the eagerly-loaded
+        inventory summary (``_REMOTE_INVENTORY``); falls back to the fully-shaped
+        agents roster, then to whatever names appear in the CVE/event streams,
+        so the dropdown is usable before inventory lands."""
+        names = set()
+        if isinstance(_REMOTE_INVENTORY, dict):
+            for it in (_REMOTE_INVENTORY.get("items") or []):
+                nm = (it.get("agent_name") or "").strip()
+                if nm:
+                    names.add(nm)
+        if not names:
+            for a in _AGENTS:
+                nm = ((a.get("basic_info") or {}).get("name") or "").strip()
+                if nm:
+                    names.add(nm)
+        if not names:
+            for v in _REMOTE_VULNS:
+                nm = (v.get("agent_name") or "").strip()
+                if nm:
+                    names.add(nm)
+            for ev in _REMOTE_VULN_EVENTS:
+                nm = (ev.get("agent") or "").strip()
+                if nm:
+                    names.add(nm)
+        return [self._DEVICE_ALL] + sorted(names)
+
+    def _scoped_device_info(self):
+        """(basic_info, loading, error) for the Overview device card/alert bar
+        under the current scope. Local device (or 'All devices') → the rich
+        ``_REMOTE_AGENT`` record; another device → its inventory ``basic_info``
+        (identically shaped, minus Wazuh version/manager/node, which render
+        absent). ``basic_info`` is None while loading or when unresolved."""
+        local = _REMOTE_AGENT.get("name") if isinstance(_REMOTE_AGENT, dict) else None
+        if not self._device_active() or self._device_scope == local:
+            if not _remote_agent_ready.is_set():
+                return None, True, None
+            if _REMOTE_AGENT_ERROR or not _REMOTE_AGENT:
+                return None, False, (_REMOTE_AGENT_ERROR or "no data")
+            return _REMOTE_AGENT, False, None
+        # Non-local device: prefer the fully-shaped agents roster, else derive a
+        # basic_info from the eagerly-loaded inventory summary.
+        for a in _AGENTS:
+            bi = a.get("basic_info") or {}
+            if bi.get("name") == self._device_scope:
+                return bi, False, None
+        if isinstance(_REMOTE_INVENTORY, dict):
+            for it in (_REMOTE_INVENTORY.get("items") or []):
+                if it.get("agent_name") == self._device_scope:
+                    return _shape_inventory_agent(it, None)["basic_info"], False, None
+        if not _remote_inventory_ready.is_set():
+            return None, True, None
+        return None, False, "device not found"
 
     def _vuln_total_for_device(self):
-        device = self._vuln_device
-        if not device or device == self._VULN_DEVICE_ALL:
-            return len(_REMOTE_VULNS)
-        return sum(1 for v in _REMOTE_VULNS if v.get("agent_name") == device)
-
-    def _on_vuln_device_change(self, device_name):
-        if device_name == self._vuln_device:
-            return
-        self._vuln_device = device_name
-        self._vuln_page = 1
-        page = self._vuln_page_widget
-        if page is not None:
-            self._build_vulnerabilities_pane(page)
+        return len(self._scope_records(_REMOTE_VULNS, "agent_name"))
 
     def _vuln_severity_counts(self):
-        device = self._vuln_device
-        if device and device != self._VULN_DEVICE_ALL:
-            filtered = [v for v in _REMOTE_VULNS if v.get("agent_name") == device]
-        else:
-            filtered = _REMOTE_VULNS
-        return _bucket_by_severity(filtered)
+        return _bucket_by_severity(self._scope_records(_REMOTE_VULNS, "agent_name"))
 
     # ----- charts row: donut + CVSS ------------------------------------------
     def _build_vuln_charts_row(self):
@@ -2667,13 +2834,10 @@ class Plugin(BasePlugin):
         from datetime import timedelta
 
         today = datetime.now().astimezone().date()
-        device = self._vuln_device
         buckets = [today - timedelta(days=i) for i in range(29, -1, -1)]
         counts = {b: {lvl: 0 for lvl in _SEVERITY_LEVELS} for b in buckets}
         first = buckets[0]
-        for v in _REMOTE_VULNS:
-            if device and device != self._VULN_DEVICE_ALL and v.get("agent_name") != device:
-                continue
+        for v in self._scope_records(_REMOTE_VULNS, "agent_name"):
             ts = v.get("first_detected_at")
             if not ts:
                 continue
@@ -2936,23 +3100,8 @@ class Plugin(BasePlugin):
             f"{self._vuln_total_for_device()} vulnerabilities", size=11, secondary=True)
         top.addWidget(self._vuln_count_label)
         v.addLayout(top)
-
-        # Device picker — only when 2+ devices actually contributed CVEs.
-        device_values = self._vuln_device_values()
-        if len(device_values) >= 3:
-            if self._vuln_device not in device_values:
-                self._vuln_device = self._default_vuln_device()
-            combo = QComboBox()
-            combo.addItems(device_values)
-            combo.setCurrentText(self._vuln_device)
-            combo.currentTextChanged.connect(self._on_vuln_device_change)
-            combo.setMaximumWidth(280)
-            row = QHBoxLayout()
-            row.addWidget(combo)
-            row.addStretch(1)
-            v.addLayout(row)
-        else:
-            self._vuln_device = self._VULN_DEVICE_ALL
+        # Device filtering now lives in the global selector on the tab strip
+        # (see _on_device_scope_change); the old per-tab picker was removed.
         return header
 
     def _on_vuln_search_changed(self, _text):
@@ -3011,12 +3160,8 @@ class Plugin(BasePlugin):
 
     def _filter_vulns(self, query):
         q = (query or "").lower().strip()
-        device_filter = self._vuln_device
         out = []
-        for v in _REMOTE_VULNS:
-            if device_filter and device_filter != self._VULN_DEVICE_ALL \
-                    and v.get("agent_name") != device_filter:
-                continue
+        for v in self._scope_records(_REMOTE_VULNS, "agent_name"):
             if not self._vuln_sev_sel.matches(v.get("severity")):
                 continue
             if q and q not in " ".join(str(f) for f in (
@@ -3301,6 +3446,7 @@ class Plugin(BasePlugin):
             page = self._inv_page_widget
             if page is None:
                 return
+            self._refresh_device_combo()
             if _agents_ready.is_set():
                 self._finish_loading("Inventory", lambda: self._build_inventory_pane(page))
             else:
@@ -3409,6 +3555,10 @@ class Plugin(BasePlugin):
             return not groups
         return group_filter in groups
 
+    def _row_in_scope(self, row):
+        """Honour the global device selector on the Inventory list too."""
+        return not self._device_active() or row.get("name") == self._device_scope
+
     # ----- render ------------------------------------------------------------
     def _render_inventory_list(self, page):
         card = QFrame()
@@ -3498,10 +3648,12 @@ class Plugin(BasePlugin):
         gf = self._inv_group
 
         if is_devices:
-            rows = [r for r in self._inventory_rows() if self._row_in_group(r, gf)]
+            rows = [r for r in self._inventory_rows()
+                    if self._row_in_group(r, gf) and self._row_in_scope(r)]
             count_text = f"{len(rows)} linked · sorted by threat level"
         else:
-            rows = [r for r in self._inventory_counts_rows(field_path) if self._row_in_group(r, gf)]
+            rows = [r for r in self._inventory_counts_rows(field_path)
+                    if self._row_in_group(r, gf) and self._row_in_scope(r)]
             total = sum(r["count"] for r in rows)
             n_with_data = sum(1 for r in rows if r["count"] > 0)
             word = "interfaces" if view == "Network" else view.lower()
