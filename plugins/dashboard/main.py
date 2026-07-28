@@ -37,28 +37,27 @@ class _PluginCard(QFrame):
         self._on_click = on_click
         self.setObjectName("Card")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        # Square fixed-size tiles (mirrors the CTk dashboard's aspect_ratio=1.0)
-        # so the FlowLayout can reflow and center them, rather than stretching
-        # a handful of tiles edge-to-edge. Sized so THREE columns fit at a
-        # typical window; elements scaled down to match.
-        _side = 250
-        self.setFixedSize(_side, _side)
+        # Fixed-size tiles so the FlowLayout can reflow and center them. Width
+        # stays in the 3-column range; height is grown so two rows fill the
+        # viewport and the third sits below the fold (slightly portrait rather
+        # than square — a bigger square would drop us to two columns).
+        self.setFixedSize(260, 304)
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(14, 14, 14, 14)
-        outer.setSpacing(6)
+        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setSpacing(8)
 
         header = QHBoxLayout()
-        header.setSpacing(10)
+        header.setSpacing(12)
         icon = QLabel()
-        icon.setPixmap(plugin.get_icon_pixmap(40))
-        icon.setFixedSize(40, 40)
+        icon.setPixmap(plugin.get_icon_pixmap(46))
+        icon.setFixedSize(46, 46)
         header.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
 
         title_col = QVBoxLayout()
         title_col.setSpacing(4)
         title = QLabel(plugin.get_name())
-        title.setStyleSheet("font-size: 15px; font-weight: 700;")
+        title.setStyleSheet("font-size: 16px; font-weight: 700;")
         title_col.addWidget(title)
         badge_row = QHBoxLayout()
         badge_row.addWidget(StatusBadge(plugin.get_status()))
