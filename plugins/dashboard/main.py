@@ -18,13 +18,12 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
 from gui import theme
-from gui.qt_widgets import CardGrid, StatusBadge, scroll_page
+from gui.qt_widgets import FlowLayout, StatusBadge, scroll_page
 from plugins.base_plugin import BasePlugin
 
 _DIR = os.path.dirname(os.path.realpath(__file__))
@@ -38,27 +37,28 @@ class _PluginCard(QFrame):
         self._on_click = on_click
         self.setObjectName("Card")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        # Cards stretch to fill their grid cell so the dashboard uses the
-        # whole width (CTk parity: column weights, not fixed tiles).
-        self.setMinimumSize(230, 240)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding,
-                           QSizePolicy.Policy.Expanding)
+        # Square fixed-size tiles (mirrors the CTk dashboard's aspect_ratio=1.0)
+        # so the FlowLayout can reflow and center them, rather than stretching
+        # a handful of tiles edge-to-edge. Sized so THREE columns fit at a
+        # typical window; elements scaled down to match.
+        _side = 250
+        self.setFixedSize(_side, _side)
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(16, 16, 16, 16)
-        outer.setSpacing(8)
+        outer.setContentsMargins(14, 14, 14, 14)
+        outer.setSpacing(6)
 
         header = QHBoxLayout()
-        header.setSpacing(12)
+        header.setSpacing(10)
         icon = QLabel()
-        icon.setPixmap(plugin.get_icon_pixmap(48))
-        icon.setFixedSize(48, 48)
+        icon.setPixmap(plugin.get_icon_pixmap(40))
+        icon.setFixedSize(40, 40)
         header.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
 
         title_col = QVBoxLayout()
         title_col.setSpacing(4)
         title = QLabel(plugin.get_name())
-        title.setStyleSheet("font-size: 16px; font-weight: 700;")
+        title.setStyleSheet("font-size: 15px; font-weight: 700;")
         title_col.addWidget(title)
         badge_row = QHBoxLayout()
         badge_row.addWidget(StatusBadge(plugin.get_status()))
@@ -115,15 +115,17 @@ class Plugin(BasePlugin):
         v.addWidget(banner)
         v.addSpacing(16)
 
-        # Responsive card grid: column count follows the width ladder and the
-        # cards stretch to fill each cell — no dead gutters at any size.
-        host = CardGrid()
-        host.set_cards([
-            _PluginCard(p, lambda n=p.get_name():
-                        self.app.select_frame_by_name(f"frame_{n}"))
-            for p in self._cards()
-        ])
-        v.addWidget(host, 1)
+        # Reflowing, centered card grid (mirrors the CTk responsive grid):
+        # fixed-size tiles wrap to the next row as width shrinks and each row
+        # is centered — instead of stretching a few tiles edge-to-edge.
+        host = QWidget()
+        flow = FlowLayout(host, margin=0, spacing=16, center=True)
+        for p in self._cards():
+            flow.addWidget(
+                _PluginCard(p, lambda n=p.get_name():
+                            self.app.select_frame_by_name(f"frame_{n}")))
+        v.addWidget(host)
+        v.addStretch(1)
         return scroll_page(inner)
 
     def on_theme_changed(self) -> None:
