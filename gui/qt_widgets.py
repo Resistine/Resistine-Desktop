@@ -261,12 +261,16 @@ class CardGrid(QWidget):
 class FlowLayout(QLayout):
     """A reflowing layout — items wrap to the next row as width shrinks."""
 
-    def __init__(self, parent=None, margin=0, spacing=16, center=False):
+    def __init__(self, parent=None, margin=0, spacing=16, center=False,
+                 max_cols=None):
         super().__init__(parent)
         if parent is not None:
             self.setContentsMargins(margin, margin, margin, margin)
         self._spacing = spacing
         self._center = center
+        # Cap the items per row (a "target N columns" that still wraps to
+        # fewer when the width can't fit N). None = wrap purely by width.
+        self._max_cols = max_cols
         self._items: list = []
 
     def addItem(self, item):
@@ -313,7 +317,8 @@ class FlowLayout(QLayout):
             w = item.sizeHint().width()
             h = item.sizeHint().height()
             add_w = w if not cur else self._spacing + w
-            if cur and cur_w + add_w > rect.width():
+            if cur and (cur_w + add_w > rect.width()
+                        or (self._max_cols and len(cur) >= self._max_cols)):
                 rows.append((cur, cur_w, cur_h))
                 cur, cur_w, cur_h = [], 0, 0
                 add_w = w
