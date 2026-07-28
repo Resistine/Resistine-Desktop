@@ -268,6 +268,11 @@ def build_db_info_card(plugin, col: QVBoxLayout) -> None:
     frame, lay = card()
     lay.addWidget(section_title("Signature Database"))
     lay.addWidget(divider())
+    # Gap between the header and the content: this card fills the remaining
+    # page height (added with stretch 1 below), and this stretch opens up the
+    # space below the header so the content sits at the bottom of the card,
+    # flush with the bottom of the screen.
+    lay.addStretch(1)
 
     try:
         engine = clamav.engine_name()
@@ -289,8 +294,9 @@ def build_db_info_card(plugin, col: QVBoxLayout) -> None:
         r.addWidget(val, 1, Qt.AlignmentFlag.AlignRight)
         lay.addLayout(r)
         plugin._db_labels[label] = val
-    col.addWidget(frame)
-    col.addStretch(1)  # keep cards top-packed; slack goes below the last card
+    # Fill the remaining page height so the card's bottom (and its content,
+    # pushed down by the stretch above) sits flush with the bottom of the page.
+    col.addWidget(frame, 1)
 
 
 # ── Settings sub-view ──────────────────────────────────────
