@@ -208,12 +208,12 @@ class AppWindow(QMainWindow):
         layout.addWidget(self.sidebar)
 
     def _logo_widget(self) -> QWidget:
-        # Primary: the blue "Resistine" wordmark banner (4:1). Shown in the
-        # sidebar across the whole app; the shield mark stays reserved for
-        # the login flow / setup wizard.
-        wordmark_path = resource("resources", "icons", "ResistineWordmark.png")
+        # Primary: the blue "Resistine" banner with rounded corners (4:1),
+        # matching the CTk sidebar logo. Shown across the whole app; the shield
+        # mark stays reserved for the login flow / setup wizard.
+        banner_path = resource("resources", "icons", "ResistineLogoWhiteText.png")
         svg_path = resource("resources", "icons", "ResistineLogo.svg")
-        png_path = resource("resources", "icons", "ResistineLogoWhiteText.png")
+        png_path = resource("resources", "icons", "ResistineWordmark.png")
         label = QLabel()
         # Centered in the sidebar.
         label.setAlignment(Qt.AlignmentFlag.AlignHCenter
@@ -223,13 +223,14 @@ class AppWindow(QMainWindow):
         # ratio so it stays crisp on Retina displays.
         w, h, radius = 200, 50, 12
         pm = None
-        if os.path.isfile(wordmark_path):
-            pm = QPixmap(wordmark_path).scaled(
+        if os.path.isfile(banner_path):
+            pm = QPixmap(banner_path).scaled(
                 w * 2, h * 2, Qt.AspectRatioMode.IgnoreAspectRatio,
                 Qt.TransformationMode.SmoothTransformation)
             if not pm.isNull():
-                # Square corners by design — the wordmark banner is shown
-                # as-is (no rounded clip).
+                # The banner already has rounded corners baked in (4:1, so it
+                # fills the 200x50 box without distortion) — show it as-is; 2x
+                # render + DPR tag keeps it crisp on Retina.
                 pm.setDevicePixelRatio(2.0)
                 label.setPixmap(pm)
                 return label
