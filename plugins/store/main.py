@@ -201,6 +201,12 @@ class Plugin(BasePlugin):
         for p in plugins:
             self._add_card(p)
         col.addWidget(self._grid_host)
+        # Absorb any leftover viewport height here (mirrors the Dashboard's
+        # trailing stretch). Without it, a tall window distributes the extra
+        # height INTO the header's labels — they grow vertically and the title/
+        # subtitle/divider spread apart. The stretch keeps the header a fixed
+        # height (only the width flexes) with content pinned to the top.
+        col.addStretch(1)
 
         self.main_frame = scroll_page(inner)
 
