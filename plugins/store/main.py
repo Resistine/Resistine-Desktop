@@ -51,7 +51,7 @@ def _btn_style(light_bg, dark_bg, light_hover, dark_hover) -> str:
     hover = dark_hover if theme.is_dark() else light_hover
     return (
         f"QPushButton {{ background-color: {bg}; color: white; border: none; "
-        f"border-radius: 8px; padding: 7px 12px; font-size: 12px; "
+        f"border-radius: 8px; padding: 8px 13px; font-size: 12px; "
         f"font-weight: 600; }} "
         f"QPushButton:hover {{ background-color: {hover}; }}"
     )
@@ -83,23 +83,24 @@ class _StoreCard(QFrame):
         self.setObjectName("Card")
         # Fixed-size tiles so the FlowLayout can reflow and center them
         # (mirrors the CTk store grid) rather than stretching them edge-to-edge.
-        self.setFixedSize(345, 230)
+        # Sized so two rows fill the viewport and the third sits below the fold.
+        self.setFixedSize(344, 268)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(16, 16, 16, 16)
-        outer.setSpacing(8)
+        outer.setSpacing(9)
 
         header = QHBoxLayout()
-        header.setSpacing(12)
+        header.setSpacing(13)
         icon = QLabel()
-        icon.setPixmap(plugin.get_icon_pixmap(48))
-        icon.setFixedSize(48, 48)
+        icon.setPixmap(plugin.get_icon_pixmap(50))
+        icon.setFixedSize(50, 50)
         header.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
 
         title_col = QVBoxLayout()
         title_col.setSpacing(4)
         title = QLabel(plugin.get_name())
-        title.setStyleSheet("font-size: 16px; font-weight: 700;")
+        title.setStyleSheet("font-size: 17px; font-weight: 700;")
         title_col.addWidget(title)
         badge_row = QHBoxLayout()
         badge_row.addWidget(StatusBadge(plugin.get_status()))
