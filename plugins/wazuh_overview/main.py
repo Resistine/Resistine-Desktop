@@ -97,25 +97,14 @@ _CONTENT_MAX_WIDTH = 1240
 _CONTENT_MIN_WIDTH = 320
 
 # Responsive breakpoints (design_test2 parity): the module grid steps
-# 1 -> 2 -> 3 -> 4 columns at these content widths, and two-up chart/detail
-# rows stack vertically below the stack breakpoint.
-_COL_BREAKPOINTS = (480, 680, 1000)
+# Overview module grid holds 2 columns until the app window spans this fraction
+# of the screen width, then expands to one row (see _ModuleGrid._target_cols).
+# Two-up chart/detail rows stack vertically below the stack breakpoint.
+_MODULE_GRID_EXPAND_SCREEN_FRAC = 0.8
 _STACK_BREAKPOINT = 680
 _CARD_MIN_H = 160
 _CARD_MAX_H = 300
 _RESIZE_DEBOUNCE_MS = 250
-
-
-def _cols_for_width(width: int) -> int:
-    """1..4 column ladder for the module grid (design_test2 parity)."""
-    c1, c2, c3 = _COL_BREAKPOINTS
-    if width < c1:
-        return 1
-    if width < c2:
-        return 2
-    if width < c3:
-        return 3
-    return 4
 
 # Severity name -> badge theme key.
 #   critical -> violet/red   high -> red (error)
@@ -1021,11 +1010,26 @@ class _ModuleGrid(QWidget):
         self._cols = None  # force a fresh layout pass
         self._relayout(force=True)
 
+    def _target_cols(self):
+        """Column count for the module grid: 2 columns until the app window spans
+        ≥80% of the screen width, then expand so every card shares one row. Gated
+        on the screen width (not the grid's own width), mirroring how the timeline
+        scales its day-span off the screen."""
+        n = len(self._cards)
+        if n <= 1:
+            return 1
+        win = self.window()
+        screen = self.screen()
+        if win is not None and screen is not None:
+            screen_w = screen.availableGeometry().width()
+            if screen_w > 0 and win.width() >= _MODULE_GRID_EXPAND_SCREEN_FRAC * screen_w:
+                return min(n, 4)
+        return 2
+
     def _relayout(self, force=False):
         if not self._cards:
             return
-        width = max(1, self.width())
-        cols = max(1, min(_cols_for_width(width), len(self._cards)))
+        cols = max(1, min(self._target_cols(), len(self._cards)))
         if not force and cols == self._cols:
             self._apply_row_heights(cols)
             return
@@ -1685,7 +1689,6 @@ class Plugin(BasePlugin):
             self._security_alerts_card(),
             self._vuln_card(),
             self._inventory_card(),
-            self._agent_health_card(),
         ]
         return cards
 
