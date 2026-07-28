@@ -600,7 +600,10 @@ class Plugin(BasePlugin):
         # ── Content column (two equal columns, centered ~750 px) ──────────
         content = QWidget()
         grid = QGridLayout(content)
-        grid.setContentsMargins(0, 10, 0, 20)
+        # No inner top/bottom margin (the centred wrapper already adds 10px each
+        # side): header sits at the same height as the Antivirus banner, and the
+        # buttons sit flush at the bottom with a matching 10px margin.
+        grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(12)
         grid.setColumnStretch(0, 1)
@@ -852,10 +855,12 @@ class Plugin(BasePlugin):
 
     def _natural_height(self) -> int:
         """Total content height with minimum gaps — summed from the outer grid's
-        INDIVIDUAL rows (each widget's own sizeHint is reliable). The async
-        Client/Server ResponsiveStack is the one exception: its aggregate flips
-        between side-by-side and stacked, so we take the taller of the two
-        panels measured directly instead of trusting the stack.
+        INDIVIDUAL rows. For rows that WRAP (the banner subtitle, the Public
+        Keys / Allowed IPs values) sizeHint over-reads, so use heightForWidth at
+        the row's real width (deterministic, honors wrapping). The async
+        Client/Server ResponsiveStack is the exception: its aggregate flips
+        between side-by-side and stacked, so take the taller of the two panels
+        via their (non-wrapping) sizeHints instead of trusting the stack.
         """
         g = self._vpn_outer_grid
         row_h: dict[int, int] = {}
@@ -867,7 +872,9 @@ class Plugin(BasePlugin):
                 h = max(self._vpn_client.sizeHint().height(),
                         self._vpn_server.sizeHint().height())
             elif w is not None:
-                h = w.sizeHint().height()
+                h = (w.heightForWidth(w.width())
+                     if w.hasHeightForWidth() and w.width() > 0
+                     else w.sizeHint().height())
             else:
                 h = item.sizeHint().height()  # nested layout (buttons row)
             row_h[r] = max(row_h.get(r, 0), h)
