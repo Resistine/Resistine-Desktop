@@ -1,0 +1,39 @@
+# Example configuration for the Resistine localization extractor.
+#
+# Copy this file before use:
+#   cp i18n-extract.example.toml i18n-extract.toml
+#
+# Paths are resolved relative to this configuration file.
+# Adjust the two `path` values to match your local checkout locations.
+
+[project]
+output_dir = "locales"
+report_path = "build/i18n-extract-report.json"
+state_path = "build/i18n-extract-state.json"
+
+[[sources]]
+name = "android"
+platform = "android"
+path = "../Resistine-Android/app/src/main/res"
+destination = "android"
+
+include = [
+  "**/values*/strings*.xml",
+]
+
+exclude = [
+  "**/build/**",
+  "**/.gradle/**",
+]
+
+[[sources]]
+name = "desktop"
+platform = "generic"
+path = "../Resistine-Desktop/utils/i18n"
+destination = "desktop"
+
+include = [
+  "**/*.json",
+]
+
+exclude = []
