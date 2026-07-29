@@ -172,3 +172,6 @@ LICENSE.txt
 /bom.json
 /bom.xml
 /*.cdx.xml
+
+# Codex guidance file (local, not tracked)
+AGENTS.md

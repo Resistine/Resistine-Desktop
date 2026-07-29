@@ -16,7 +16,7 @@ IS_WINDOWS = sys.platform == "win32"
 # Application metadata
 APP_NAME = 'Resistine'
 BUNDLE_ID = 'com.resistine.desktop'
-VERSION = '2026.07.20-rc'
+VERSION = '2026.07.21'
 
 # Paths — project root is one level up from packaging/
 _spec_dir = os.path.dirname(os.path.abspath(SPEC))
@@ -300,7 +300,13 @@ if IS_MACOS:
 
             # Sparkle Auto-Update
             'SUFeedURL': 'https://resistine.github.io/appcast.xml',
-            'SUPublicEDKey': '2eiUHVoMgl+qqhEWO8iix5SUcRAKfkWYESh9F7jG6ls=',
+            # Rotated key (Keychain account 'ed25519-v2'). Old key was
+            # '2eiUHVoMgl+qqhEWO8iix5SUcRAKfkWYESh9F7jG6ls=' (account 'ed25519').
+            # The 2026.07.21 intermediate carries THIS new key but its appcast
+            # signature is made with the OLD key so existing installs accept it;
+            # the following release signs with the new key. See
+            # dev-docs/sparkle-key-rotation.md.
+            'SUPublicEDKey': 'rQM13H6rUc0dBXqLdQdZgjNs5qGn+TF/uvSvxOc1H+4=',
             'SUEnableAutomaticChecks': True,
             'SUScheduledCheckInterval': 14400,  # 4 hours (base; Python scheduler adds jitter)
         },
