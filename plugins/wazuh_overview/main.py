@@ -30,6 +30,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from PyQt6.QtCore import QTimer, Qt
+from PyQt6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QStackedWidget,
     QBoxLayout,
@@ -1053,6 +1054,20 @@ class _ModuleGrid(QWidget):
             self._grid.setRowMinimumHeight(r, target_h)
 
 
+def _decode_group_email(group):
+    """Wazuh group names are the account email with '@' encoded as '-' (see the
+    per-platform ``get_agent_group`` in ``plugins/wazuh/agent/wazuh_functions_*``,
+    which all do ``email.replace('@', '-')``). Decode the first '-' back to '@' so
+    the Overview card shows a real address. Groups already containing '@', groups
+    with no '-', and non-email groups like 'default' are returned unchanged; the
+    decode only fires when the tail looks domain-like (contains a '.')."""
+    g = group or ""
+    if "@" in g or "-" not in g:
+        return g
+    local, _, rest = g.partition("-")
+    return f"{local}@{rest}" if "." in rest else g
+
+
 # ==============================================================================
 #  Plugin
 # ==============================================================================
@@ -1178,6 +1193,8 @@ class Plugin(BasePlugin):
         self._device_scope = self._DEVICE_ALL
         self._device_scope_user_set = False
         self._device_combo = None
+        self._device_combo_sig = None
+        self._dot_icon_cache = {}
         self._tab_rendered_scope = {}
         self._active_tab = None
 
@@ -1269,10 +1286,15 @@ class Plugin(BasePlugin):
         # roster lands (the strip is built before inventory is ready).
         self._device_combo = QComboBox()
         self._device_combo.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._device_combo.setMaximumWidth(240)
-        self._device_combo.addItem(self._DEVICE_ALL)
-        self._device_combo.setCurrentText(self._device_scope)
-        self._device_combo.currentTextChanged.connect(self._on_device_scope_change)
+        # Size to fit ~20 characters (plus the threat dot + dropdown arrow), so
+        # typical device names aren't truncated in the collapsed box.
+        self._device_combo.setMinimumContentsLength(20)
+        self._device_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        # Each item's raw scope value (a device name or the sentinel) lives in
+        # item data, so the visible label ("… (this device)") can differ from it.
+        self._device_combo.addItem(self._DEVICE_ALL, self._DEVICE_ALL)
+        self._device_combo.currentIndexChanged.connect(self._on_device_scope_change)
         strip_lay.addWidget(self._device_combo, 0, Qt.AlignmentFlag.AlignVCenter)
         self._refresh_device_combo()
 
@@ -1375,11 +1397,51 @@ class Plugin(BasePlugin):
                 return local
         return self._DEVICE_ALL
 
+    def _threat_dot_color(self, threat):
+        """Saturated badge colour for a device's threat level, reusing the same
+        mapping the Inventory threat pills use."""
+        _bg, fg = _badge_colors(_SEV_TO_STATUS.get(threat, "OK"))
+        return fg
+
+    def _threat_dot_icon(self, threat):
+        """A small filled-circle QIcon in the device's threat colour, cached per
+        colour so repeated combo rebuilds don't repaint the same pixmaps."""
+        color = self._threat_dot_color(threat)
+        icon = self._dot_icon_cache.get(color)
+        if icon is None:
+            pix = QPixmap(12, 12)
+            pix.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pix)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setBrush(QColor(color))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(2, 2, 8, 8)
+            painter.end()
+            icon = QIcon(pix)
+            self._dot_icon_cache[color] = icon
+        return icon
+
+    def _device_combo_rows(self, roster):
+        """Ordered (label, value, threat) rows for the selector: 'All devices'
+        first (no dot), the local device pinned next and tagged '(this device)',
+        then the rest. ``value`` is the raw scope; ``label`` is what's shown."""
+        local = _REMOTE_AGENT.get("name") if isinstance(_REMOTE_AGENT, dict) else None
+        device_names = [n for n in roster if n != self._DEVICE_ALL]
+        ordered = ([local] if local in device_names else []) + \
+                  [n for n in device_names if n != local]
+        events_by_agent = self._events_threat_by_agent()
+        rows = [(self._DEVICE_ALL, self._DEVICE_ALL, None)]
+        for n in ordered:
+            label = f"{n} (this device)" if n == local else n
+            rows.append((label, n, self._device_threat_level(n, events_by_agent)))
+        return rows
+
     def _refresh_device_combo(self):
-        """Sync the strip selector's items with the current device roster,
-        preserving the selection. Called by the tab pollers as devices land.
-        The first time the roster carries real devices, the scope defaults to
-        the local device (unless the user has already picked one)."""
+        """Sync the strip selector with the current device roster, preserving the
+        selection. Called by the tab pollers as devices land. The first time the
+        roster carries real devices the scope defaults to the local device
+        (unless the user has already picked one). The local device is pinned to
+        the top and tagged, and each device carries a threat-coloured dot."""
         combo = self._device_combo
         if combo is None:
             return
@@ -1393,18 +1455,29 @@ class Plugin(BasePlugin):
                     self._apply_scope_to_tab(self._active_tab)
         if self._device_scope not in roster:
             self._device_scope = self._DEVICE_ALL
-        current = [combo.itemText(i) for i in range(combo.count())]
-        if current == roster and combo.currentText() == self._device_scope:
+
+        rows = self._device_combo_rows(roster)
+        # Skip the rebuild (which would close an open popup) when nothing the
+        # combo shows has changed and the right item is already selected.
+        signature = (tuple(rows), self._device_scope)
+        if self._device_combo_sig == signature:
             return
+        self._device_combo_sig = signature
+
         combo.blockSignals(True)
         try:
             combo.clear()
-            combo.addItems(roster)
-            combo.setCurrentText(self._device_scope)
+            for label, value, threat in rows:
+                icon = self._threat_dot_icon(threat) if threat is not None else QIcon()
+                combo.addItem(icon, label, value)
+            idx = combo.findData(self._device_scope)
+            combo.setCurrentIndex(idx if idx >= 0 else 0)
         finally:
             combo.blockSignals(False)
 
-    def _on_device_scope_change(self, name):
+    def _on_device_scope_change(self, _index=None):
+        combo = self._device_combo
+        name = combo.currentData() if combo is not None else None
         if not name or name == self._device_scope:
             return
         self._device_scope = name
@@ -1669,29 +1742,43 @@ class Plugin(BasePlugin):
         connectivity_label = "Connected" if is_connected else "Disconnected"
         state_label = "Online" if is_connected else "Offline"
 
+        # The account "group" is the login email with '@' encoded as '-'; decode
+        # each and show them (right-aligned) on the device-name row rather than
+        # buried in the facts line below.
+        groups = bi.get("group") or []
+        group_text = ", ".join(_decode_group_email(g) for g in groups if g)
+
         facts = [f"Last seen {_format_relative(bi.get('lastKeepAlive'))}", state_label]
         if bi.get("manager"):
             facts.append(f"Manager {bi.get('manager')}")
         if bi.get("ip"):
             facts.append(f"IP {bi.get('ip')}")
-        groups = bi.get("group") or []
-        if groups:
-            facts.append(f"Group {', '.join(groups)}")
         if bi.get("node_name"):
             facts.append(f"Node {bi.get('node_name')}")
         facts_text = "  ·  ".join(facts)
 
-        # Top: label + name + meta | status badge
+        # Top: label + (name | email group) + meta | status badge
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
         left = QVBoxLayout()
         left.setSpacing(2)
         left.addWidget(_label(card_label, size=10, bold=True, secondary=True))
-        left.addWidget(_label(name, size=22, bold=True))
+
+        # Name row: device name on the left, the account email group right-aligned
+        # on the same line (not bold).
+        name_row = QHBoxLayout()
+        name_row.setContentsMargins(0, 0, 0, 0)
+        name_row.addWidget(_label(name, size=22, bold=True))
+        name_row.addStretch(1)
+        if group_text:
+            name_row.addWidget(_label(group_text, size=13, secondary=True),
+                               alignment=Qt.AlignmentFlag.AlignVCenter)
+        left.addLayout(name_row)
+
         if meta_text:
             left.addWidget(_label(meta_text, size=12, secondary=True))
-        top.addLayout(left)
-        top.addStretch(1)
+        # stretch=1 so the name row fills the width and the email hugs the right.
+        top.addLayout(left, 1)
         bg, fg = _badge_colors("ok" if is_connected else "error")
         badge = _pill(f"●  {connectivity_label}", bg, fg)
         top.addWidget(badge, alignment=Qt.AlignmentFlag.AlignTop)
