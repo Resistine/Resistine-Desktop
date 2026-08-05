@@ -157,7 +157,11 @@ class Plugin(BasePlugin):
         super().__init__(
             id="011",
             version="2026.01.04-alpha",
-            order=5,
+            # order=-1 hides this from the sidebar AND the Dashboard grid
+            # (both render only order>0 plugins). The SIEM agent screen is now
+            # reached from the Wazuh overview's "Agent Details" module card via
+            # app.navigate("Endpoint"), which works for hidden plugins too.
+            order=-1,
             name="Endpoint",
             status=None,
             description="Install and manage the SIEM agent.",
@@ -283,6 +287,12 @@ class Plugin(BasePlugin):
         page.setContentsMargins(20, 10, 20, 10)
         page.setSpacing(0)
 
+        # Back link to the Wazuh overview. This screen no longer has its own
+        # sidebar tab (it's reached from the overview's "Agent Details" card),
+        # so give it an explicit way back.
+        page.addWidget(self._back_button(), 0, Qt.AlignmentFlag.AlignLeft)
+        page.addSpacing(6)
+
         # Single bordered, rounded "Surface" card (CTkFrame analogue).
         card = QFrame()
         card.setObjectName("Surface")
@@ -313,6 +323,18 @@ class Plugin(BasePlugin):
         return scr
 
     # ── UI helpers ─────────────────────────────────────────────────────
+
+    def _back_button(self) -> QPushButton:
+        """A flat "‹ Wazuh" link that returns to the Wazuh overview screen."""
+        btn = QPushButton("‹  Wazuh")
+        btn.setFlat(True)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setStyleSheet(
+            f"QPushButton {{ border: none; background: transparent; padding: 2px 0; "
+            f"font-size: 13px; font-weight: 600; color: {_c(_COLOR_MUTED)}; }}"
+            f"QPushButton:hover {{ color: {theme.color('text_primary')}; }}")
+        btn.clicked.connect(lambda: self.app.navigate("Wazuh"))
+        return btn
 
     def _add_separator(self, body: QVBoxLayout) -> None:
         body.addSpacing(4)

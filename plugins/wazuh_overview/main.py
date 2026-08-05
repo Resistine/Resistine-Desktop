@@ -30,7 +30,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from PyQt6.QtCore import QTimer, Qt
-from PyQt6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QStackedWidget,
     QBoxLayout,
@@ -237,6 +237,40 @@ _agents_loader_started = False
 _agents_loader_lock = threading.Lock()
 
 
+def _interfaces_with_addresses(interfaces, addresses):
+    """Attach each interface's IP addresses to it, keyed on interface name.
+
+    The API reports /me/inventory/{id} `network.interfaces` and
+    `network.addresses` as two flat sibling lists, joined only by the address
+    record's `interface` field matching an interface's `name`. Doing the join
+    here keeps the Network view's column getters a plain dict lookup.
+
+    Interfaces are shallow-copied rather than mutated: the caller's
+    ``list(interfaces)`` is itself shallow, so the inner dicts are still the
+    response objects and writing to them would edit the API payload in place.
+    IPv4 sorts ahead of IPv6 so the column shows the useful address first."""
+    by_iface = {}
+    for addr in addresses or []:
+        if not isinstance(addr, dict):
+            continue
+        name = addr.get("interface")
+        value = addr.get("address")
+        if not name or not value:
+            continue
+        by_iface.setdefault(name, []).append((addr.get("proto") or "", value))
+
+    out = []
+    for iface in interfaces or []:
+        if not isinstance(iface, dict):
+            continue
+        found = by_iface.get(iface.get("name"), [])
+        found.sort(key=lambda pv: (pv[0] != "ipv4", pv[1]))
+        merged = dict(iface)
+        merged["ip_addresses"] = [value for _, value in found]
+        out.append(merged)
+    return out
+
+
 def _shape_inventory_agent(summary, detail):
     """Map a /me/inventory summary device (+ optional /me/inventory/{id} detail)
     into the {basic_info, syscollector, hardware} shape the Inventory tab reads.
@@ -271,12 +305,15 @@ def _shape_inventory_agent(summary, detail):
         ports = detail.get("ports")
         network = detail.get("network") or {}
         interfaces = network.get("interfaces") if isinstance(network, dict) else None
+        addresses = network.get("addresses") if isinstance(network, dict) else None
         packages = detail.get("packages")
         syscollector = {
             "processes": {"affected_items": list(processes or [])},
             "network": {
                 "ports": {"affected_items": list(ports or [])},
-                "interfaces": {"affected_items": list(interfaces or [])},
+                "interfaces": {
+                    "affected_items": _interfaces_with_addresses(interfaces, addresses)
+                },
             },
             "packages": {"affected_items": list(packages or [])},
         }
@@ -744,6 +781,221 @@ def _format_timestamp(iso_ts):
     return dt.astimezone().strftime("%b %d %H:%M:%S")
 
 
+def _as_int(value):
+    """Best-effort int for sorting mixed-typed API fields. The inventory API is
+    inconsistent about this — processes report `pid` as a string but `ppid` as
+    an int — so sort keys have to coerce rather than assume. Unparseable values
+    sort last."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 1 << 62
+
+
+def _join_host_port(host, port):
+    """'0.0.0.0:445' for a port row, tolerating either half being missing.
+
+    IPv6 hosts are bracketed per RFC 3986 — the API reports the wildcard v6
+    address as '::', which naively concatenated would render ':::135'."""
+    if not host and port in (None, ""):
+        return ""
+    shown = host or "*"
+    if ":" in shown:
+        shown = f"[{shown}]"
+    return f"{shown}:{'' if port is None else port}"
+
+
+def _cell_text(value):
+    """Render a column getter's result. Blank, None and the API's
+    whitespace-only placeholders (macOS returns ' ' for architecture and
+    process state) all collapse to an em dash so a column reads as absent
+    rather than as an empty string."""
+    if value is None:
+        return "—"
+    text = str(value).strip()
+    return text or "—"
+
+
+def _format_bytes(value):
+    """Human-readable byte count ('1.4 GB'). Renders 0 as '0 B', not '—',
+    because a down interface legitimately has zero traffic."""
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    if n < 0:
+        return "—"
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024.0
+    return "—"
+
+
+def _fixed_col(label, text, width, *, size=11):
+    """Pin a label to a column width, eliding overflow with an ellipsis and
+    keeping the full value on the tooltip.
+
+    A plain fixed-width QLabel clips silently, so a truncated cell is
+    indistinguishable from a complete one — an interface with five IP
+    addresses would just look like it had one.
+
+    `size` must match the px size _label() applied, because that is set through
+    the stylesheet and QLabel.font() does not reflect it. Measuring the default
+    application font instead makes every cell elide several characters early."""
+    label.setFixedWidth(width)
+    label.setToolTip(text)
+    font = QFont(label.font())
+    font.setPixelSize(size)
+    metrics = QFontMetrics(font)
+    label.setText(metrics.elidedText(text, Qt.TextElideMode.ElideRight, width - 4))
+    return label
+
+
+def _format_traffic(rx, tx):
+    """'1.5 KB / 0 B' for an interface. Returns '' when neither counter is
+    reported, so the column collapses to a single em dash rather than the
+    noisier '— / —'."""
+    rx_text = _format_bytes(rx)
+    tx_text = _format_bytes(tx)
+    if rx_text == "—" and tx_text == "—":
+        return ""
+    return f"{rx_text} / {tx_text}"
+
+
+def _format_ram(value):
+    """Format the API's `hardware.ram_total_mb` / `ram_free_mb`.
+
+    The field name is wrong: the API reports these in KILOBYTES, not MB. A
+    16 GB MacBook returns 16777216 and a 32 GB PC returns 33469492 — read as
+    MB those would be 16 TB and 32 TB. Convert from KB so the displayed value
+    matches the machine.
+
+    (Related, and deliberately not worked around here: `ram_usage_pct` comes
+    back as 100 on the MacBook while `ram_free_mb` is non-zero. We display
+    what the API reports rather than recomputing it.)"""
+    try:
+        kb = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    if kb <= 0:
+        return "—"
+    return f"{kb / (1024.0 * 1024.0):.1f} GB"
+
+
+# ------------------------------------------------------------------------------
+#  Inventory per-view row summaries
+#
+#  Each Inventory view summarises its own items on the device row, so switching
+#  views visibly changes the table instead of only changing one count. Every
+#  getter below takes an inventory row dict (device fields + an "items" list)
+#  and returns display text.
+# ------------------------------------------------------------------------------
+def _num(value):
+    """Coerce to float for summing, treating junk as 0 (unlike _as_int, whose
+    sentinel is deliberately huge so unparseable values sort last)."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _distinct_count(items, key):
+    return len({str(it.get(key)).strip() for it in items
+                if str(it.get(key) or "").strip()})
+
+
+def _top_value(items, key):
+    """'svchost.exe ×24' — the most common value of `key`, with its count."""
+    counts = {}
+    for it in items:
+        value = str(it.get(key) or "").strip()
+        if value:
+            counts[value] = counts.get(value, 0) + 1
+    if not counts:
+        return "—"
+    value, n = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+    return f"{value} ×{n}" if n > 1 else value
+
+
+def _last_seen_text(row):
+    if row.get("status") in ("active", "connected"):
+        return "Active now"
+    return _format_relative(row.get("last_keep"))
+
+
+def _cpu_ram_text(row):
+    """'Apple M2 Pro (12c) · 16.0 GB', dropping whichever half is missing."""
+    parts = []
+    if row.get("cpu"):
+        cores = row.get("cpu_cores")
+        parts.append(f"{row['cpu']}{f' ({cores}c)' if cores else ''}")
+    ram = _format_ram(row.get("ram_total"))
+    if ram != "—":
+        parts.append(ram)
+    return " · ".join(parts) or "—"
+
+
+def _proc_users(row):
+    n = _distinct_count(row.get("items") or [], "user")
+    # Windows reports no process owner at all; 0 would read as "nobody".
+    return str(n) if n else "—"
+
+
+def _ports_proto_split(row):
+    items = row.get("items") or []
+    tcp = sum(1 for it in items if str(it.get("protocol") or "").startswith("tcp"))
+    udp = sum(1 for it in items if str(it.get("protocol") or "").startswith("udp"))
+    return f"{tcp} / {udp}"
+
+
+def _ports_listening(row):
+    items = row.get("items") or []
+    if not any(str(it.get("state") or "").strip() for it in items):
+        # macOS omits socket state entirely — don't claim zero listeners.
+        return "—"
+    return str(sum(1 for it in items
+                   if str(it.get("state") or "").lower() == "listening"))
+
+
+def _ports_top(row):
+    ports = sorted({_as_int(it.get("local_port")) for it in (row.get("items") or [])})
+    ports = [p for p in ports if 0 < p < (1 << 62)]
+    return ", ".join(str(p) for p in ports[:4]) or "—"
+
+
+def _iface_up_down(row):
+    items = row.get("items") or []
+    up = sum(1 for it in items if str(it.get("state") or "").lower() == "up")
+    return f"{up} / {len(items) - up}"
+
+
+def _iface_addresses(row):
+    n = sum(len(it.get("ip_addresses") or []) for it in (row.get("items") or []))
+    return str(n) if n else "—"
+
+
+def _iface_traffic_total(row):
+    items = row.get("items") or []
+    if not items:
+        return "—"
+    return _format_traffic(sum(_num(it.get("rx_bytes")) for it in items),
+                           sum(_num(it.get("tx_bytes")) for it in items)) or "—"
+
+
+def _pkg_formats(row):
+    """'win 162 · pypi 4' — the package formats present on this device."""
+    counts = {}
+    for it in row.get("items") or []:
+        value = str(it.get("format") or "").strip()
+        if value:
+            counts[value] = counts.get(value, 0) + 1
+    if not counts:
+        return "—"
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:3]
+    return " · ".join(f"{fmt} {n}" for fmt, n in ranked)
+
+
 def _short_benchmark_name(name):
     """Tidy a CIS-style policy name."""
     if not name:
@@ -752,7 +1004,13 @@ def _short_benchmark_name(name):
 
 
 # ----- module-card state helpers ----------------------------------------------
-def _status_card(title, description, stat_text, target_tab=None):
+def _status_card(title, description, stat_text, target_tab=None, nav_target=None):
+    """Placeholder card for the loading / error / no-data states.
+
+    Carries ``nav_target`` through as well as ``target_tab`` so a card that
+    opens another plugin screen stays clickable while its data is still in
+    flight or has failed — for the agent card that's precisely when the user
+    most wants to reach the screen behind it."""
     card = {
         "title": title,
         "status": "INFO",
@@ -761,19 +1019,21 @@ def _status_card(title, description, stat_text, target_tab=None):
     }
     if target_tab:
         card["target_tab"] = target_tab
+    if nav_target:
+        card["nav_target"] = nav_target
     return card
 
 
-def _unavailable_card(title, description, target_tab=None):
-    return _status_card(title, description, "Data unavailable", target_tab)
+def _unavailable_card(title, description, target_tab=None, nav_target=None):
+    return _status_card(title, description, "Data unavailable", target_tab, nav_target)
 
 
-def _loading_card(title, description, target_tab=None):
-    return _status_card(title, description, "Loading…", target_tab)
+def _loading_card(title, description, target_tab=None, nav_target=None):
+    return _status_card(title, description, "Loading…", target_tab, nav_target)
 
 
-def _error_card(title, description, target_tab=None):
-    return _status_card(title, description, "Couldn't load", target_tab)
+def _error_card(title, description, target_tab=None, nav_target=None):
+    return _status_card(title, description, "Couldn't load", target_tab, nav_target)
 
 
 def _bucket_by_severity(items):
@@ -856,14 +1116,19 @@ def _pill(text, bg, fg, *, size=11):
 
 
 class _ModuleCard(QFrame):
-    """A clickable Overview module card. Emits its target tab on click by
-    calling ``on_click`` (a plain callable) — avoids a signal for one consumer."""
+    """A clickable Overview module card. On click it hands its whole
+    ``card_data`` back to ``on_click`` (a plain callable) — avoids a signal for
+    one consumer. A card is clickable when it carries a ``target_tab`` (switch an
+    internal overview tab) or a ``nav_target`` (open another plugin screen)."""
 
     def __init__(self, card_data, on_click=None):
         super().__init__()
         self.setObjectName("Card")
-        self._target = card_data.get("target_tab")
-        self._on_click = on_click if (self._target and on_click) else None
+        self._card_data = card_data
+        clickable = bool(
+            (card_data.get("target_tab") or card_data.get("nav_target"))
+            and on_click)
+        self._on_click = on_click if clickable else None
         if self._on_click:
             self.setCursor(Qt.CursorShape.PointingHandCursor)
         # Stretch to fill each grid half; height follows content with a floor
@@ -904,7 +1169,7 @@ class _ModuleCard(QFrame):
 
     def mousePressEvent(self, event):  # noqa: N802 - Qt override
         if self._on_click and event.button() == Qt.MouseButton.LeftButton:
-            self._on_click(self._target)
+            self._on_click(self._card_data)
         super().mousePressEvent(event)
 
 
@@ -1166,7 +1431,16 @@ class Plugin(BasePlugin):
         self._inv_rows_layout = None
         self._inv_pager_holder = None
         self._inv_body_holder = None     # column header + list (rebuilt on change)
+        self._inv_header_holder = None   # item column header (rebuilt on view change)
+        self._inv_scroll = None          # stable scroll area; only its rows are cleared
         self._inv_ready_token = None
+        # Expanded device rows and their per-device "show more" limits, both
+        # keyed (view, agent_id) so expanding a device under Processes doesn't
+        # also expand it under Ports, and so the state survives a tab round
+        # trip. Initialized here only — create_main_screen deliberately keeps
+        # view/group/page across a theme rebuild, and expansion follows suit.
+        self._inv_expanded = set()
+        self._inv_item_limits = {}
 
     def check_status(self):
         return None
@@ -1246,6 +1520,8 @@ class Plugin(BasePlugin):
         self._inv_rows_layout = None
         self._inv_pager_holder = None
         self._inv_body_holder = None
+        self._inv_header_holder = None
+        self._inv_scroll = None
 
         root = QWidget()
         # Explicit theme background (NOT Transparent): document-mode QTabBar
@@ -1386,6 +1662,20 @@ class Plugin(BasePlugin):
             self._render_vuln_cvss()
         self._tab_stack.setCurrentIndex(_TAB_NAMES.index(name))
         self._style_tab_buttons(name)
+        self._sync_device_combo_enabled(name)
+
+    def _sync_device_combo_enabled(self, name):
+        """Grey the device selector out on Inventory.
+
+        Inventory is fleet-wide by design, so the selector has no effect there.
+        Leaving it live but inert reads as a broken control — the user changes
+        it and nothing happens. Disabling it says so instead."""
+        if self._device_combo is None:
+            return
+        applies = name != "Inventory"
+        self._device_combo.setEnabled(applies)
+        self._device_combo.setToolTip(
+            "" if applies else "Inventory always shows every device in the group")
 
     # ----- global device selector --------------------------------------------
     def _default_device_scope(self, roster):
@@ -1482,10 +1772,11 @@ class Plugin(BasePlugin):
             return
         self._device_scope = name
         self._device_scope_user_set = True
-        # A narrowed list should start at its first page on every tab.
+        # A narrowed list should start at its first page on every tab that
+        # follows the selector. Inventory is excluded on purpose — it is
+        # fleet-wide, so a scope change must not disturb its paging.
         self._ev_page = 1
         self._vuln_page = 1
-        self._inv_page = 1
         # Re-render the visible tab now; the rest re-render on their next visit
         # (tracked via _tab_rendered_scope in _switch_tab).
         if self._active_tab:
@@ -1512,10 +1803,10 @@ class Plugin(BasePlugin):
                 if page is not None:
                     self._build_vulnerabilities_pane(page)
             elif name == "Inventory":
-                if self._inv_body_holder is not None:
-                    self._render_inventory_body()
-                elif page is not None:
-                    self._build_inventory_pane(page)
+                # Intentionally nothing: Inventory is fleet-wide and does not
+                # follow the device selector. Its first build is handled by the
+                # normal _switch_tab path, not by a scope change.
+                pass
         except Exception as e:
             logger.error(f"Wazuh Overview: applying scope to '{name}' failed: {e}")
         self._tab_rendered_scope[name] = self._device_scope
@@ -1881,8 +2172,18 @@ class Plugin(BasePlugin):
         if self._module_grid is None:
             return
         cards_data = self._module_cards()
-        widgets = [_ModuleCard(cd, on_click=self._switch_tab) for cd in cards_data]
+        widgets = [_ModuleCard(cd, on_click=self._on_card_click) for cd in cards_data]
         self._module_grid.set_cards(widgets)
+
+    def _on_card_click(self, card_data):
+        """Route a module-card click: ``nav_target`` opens another plugin
+        screen (e.g. the SIEM agent), ``target_tab`` switches an internal
+        overview tab."""
+        nav = card_data.get("nav_target")
+        if nav:
+            self.app.navigate(nav)
+        elif card_data.get("target_tab"):
+            self._switch_tab(card_data["target_tab"])
 
     def _module_cards(self):
         """Compute module-card data from the live /me/* responses."""
@@ -1891,11 +2192,46 @@ class Plugin(BasePlugin):
         # the Overview loading progress); only the cards are withheld. Re-add the
         # entries here to bring them back — the card methods are kept below.
         cards = [
+            self._agent_status_card(),
             self._security_alerts_card(),
             self._vuln_card(),
             self._inventory_card(),
         ]
         return cards
+
+    def _agent_status_card(self):
+        """Live state of the SIEM agent on THIS device, and the entry point to
+        the agent install/manage screen — the former "Endpoint" sidebar tab,
+        now hidden (``order=-1``) and reached only from here via
+        ``nav_target`` → ``app.navigate("Endpoint")``.
+
+        Deliberately NOT filtered by the global device selector: /me/agent
+        resolves by the caller's source IP and the screen this card opens
+        manages the local agent daemon, so both are about this machine no
+        matter which device the rest of the Overview is scoped to. The card
+        repaints when the agent fetch lands — that slot is bit 1 of
+        ``_ready_mask()``, which the Overview readiness poll watches."""
+        title, desc, nav = "Agent Status", "SIEM agent on this device", "Endpoint"
+        if not _remote_agent_ready.is_set():
+            return _loading_card(title, desc, nav_target=nav)
+        if _REMOTE_AGENT_ERROR or not _REMOTE_AGENT:
+            return _error_card(title, desc, nav_target=nav)
+
+        bi = _REMOTE_AGENT
+        connected = (bi.get("status") or "").lower() in ("active", "connected")
+        if connected:
+            stats = ((f"Connected · keep-alive "
+                      f"{_format_relative(bi.get('lastKeepAlive'))}", "ok"),)
+        else:
+            stats = ((f"Disconnected · "
+                      f"{_format_relative(bi.get('disconnection_time'))}", "error"),)
+        return {
+            "title": title,
+            "status": "OK" if connected else "ERROR",
+            "description": desc,
+            "stats": stats,
+            "nav_target": nav,
+        }
 
     def _security_alerts_card(self):
         """Summarise the vuln-detection events (same data the Events tab paints)
@@ -3495,16 +3831,112 @@ class Plugin(BasePlugin):
         "Processes": ("syscollector", "processes"),
         "Ports": ("syscollector", "network", "ports"),
         "Network": ("syscollector", "network", "interfaces"),
+        "Packages": ("syscollector", "packages"),
     }
     _INVENTORY_LEAD_HEADER = {
         "Devices": "THREAT",
         "Processes": "PROCESSES",
         "Ports": "OPEN PORTS",
         "Network": "INTERFACES",
+        "Packages": "PACKAGES",
     }
     _GROUP_ALL = "All groups"
     _GROUP_NONE = "(no group)"
     _INVENTORY_PAGE_SIZE = 20
+    # Items revealed per "show more" click inside an expanded device row. Kept
+    # small on purpose: one macOS agent reports 500 processes and 410 packages,
+    # and materializing that many row widgets inline stalls the UI.
+    _INV_ITEM_PAGE = 25
+
+    # Per-view item columns: (header, fixed_width, getter). width 0 == stretch.
+    # Header and rows both read this one spec so their widths cannot drift —
+    # the failure mode the hand-duplicated widths in the Events and
+    # Vulnerabilities tables are only protected from by a comment.
+    #
+    # Column choices are driven by measured fill rates on the live API, not by
+    # what the payload nominally offers. Deliberately excluded: processes'
+    # cpu_usage/memory_usage (null on 100% of rows, both platforms) and state
+    # (null on Windows, blank on macOS); ports' remote_ip/remote_port (always
+    # ::/0 — every reported socket is listening); packages' install_time (blank
+    # on 22% of Windows and 69% of macOS rows). USER and COMMAND are both kept
+    # because each platform populates exactly one of them.
+    _INVENTORY_ITEM_COLUMNS = {
+        "Processes": (
+            ("NAME", 180, lambda it: it.get("name")),
+            ("PID", 70, lambda it: it.get("pid")),
+            ("PPID", 70, lambda it: it.get("ppid")),
+            ("USER", 130, lambda it: it.get("user")),
+            ("COMMAND", 0, lambda it: it.get("command")),
+        ),
+        "Ports": (
+            ("LOCAL", 190, lambda it: _join_host_port(it.get("local_ip"), it.get("local_port"))),
+            ("PROTOCOL", 80, lambda it: it.get("protocol")),
+            ("STATE", 100, lambda it: it.get("state")),
+            ("PROCESS", 0, lambda it: it.get("process")),
+            ("PID", 70, lambda it: it.get("pid")),
+        ),
+        "Network": (
+            ("NAME", 160, lambda it: it.get("name")),
+            ("STATE", 70, lambda it: it.get("state")),
+            ("IP ADDRESS", 150, lambda it: ", ".join(it.get("ip_addresses") or [])),
+            ("MAC", 150, lambda it: it.get("mac")),
+            ("RX / TX", 0,
+             lambda it: _format_traffic(it.get("rx_bytes"), it.get("tx_bytes"))),
+        ),
+        "Packages": (
+            ("NAME", 0, lambda it: it.get("name")),
+            ("VERSION", 140, lambda it: it.get("version")),
+            ("VENDOR", 180, lambda it: it.get("vendor")),
+            ("FORMAT", 70, lambda it: it.get("format")),
+            ("ARCH", 90, lambda it: it.get("architecture")),
+        ),
+    }
+
+    # Per-view DEVICE-ROW summary columns: (header, width, getter(row)).
+    # These are what make switching views change the table at a glance — the
+    # row used to carry OS/CPU/LAST SEEN on every view, so only the lead count
+    # varied and all five views read as the same screen. Each view now
+    # summarises its own items; Devices keeps the machine-level facts, which is
+    # the one view where they are the subject.
+    _INVENTORY_SUMMARY_COLUMNS = {
+        "Devices": (
+            ("OS", 170, lambda r: _cell_text(r.get("os"))),
+            ("CPU / RAM", 190, _cpu_ram_text),
+            ("LAST SEEN", 130, _last_seen_text),
+        ),
+        "Processes": (
+            ("UNIQUE", 80, lambda r: str(_distinct_count(r.get("items") or [], "name"))),
+            ("USERS", 70, _proc_users),
+            ("TOP PROCESS", 200, lambda r: _top_value(r.get("items") or [], "name")),
+        ),
+        "Ports": (
+            ("TCP / UDP", 90, _ports_proto_split),
+            ("LISTENING", 80, _ports_listening),
+            ("TOP PORTS", 180, _ports_top),
+        ),
+        "Network": (
+            ("UP / DOWN", 90, _iface_up_down),
+            ("ADDRESSES", 90, _iface_addresses),
+            ("TOTAL RX / TX", 170, _iface_traffic_total),
+        ),
+        "Packages": (
+            ("FORMATS", 150, _pkg_formats),
+            ("VENDORS", 80, lambda r: str(_distinct_count(r.get("items") or [], "vendor"))),
+            ("TOP VENDOR", 190, lambda r: _top_value(r.get("items") or [], "vendor")),
+        ),
+    }
+
+    # Fixed per-view item ordering, matching the file's convention of implicit
+    # sorts applied at filter/build time rather than interactive column sorts.
+    _INVENTORY_ITEM_SORTS = {
+        "Processes": lambda it: str(it.get("name") or "").lower(),
+        "Ports": lambda it: _as_int(it.get("local_port")),
+        # Live interfaces first, then by name — a down interface is rarely what
+        # you opened the Network view to look at.
+        "Network": lambda it: (str(it.get("state") or "").lower() != "up",
+                               str(it.get("name") or "").lower()),
+        "Packages": lambda it: str(it.get("name") or "").lower(),
+    }
 
     def _build_inventory_pane(self, page, _name="Inventory"):
         _clear_layout(page.layout())
@@ -3586,6 +4018,8 @@ class Plugin(BasePlugin):
 
     def _base_agent_row(self, agent):
         bi = agent.get("basic_info") or {}
+        os_info = bi.get("os") or {}
+        hw = agent.get("hardware") or {}
         return {
             "name": bi.get("name") or "(unknown)",
             "status": (bi.get("status") or "").lower(),
@@ -3593,6 +4027,13 @@ class Plugin(BasePlugin):
             "agent_id": bi.get("id") or "—",
             "ip": bi.get("ip") or "—",
             "groups": self._agent_groups(bi),
+            "os": " ".join(
+                p for p in (os_info.get("name"), os_info.get("version")) if p
+            ),
+            "cpu": hw.get("cpu_name") or "",
+            "cpu_cores": hw.get("cpu_cores"),
+            "ram_total": hw.get("ram_total_mb"),
+            "ram_pct": hw.get("ram_usage_pct"),
         }
 
     def _inventory_rows(self):
@@ -3605,7 +4046,10 @@ class Plugin(BasePlugin):
         rows.sort(key=lambda r: (-_THREAT_RANK.get(r["threat"], 0), r["name"].lower()))
         return rows
 
-    def _inventory_counts_rows(self, field_path):
+    def _inventory_counts_rows(self, field_path, view):
+        """Device rows for a non-Devices view, each carrying that device's
+        items so an expanded row can render them without a second lookup."""
+        sort_key = self._INVENTORY_ITEM_SORTS.get(view)
         rows = []
         for agent in _AGENTS:
             node = agent
@@ -3614,8 +4058,12 @@ class Plugin(BasePlugin):
                 if node is None:
                     break
             items = (node or {}).get("affected_items") if isinstance(node, dict) else None
+            items = [it for it in (items or []) if isinstance(it, dict)]
+            if sort_key is not None:
+                items.sort(key=sort_key)
             row = self._base_agent_row(agent)
-            row["count"] = len(items) if isinstance(items, list) else 0
+            row["items"] = items
+            row["count"] = len(items)
             rows.append(row)
         rows.sort(key=lambda r: (-r["count"], r["name"].lower()))
         return rows
@@ -3642,9 +4090,11 @@ class Plugin(BasePlugin):
             return not groups
         return group_filter in groups
 
-    def _row_in_scope(self, row):
-        """Honour the global device selector on the Inventory list too."""
-        return not self._device_active() or row.get("name") == self._device_scope
+    # NOTE: Inventory deliberately ignores the global device selector. It is the
+    # one tab whose subject IS the fleet — the list compares devices against
+    # each other, and narrowing it to a single device collapses every view to a
+    # single row. Per-device detail is reached by expanding a row instead. The
+    # group dropdown remains the Inventory-local filter.
 
     # ----- render ------------------------------------------------------------
     def _render_inventory_list(self, page):
@@ -3692,42 +4142,85 @@ class Plugin(BasePlugin):
         divider.setObjectName("Divider")
         cl.addWidget(divider)
 
-        # Body (column header + list) — rebuilt in place on view/group/page change.
+        # Body: device column header (rebuilt on view change) over a scroll area
+        # that is built ONCE. Only the rows inside it are cleared on a
+        # view/group/page/expand change, so scroll position survives — expanding
+        # a device would otherwise jump the list back to the top on every click.
         self._inv_body_holder = QWidget()
         self._inv_body_holder.setObjectName("Transparent")
         bl = QVBoxLayout(self._inv_body_holder)
         bl.setContentsMargins(0, 8, 0, 0)
         bl.setSpacing(4)
+
+        self._inv_header_holder = QWidget()
+        self._inv_header_holder.setObjectName("Transparent")
+        QVBoxLayout(self._inv_header_holder).setContentsMargins(0, 0, 0, 0)
+        bl.addWidget(self._inv_header_holder)
+
+        scroll, rows_layout = _rows_scroll()
+        self._inv_scroll = scroll
+        self._inv_rows_layout = rows_layout
+        bl.addWidget(scroll, 1)
+
         cl.addWidget(self._inv_body_holder, 1)
 
         page.layout().addWidget(card)
         self._render_inventory_body()
 
-    # Column widths shared by the header and each row so they align.
-    _INV_COL_WIDTHS = {"lead": 110, "last": 140, "agent": 80, "ip": 140}
+    # Widths for the two columns every view shares; the rest come from
+    # _INVENTORY_SUMMARY_COLUMNS so header and row cannot drift apart.
+    _INV_COL_WIDTHS = {"lead": 110, "disclose": 18}
 
     def _inventory_column_header(self):
+        """Device-row column header. The Devices view trades the AGENT ID and
+        IP columns for OS and CPU/RAM — the identifiers move into the DEVICE
+        cell's secondary line, so nothing is lost."""
         head = QWidget()
         head.setObjectName("Transparent")
         h = QHBoxLayout(head)
         h.setContentsMargins(2, 0, 2, 0)
         h.setSpacing(12)
+
+        spacer = _label("", size=10)
+        spacer.setFixedWidth(self._INV_COL_WIDTHS["disclose"])
+        h.addWidget(spacer)
+
         lead = _label(self._INVENTORY_LEAD_HEADER.get(self._inv_view, "THREAT"),
                       size=10, bold=True, secondary=True)
         lead.setFixedWidth(self._INV_COL_WIDTHS["lead"])
         h.addWidget(lead)
         h.addWidget(_label("DEVICE", size=10, bold=True, secondary=True), 1)
-        for name, key in (("LAST SEEN", "last"), ("AGENT ID", "agent"), ("IP", "ip")):
-            lbl = _label(name, size=10, bold=True, secondary=True)
-            lbl.setFixedWidth(self._INV_COL_WIDTHS[key])
+        for title, width, _getter in self._summary_columns(self._inv_view):
+            lbl = _label(title, size=10, bold=True, secondary=True)
+            lbl.setFixedWidth(width)
             h.addWidget(lbl)
         return head
 
+    def _summary_columns(self, view):
+        return self._INVENTORY_SUMMARY_COLUMNS.get(
+            view, self._INVENTORY_SUMMARY_COLUMNS["Devices"])
+
+    def _inventory_item_header(self, view):
+        """Column header for the items inside an expanded device row. Reads the
+        same _INVENTORY_ITEM_COLUMNS spec the rows do, so widths cannot drift."""
+        head = QWidget()
+        head.setObjectName("Transparent")
+        h = QHBoxLayout(head)
+        h.setContentsMargins(0, 2, 0, 2)
+        h.setSpacing(10)
+        for title, width, _getter in self._INVENTORY_ITEM_COLUMNS.get(view, ()):
+            lbl = _label(title, size=9, bold=True, secondary=True)
+            if width:
+                lbl.setFixedWidth(width)
+                h.addWidget(lbl)
+            else:
+                h.addWidget(lbl, 1)
+        return head
+
     def _render_inventory_body(self):
-        holder = self._inv_body_holder
-        if holder is None:
+        """Rebuild the device column header and repopulate the rows in place."""
+        if self._inv_rows_layout is None:
             return
-        _clear_layout(holder.layout())
 
         view = self._inv_view
         is_devices = view == "Devices"
@@ -3735,12 +4228,11 @@ class Plugin(BasePlugin):
         gf = self._inv_group
 
         if is_devices:
-            rows = [r for r in self._inventory_rows()
-                    if self._row_in_group(r, gf) and self._row_in_scope(r)]
+            rows = [r for r in self._inventory_rows() if self._row_in_group(r, gf)]
             count_text = f"{len(rows)} linked · sorted by threat level"
         else:
-            rows = [r for r in self._inventory_counts_rows(field_path)
-                    if self._row_in_group(r, gf) and self._row_in_scope(r)]
+            rows = [r for r in self._inventory_counts_rows(field_path, view)
+                    if self._row_in_group(r, gf)]
             total = sum(r["count"] for r in rows)
             n_with_data = sum(1 for r in rows if r["count"] > 0)
             word = "interfaces" if view == "Network" else view.lower()
@@ -3748,35 +4240,58 @@ class Plugin(BasePlugin):
         if self._inv_count_label is not None:
             self._inv_count_label.setText(count_text)
 
+        if self._inv_header_holder is not None:
+            _clear_layout(self._inv_header_holder.layout())
+            self._inv_header_holder.layout().addWidget(self._inventory_column_header())
+
         page_size = self._INVENTORY_PAGE_SIZE
         total_pages = max(1, (len(rows) + page_size - 1) // page_size)
         self._inv_page = max(1, min(self._inv_page, total_pages))
         start = (self._inv_page - 1) * page_size
         page_rows = rows[start:start + page_size]
 
-        holder.layout().addWidget(self._inventory_column_header())
-        scroll, rows_layout = _rows_scroll()
-        self._inv_rows_layout = rows_layout
-        holder.layout().addWidget(scroll, 1)
+        # Clear rows only, keeping _rows_scroll()'s trailing stretch (always the
+        # last item) so rows stay top-aligned.
+        lay = self._inv_rows_layout
+        bar = self._inv_scroll.verticalScrollBar() if self._inv_scroll else None
+        offset = bar.value() if bar is not None else 0
+        while lay.count() > 1:
+            item = lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+
         for dev in page_rows:
-            self._add_inventory_row(dev, is_devices)
+            self._add_inventory_row(dev, is_devices, view)
+
+        if bar is not None:
+            # Restore after Qt has laid the new rows out, otherwise the bar's
+            # range is still the old one and the value gets clamped away.
+            QTimer.singleShot(0, lambda b=bar, v=offset: b.setValue(min(v, b.maximum())))
 
         self._render_pager(self._inv_pager_holder, self._inv_page, total_pages,
                            self._set_inventory_page)
 
-    def _add_inventory_row(self, dev, is_devices):
-        row = QFrame()
-        row.setObjectName("InvRow")
-        hover = theme.color("sidebar_hover_bg")
-        row.setStyleSheet(
-            f"#InvRow{{background:transparent;border-radius:6px;}}"
-            f"#InvRow:hover{{background:{hover};}}"
-        )
-        h = QHBoxLayout(row)
-        h.setContentsMargins(2, 6, 2, 6)
-        h.setSpacing(12)
+    def _inv_expand_key(self, view, dev):
+        return (view, str(dev.get("agent_id")))
 
-        # Lead cell — threat badge (Devices) or count (other views).
+    def _toggle_inventory_row(self, view, dev):
+        key = self._inv_expand_key(view, dev)
+        if key in self._inv_expanded:
+            self._inv_expanded.discard(key)
+        else:
+            self._inv_expanded.add(key)
+        self._render_inventory_body()
+
+    def _show_more_inventory_items(self, view, dev):
+        key = self._inv_expand_key(view, dev)
+        shown = self._inv_item_limits.get(key, self._INV_ITEM_PAGE)
+        self._inv_item_limits[key] = shown + self._INV_ITEM_PAGE
+        self._render_inventory_body()
+
+    def _inventory_lead_cell(self, dev, is_devices):
+        """Lead cell — threat badge on Devices, item count on the other views."""
         lead = QWidget()
         lead.setObjectName("Transparent")
         lead.setFixedWidth(self._INV_COL_WIDTHS["lead"])
@@ -3791,18 +4306,127 @@ class Plugin(BasePlugin):
             lh.addWidget(_label(str(count), size=13, bold=True,
                                 secondary=(count == 0)))
         lh.addStretch(1)
-        h.addWidget(lead)
+        return lead
 
-        h.addWidget(_label(dev["name"], size=13, bold=True), 1)
+    def _add_inventory_row(self, dev, is_devices, view):
+        expandable = not is_devices and dev["count"] > 0
+        key = self._inv_expand_key(view, dev)
+        expanded = expandable and key in self._inv_expanded
 
-        connected = dev["status"] in ("active", "connected")
-        last_seen = "Active now" if connected else _format_relative(dev["last_keep"])
-        for text, key in ((last_seen, "last"), (str(dev["agent_id"]), "agent"), (dev["ip"], "ip")):
-            lbl = _label(text, size=12, secondary=True)
-            lbl.setFixedWidth(self._INV_COL_WIDTHS[key])
-            h.addWidget(lbl)
+        if expandable:
+            row = _ClickableFrame(lambda d=dev: self._toggle_inventory_row(view, d))
+        else:
+            row = QFrame()
+        row.setObjectName("InvRow")
+        hover = theme.color("sidebar_hover_bg")
+        row.setStyleSheet(
+            f"#InvRow{{background:transparent;border-radius:6px;}}"
+            f"#InvRow:hover{{background:{hover};}}"
+        )
+        h = QHBoxLayout(row)
+        h.setContentsMargins(2, 6, 2, 6)
+        h.setSpacing(12)
+
+        # Disclosure triangle — a fixed-width blank on non-expandable rows so
+        # every view's columns still line up with the header.
+        glyph = ("▼" if expanded else "▶") if expandable else ""
+        disclose = _label(glyph, size=9, secondary=True)
+        disclose.setFixedWidth(self._INV_COL_WIDTHS["disclose"])
+        h.addWidget(disclose)
+
+        h.addWidget(self._inventory_lead_cell(dev, is_devices))
+
+        # Device cell — name over the identifiers the Devices view no longer
+        # spends a column on.
+        name_cell = QWidget()
+        name_cell.setObjectName("Transparent")
+        nv = QVBoxLayout(name_cell)
+        nv.setContentsMargins(0, 0, 0, 0)
+        nv.setSpacing(1)
+        nv.addWidget(_label(dev["name"], size=13, bold=True))
+        nv.addWidget(_label(f"id {dev['agent_id']} · {dev['ip']}", size=10, secondary=True))
+        h.addWidget(name_cell, 1)
+
+        for _title, width, getter in self._summary_columns(view):
+            try:
+                text = _cell_text(getter(dev))
+            except (AttributeError, TypeError, ValueError):
+                # One malformed device must not take out the whole list.
+                text = "—"
+            h.addWidget(_fixed_col(_label(text, size=12, secondary=True),
+                                   text, width, size=12))
 
         self._inv_rows_layout.insertWidget(self._inv_rows_layout.count() - 1, row)
+
+        if expanded:
+            self._inv_rows_layout.insertWidget(
+                self._inv_rows_layout.count() - 1,
+                self._inventory_items_panel(view, dev),
+            )
+
+    def _inventory_items_panel(self, view, dev):
+        """The item table revealed under an expanded device row.
+
+        Capped at the device's current "show more" limit rather than rendering
+        everything: one macOS agent reports 500 processes and 410 packages, and
+        materializing that many row widgets inline stalls the UI."""
+        panel = QFrame()
+        panel.setObjectName("Transparent")
+        pv = QVBoxLayout(panel)
+        pv.setContentsMargins(self._INV_COL_WIDTHS["disclose"] + 14, 2, 6, 10)
+        pv.setSpacing(2)
+
+        items = dev.get("items") or []
+        key = self._inv_expand_key(view, dev)
+        limit = self._inv_item_limits.get(key, self._INV_ITEM_PAGE)
+        shown = items[:limit]
+
+        pv.addWidget(self._inventory_item_header(view))
+        divider = QFrame()
+        divider.setFixedHeight(1)
+        divider.setObjectName("Divider")
+        pv.addWidget(divider)
+
+        columns = self._INVENTORY_ITEM_COLUMNS.get(view, ())
+        for item in shown:
+            line = QWidget()
+            line.setObjectName("Transparent")
+            lh = QHBoxLayout(line)
+            lh.setContentsMargins(0, 2, 0, 2)
+            lh.setSpacing(10)
+            for idx, (_title, width, getter) in enumerate(columns):
+                try:
+                    text = _cell_text(getter(item))
+                except (AttributeError, TypeError, ValueError):
+                    # A single malformed item must not take out the whole panel.
+                    text = "—"
+                lbl = _label(text, size=11, bold=(idx == 0), secondary=(idx > 0))
+                lbl.setToolTip(text)
+                if width:
+                    lh.addWidget(_fixed_col(lbl, text, width))
+                else:
+                    lbl.setWordWrap(False)
+                    lh.addWidget(lbl, 1)
+            pv.addWidget(line)
+
+        if len(items) > len(shown):
+            more = QHBoxLayout()
+            more.setContentsMargins(0, 4, 0, 0)
+            more.addWidget(_label(f"Showing {len(shown)} of {len(items)}",
+                                  size=10, secondary=True))
+            btn = QPushButton(f"Show {min(self._INV_ITEM_PAGE, len(items) - len(shown))} more")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFlat(True)
+            btn.setStyleSheet(
+                "QPushButton{border:none;background:transparent;padding:0 6px;"
+                f"font-size:10px;font-weight:700;color:{theme.color('accent')};}}"
+            )
+            btn.clicked.connect(lambda _=False, d=dev: self._show_more_inventory_items(view, d))
+            more.addWidget(btn)
+            more.addStretch(1)
+            pv.addLayout(more)
+
+        return panel
 
     def _on_inventory_view_change(self, view_name):
         if view_name not in self._INVENTORY_COUNT_FIELDS or view_name == self._inv_view:
