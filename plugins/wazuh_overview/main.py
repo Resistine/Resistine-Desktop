@@ -1,13 +1,20 @@
-"""Wazuh Overview Plugin (PyQt6).
+"""Endpoint Plugin (PyQt6).
 
-Second sidebar entry ("Wazuh") — a multi-tab security-posture dashboard for the
+Sidebar entry ("Endpoint") — a multi-tab security-posture dashboard for the
 caller's device group, driven by the IP-identified /api/v1/me/* API. Ported from
 the CustomTkinter design_test2 branch onto the PyQt foundation.
 
-Tabs: Overview, Events, Vulnerabilities, Inventory. The Overview tab paints from
-five /me/* endpoints (agent, vulnerabilities-summary, sca, inventory, hotfixes),
-each fetched on its own thread and rendered as it lands. Events / Vulnerabilities
-add matplotlib charts (Qt backend) and are built lazily on first tab open.
+Tabs: Overview, Events, Vulnerabilities, Inventory, Agent. The Overview tab
+paints from five /me/* endpoints (agent, vulnerabilities-summary, sca,
+inventory, hotfixes), each fetched on its own thread and rendered as it lands.
+Events / Vulnerabilities add matplotlib charts (Qt backend) and are built lazily
+on first tab open. Agent embeds the SIEM-agent install/manage screen owned by
+the sibling plugin in ``plugins/wazuh`` (id 011), which was formerly its own
+sidebar entry named "Endpoint".
+
+The directory is still named ``wazuh_overview`` and the module still refers to
+Wazuh wherever it means the product (rule levels, manager, group naming) rather
+than this plugin.
 
 The module-level data layer (constants, response normalizers, the remote-data
 cache, and the background preloaders) is framework-agnostic and carries over
@@ -30,7 +37,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from PyQt6.QtCore import QTimer, Qt
-from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPixmap
+from PyQt6.QtGui import QColor, QFontMetrics, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QStackedWidget,
     QBoxLayout,
@@ -67,7 +74,7 @@ _WAZUH_DIR = os.path.join(os.path.dirname(_PLUGIN_DIR), "wazuh")
 # the debug inspector gate is restored; flip to False when shipping.
 _SHOW_DEV_REFRESH_BUTTON = True
 
-_TAB_NAMES = ("Overview", "Events", "Vulnerabilities", "Inventory")
+_TAB_NAMES = ("Overview", "Events", "Vulnerabilities", "Inventory", "Agent")
 # Tabs that show a circular-progress loading screen. Overview is excluded on
 # purpose: it paints a full skeleton immediately and fills it in as endpoints
 # land, which beats blocking on a ring.
@@ -448,27 +455,27 @@ def _wait_for_vpn(poll_interval=2.0, timeout=60.0):
         from plugins.vpn.main import is_vpn_connected
     except ImportError:
         logger.warning(
-            "[WAZUH-OVERVIEW] VPN plugin unavailable; preloader proceeding without VPN gate"
+            "[ENDPOINT] VPN plugin unavailable; preloader proceeding without VPN gate"
         )
         return
 
     if is_vpn_connected():
         return
     logger.info(
-        "[WAZUH-OVERVIEW] Preloader waiting for VPN tunnel before fetching /me/* endpoints"
+        "[ENDPOINT] Preloader waiting for VPN tunnel before fetching /me/* endpoints"
     )
     waited = 0.0
     while not is_vpn_connected():
         if waited >= timeout:
             logger.warning(
-                f"[WAZUH-OVERVIEW] VPN not confirmed after {timeout:.0f}s — preloader "
+                f"[ENDPOINT] VPN not confirmed after {timeout:.0f}s — preloader "
                 "proceeding anyway; GETs will surface real connectivity errors if the "
                 "tunnel is down"
             )
             return
         time.sleep(poll_interval)
         waited += poll_interval
-    logger.info("[WAZUH-OVERVIEW] VPN tunnel up — preloader proceeding")
+    logger.info("[ENDPOINT] VPN tunnel up — preloader proceeding")
 
 
 def _load_overview_early_async():
@@ -530,7 +537,7 @@ def _load_overview_early_async():
             try:
                 f.result()
             except Exception as e:
-                logger.error(f"[WAZUH-OVERVIEW] preloader thread crashed: {e}")
+                logger.error(f"[ENDPOINT] preloader thread crashed: {e}")
 
 
 def _load_vuln_events_phase1_async():
@@ -542,7 +549,7 @@ def _load_vuln_events_phase1_async():
     local_id = (_REMOTE_AGENT or {}).get("id") if isinstance(_REMOTE_AGENT, dict) else None
     if not local_id:
         logger.warning(
-            "[WAZUH-OVERVIEW] No local agent id — skipping vuln-events fetch"
+            "[ENDPOINT] No local agent id — skipping vuln-events fetch"
         )
         _REMOTE_VULN_EVENTS_ERROR = "no local agent"
         _remote_vuln_events_ready.set()
@@ -560,7 +567,7 @@ def _load_vuln_events_phase1_async():
         # Without this the tab renders an empty stream that's indistinguishable
         # from a genuine "no events in the window".
         logger.warning(
-            f"[WAZUH-OVERVIEW] Vuln-events fetch for local agent {local_id} failed: {err}"
+            f"[ENDPOINT] Vuln-events fetch for local agent {local_id} failed: {err}"
         )
     else:
         normalized = [_normalize_wazuh_hit(h) for h in (local_events or [])]
@@ -601,7 +608,7 @@ def _load_vuln_events_phase2_async():
             events, derr = future.result()
             if derr:
                 logger.warning(
-                    f"[WAZUH-OVERVIEW] Vuln-events fetch for agent {aid} failed: {derr}"
+                    f"[ENDPOINT] Vuln-events fetch for agent {aid} failed: {derr}"
                 )
                 continue
             new_normalized = [_normalize_wazuh_hit(h) for h in (events or [])]
@@ -832,7 +839,7 @@ def _format_bytes(value):
     return "—"
 
 
-def _fixed_col(label, text, width, *, size=11):
+def _fixed_col(label, text, width):
     """Pin a label to a column width, eliding overflow with an ellipsis and
     keeping the full value on the tooltip.
 
@@ -840,14 +847,11 @@ def _fixed_col(label, text, width, *, size=11):
     indistinguishable from a complete one — an interface with five IP
     addresses would just look like it had one.
 
-    `size` must match the px size _label() applied, because that is set through
-    the stylesheet and QLabel.font() does not reflect it. Measuring the default
-    application font instead makes every cell elide several characters early."""
+    Measures label.font(), which _label() keeps in sync with the painted size,
+    so the elide point matches what is actually drawn."""
     label.setFixedWidth(width)
     label.setToolTip(text)
-    font = QFont(label.font())
-    font.setPixelSize(size)
-    metrics = QFontMetrics(font)
+    metrics = QFontMetrics(label.font())
     label.setText(metrics.elidedText(text, Qt.TextElideMode.ElideRight, width - 4))
     return label
 
@@ -1091,6 +1095,28 @@ def _label(text, *, size=13, bold=False, color=None, secondary=False, wrap=False
     QSS, so inline is the cleanest way to carry them)."""
     lbl = QLabel(str(text))
     lbl.setWordWrap(wrap)
+    # Apply the size to the widget's OWN font, not just the stylesheet.
+    # A stylesheet font-size only reaches QLabel.font() once the widget is
+    # polished, so any sizeHint taken before that describes the default font.
+    # Where a layout sizes strictly to sizeHint — which is what passing an
+    # explicit alignment flag to addWidget() does — a too-short height clips
+    # the painted glyphs, and descenders (g, y, p, q, j) lose their tails.
+    # Keeping both in sync also makes QFontMetrics(lbl.font()) trustworthy,
+    # which _fixed_col() relies on to elide at the right width.
+    font = lbl.font()
+    font.setPixelSize(size)
+    font.setBold(bold)
+    lbl.setFont(font)
+    # Reserve the height the glyphs actually occupy, not just the font's
+    # nominal ascent+descent. Several call sites pass an alignment flag to
+    # addWidget(), which makes the layout size the widget to EXACTLY its
+    # sizeHint — leaving no slack — and some faces draw descenders (g, y, p,
+    # q, j) past the nominal descent, so the tails get clipped. boundingRect()
+    # reports the real extent; max() keeps ascent-only text unaffected. Costs
+    # nothing where the layout already grants enough height.
+    metrics = QFontMetrics(font)
+    lbl.setMinimumHeight(
+        max(metrics.height(), metrics.boundingRect(str(text)).height()))
     parts = [f"font-size:{size}px", "background:transparent"]
     if bold:
         parts.append("font-weight:700")
@@ -1337,18 +1363,18 @@ def _decode_group_email(group):
 #  Plugin
 # ==============================================================================
 class Plugin(BasePlugin):
-    """Wazuh Overview — multi-tab security-posture dashboard."""
+    """Endpoint — multi-tab security-posture dashboard."""
 
     def __init__(self, app):
         super().__init__(
             id="013",
             version="2026.07.01",
             order=5.5,
-            name="Wazuh",
+            name="Endpoint",
             status=None,
             description="Security posture across your device group.",
             supported_systems=["Darwin", "Linux", "Windows"],
-            translations={"US": "Wazuh", "ES": "Wazuh", "FR": "Wazuh"},
+            translations={"US": "Endpoint", "ES": "Endpoint", "FR": "Endpoint"},
             icon_light_path=os.path.join(_WAZUH_DIR, "wazuh_light.png"),
             icon_dark_path=os.path.join(_WAZUH_DIR, "wazuh_dark.png"),
             uninstall_enabled=True,
@@ -1367,6 +1393,10 @@ class Plugin(BasePlugin):
 
         # Overview state
         self._overview_ready_mask = -1
+        # Tracks _awaiting_scoped_data() between polls; a change in it is a
+        # repaint trigger in its own right (the readiness mask does not move
+        # when the per-device datasets land).
+        self._overview_awaiting = None
         self._overview_poll_token = None
         self._device_holder = None
         self._alert_holder = None
@@ -1446,7 +1476,7 @@ class Plugin(BasePlugin):
         return None
 
     def on_theme_changed(self):
-        """Rebuild the Wazuh Overview screen on theme toggle to re-render charts and colors."""
+        """Rebuild the Endpoint screen on theme toggle to re-render charts and colors."""
         if getattr(self, "app", None):
             self.app.update_plugin(self.id)
 
@@ -1528,9 +1558,9 @@ class Plugin(BasePlugin):
         # ignores background rules on some styles, so the strip showed the
         # dark ancestor colour as a black band in light mode. Painting the
         # page root guarantees the bar row sits on the theme background.
-        root.setObjectName("WazuhOverviewRoot")
+        root.setObjectName("EndpointRoot")
         root.setStyleSheet(
-            f"#WazuhOverviewRoot{{background:{theme.color('window_bg')};}}")
+            f"#EndpointRoot{{background:{theme.color('window_bg')};}}")
         outer = QVBoxLayout(root)
         # Breathing room so the tab bar doesn't sit flush against the window
         # title bar (top) or the content edges (sides).
@@ -1631,6 +1661,7 @@ class Plugin(BasePlugin):
             "Events": self._build_events_pane,
             "Vulnerabilities": self._build_vulnerabilities_pane,
             "Inventory": self._build_inventory_pane,
+            "Agent": self._build_agent_pane,
         }.get(name)
         if builder is None:
             return
@@ -1639,8 +1670,58 @@ class Plugin(BasePlugin):
             self._tab_built[name] = True
             self._tab_rendered_scope[name] = self._device_scope
         except Exception as e:
-            logger.error(f"Wazuh Overview: building '{name}' pane failed: {e}")
+            logger.error(f"Endpoint: building '{name}' pane failed: {e}")
             self._tab_built[name] = True  # don't retry forever
+
+    # ======================================================================
+    #  Agent pane — the SIEM agent install/manage screen, merged in as a tab
+    # ======================================================================
+    _AGENT_PLUGIN_ID = "011"
+
+    def _agent_plugin(self):
+        """The SIEM-agent plugin instance that owns the install/manage screen.
+
+        Looked up by plugin id, not name: this screen used to be a sidebar
+        entry called "Endpoint" reached via app.navigate("Endpoint"), and that
+        name now belongs to this plugin. Matching on the stable id keeps the
+        lookup working regardless of what either plugin is called."""
+        for plugin in getattr(self.app, "plugins", None) or []:
+            if getattr(plugin, "id", None) == self._AGENT_PLUGIN_ID:
+                return plugin
+        return None
+
+    def _build_agent_pane(self, page, _name="Agent"):
+        """Embed the agent plugin's own screen as this tab's content.
+
+        The screen is built by the owning plugin rather than reimplemented
+        here, so the install state machine, platform backends and status
+        polling all keep working untouched. Its lifecycle still belongs to
+        that plugin — the plugin manager calls its destroy(), and this pane
+        deliberately does not."""
+        _clear_layout(page.layout())
+        plugin = self._agent_plugin()
+        if plugin is None:
+            page.layout().addWidget(
+                _label("Agent plugin unavailable.", size=13, secondary=True))
+            page.layout().addStretch(1)
+            return
+        try:
+            screen = plugin.create_main_screen()
+        except Exception as e:
+            logger.error(f"Endpoint: building the Agent pane failed: {e}")
+            page.layout().addWidget(
+                _label(f"Couldn't load the agent screen: {e}", size=13, secondary=True))
+            page.layout().addStretch(1)
+            return
+        page.layout().addWidget(screen, 1)
+
+    def show_tab(self, name):
+        """Public entry point for other plugins to open a specific tab.
+
+        Replaces the old cross-plugin app.navigate("Endpoint") hop now that the
+        agent screen lives here as a tab rather than as its own sidebar entry."""
+        if name in _TAB_NAMES and self._tab_stack is not None:
+            self._switch_tab(name)
 
     def _switch_tab(self, name):
         if name not in _TAB_NAMES or self._tab_stack is None:
@@ -1660,22 +1741,30 @@ class Plugin(BasePlugin):
         # rebuild above already re-rendered it, so skip the double draw.)
         elif name == "Vulnerabilities" and already_built and self._vuln_cvss_ax is not None:
             self._render_vuln_cvss()
+        elif name == "Overview" and already_built:
+            # Per-device data may have landed while another tab was showing —
+            # opening the Vulnerabilities tab is itself what kicks the CVE
+            # fan-out. That doesn't move the readiness mask, so nothing would
+            # otherwise repaint a scoped card left on "Loading…". The poll exits
+            # on its first tick when there is nothing outstanding.
+            self._schedule_overview_poll()
         self._tab_stack.setCurrentIndex(_TAB_NAMES.index(name))
         self._style_tab_buttons(name)
-        self._sync_device_combo_enabled(name)
+        self._sync_device_combo_visible(name)
 
-    def _sync_device_combo_enabled(self, name):
-        """Grey the device selector out on Inventory.
+    # Tabs the global device selector does not apply to. Inventory is
+    # fleet-wide by design; Agent manages the daemon on THIS machine only.
+    _SCOPE_FREE_TABS = ("Inventory", "Agent")
 
-        Inventory is fleet-wide by design, so the selector has no effect there.
-        Leaving it live but inert reads as a broken control — the user changes
-        it and nothing happens. Disabling it says so instead."""
+    def _sync_device_combo_visible(self, name):
+        """Hide the device selector on tabs it has no effect on.
+
+        Leaving it visible reads as a broken control — the user changes it and
+        nothing happens. The selection itself is preserved, so returning to a
+        scoped tab still shows the device that was picked there."""
         if self._device_combo is None:
             return
-        applies = name != "Inventory"
-        self._device_combo.setEnabled(applies)
-        self._device_combo.setToolTip(
-            "" if applies else "Inventory always shows every device in the group")
+        self._device_combo.setVisible(name not in self._SCOPE_FREE_TABS)
 
     # ----- global device selector --------------------------------------------
     def _default_device_scope(self, roster):
@@ -1793,6 +1882,10 @@ class Plugin(BasePlugin):
                 self._rebuild_device_card()
                 self._rebuild_alert_bar()
                 self._populate_module_grid()
+                # The readiness poll may already have exited at _READY_ALL.
+                # Scoping now introduces a dependency on the per-device
+                # datasets, so restart it or the cards never leave "Loading…".
+                self._schedule_overview_poll()
             elif name == "Events":
                 if self._ev_page_widget is not None and _remote_vuln_events_ready.is_set():
                     self._update_severity_pills()
@@ -1802,13 +1895,13 @@ class Plugin(BasePlugin):
             elif name == "Vulnerabilities":
                 if page is not None:
                     self._build_vulnerabilities_pane(page)
-            elif name == "Inventory":
-                # Intentionally nothing: Inventory is fleet-wide and does not
-                # follow the device selector. Its first build is handled by the
-                # normal _switch_tab path, not by a scope change.
+            elif name in self._SCOPE_FREE_TABS:
+                # Intentionally nothing: Inventory is fleet-wide and Agent is
+                # about this machine, so neither follows the device selector.
+                # Their first build is handled by the normal _switch_tab path.
                 pass
         except Exception as e:
-            logger.error(f"Wazuh Overview: applying scope to '{name}' failed: {e}")
+            logger.error(f"Endpoint: applying scope to '{name}' failed: {e}")
         self._tab_rendered_scope[name] = self._device_scope
 
     # ----- loading screens ---------------------------------------------------
@@ -1919,6 +2012,7 @@ class Plugin(BasePlugin):
 
         # Initial paint from whatever is already cached.
         self._overview_ready_mask = _ready_mask()
+        self._overview_awaiting = self._awaiting_scoped_data()
         self._rebuild_device_card()
         self._rebuild_alert_bar()
         self._populate_module_grid()
@@ -1927,7 +2021,7 @@ class Plugin(BasePlugin):
         _kick_overview_api_loader()
         if _ready_mask() == _READY_ALL and _overview_has_errors():
             logger.info(
-                "[WAZUH-OVERVIEW] Cached preload had errors — auto-refreshing on tab open"
+                "[ENDPOINT] Cached preload had errors — auto-refreshing on tab open"
             )
             refresh_all_remote_data()
             self._schedule_overview_poll(force=True)
@@ -1944,16 +2038,40 @@ class Plugin(BasePlugin):
                 return
             self._refresh_device_combo()
             mask = _ready_mask()
-            if mask != self._overview_ready_mask:
+            awaiting = self._awaiting_scoped_data()
+            # Repaint when EITHER the eager mask changes or the scoped-data wait
+            # ends. Gating on the mask alone leaves the scoped Vulnerabilities
+            # card stuck on blue "Loading…": the per-device CVE list is not one
+            # of the mask's slots, so it landing changes nothing the poll was
+            # watching, and the card never repaints even while the poll runs.
+            if mask != self._overview_ready_mask or awaiting != self._overview_awaiting:
                 self._overview_ready_mask = mask
+                self._overview_awaiting = awaiting
                 self._rebuild_device_card()
                 self._rebuild_alert_bar()
                 self._populate_module_grid()
-            if mask == _READY_ALL:
+            if mask == _READY_ALL and not awaiting:
                 return
             self._overview_poll_token = self.app.after(150, check)
 
         self._overview_poll_token = self.app.after(150, check)
+
+    def _awaiting_scoped_data(self):
+        """True while a device-scoped Overview is still missing per-device data.
+
+        _ready_mask() covers only the six eager slots. The scoped Vulnerabilities
+        and Security Alerts cards read the full per-device CVE list and the
+        phase-2 event fan-out, neither of which is in that mask — so without
+        this the poll would stop at _READY_ALL and those cards would stay stuck
+        on their blue "Loading…" state even after the data landed.
+
+        Kept out of _ready_mask() itself on purpose: both datasets are far more
+        expensive than the summary endpoints, and an unscoped Overview has no
+        reason to wait on them."""
+        if not self._device_active():
+            return False
+        return not (_remote_vulns_ready.is_set()
+                    and _remote_vuln_events_complete.is_set())
 
     def request_refresh(self):
         """Dev refresh button: re-fetch every endpoint and repaint as it lands."""
@@ -2048,31 +2166,48 @@ class Plugin(BasePlugin):
             facts.append(f"Node {bi.get('node_name')}")
         facts_text = "  ·  ".join(facts)
 
-        # Top: label + (name | email group) + meta | status badge
+        # Two columns: identity on the left, status on the right.
+        #   left  : card label / device name / OS·agent·version meta
+        #   right : status badge, with the account email group directly beneath
+        #
+        # The email lives in the RIGHT column rather than trailing a stretch on
+        # the device-name row. On that row it only reached the left column's
+        # edge — a badge-width short of the card's — so it read as floating
+        # mid-right instead of aligned. Both right-column items are AlignRight,
+        # so they share the card's right margin whatever their widths.
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
+
         left = QVBoxLayout()
         left.setSpacing(2)
         left.addWidget(_label(card_label, size=10, bold=True, secondary=True))
-
-        # Name row: device name on the left, the account email group right-aligned
-        # on the same line (not bold).
-        name_row = QHBoxLayout()
-        name_row.setContentsMargins(0, 0, 0, 0)
-        name_row.addWidget(_label(name, size=22, bold=True))
-        name_row.addStretch(1)
-        if group_text:
-            name_row.addWidget(_label(group_text, size=13, secondary=True),
-                               alignment=Qt.AlignmentFlag.AlignVCenter)
-        left.addLayout(name_row)
-
+        left.addWidget(_label(name, size=22, bold=True))
         if meta_text:
             left.addWidget(_label(meta_text, size=12, secondary=True))
-        # stretch=1 so the name row fills the width and the email hugs the right.
         top.addLayout(left, 1)
+
+        # Right-align by pushing each item with a stretch rather than by passing
+        # an alignment flag to addWidget(). An alignment flag makes the layout
+        # size the widget to EXACTLY its sizeHint, and sizeHint is ascent+descent
+        # — a font whose glyphs overhang that nominal descent then has its
+        # descenders (g, y, p, q, j) clipped. Leaving the height unconstrained
+        # keeps the row's natural slack.
+        right = QVBoxLayout()
+        right.setSpacing(4)
         bg, fg = _badge_colors("ok" if is_connected else "error")
-        badge = _pill(f"●  {connectivity_label}", bg, fg)
-        top.addWidget(badge, alignment=Qt.AlignmentFlag.AlignTop)
+        badge_row = QHBoxLayout()
+        badge_row.setContentsMargins(0, 0, 0, 0)
+        badge_row.addStretch(1)
+        badge_row.addWidget(_pill(f"●  {connectivity_label}", bg, fg))
+        right.addLayout(badge_row)
+        if group_text:
+            email_row = QHBoxLayout()
+            email_row.setContentsMargins(0, 0, 0, 0)
+            email_row.addStretch(1)
+            email_row.addWidget(_label(group_text, size=13, secondary=True))
+            right.addLayout(email_row)
+        right.addStretch(1)
+        top.addLayout(right, 0)
         lay.addLayout(top)
 
         # Divider
@@ -2142,7 +2277,7 @@ class Plugin(BasePlugin):
         return f
 
     def _on_reconnect_click(self):
-        logger.info("Wazuh Overview: Reconnect clicked (placeholder)")
+        logger.info("Endpoint: Reconnect clicked (placeholder)")
 
     # ----- section 3a: modules header ----------------------------------------
     def _build_modules_header(self):
@@ -2201,9 +2336,9 @@ class Plugin(BasePlugin):
 
     def _agent_status_card(self):
         """Live state of the SIEM agent on THIS device, and the entry point to
-        the agent install/manage screen — the former "Endpoint" sidebar tab,
-        now hidden (``order=-1``) and reached only from here via
-        ``nav_target`` → ``app.navigate("Endpoint")``.
+        the agent install/manage screen — now the "Agent" tab of this same
+        screen, so the card switches tabs instead of taking the old
+        cross-plugin ``app.navigate("Endpoint")`` hop.
 
         Deliberately NOT filtered by the global device selector: /me/agent
         resolves by the caller's source IP and the screen this card opens
@@ -2211,11 +2346,11 @@ class Plugin(BasePlugin):
         matter which device the rest of the Overview is scoped to. The card
         repaints when the agent fetch lands — that slot is bit 1 of
         ``_ready_mask()``, which the Overview readiness poll watches."""
-        title, desc, nav = "Agent Status", "SIEM agent on this device", "Endpoint"
+        title, desc, target = "Agent Status", "SIEM agent on this device", "Agent"
         if not _remote_agent_ready.is_set():
-            return _loading_card(title, desc, nav_target=nav)
+            return _loading_card(title, desc, target_tab=target)
         if _REMOTE_AGENT_ERROR or not _REMOTE_AGENT:
-            return _error_card(title, desc, nav_target=nav)
+            return _error_card(title, desc, target_tab=target)
 
         bi = _REMOTE_AGENT
         connected = (bi.get("status") or "").lower() in ("active", "connected")
@@ -2230,7 +2365,7 @@ class Plugin(BasePlugin):
             "status": "OK" if connected else "ERROR",
             "description": desc,
             "stats": stats,
-            "nav_target": nav,
+            "target_tab": target,
         }
 
     def _security_alerts_card(self):
@@ -2241,7 +2376,15 @@ class Plugin(BasePlugin):
             "Threats and security incidents detected",
             "Events",
         )
-        if not _remote_vuln_events_ready.is_set():
+        if self._device_active():
+            # Phase 1 fetches only the LOCAL device's events. A card scoped to
+            # any other device needs the phase-2 fan-out — without this gate it
+            # reports a confident "No alerts" (green) for a device whose events
+            # simply haven't been fetched yet.
+            _kick_vuln_events_phase2_loader()
+            if not _remote_vuln_events_complete.is_set():
+                return _loading_card(title, desc, target_tab=target)
+        elif not _remote_vuln_events_ready.is_set():
             return _loading_card(title, desc, target_tab=target)
 
         counts = _bucket_by_severity(self._scope_records(_REMOTE_VULN_EVENTS, "agent"))
@@ -2261,7 +2404,12 @@ class Plugin(BasePlugin):
         title, desc, target = "Vulnerabilities", "CVEs across installed packages", "Vulnerabilities"
         if self._device_active():
             # The pre-aggregated summary has no per-device breakdown, so a scoped
-            # card must re-bucket the full per-device CVE list instead.
+            # card must re-bucket the full per-device CVE list instead. That list
+            # is otherwise only fetched when the Vulnerabilities tab is opened,
+            # so kick it here (idempotent) — without this the card sits on
+            # "Loading…" forever for anyone who scopes a device from Overview
+            # without ever visiting that tab.
+            _kick_vulns_loader()
             if not _remote_vulns_ready.is_set():
                 return _loading_card(title, desc, target_tab=target)
             if _REMOTE_VULNS_ERROR:
@@ -4354,7 +4502,7 @@ class Plugin(BasePlugin):
                 # One malformed device must not take out the whole list.
                 text = "—"
             h.addWidget(_fixed_col(_label(text, size=12, secondary=True),
-                                   text, width, size=12))
+                                   text, width))
 
         self._inv_rows_layout.insertWidget(self._inv_rows_layout.count() - 1, row)
 

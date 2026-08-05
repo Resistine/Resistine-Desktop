@@ -158,15 +158,21 @@ class Plugin(BasePlugin):
             id="011",
             version="2026.01.04-alpha",
             # order=-1 hides this from the sidebar AND the Dashboard grid
-            # (both render only order>0 plugins). The SIEM agent screen is now
-            # reached from the Wazuh overview's "Agent Details" module card via
-            # app.navigate("Endpoint"), which works for hidden plugins too.
+            # (both render only order>0 plugins). This plugin is now a screen
+            # PROVIDER rather than a destination: the Endpoint plugin's "Agent"
+            # tab calls create_main_screen() and embeds the result, so nothing
+            # navigates here by name any more.
+            #
+            # Renamed off "Endpoint" because that name now belongs to the
+            # Endpoint dashboard (plugins/wazuh_overview). Two plugins sharing
+            # a name would make app.navigate() ambiguous — it resolves by name
+            # and silently returns on a miss.
             order=-1,
-            name="Endpoint",
+            name="Agent",
             status=None,
             description="Install and manage the SIEM agent.",
             supported_systems=["Darwin", "Linux", "Windows"],
-            translations={"US": "Endpoint", "ES": "Endpoint", "FR": "Endpoint"},
+            translations={"US": "Agent", "ES": "Agent", "FR": "Agent"},
             icon_light_path=os.path.join(_PLUGIN_DIR, "add_user_light.png"),
             icon_dark_path=os.path.join(_PLUGIN_DIR, "add_user_dark.png"),
             uninstall_enabled=True,
@@ -287,11 +293,8 @@ class Plugin(BasePlugin):
         page.setContentsMargins(20, 10, 20, 10)
         page.setSpacing(0)
 
-        # Back link to the Wazuh overview. This screen no longer has its own
-        # sidebar tab (it's reached from the overview's "Agent Details" card),
-        # so give it an explicit way back.
-        page.addWidget(self._back_button(), 0, Qt.AlignmentFlag.AlignLeft)
-        page.addSpacing(6)
+        # No back link: this screen is embedded as the Endpoint plugin's
+        # "Agent" tab, so the tab strip above it already is the way back.
 
         # Single bordered, rounded "Surface" card (CTkFrame analogue).
         card = QFrame()
@@ -323,18 +326,6 @@ class Plugin(BasePlugin):
         return scr
 
     # ── UI helpers ─────────────────────────────────────────────────────
-
-    def _back_button(self) -> QPushButton:
-        """A flat "‹ Wazuh" link that returns to the Wazuh overview screen."""
-        btn = QPushButton("‹  Wazuh")
-        btn.setFlat(True)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setStyleSheet(
-            f"QPushButton {{ border: none; background: transparent; padding: 2px 0; "
-            f"font-size: 13px; font-weight: 600; color: {_c(_COLOR_MUTED)}; }}"
-            f"QPushButton:hover {{ color: {theme.color('text_primary')}; }}")
-        btn.clicked.connect(lambda: self.app.navigate("Wazuh"))
-        return btn
 
     def _add_separator(self, body: QVBoxLayout) -> None:
         body.addSpacing(4)

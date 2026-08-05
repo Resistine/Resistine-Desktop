@@ -43,7 +43,7 @@ def _get(path, params=None):
     """Shared GET. Returns (parsed_json, error_str)."""
     url = f"{API_BASE_URL}{path}"
     try:
-        logger.info(f"[WAZUH-OVERVIEW] GET {url} params={params}")
+        logger.info(f"[ENDPOINT] GET {url} params={params}")
         resp = _SESSION.get(url, params=params, timeout=REQUEST_TIMEOUT)
     except requests.exceptions.Timeout:
         return None, "timeout"

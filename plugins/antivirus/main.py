@@ -1838,11 +1838,20 @@ class Plugin(BasePlugin):
                 btn.setText("Configure Forwarding")
 
     def _open_endpoint(self):
-        """Navigate to the Endpoint (SIEM agent) plugin screen."""
+        """Open the SIEM agent screen.
+
+        That screen is now the Endpoint plugin's "Agent" tab rather than its
+        own sidebar entry, so navigate to Endpoint and then ask it to select
+        that tab. The show_tab() call is guarded because navigate() succeeding
+        does not guarantee the plugin exposes it."""
         try:
             self.app.navigate("Endpoint")
+            for plugin in getattr(self.app, "plugins", None) or []:
+                if plugin.get_name() == "Endpoint" and hasattr(plugin, "show_tab"):
+                    plugin.show_tab("Agent")
+                    break
         except Exception:
-            logger.debug("Antivirus: could not navigate to Endpoint")
+            logger.debug("Antivirus: could not open the Endpoint agent tab")
 
     def _refresh_siem_switch(self):
         """Re-sync the SIEM forwarding button with the live agent state."""
