@@ -51,7 +51,7 @@ from PyQt6.QtWidgets import (
 )
 
 from gui import theme
-from gui.qt_widgets import StatusBadge, centered, heading, muted, scroll_page
+from gui.qt_widgets import StatusBadge, centered, heading, muted
 from plugins.backup import backends, repo_store, restic_installer, win_timestamps
 from plugins.backup.restic_service import ResticError, ResticService
 from plugins.base_plugin import BasePlugin
@@ -138,6 +138,25 @@ class _NoScrollComboBox(QComboBox):
 
     def wheelEvent(self, event):  # noqa: N802 (Qt override)
         event.ignore()
+
+
+class _BackupScreen(QScrollArea):
+    """The plugin's scroll page. Fires ``on_hide`` when the shell switches away
+    from it (QStackedWidget hides the outgoing page), so the open repository
+    detail auto-closes when you leave the Backup page."""
+
+    def __init__(self, on_hide):
+        super().__init__()
+        self._on_hide = on_hide
+        self.setWidgetResizable(True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+    def hideEvent(self, event):  # noqa: N802 (Qt override)
+        try:
+            self._on_hide()
+        except Exception:
+            pass
+        super().hideEvent(event)
 
 
 class Plugin(BasePlugin):
@@ -261,7 +280,9 @@ class Plugin(BasePlugin):
 
         self._render_status()
         self._refresh_repos_list()
-        return scroll_page(centered(inner))
+        screen = _BackupScreen(self._close_detail)
+        screen.setWidget(centered(inner))
+        return screen
 
     def _divider(self) -> QFrame:
         d = QFrame()
@@ -700,9 +721,21 @@ class Plugin(BasePlugin):
         cl.setContentsMargins(16, 16, 16, 16)
         cl.setSpacing(10)
 
+        header = QHBoxLayout()
         self._detail_title = QLabel("Repository")
         self._detail_title.setStyleSheet("font-size: 15px; font-weight: 700;")
-        cl.addWidget(self._detail_title)
+        header.addWidget(self._detail_title)
+        header.addStretch(1)
+        close_btn = QPushButton("✕")
+        close_btn.setObjectName("SurfaceBtn")
+        close_btn.setFixedSize(28, 28)
+        # Zero the inherited QPushButton padding (18px h) so the glyph isn't
+        # squeezed out of a 28px-wide button.
+        close_btn.setStyleSheet("padding: 0px; font-size: 14px;")
+        close_btn.setToolTip("Close")
+        close_btn.clicked.connect(self._close_detail)
+        header.addWidget(close_btn, 0, Qt.AlignmentFlag.AlignTop)
+        cl.addLayout(header)
         self._detail_stats = QLabel("")
         self._detail_stats.setStyleSheet(
             f"color: {theme.color('text_secondary')}; font-size: 12px;")
@@ -812,6 +845,13 @@ class Plugin(BasePlugin):
         lbl = QLabel(text)
         lbl.setStyleSheet("font-weight: 600; font-size: 13px;")
         return lbl
+
+    def _close_detail(self) -> None:
+        """Hide the open repository detail and clear the selection. Called by
+        the detail's close button and when the Backup page is navigated away."""
+        self._selected_repo_id = None
+        if self._detail_card is not None:
+            self._detail_card.hide()
 
     def _select_repo(self, repo_id: str) -> None:
         self._selected_repo_id = repo_id
