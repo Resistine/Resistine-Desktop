@@ -45,6 +45,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -385,61 +386,73 @@ class Plugin(BasePlugin):
         backend = backends.get_backend(meta.get("backend", ""))
         row = QFrame()
         row.setObjectName("Surface")
-        rl = QHBoxLayout(row)
-        rl.setContentsMargins(12, 10, 12, 10)
-        rl.setSpacing(10)
+        outer = QVBoxLayout(row)
+        outer.setContentsMargins(12, 10, 12, 10)
+        outer.setSpacing(4)
+
+        # --- top line: name/backend/summary share the width with the buttons ---
+        top = QHBoxLayout()
+        top.setSpacing(10)
 
         text = QVBoxLayout()
         text.setSpacing(2)
         name = QLabel(meta.get("name", "(unnamed)"))
         name.setStyleSheet("font-weight: 600;")
         text.addWidget(name)
-        sub = QLabel(
-            f"{backend.label if backend else meta.get('backend', '?')}  ·  "
-            f"{meta.get('location', '')}")
+        sub = QLabel(backend.label if backend else meta.get("backend", "?"))
         sub.setStyleSheet(f"color: {theme.color('text_secondary')}; font-size: 12px;")
         text.addWidget(sub)
         summary = QLabel("Loading snapshots…")
         summary.setStyleSheet(f"color: {theme.color('text_secondary')}; font-size: 12px;")
         text.addWidget(summary)
         self._row_summaries[repo_id] = summary
-        rl.addLayout(text, 1)
+        top.addLayout(text, 1)
 
         # Right side: Open + Remove, with an inline remove-confirmation swap.
         open_btn = QPushButton("Open")
         open_btn.setObjectName("SurfaceBtn")
         open_btn.clicked.connect(lambda _=False, rid=repo_id: self._select_repo(rid))
-        rl.addWidget(open_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        top.addWidget(open_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
         remove = QPushButton("Remove")
         remove.setObjectName("Danger")
-        rl.addWidget(remove, 0, Qt.AlignmentFlag.AlignVCenter)
+        top.addWidget(remove, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        confirm = QWidget()
-        cl = QHBoxLayout(confirm)
-        cl.setContentsMargins(0, 0, 0, 0)
-        cl.setSpacing(6)
-        q = QLabel("Remove?")
-        q.setStyleSheet(f"color: {theme.color('text_secondary')}; font-size: 12px;")
-        cl.addWidget(q)
+        # Inline confirm pieces added directly to the row — no wrapper QWidget,
+        # which would otherwise paint the darker window background as a block
+        # behind them. The label is transparent; the buttons keep their styles.
+        confirm_q = QLabel("Remove?")
+        confirm_q.setStyleSheet(
+            f"color: {theme.color('text_secondary')}; font-size: 12px;")
         yes = QPushButton("Confirm")
         yes.setObjectName("Danger")
         cancel = QPushButton("Cancel")
-        cancel.setObjectName("Secondary")
-        cl.addWidget(yes)
-        cl.addWidget(cancel)
-        confirm.hide()
-        rl.addWidget(confirm, 0, Qt.AlignmentFlag.AlignVCenter)
+        cancel.setObjectName("SurfaceBtn")  # match the neutral Open button
+        confirm_widgets = (confirm_q, yes, cancel)
+        for w in confirm_widgets:
+            w.hide()
+            top.addWidget(w, 0, Qt.AlignmentFlag.AlignVCenter)
+        outer.addLayout(top)
+
+        # --- directory on its own full-width line: paths can be long, so they
+        #     get their own height rather than competing with the buttons. ---
+        loc = QLabel(meta.get("location", ""))
+        loc.setStyleSheet(f"color: {theme.color('text_secondary')}; font-size: 12px;")
+        loc.setWordWrap(True)
+        outer.addWidget(loc)
 
         def start_confirm():
+            # Hide Open + Remove so Confirm/Cancel have room and don't get clipped.
+            open_btn.hide()
             remove.hide()
-            open_btn.setEnabled(False)
-            confirm.show()
+            for w in confirm_widgets:
+                w.show()
 
         def end_confirm():
-            confirm.hide()
+            for w in confirm_widgets:
+                w.hide()
+            open_btn.show()
             remove.show()
-            open_btn.setEnabled(True)
 
         remove.clicked.connect(lambda _=False: start_confirm())
         cancel.clicked.connect(lambda _=False: end_confirm())
@@ -989,20 +1002,76 @@ class Plugin(BasePlugin):
 
         threading.Thread(target=work, daemon=True, name="restic-snaps").start()
 
-    def _snapshot_row(self, snap: dict) -> QFrame:
+    def _snapshot_row(self, snap: dict) -> QWidget:
         short = snap.get("short_id", snap.get("id", "")[:8])
         snap_id = snap.get("id", short)
         when = _fmt_time(snap.get("time", ""))
-        paths = ", ".join(snap.get("paths", []) or [])
-        row = QFrame()
+        paths_list = list(snap.get("paths", []) or [])
+
+        # Transparent row; only the text chip on the left is shaded, and it hugs
+        # its content (with the path capped so long paths wrap instead of running
+        # the chip full-width). The Restore button sits on the plain card bg.
+        row = QWidget()
+        row.setObjectName("SnapRow")
+        row.setStyleSheet(
+            "#SnapRow { background: transparent; }"
+            f"#SnapChip {{ background-color: {theme.color('window_bg')}; "
+            "border-radius: 8px; }}")
         rl = QHBoxLayout(row)
         rl.setContentsMargins(0, 0, 0, 0)
         rl.setSpacing(8)
-        label = QLabel(f"{short}  ·  {when}  ·  {paths}")
-        label.setStyleSheet(
-            f"color: {theme.color('text_secondary')}; font-size: 12px;")
-        label.setWordWrap(True)
-        rl.addWidget(label, 1)
+
+        chip = QFrame()
+        chip.setObjectName("SnapChip")
+        cv = QVBoxLayout(chip)
+        cv.setContentsMargins(10, 6, 10, 6)
+        cv.setSpacing(2)
+        _small = f"color: {theme.color('text_secondary')}; font-size: 12px;"
+        head = QLabel(f"{short}  ·  {when}")
+        head.setStyleSheet(_small)
+        cv.addWidget(head)
+
+        # One line per backed-up path (wrapping for long ones). Up to three fit
+        # inline; a snapshot with more paths gets a scroll area capped at three
+        # lines so the row stays compact.
+        def _path_label(p: str) -> QLabel:
+            lbl = QLabel(p)
+            lbl.setStyleSheet(_small)
+            lbl.setWordWrap(True)
+            return lbl
+
+        if paths_list and len(paths_list) <= 3:
+            for p in paths_list:
+                cv.addWidget(_path_label(p))
+        elif paths_list:
+            holder = QWidget()
+            holder.setObjectName("SnapPaths")
+            hv = QVBoxLayout(holder)
+            hv.setContentsMargins(0, 0, 0, 0)
+            hv.setSpacing(2)
+            for p in paths_list:
+                hv.addWidget(_path_label(p))
+            probe = QLabel("Ag")
+            probe.setStyleSheet(_small)
+            probe.ensurePolished()
+            cap = probe.fontMetrics().lineSpacing() * 3 + 10
+            scroll = QScrollArea()
+            scroll.setWidget(holder)
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setMaximumHeight(cap)
+            scroll.setHorizontalScrollBarPolicy(
+                Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            scroll.viewport().setStyleSheet("background: transparent;")
+            holder.setStyleSheet("#SnapPaths { background: transparent; }")
+            cv.addWidget(scroll)
+
+        # The chip fills the width up to the fixed-position Restore button and the
+        # paths wrap at that width — adapting to the card rather than a fixed cap
+        # that overran the narrower real layout. The darker background reaching
+        # the buttons is fine since they sit at a constant horizontal position.
+        rl.addWidget(chip, 1)
+
         restore = QPushButton("Restore…")
         restore.setObjectName("SurfaceBtn")
         restore.clicked.connect(
