@@ -27,8 +27,9 @@ from utils.logger import logger
 from utils.updates.appcast import AppcastItem, get_latest_linux_update
 from utils.updates.version import get_current_version, get_project_root
 
-# Ed25519 public key (same key pair used by macOS Sparkle signatures)
-_ED25519_PUBLIC_KEY_B64 = "2eiUHVoMgl+qqhEWO8iix5SUcRAKfkWYESh9F7jG6ls="
+# Ed25519 public key — Linux (Ubuntu) release keypair, distinct from the
+# macOS Sparkle / Windows keys. Private key held off-repo by the release signer.
+_ED25519_PUBLIC_KEY_B64 = "CzV2dOOGKz00ZDoh8X7Mvy5mkaJ/irsVQWGP6gMxmEk="
 
 # Module state
 _app = None
