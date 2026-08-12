@@ -26,6 +26,8 @@ Licensed under the GNU General Public License v2 or later
 from __future__ import annotations
 
 import os
+import platform
+import re
 import threading
 
 from datetime import datetime
@@ -49,12 +51,38 @@ from PyQt6.QtWidgets import (
 
 from gui import theme
 from gui.qt_widgets import StatusBadge, centered, heading, muted, scroll_page
-from plugins.backup import backends, repo_store, restic_installer
+from plugins.backup import backends, repo_store, restic_installer, win_timestamps
 from plugins.backup.restic_service import ResticError, ResticService
 from plugins.base_plugin import BasePlugin
 from utils.logger import logger
 
 _DIR = os.path.dirname(os.path.realpath(__file__))
+_IS_WINDOWS = platform.system() == "Windows"
+
+
+def _parse_failed_timestamp_paths(stderr: str) -> list[str]:
+    """Extract the directory paths restic couldn't set a timestamp on.
+
+    Lines look like: ``… failed to restore timestamp of "C:\\a\\b": Access is
+    denied.`` — the quoted path has doubled backslashes, which we unescape.
+    """
+    paths = []
+    for m in re.finditer(r'failed to restore timestamp of "([^"]+)"', stderr):
+        paths.append(m.group(1).replace("\\\\", "\\"))
+    return paths
+
+
+def _iso_to_epoch(iso: str) -> float | None:
+    """Parse a restic RFC3339 mtime to epoch seconds, or None."""
+    if not iso:
+        return None
+    try:
+        s = iso.replace("Z", "+00:00")
+        # fromisoformat accepts at most microseconds; trim extra digits.
+        s = re.sub(r"(\.\d{6})\d+", r"\1", s)
+        return datetime.fromisoformat(s).timestamp()
+    except (ValueError, TypeError):
+        return None
 
 
 def _fmt_time(iso: str) -> str:
@@ -1076,6 +1104,12 @@ class Plugin(BasePlugin):
             None, f"Restore snapshot {short} into…")
         if not target:
             return
+        # Full restore: recreate the snapshot's paths under the target (files
+        # keep their names and directory structure, nothing is separated). The
+        # real backed-up files and folders receive their correct timestamps;
+        # only protected system path-scaffolding (e.g. C\Users) may fail to have
+        # its timestamp set on Windows — a cosmetic issue the benign-warning
+        # handling below reports softly rather than as a failure.
         # Restore writes into the target and can overwrite existing files there.
         try:
             not_empty = bool(os.listdir(target))
@@ -1103,14 +1137,23 @@ class Plugin(BasePlugin):
                 ok = res.ok
                 msg = (res.stderr or "").strip()
                 if not ok and _restore_errors_benign(msg):
-                    ok, warned = True, True  # data restored; only metadata warnings
+                    # Data restored; the only errors are ignorable timestamp
+                    # failures on locked system scaffolding dirs. On Windows we
+                    # own those dirs and can repair their mtimes ourselves.
+                    ok = True
+                    if _IS_WINDOWS:
+                        remaining = self._repair_timestamps(
+                            repo, snapshot_id, target, msg)
+                        warned = remaining > 0
+                    else:
+                        warned = True
             except Exception as e:
                 ok, msg = False, str(e)
 
             def done():
                 self._maint_busy = False
                 if ok:
-                    note = (" (some file timestamps couldn't be set)"
+                    note = (" (some system folder timestamps couldn't be set)"
                             if warned else "")
                     if self._maint_status:
                         self._maint_status.setText(
@@ -1126,6 +1169,44 @@ class Plugin(BasePlugin):
             self._marshal(done)
 
         threading.Thread(target=work, daemon=True, name="restic-restore").start()
+
+    def _repair_timestamps(self, repo, snapshot_id: str, target: str,
+                           stderr: str) -> int:
+        """Set the correct mtime on the system scaffolding dirs restic couldn't.
+
+        Returns the count still unfixed (0 = all repaired). Windows only; called
+        off the UI thread. Reads the intended times from the snapshot metadata
+        and applies them via ``win_timestamps`` (owner DACL rewrite + os.utime).
+        """
+        failed_paths = _parse_failed_timestamp_paths(stderr)
+        if not failed_paths:
+            return 0
+
+        # Map each failed target path back to its snapshot tree path (e.g.
+        # <target>\C\Users -> /C/Users) so we can look up the intended mtime.
+        tree_of: dict[str, str] = {}
+        for p in failed_paths:
+            try:
+                rel = os.path.relpath(p, target)
+            except ValueError:
+                continue  # different drive than target; skip
+            tree_of[p] = "/" + rel.replace(os.sep, "/").replace("\\", "/")
+
+        try:
+            mtimes = self.restic.tree_mtimes(
+                repo, snapshot_id, set(tree_of.values()))
+        except Exception as e:
+            logger.debug(f"Backup: tree_mtimes failed: {e}")
+            mtimes = {}
+
+        fixes: list[tuple[str, float]] = []
+        for path, tree in tree_of.items():
+            epoch = _iso_to_epoch(mtimes.get(tree, ""))
+            if epoch is not None:
+                fixes.append((path, epoch))
+
+        fixed, _failed = win_timestamps.apply_directory_mtimes(fixes)
+        return len(failed_paths) - fixed
 
     # ===================================================================
     #  Install flow

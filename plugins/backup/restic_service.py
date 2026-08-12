@@ -183,6 +183,31 @@ class ResticService:
         # restic already returns oldest→newest; present newest first.
         return list(reversed(snaps))
 
+    def tree_mtimes(self, repo: Repository, snapshot_id: str,
+                    wanted: set[str]) -> dict[str, str]:
+        """Return ``{tree_path: mtime_iso}`` for the nodes in *wanted*.
+
+        ``restic ls --long --json`` streams one JSON object per line (ndjson),
+        each carrying the node's tree ``path`` and ``mtime`` — the source time
+        the restore tried (and, for locked system dirs, failed) to apply.
+        """
+        res = self._run(["ls", "--long", "--json", snapshot_id], repo=repo)
+        out: dict[str, str] = {}
+        for line in res.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                node = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            path = node.get("path")
+            if path in wanted and path not in out:
+                out[path] = node.get("mtime", "")
+                if len(out) == len(wanted):
+                    break
+        return out
+
     def stats(self, repo: Repository, mode: str = "raw-data") -> ResticResult:
         """Repository stats (JSON in ``.json``).
 
