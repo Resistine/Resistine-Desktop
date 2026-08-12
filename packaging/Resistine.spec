@@ -16,7 +16,7 @@ IS_WINDOWS = sys.platform == "win32"
 # Application metadata
 APP_NAME = 'Resistine'
 BUNDLE_ID = 'com.resistine.desktop'
-VERSION = '2026.07.20-rc'
+VERSION = '2026.08.12'
 
 # Paths — project root is one level up from packaging/
 _spec_dir = os.path.dirname(os.path.abspath(SPEC))
