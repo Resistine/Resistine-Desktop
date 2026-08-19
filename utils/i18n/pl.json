@@ -1,5 +1,6 @@
 {
     "main.debug_window.button.clear": "Wyczyść",
     "encryption.insecure_backend": "Wykryto niepewny backend keyring: {backend}\nTen dodatek nie zapewnia bezpiecznego przechowywania danych.\n\nAby to naprawić:\n- Linux: Zainstaluj i skonfiguruj Secret Service (np. gnome- keyring, khollow)\n- MacOS: Keychain powinien być dostępny domyślnie\n- Windows: Windows Credential Manager powinien być dostępny domyślnie\n- WSL: Zainstaluj tajny serwis lub uruchom go na rodzimym systemie Windows / Linux\n\nWięcej informacji: https: / / pypi.org / project / keyring /",
-    "encryption.key_stored_keyring": "Klucz bezpiecznie przechowywany w breloczku systemowym."
+    "encryption.key_stored_keyring": "Klucz bezpiecznie przechowywany w breloczku systemowym.",
+    "encryption.key_retrieved_keyring": "Klucz odzyskany z klawiatury systemu."
 }
