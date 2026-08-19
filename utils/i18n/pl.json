@@ -4,5 +4,6 @@
     "encryption.key_stored_keyring": "Klucz jest bezpiecznie przechowywany w systemowym pęku kluczy.",
     "encryption.key_retrieved_keyring": "Pobrano klucz z systemowego pęku kluczy.",
     "encryption.data_stored_keyring": "Zaszyfrowane dane są bezpiecznie przechowywane w systemowym pęku kluczy.",
-    "encryption.no_key_found": "Nie znaleziono klucza w systemowym pęku kluczy. Najpierw wygeneruj klucz."
+    "encryption.no_key_found": "Nie znaleziono klucza w systemowym pęku kluczy. Najpierw wygeneruj klucz.",
+    "encryption.no_data_found": "Brak zakodowanych danych w breloczku."
 }
