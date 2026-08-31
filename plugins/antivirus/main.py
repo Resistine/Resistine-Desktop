@@ -740,9 +740,10 @@ class Plugin(BasePlugin):
                 "kind": "warn", "title": "Protection Degraded",
                 "subtitle": (
                     "Scanning is available but real-time file monitoring "
-                    "is not running. Full Disk Access may be needed."
+                    "is not running. The ResistineClamAV helper may need "
+                    "Full Disk Access."
                 ),
-                "action": ("Open Settings", self._safe(clamav, "open_fda_settings")),
+                "action": ("Open Settings", self._open_fda_for_helper),
             }
         if runtime_state == "approval_required":
             return {
@@ -759,11 +760,13 @@ class Plugin(BasePlugin):
             return {
                 "kind": "warn", "title": "Full Disk Access Required",
                 "subtitle": (
-                    "Resistine needs Full Disk Access to monitor files "
-                    "in real time. Grant access in System Settings "
-                    "› Privacy & Security › Full Disk Access."
+                    "Real-time monitoring runs in the ResistineClamAV "
+                    "helper, which needs its own Full Disk Access grant. "
+                    "Click Open Settings, then drag ResistineClamAV from "
+                    "the Finder window into the Full Disk Access list "
+                    "(or add it with the + button) and enable it."
                 ),
-                "action": ("Open Settings", self._safe(clamav, "open_fda_settings")),
+                "action": ("Open Settings", self._open_fda_for_helper),
             }
         _is_win = platform.system() == "Windows"
         is_linux = platform.system() == "Linux"
@@ -792,6 +795,15 @@ class Plugin(BasePlugin):
                 else None
             ),
         }
+
+    def _open_fda_for_helper(self):
+        """Open the FDA pane AND reveal ResistineClamAV.app in Finder.
+
+        FDA must be granted to the helper bundle (not the main app), and
+        macOS does not auto-list it — the user has to drag it in.
+        """
+        self._safe(clamav, "reveal_clamav_helper_in_finder")()
+        self._safe(clamav, "open_fda_settings")()
 
     @staticmethod
     def _safe(module, name):

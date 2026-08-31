@@ -14,6 +14,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 from utils.logger import logger
@@ -238,92 +239,103 @@ def daemons_approved() -> bool:
         return False
 
 
+def _clamonacc_job_info() -> dict | None:
+    """Parse ``launchctl print`` for the clamonacc job.
+
+    Returns {"runs": int, "last_exit": int | None, "spawn_failed": bool}
+    if the job is loaded in the system domain, else None.
+    """
+    try:
+        result = subprocess.run(
+            ["launchctl", "print",
+             "system/com.resistine.desktop.clamonacc"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+
+    info: dict = {"runs": 0, "last_exit": None, "spawn_failed": False}
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("runs = "):
+            try:
+                info["runs"] = int(stripped.split("=")[1].strip())
+            except ValueError:
+                pass
+        elif stripped.startswith("last exit code = "):
+            code = stripped.split("=", 1)[1].strip()
+            try:
+                info["last_exit"] = int(code.split(":")[0].strip())
+            except ValueError:
+                pass  # "(never exited)"
+        elif "spawn failed" in stripped:
+            info["spawn_failed"] = True
+    return info
+
+
 def has_full_disk_access() -> bool:
     """Check whether clamonacc has Full Disk Access.
 
-    clamonacc requires FDA for the Endpoint Security Framework.
-    Rather than probing TCC-protected paths (which checks *our* process,
-    not clamonacc's), we check clamonacc's actual runtime state:
+    clamonacc requires FDA for the Endpoint Security Framework, and TCC
+    grants FDA per code identity — the helper bundle (ResistineClamAV.app,
+    com.resistine.clamonacc), NOT the main Resistine app. So probing
+    TCC-protected paths from *our* process says nothing about clamonacc;
+    we check clamonacc's actual runtime state instead:
 
-    - If clamonacc is running → FDA is granted (it would crash without it).
-    - If the system daemon is loaded but clamonacc isn't running → it's
-      crash-looping, which means FDA (or ESF entitlement) is missing.
+    - If clamonacc is running → FDA is granted (ESF init would fail
+      without it and the process would exit).
+    - If the job is loaded, system clamd is healthy, but clamonacc has
+      run and died (or launchd reports spawn failed) → the ESF client
+      was rejected: FDA is missing for the helper.
     - If the daemon isn't loaded yet → we can't tell, so fall back to a
-      TCC directory probe as a best-effort hint.
+      TCC directory probe as a weak, last-resort hint.
     """
-    # Direct check: if clamonacc is alive, it has FDA.
     if is_clamonacc_running():
         return True
 
-    # If the launchd job is loaded AND the system config exists (meaning
-    # the postinstall script has been run), a crash-looping clamonacc
-    # indicates missing FDA. Without the config, clamonacc crashes because
-    # it can't find its config file — not because of FDA.
-    #
-    # IMPORTANT: only blame FDA if system clamd is actually running.
-    # clamonacc depends on clamd's socket — if clamd is still loading its
-    # 500 MB+ signature DB, clamonacc will restart repeatedly trying to
-    # connect. That's a transient startup issue, not an FDA denial.
+    # Only blame FDA if the system config exists (postinstall has run)
+    # AND system clamd is actually serving its socket. clamonacc depends
+    # on clamd — while clamd is still loading its 500 MB+ signature DB,
+    # clamonacc exits repeatedly trying to connect. That's a transient
+    # startup issue, not an FDA denial.
     if os.path.exists(_SYSTEM_CLAMD_CONF):
         from plugins.antivirus.clamav_common import _ping_socket
 
-        try:
-            result = subprocess.run(
-                ["launchctl", "print",
-                 "system/com.resistine.desktop.clamonacc"],
-                capture_output=True, text=True, timeout=5,
+        info = _clamonacc_job_info()
+        if (
+            info is not None
+            and (info["runs"] > 0 or info["last_exit"] is not None
+                 or info["spawn_failed"])
+            and _ping_socket(_SYSTEM_CLAMD_SOCKET)
+        ):
+            # clamd is ready but clamonacc ran and died. Give a throttled
+            # KeepAlive restart a brief chance to recover (transient
+            # startup race) before concluding FDA is missing.
+            for _retry in range(6):
+                time.sleep(0.5)
+                if is_clamonacc_running():
+                    logger.debug("FDA check: clamonacc recovered — FDA OK")
+                    return True
+            logger.debug(
+                f"FDA check: clamonacc dead with clamd healthy "
+                f"(runs={info['runs']}, last_exit={info['last_exit']}, "
+                f"spawn_failed={info['spawn_failed']}) — helper likely "
+                f"missing FDA",
             )
-            if result.returncode == 0:
-                output = result.stdout
-                for line in output.splitlines():
-                    stripped = line.strip()
-                    if stripped.startswith("runs = "):
-                        try:
-                            runs = int(stripped.split("=")[1].strip())
-                            if runs > 3:
-                                if _ping_socket(_SYSTEM_CLAMD_SOCKET):
-                                    # clamd is ready but clamonacc has
-                                    # crashed multiple times. Could be a
-                                    # genuine FDA issue OR a transient
-                                    # startup race (clamonacc couldn't
-                                    # connect while clamd was loading
-                                    # signatures). Poll for up to ~4s
-                                    # (reduced from 12s to avoid blocking
-                                    # plugin init on every status check;
-                                    # the launchd ThrottleInterval is 10s
-                                    # but 4s covers most transient races).
-                                    for _retry in range(8):
-                                        time.sleep(0.5)
-                                        if is_clamonacc_running():
-                                            logger.debug(
-                                                "FDA check: clamonacc "
-                                                "recovered — FDA is OK",
-                                            )
-                                            return True
-                                    logger.debug(
-                                        f"FDA check: clamonacc crash-looping "
-                                        f"({runs} runs) with clamd running"
-                                        f" — likely missing FDA",
-                                    )
-                                    return False
-                                logger.debug(
-                                    f"FDA check: clamonacc restarting "
-                                    f"({runs} runs) but clamd not ready "
-                                    f"— not an FDA issue",
-                                )
-                        except ValueError:
-                            pass
-        except Exception:
-            pass
+            _schedule_clamonacc_recovery()
+            return False
 
     # Final check: clamonacc may have started between the early-return
-    # check and the crash-loop analysis above.
+    # check and the analysis above.
     if is_clamonacc_running():
         return True
 
-    # Fallback: probe a TCC-protected directory as a hint.
-    # This checks *our* process, not clamonacc, but is a reasonable
-    # proxy when the daemon hasn't been loaded yet.
+    # Fallback: probe a TCC-protected directory as a hint. This checks
+    # *our* process, not clamonacc, so it is only trusted when the
+    # daemon has never been loaded (pre-setup) and no stronger signal
+    # exists.
     probes = [
         os.path.expanduser("~/Library/Mail"),
         os.path.expanduser("~/Library/Safari"),
@@ -340,11 +352,73 @@ def has_full_disk_access() -> bool:
 
     # When we can't determine FDA status (no TCC-protected dirs found),
     # assume it's available. If clamonacc actually lacks FDA, the
-    # crash-loop check will catch it definitively once daemons are loaded.
+    # dead-daemon check will catch it definitively once daemons are loaded.
     # Defaulting to False here causes a premature "FDA Required" screen
     # before the user has even started protection.
     logger.debug("FDA check: cannot determine status, assuming granted")
     return True
+
+
+# Throttle for automatic clamonacc recovery attempts. A job that exited
+# EX_CONFIG (ESF rejected) or hit "spawn failed" is NOT retried by
+# launchd's KeepAlive, so after the user grants FDA nothing would ever
+# relaunch clamonacc — the grant "doesn't register". Re-registering the
+# SMAppService daemon (no admin prompt for an already-approved daemon)
+# triggers a fresh spawn that succeeds once FDA is granted.
+_RECOVER_THROTTLE_S = 120.0
+_recover_lock = threading.Lock()
+_last_recover_ts = 0.0
+
+
+def _schedule_clamonacc_recovery():
+    """Re-register the clamonacc daemon in the background, throttled."""
+    global _last_recover_ts
+    with _recover_lock:
+        now = time.monotonic()
+        if now - _last_recover_ts < _RECOVER_THROTTLE_S:
+            return
+        _last_recover_ts = now
+
+    def _recover():
+        try:
+            from ServiceManagement import SMAppService
+
+            service = SMAppService.daemonServiceWithPlistName_(
+                "com.resistine.desktop.clamonacc.plist",
+            )
+            logger.info("ClamAV: re-registering dead clamonacc daemon")
+            try:
+                service.unregisterAndReturnError_(None)
+            except Exception as exc:
+                logger.debug(f"clamonacc unregister failed: {exc}")
+            time.sleep(0.5)
+            success, err = service.registerAndReturnError_(None)
+            if not success:
+                logger.debug(f"clamonacc re-register failed: {err}")
+        except Exception as exc:
+            logger.debug(f"clamonacc recovery error: {exc}")
+
+    threading.Thread(target=_recover, daemon=True,
+                     name="clamonacc-recover").start()
+
+
+def reveal_clamav_helper_in_finder():
+    """Reveal ResistineClamAV.app in Finder so the user can drag it into
+    the Full Disk Access list (TCC keys FDA to the helper bundle, and
+    macOS does not auto-add ESF daemons that fail to spawn)."""
+    contents = _app_bundle_contents() or _installed_app_contents()
+    if not contents:
+        logger.warning("ClamAV: no app bundle found to reveal helper")
+        return
+    helper = os.path.join(contents, "Helpers", "ResistineClamAV.app")
+    if not os.path.exists(helper):
+        logger.warning(f"ClamAV: helper not found at {helper}")
+        return
+    try:
+        subprocess.Popen(["open", "-R", helper])
+        logger.info("Revealed ResistineClamAV.app in Finder")
+    except Exception as exc:
+        logger.error(f"Could not reveal helper in Finder: {exc}")
 
 
 def open_fda_settings():
@@ -527,8 +601,28 @@ def activate_system_daemons() -> tuple[bool, str]:
     # Give launchd a moment to bring the daemons up after (re)registration.
     for _ in range(10):
         if all(_daemon_loaded(label) for label in protection_labels):
-            return True, "Protection started."
+            break
         time.sleep(0.5)
+
+    if all(_daemon_loaded(label) for label in protection_labels):
+        # "Loaded" is not "running": a clamonacc that exited (missing FDA)
+        # or hit "spawn failed" still shows as loaded. Kickstart it with
+        # admin privileges so it actually spawns — if FDA was just
+        # granted, this is what makes the grant take effect.
+        if not is_clamonacc_running():
+            _kickstart_clamonacc_admin()
+            for _ in range(6):
+                if is_clamonacc_running():
+                    break
+                time.sleep(0.5)
+        if is_clamonacc_running():
+            return True, "Protection started."
+        if not has_full_disk_access():
+            return False, (
+                "Real-time monitoring is blocked. Add ResistineClamAV to "
+                "System Settings › Privacy & Security › Full Disk Access."
+            )
+        return True, "Protection is starting…"
 
     if any(_daemon_loaded(label) for label in protection_labels):
         return True, "Protection is starting…"
@@ -539,6 +633,32 @@ def activate_system_daemons() -> tuple[bool, str]:
         "Couldn't start protection automatically. Enable the Resistine ClamAV "
         "daemons in System Settings › General › Login Items."
     )
+
+
+def _kickstart_clamonacc_admin():
+    """Force-spawn the clamonacc daemon via launchctl kickstart (admin).
+
+    Needed because a job whose last spawn failed (missing FDA) is not
+    retried by KeepAlive; after the user grants FDA, only a kickstart or
+    re-registration makes clamonacc actually launch.
+    """
+    script = "launchctl kickstart -k system/com.resistine.desktop.clamonacc"
+    try:
+        result = subprocess.run(
+            [
+                "osascript", "-e",
+                "do shell script " + _applescript_quote(script)
+                + " with administrator privileges",
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            logger.warning(
+                f"ClamAV: clamonacc kickstart failed: "
+                f"{(result.stderr or '').strip()}",
+            )
+    except Exception as exc:
+        logger.warning(f"ClamAV: clamonacc kickstart error: {exc}")
 
 
 def _app_bundle_contents() -> str | None:
@@ -558,8 +678,6 @@ def _generate_system_clamd_conf() -> str:
     clamonacc's real-time ESF monitoring — without OnAccessIncludePath
     clamonacc exits with "No OnAccessIncludePath configured".
     """
-    import tempfile
-
     return (
         "# Auto-generated by Resistine — do not edit manually\n"
         f"LocalSocket {_SYSTEM_CLAMD_SOCKET}\n"
@@ -571,7 +689,11 @@ def _generate_system_clamd_conf() -> str:
         "LogVerbose yes\n"
         "LogClean yes\n"
         "MaxThreads 8\n"
-        f"TemporaryDirectory {tempfile.gettempdir()}\n"
+        # Must be a system-wide path: this config is read by ROOT daemons
+        # (clamd/clamonacc). tempfile.gettempdir() would bake in the app
+        # user's private /var/folders/... dir, which is wrong for root
+        # and breaks when another user runs the app.
+        "TemporaryDirectory /private/tmp\n"
         "MaxDirectoryRecursion 20\n"
         "FollowDirectorySymlinks yes\n"
         "SelfCheck 60\n"

@@ -27,6 +27,7 @@ _FOUND_RE = re.compile(r"->\s*(.+?:\s*.+?\s+FOUND)\s*$")
 
 _POLL_INTERVAL = 1.0
 _RETRY_INTERVAL = 5.0
+_PERM_RETRY_INTERVAL = 30.0
 _DEDUP_WINDOW = 30.0
 _DEDUP_PRUNE_AGE = 60.0
 _RATE_LIMIT = 5
@@ -49,6 +50,7 @@ class ClamdLogWatcher:
         self._thread: threading.Thread | None = None
         # Lock protecting the rate-limiting and deduplication shared state.
         self._state_lock = threading.Lock()
+        self._perm_warned = False
         self._dedup: dict[tuple[str, str], float] = {}
         self._rate_times: list[float] = []
         self._suppressed_count = 0
@@ -85,11 +87,19 @@ class ClamdLogWatcher:
                     return
                 continue
             except PermissionError:
-                logger.warning(
-                    f"RTD watcher: no read access to {self._log_path}, "
-                    "stopping",
-                )
-                return
+                # Log permissions can change (e.g. daemon restart rewrites
+                # the file, or the user gets added to the admin group) —
+                # keep retrying slowly instead of giving up for good.
+                if not self._perm_warned:
+                    self._perm_warned = True
+                    logger.warning(
+                        f"RTD watcher: no read access to {self._log_path} "
+                        f"— real-time threat notifications unavailable; "
+                        f"retrying every {int(_PERM_RETRY_INTERVAL)}s",
+                    )
+                if self._stop_event.wait(timeout=_PERM_RETRY_INTERVAL):
+                    return
+                continue
             except OSError as exc:
                 logger.warning(f"RTD watcher: open error: {exc}, retrying")
                 if self._stop_event.wait(timeout=_RETRY_INTERVAL):
