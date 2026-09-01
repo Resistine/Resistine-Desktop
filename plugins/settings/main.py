@@ -112,6 +112,7 @@ class Plugin(BasePlugin):
         col.addWidget(self._profile_card())
         col.addWidget(self._api_card())
         col.addWidget(self._appearance_card())
+        col.addWidget(self._language_card())
         col.addWidget(self._updates_card())
         col.addWidget(self._uninstall_card())
         col.addStretch(1)
@@ -203,6 +204,40 @@ class Plugin(BasePlugin):
             self.change_appearance_mode)
         lay.addWidget(self.appearance_combo)
         return card
+
+    # ---- Language ---------------------------------------------------------
+    def _language_card(self) -> QWidget:
+        from utils import i18n
+
+        card, lay = self._card(_t("settings.language.label", "Language"))
+        self.language_combo = _NoScrollComboBox()
+        # Store the language code on each item; display the native name.
+        for code in sorted(i18n.get_available_languages()):
+            name = i18n.LANGUAGE_NAMES.get(code, code)
+            self.language_combo.addItem(name, code)
+        current = settings.get("ui", "language", i18n.DEFAULT_LANGUAGE)
+        idx = self.language_combo.findData(current)
+        if idx >= 0:
+            self.language_combo.setCurrentIndex(idx)
+        self.language_combo.currentIndexChanged.connect(self.change_language)
+        lay.addWidget(self.language_combo)
+        self.language_status_label = self._muted("")
+        lay.addWidget(self.language_status_label)
+        return card
+
+    def change_language(self, index: int):
+        from utils import i18n
+
+        code = self.language_combo.itemData(index)
+        if not code or code == i18n.get_language():
+            return
+        settings.set("ui", "language", code)
+        i18n.set_language(code)
+        # Screens already built keep their original strings — a restart
+        # applies the new language everywhere.
+        self.language_status_label.setText(
+            _t("settings.language.restart_required",
+               "Restart Resistine to apply the new language."))
 
     # ---- Software Updates -------------------------------------------------
     def _updates_card(self) -> QWidget:

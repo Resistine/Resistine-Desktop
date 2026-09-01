@@ -306,5 +306,7 @@
   "utils.uninstall.darwin.extension_deactivation_failed_err": "Extension deactivation failed: {err}",
   "utils.uninstall.darwin.extension_deactivation_error_e": "Extension deactivation error: {e}",
   "utils.updates.linux.you_re_up_to_date": "You're up to date!\n\nResistine {version} is the latest version.",
-  "utils.updates.linux.downloading_mb_down_mb_total": "Downloading... {mb_down} / {mb_total} MB"
+  "utils.updates.linux.downloading_mb_down_mb_total": "Downloading... {mb_down} / {mb_total} MB",
+  "settings.language.label": "Language",
+  "settings.language.restart_required": "Restart Resistine to apply the new language."
 }

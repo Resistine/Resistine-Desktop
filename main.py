@@ -180,6 +180,11 @@ def main() -> int:
         log_level = "DEBUG"
     setup_logging(level=log_level)
 
+    # Apply the persisted UI language before any plugin builds its screen,
+    # so get_text() calls during construction use the right locale.
+    from utils import i18n
+    i18n.set_language(settings.get("ui", "language", i18n.DEFAULT_LANGUAGE))
+
     qt_app, window = _build_app()
 
     if DEBUG:
