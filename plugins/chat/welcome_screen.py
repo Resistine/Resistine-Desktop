@@ -10,6 +10,7 @@ import customtkinter
 from plugins.chat.fonts import RESISTINE_BLUE, ui_family, widget_scale
 
 from plugins.chat.suggestions import SUGGESTION_POOL  # noqa: F401
+from utils.i18n import get_text
 
 def _secondary_color(is_dark: bool) -> str:
     return "#9CA3AF" if is_dark else "#6B7280"
@@ -48,7 +49,7 @@ class WelcomeScreen(customtkinter.CTkFrame):
         # Greeting
         greeting_label = customtkinter.CTkLabel(
             self,
-            text="How can I help you today?",
+            text=get_text("chat.how_can_i_help_you"),
             font=customtkinter.CTkFont(
                 family=ui_family(), size=24, weight="bold"),
             text_color=fg_color,
@@ -57,7 +58,7 @@ class WelcomeScreen(customtkinter.CTkFrame):
 
         subtitle_label = customtkinter.CTkLabel(
             self,
-            text="Ask me anything about cybersecurity",
+            text=get_text("chat.ask_me_anything_about_cybersecurity"),
             font=customtkinter.CTkFont(family=ui_family(), size=14),
             text_color=secondary,
         )
@@ -99,7 +100,7 @@ class WelcomeScreen(customtkinter.CTkFrame):
         chips_box.pack(pady=0)
 
         section_label = customtkinter.CTkLabel(
-            chips_box, text="TRY ASKING",
+            chips_box, text=get_text("chat.try_asking"),
             font=customtkinter.CTkFont(
                 family=ui_family(), size=11, weight="bold"),
             text_color=RESISTINE_BLUE, anchor="w",
@@ -186,7 +187,7 @@ class ApiKeyMissingScreen(customtkinter.CTkFrame):
 
         title_label = customtkinter.CTkLabel(
             self,
-            text="API Key Required",
+            text=get_text("chat.api_key_required"),
             font=customtkinter.CTkFont(family=ui_family(), size=20, weight="bold"),
             text_color="#ffffff" if is_dark else "#000000",
         )
@@ -194,7 +195,7 @@ class ApiKeyMissingScreen(customtkinter.CTkFrame):
 
         desc_label = customtkinter.CTkLabel(
             self,
-            text="Add your OpenAI API key in Settings to start chatting.",
+            text=get_text("chat.welcome_screen.add_your_openai_api_key"),
             font=customtkinter.CTkFont(family=ui_family(), size=14),
             text_color=secondary,
         )
@@ -202,7 +203,7 @@ class ApiKeyMissingScreen(customtkinter.CTkFrame):
 
         settings_btn = customtkinter.CTkButton(
             self,
-            text="Open Settings",
+            text=get_text("antivirus.qt_ui.open_settings"),
             font=customtkinter.CTkFont(family=ui_family(), size=13, weight="bold"),
             fg_color=RESISTINE_BLUE,
             hover_color="#1565B0",
@@ -253,7 +254,7 @@ class ChatLockedScreen(customtkinter.CTkFrame):
 
         title_label = customtkinter.CTkLabel(
             self,
-            text="Secure Chat Locked",
+            text=get_text("chat.welcome_screen.secure_chat_locked"),
             font=customtkinter.CTkFont(
                 family=ui_family(), size=22, weight="bold"),
             text_color=fg,
@@ -262,8 +263,7 @@ class ChatLockedScreen(customtkinter.CTkFrame):
 
         desc_label = customtkinter.CTkLabel(
             self,
-            text=("Chat is only available on a protected device.\n"
-                  "Connect the VPN and install the Endpoint agent to continue."),
+            text=(get_text("chat.welcome_screen.chat_is_only_available_on")),
             font=customtkinter.CTkFont(family=ui_family(), size=14),
             text_color=secondary,
             justify="center",

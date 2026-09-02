@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
 from gui import theme
 from gui.qt_widgets import CardGrid, StatusBadge, scroll_page
 from plugins.base_plugin import BasePlugin
+from utils.i18n import get_text
 
 _DIR = os.path.dirname(os.path.realpath(__file__))
 
@@ -86,7 +87,7 @@ class Plugin(BasePlugin):
         super().__init__(
             id="001", version="2025.01.01", order=1, name="Dashboard",
             status=None,
-            description="See your protection status at a glance.",
+            description=get_text("dashboard.see_your_protection_status_at"),
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Dashboard", "ES": "Panel",
                           "FR": "Tableau de bord"},
@@ -107,10 +108,10 @@ class Plugin(BasePlugin):
         banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
         banner.setMinimumHeight(48)
         if self._vpn_ok():
-            banner.setText("✓  Protected")
+            banner.setText(get_text("dashboard.protected"))
             banner.setProperty("protection", "ok")
         else:
-            banner.setText("⚠  Not Protected")
+            banner.setText(get_text("dashboard.not_protected"))
             banner.setProperty("protection", "warn")
         v.addWidget(banner)
         v.addSpacing(16)

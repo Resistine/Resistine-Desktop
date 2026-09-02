@@ -11,7 +11,6 @@ import sys
 import tkinter as tk
 
 import customtkinter
-from customtkinter import ThemeManager
 
 from plugins.base_plugin import BasePlugin
 from utils import functions

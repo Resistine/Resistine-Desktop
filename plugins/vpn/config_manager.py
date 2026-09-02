@@ -11,6 +11,7 @@ import re
 
 from utils import settings as app_settings
 from utils.logger import logger
+from utils.i18n import get_text
 
 RESISTINE_CONFIG_NAME = "resistine"
 SETTINGS_NAMESPACE = "vpn"
@@ -88,7 +89,7 @@ class VPNConfigManager:
     def import_config(self, source_path, content):
         try:
             if not content or not content.strip():
-                raise ValueError("Config content is empty")
+                raise ValueError(get_text("vpn.config_manager.config_content_is_empty"))
 
             filename = os.path.basename(source_path)
             config_name = self.sanitize_filename(filename)
@@ -115,7 +116,7 @@ class VPNConfigManager:
             return True, config_name
 
         except Exception as e:
-            logger.error(f"Failed to import config: {e}")
+            logger.error(get_text("vpn.failed_to_import_config_e", e=e))
             return False, str(e)
 
     def delete_config(self, config_name):

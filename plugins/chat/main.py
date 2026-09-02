@@ -62,12 +62,12 @@ from plugins.chat.streaming import StreamController
 from plugins.chat.suggestions import SUGGESTION_POOL
 from utils import settings
 from utils.logger import logger
+from utils.i18n import get_text
 
 # Appended to history when the user navigates away mid-response: the partial
 # text is discarded and this canned marker is stored instead.
 _NAV_AWAY_MSG = (
-    "_(You switched chats before this response could finish. "
-    "Please ask your question again.)_"
+    get_text("chat.you_switched_chats_before_this")
 )
 
 _SYSTEM_PROMPT = "You are SOC Copilot specialized in cybersecurity."
@@ -248,7 +248,7 @@ class _Bubble(QFrame):
 
     def _build_copy_button(self) -> QPushButton:
         muted = theme.color("text_secondary")
-        btn = QPushButton("⧉  Copy")
+        btn = QPushButton(get_text("chat.copy"))
         btn.setObjectName("ChatCopyBtn")
         btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn.setFlat(True)
@@ -268,10 +268,10 @@ class _Bubble(QFrame):
         QApplication.clipboard().setText(self._raw_text)
         if self._copy_btn is None:
             return
-        self._copy_btn.setText("✓  Copied")
+        self._copy_btn.setText(get_text("chat.copied"))
         QTimer.singleShot(
             1500,
-            lambda: self._copy_btn and self._copy_btn.setText("⧉  Copy"))
+            lambda: self._copy_btn and self._copy_btn.setText(get_text("chat.copy")))
 
     # -- hover: fade the copy button in/out --------------------------------
 
@@ -299,7 +299,7 @@ class _Bubble(QFrame):
         if self._copy_row is None:
             return
         muted = theme.color("text_secondary")
-        btn = QPushButton("↻  Retry")
+        btn = QPushButton(get_text("chat.retry"))
         btn.setObjectName("ChatRetryBtn")
         btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn.setFlat(True)
@@ -517,7 +517,7 @@ class Plugin(BasePlugin):
     def __init__(self, app):
         super().__init__(
             id="002", version="2025.01.01", order=2, name="Chat", status=None,
-            description="This plugin allows you to chat with the AI assistant.",
+            description=get_text("chat.this_plugin_allows_you_to"),
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Chat", "ES": "Chat", "FR": "Chat"},
             icon_light_path=os.path.join(_ICON_DIR, "chat_light.png"),
@@ -610,7 +610,7 @@ class Plugin(BasePlugin):
             if notify:
                 try:
                     self.app.show_notification(
-                        f"Chat Init Error: {e}", type="error")
+                        get_text("chat.chat_init_error_e", e=e), type="error")
                 except Exception:
                     pass
             self.client = None
@@ -707,7 +707,7 @@ class Plugin(BasePlugin):
         lay = QVBoxLayout(page)
         lay.addStretch(1)
 
-        title = QLabel("Resistine AI is locked")
+        title = QLabel(get_text("chat.resistine_ai_is_locked"))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet(
             f"font-size: 20px; font-weight: 700; "
@@ -716,7 +716,7 @@ class Plugin(BasePlugin):
         lay.addSpacing(8)
 
         sub = QLabel(
-            "Chat is available when your connection is protected.")
+            get_text("chat.chat_is_available_when_your"))
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sub.setStyleSheet(
             f"font-size: 14px; color: {theme.color('text_secondary')};")
@@ -736,8 +736,7 @@ class Plugin(BasePlugin):
 
         lay.addSpacing(16)
         hint = QLabel(
-            "Connect the VPN and start the Endpoint agent to unlock chat. "
-            "This screen unlocks automatically.")
+            get_text("chat.connect_the_vpn_and_start"))
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hint.setWordWrap(True)
         hint.setStyleSheet(
@@ -760,7 +759,7 @@ class Plugin(BasePlugin):
         lay.addWidget(self._toggle_btn)
 
         lay.addStretch(1)
-        title = QLabel("Resistine AI")
+        title = QLabel(get_text("chat.chat_ui.resistine_ai"))
         title.setStyleSheet(
             f"font-size: 16px; font-weight: 700; "
             f"color: {theme.color('text_primary')}; background: transparent;")
@@ -866,7 +865,7 @@ class Plugin(BasePlugin):
         row.setSpacing(6)
 
         self.chat_entry = _ChatInput()
-        self.chat_entry.setPlaceholderText("Message Resistine AI...")
+        self.chat_entry.setPlaceholderText(get_text("chat.chat_ui.message_resistine_ai"))
         self.chat_entry.setStyleSheet(
             "QTextEdit { background: transparent; border: none; "
             "font-size: 15px; padding: 4px 8px; }")
@@ -956,13 +955,13 @@ class Plugin(BasePlugin):
 
         hdr = QHBoxLayout()
         hdr.setContentsMargins(4, 0, 0, 0)
-        title = QLabel("HISTORY")
+        title = QLabel(get_text("chat.history"))
         title.setStyleSheet(
             "font-size: 10px; font-weight: 700; color: #6B7280; "
             "background: transparent;")
         hdr.addWidget(title)
         hdr.addStretch(1)
-        new_btn = QPushButton("+ New")
+        new_btn = QPushButton(get_text("chat.new"))
         new_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         new_btn.setStyleSheet(
             f"QPushButton {{ background-color: {RESISTINE_BLUE}; color: #fff; "
@@ -1001,7 +1000,7 @@ class Plugin(BasePlugin):
         sessions = self._history.list_sessions()
         active_id = self._history.get_active_id()
         if not sessions:
-            empty = QLabel("No conversations")
+            empty = QLabel(get_text("chat.no_conversations"))
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty.setStyleSheet(
                 "color: #6B7280; font-size: 12px; background: transparent;")
@@ -1061,7 +1060,7 @@ class Plugin(BasePlugin):
             QStyle.StandardPixmap.SP_TitleBarCloseButton))
         del_btn.setIconSize(QSize(12, 12))
         del_btn.setFixedSize(24, 24)
-        del_btn.setToolTip("Delete chat")
+        del_btn.setToolTip(get_text("chat.delete_chat"))
         del_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         del_btn.setStyleSheet(
             "QPushButton { background: transparent; border: none; "
@@ -1115,14 +1114,14 @@ class Plugin(BasePlugin):
         lay.setSpacing(4)
         lay.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
-        greeting = QLabel("How can I help you today?")
+        greeting = QLabel(get_text("chat.how_can_i_help_you"))
         greeting.setAlignment(Qt.AlignmentFlag.AlignCenter)
         greeting.setStyleSheet(
             f"font-size: 24px; font-weight: 700; "
             f"color: {theme.color('text_primary')}; background: transparent;")
         lay.addWidget(greeting)
 
-        subtitle = QLabel("Ask me anything about cybersecurity")
+        subtitle = QLabel(get_text("chat.ask_me_anything_about_cybersecurity"))
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle.setStyleSheet(
             f"font-size: 14px; color: {theme.color('text_secondary')}; "
@@ -1130,7 +1129,7 @@ class Plugin(BasePlugin):
         lay.addWidget(subtitle)
         lay.addSpacing(14)
 
-        section = QLabel("TRY ASKING")
+        section = QLabel(get_text("chat.try_asking"))
         section.setStyleSheet(
             f"font-size: 11px; font-weight: 700; color: {RESISTINE_BLUE}; "
             f"background: transparent;")
@@ -1148,7 +1147,7 @@ class Plugin(BasePlugin):
         card_bg = theme.color("card_bg")
         card_hover = theme.color("sidebar_hover_bg")
         chip_fg = theme.color("text_primary")
-        chip = QPushButton(f"  ●   {text}")
+        chip = QPushButton(get_text("chat.text", text=text))
         chip.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         chip.setMinimumWidth(360)
         chip.setStyleSheet(
@@ -1176,14 +1175,14 @@ class Plugin(BasePlugin):
             f"background: transparent;")
         lay.addWidget(icon)
 
-        title = QLabel("API Key Required")
+        title = QLabel(get_text("chat.api_key_required"))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet(
             f"font-size: 20px; font-weight: 700; "
             f"color: {theme.color('text_primary')}; background: transparent;")
         lay.addWidget(title)
 
-        desc = QLabel("Add an API key in Settings to start chatting.")
+        desc = QLabel(get_text("chat.add_an_api_key_in"))
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
         desc.setWordWrap(True)
         desc.setStyleSheet(
@@ -1192,7 +1191,7 @@ class Plugin(BasePlugin):
         lay.addWidget(desc)
         lay.addSpacing(12)
 
-        btn = QPushButton("Open Settings")
+        btn = QPushButton(get_text("antivirus.qt_ui.open_settings"))
         btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn.clicked.connect(self._open_settings)
         lay.addWidget(btn, 0, Qt.AlignmentFlag.AlignCenter)
@@ -1413,7 +1412,7 @@ class Plugin(BasePlugin):
         if len(user_text) > 15000:
             try:
                 self.app.show_notification(
-                    "Message too long (15,000 character limit).",
+                    get_text("chat.message_too_long_15_000"),
                     type="warning")
             except Exception:
                 pass
@@ -1510,7 +1509,7 @@ class Plugin(BasePlugin):
                 self._response_persisted = True
                 try:
                     self.app.show_notification(
-                        "The server returned an empty response.",
+                        get_text("chat.the_server_returned_an_empty"),
                         type="warning")
                 except Exception:
                     pass
@@ -1536,7 +1535,7 @@ class Plugin(BasePlugin):
                 {"role": "assistant", "content": self._accumulated_text})
             try:
                 self.app.show_notification(
-                    "Response may be incomplete.", type="warning")
+                    get_text("chat.response_may_be_incomplete"), type="warning")
             except Exception:
                 pass
         elif self._current_asst_bubble is not None:
@@ -1619,11 +1618,11 @@ class Plugin(BasePlugin):
             return
         if self.client is None:
             entry.setEnabled(False)
-            entry.setPlaceholderText("API key required — see Settings")
+            entry.setPlaceholderText(get_text("chat.chat_ui.api_key_required_see_settings"))
             btn.setEnabled(False)
         else:
             entry.setEnabled(True)
-            entry.setPlaceholderText("Message Resistine AI...")
+            entry.setPlaceholderText(get_text("chat.chat_ui.message_resistine_ai"))
             # Disabled-when-empty: only enable if there's content to send.
             btn.setEnabled(bool(entry.text().strip()))
 

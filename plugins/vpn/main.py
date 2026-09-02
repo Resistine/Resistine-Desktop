@@ -49,6 +49,7 @@ from gui import theme
 from gui.qt_widgets import ResponsiveStack, scroll_page
 from plugins.base_plugin import BasePlugin
 from utils.logger import logger
+from utils.i18n import get_text
 
 # --- Platform Detection (single source of truth) ---
 _PLATFORM = platform.system()
@@ -271,7 +272,7 @@ class Plugin(BasePlugin):
             order=3,
             name="VPN",
             status=None,  # Default status
-            description="VPN Management",
+            description=get_text("vpn.vpn_management"),
             supported_systems=["Windows", "Darwin", "Linux"],
             translations={"US": "VPN", "ES": "VPN", "FR": "VPN"},
             icon_light_path=os.path.join(
@@ -410,7 +411,7 @@ class Plugin(BasePlugin):
             valid, reason = self.validate_wireguard_config(content)
             if not valid:
                 logger.warning(f"Invalid config rejected: {reason}")
-                self.app.show_notification(f"Invalid config: {reason}", type="error")
+                self.app.show_notification(get_text("vpn.invalid_config_reason", reason=reason), type="error")
                 return
 
             # Stop VPN if running before switching to imported config
@@ -422,7 +423,7 @@ class Plugin(BasePlugin):
             success, config_name = self.config_manager.import_config(file_path, content)
             if not success:
                 self.app.show_notification(
-                    f"Failed to import: {config_name}", type="error"
+                    get_text("vpn.failed_to_import_config_name", config_name=config_name), type="error"
                 )
                 return
 
@@ -430,13 +431,13 @@ class Plugin(BasePlugin):
 
             logger.info(f"Imported config: {config_name}")
             self.app.show_notification(
-                "Configuration imported successfully!", type="success"
+                get_text("vpn.configuration_imported_successfully"), type="success"
             )
             self.update_plugin(self.id)
 
         except Exception as e:
-            logger.error(f"Failed to import config: {e}")
-            self.app.show_notification(f"Failed to import config: {e}", type="error")
+            logger.error(get_text("vpn.failed_to_import_config_e", e=e))
+            self.app.show_notification(get_text("vpn.failed_to_import_config_e", e=e), type="error")
 
     def get_selected_conf_file_name(self):
         """Get the active VPN config name from the config manager."""
@@ -555,7 +556,7 @@ class Plugin(BasePlugin):
 
         # ── Status copy + colours (mirror the original (light, dark) pairs) ──
         if extension_disabled:
-            status_text = "Extension Disabled"
+            status_text = get_text("vpn.extension_disabled")
             status_color = _pick("#C5221F", "#FF4040")
             try:
                 mac_major = int(platform.mac_ver()[0].split(".")[0] or "0")
@@ -563,20 +564,18 @@ class Plugin(BasePlugin):
                 mac_major = 0
             if mac_major >= 15:
                 sub_text = (
-                    "Enable in System Settings › General › Login Items & "
-                    "Extensions › Network Extensions"
+                    get_text("vpn.enable_in_system_settings_general")
                 )
             else:
                 sub_text = (
-                    "Enable in System Settings › Privacy & Security › scroll to "
-                    "Security › click Allow"
+                    get_text("vpn.enable_in_system_settings_privacy")
                 )
             card_bg = _pick("#FDEDEC", "#3A1A1A")
             is_enabled = False
         elif not selected_conf_file:
-            status_text = "No Configuration"
+            status_text = get_text("vpn.no_configuration")
             status_color = _pick("#666666", "#999999")
-            sub_text = "Please log in or import a VPN configuration to get started"
+            sub_text = get_text("vpn.please_log_in_or_import")
             card_bg = _pick("#F5F5F5", "#1A1A1A")
             is_enabled = False
         else:
@@ -673,7 +672,7 @@ class Plugin(BasePlugin):
             sel_lay.setContentsMargins(16, 12, 12, 12)
             sel_lay.setSpacing(8)
 
-            cfg_lbl = QLabel("CONFIGURATION")
+            cfg_lbl = QLabel(get_text("vpn.configuration"))
             cfg_lbl.setStyleSheet(
                 f"color: {_pick('#888888', '#777777')}; font-size: 12px; "
                 f"font-weight: 700; background: transparent;"
@@ -697,7 +696,7 @@ class Plugin(BasePlugin):
             if selected_conf_file and not self.config_manager.is_resistine_config(
                 selected_conf_file
             ):
-                del_btn = QPushButton("Delete")
+                del_btn = QPushButton(get_text("antivirus.delete"))
                 del_btn.setObjectName("Danger")
                 del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 del_btn.clicked.connect(
@@ -780,7 +779,7 @@ class Plugin(BasePlugin):
         buttons_row = QHBoxLayout()
         buttons_row.setSpacing(8)
 
-        import_btn = QPushButton("Import Configuration")
+        import_btn = QPushButton(get_text("vpn.import_configuration"))
         import_btn.setObjectName("SurfaceBtn")
         import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         import_btn.setMinimumHeight(38)
@@ -788,7 +787,7 @@ class Plugin(BasePlugin):
         buttons_row.addWidget(import_btn, 1)
 
         if selected_conf_file:
-            view_btn = QPushButton("View Config")
+            view_btn = QPushButton(get_text("vpn.view_config"))
             view_btn.setObjectName("SurfaceBtn")
             view_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             view_btn.setMinimumHeight(38)
@@ -956,7 +955,7 @@ class Plugin(BasePlugin):
         if not selected_conf_file:
             logger.error("❌ Cannot toggle: No VPN config found.")
             self.app.show_notification(
-                "No VPN configuration found. Please log in or add a config.",
+                get_text("vpn.no_vpn_configuration_found_please"),
                 type="error",
             )
             if self.vpn_toggle_switch is not None:
@@ -1187,7 +1186,7 @@ class Plugin(BasePlugin):
             active_client_name = None
 
         self.config_manager.set_active_config(new_config_name)
-        self.app.show_notification(f"Switched to {display_name}", type="info")
+        self.app.show_notification(get_text("vpn.switched_to_display_name", display_name=display_name), type="info")
         self.update_plugin(self.id)
 
     def _delete_config(self, config_name):
@@ -1201,9 +1200,9 @@ class Plugin(BasePlugin):
 
         success, message = self.config_manager.delete_config(config_name)
         if success:
-            self.app.show_notification("Configuration deleted", type="info")
+            self.app.show_notification(get_text("vpn.configuration_deleted"), type="info")
         else:
-            self.app.show_notification(f"Failed to delete: {message}", type="error")
+            self.app.show_notification(get_text("vpn.failed_to_delete_message", message=message), type="error")
 
         self.update_plugin(self.id)
 
@@ -1216,7 +1215,7 @@ class Plugin(BasePlugin):
 
         conf_file_path = os.path.join(wireguard_folder, f"{tunnel_name}.conf")
         if not os.path.exists(conf_file_path):
-            self.app.show_notification("Config file not found", type="error")
+            self.app.show_notification(get_text("vpn.config_file_not_found"), type="error")
             return
 
         with open(conf_file_path, "r", encoding="utf-8") as f:
@@ -1242,15 +1241,15 @@ class Plugin(BasePlugin):
         )
         lay.addWidget(textbox, 1)
 
-        copy_btn = QPushButton("Copy to Clipboard")
+        copy_btn = QPushButton(get_text("vpn.copy_to_clipboard"))
         copy_btn.setMinimumHeight(36)
 
         def copy_to_clipboard():
             clip = QGuiApplication.clipboard()
             if clip is not None:
                 clip.setText(content)
-            copy_btn.setText("Copied!")
-            self.app.after(2000, lambda: copy_btn.setText("Copy to Clipboard"))
+            copy_btn.setText(get_text("chat.assistant_bubble.copied"))
+            self.app.after(2000, lambda: copy_btn.setText(get_text("vpn.copy_to_clipboard")))
 
         copy_btn.clicked.connect(copy_to_clipboard)
         lay.addWidget(copy_btn)

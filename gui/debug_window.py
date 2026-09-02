@@ -1,5 +1,6 @@
 import sys
 import tkinter as tk
+from utils.i18n import get_text
 
 
 class DebugWindow:
@@ -15,7 +16,7 @@ class DebugWindow:
     def create_debug_window(self):
         """Create the debug window"""
         self.debug_window = tk.Toplevel(self.parent)
-        self.debug_window.title("Resistine Debug Output")
+        self.debug_window.title(get_text("main.debug_window.title"))
         self.debug_window.geometry("800x600")
 
         # Create text widget WITHOUT scroll
@@ -29,7 +30,7 @@ class DebugWindow:
         clear_button = tk.Button(button_frame, text="Clear", command=self.clear_output)
         clear_button.pack(side=tk.LEFT, padx=5)
 
-        save_button = tk.Button(button_frame, text="Save Log", command=self.save_log)
+        save_button = tk.Button(button_frame, text=get_text("main.debug_window.button.save_log"), command=self.save_log)
         save_button.pack(side=tk.LEFT, padx=5)
 
         # Redirect stdout and stderr

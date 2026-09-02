@@ -18,6 +18,7 @@ import threading
 import time
 
 from utils.logger import logger
+from utils.i18n import get_text
 
 
 def _applescript_quote(s: str) -> str:
@@ -501,7 +502,7 @@ def ensure_daemons_registered():
     try:
         from ServiceManagement import SMAppService
     except ImportError:
-        logger.warning("ServiceManagement framework not available")
+        logger.warning(get_text("main.helper.framework_unavailable"))
         return
 
     needs_approval = False

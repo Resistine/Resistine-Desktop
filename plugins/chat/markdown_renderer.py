@@ -8,7 +8,6 @@ response.
 from __future__ import annotations
 
 import re
-import sys
 import tkinter as tk
 
 import customtkinter

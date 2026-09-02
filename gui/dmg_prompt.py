@@ -6,9 +6,9 @@ initialization — no window manager state to clean up on exit.
 from __future__ import annotations
 
 import subprocess
-import sys
 
 from utils.logger import logger
+from utils.i18n import get_text
 
 
 def _osascript_dialog(title: str, message: str, buttons: list[str],
@@ -42,10 +42,7 @@ def prompt_move_to_applications() -> str:
     choice = _osascript_dialog(
         title="Resistine",
         message=(
-            "Resistine is running from the installer disk image.\n\n"
-            "To use all features (background services, auto-updates), "
-            "it must be in your Applications folder.\n\n"
-            "Move it now?"
+            get_text("gui.dmg_prompt.resistine_is_running_from_the")
         ),
         buttons=["Quit", "Move to Applications"],
         default="Move to Applications",
@@ -60,9 +57,7 @@ def prompt_move_to_applications() -> str:
         _osascript_dialog(
             title="Resistine",
             message=(
-                "Could not move automatically.\n\n"
-                "Please drag Resistine.app to your Applications "
-                "folder and relaunch from there."
+                get_text("gui.dmg_prompt.could_not_move_automatically_please")
             ),
             buttons=["OK"],
             default="OK",

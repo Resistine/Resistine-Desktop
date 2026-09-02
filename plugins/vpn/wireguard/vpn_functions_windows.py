@@ -22,7 +22,8 @@ from utils.logger import logger
 
 # Import client functions so main.py can use check_service_status etc.
 # without importing from two places
-from plugins.vpn.wireguard.vpn_windows_client import get_status, connect, disconnect, toggle
+from plugins.vpn.wireguard.vpn_windows_client import get_status, connect, disconnect
+from utils.i18n import get_text
 
 
 # ----------------------------------------------------------------
@@ -255,7 +256,7 @@ def parse_and_create_vpn_config(
 ) -> str | None:
     try:
         if not vpn_config_json_string:
-            raise ValueError("Empty API response")
+            raise ValueError(get_text("vpn.wireguard.vpn_functions_windows.empty_api_response"))
 
         # The server may hand us the config already parsed (a dict) or as a
         # JSON string. macOS handled both; Windows only handled the string, so
@@ -337,7 +338,7 @@ def parse_and_create_vpn_config(
         conf_text = "\n".join(lines).strip() + "\n"
 
         if not conf_text.strip():
-            raise ValueError("Generated WireGuard config is empty")
+            raise ValueError(get_text("vpn.wireguard.vpn_functions_windows.generated_wireguard_config_is_empty"))
 
         config_dir = get_writable_wireguard_dir()
         os.makedirs(config_dir, exist_ok=True)

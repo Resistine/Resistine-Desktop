@@ -76,10 +76,10 @@ def get_or_create_key():
     if key is None:
         new_key = Fernet.generate_key()  # already bytes
         keyring.set_password("resistine", "encryption_key", new_key.decode())
-        logger.info("Key securely stored in system keyring.")
+        logger.info(get_text("encryption.key_stored_keyring"))
         return new_key
     else:
-        logger.info("Key retrieved from system keyring.")
+        logger.info(get_text("encryption.key_retrieved_keyring"))
         return key.encode()  # keyring returns a string; encode to bytes
 
 
@@ -119,7 +119,7 @@ def encrypt_data(data_dict):
         encrypted_data_dict[key_name] = cipher.encrypt(value.encode()).decode()
 
     keyring.set_password("resistine", "encrypted_data", json.dumps(encrypted_data_dict))
-    logger.info("Encrypted data securely stored in system keyring.")
+    logger.info(get_text("encryption.data_stored_keyring"))
 
     return encrypted_data_dict
 

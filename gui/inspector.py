@@ -4,6 +4,7 @@ import pprint
 import tkinter as tk
 import customtkinter as ctk
 from utils.logger import logger
+from utils.i18n import get_text
 
 # --- Monkey Patching for Source Tracking ---
 # We patch tk.Widget.__init__ to capture where widgets are created.
@@ -214,7 +215,7 @@ class RuntimeInspector:
             display_name = widget.__class__.__name__
 
         header = ctk.CTkLabel(
-            scroll, text=f"Inspecting: {display_name}", font=("Arial", 16, "bold")
+            scroll, text=get_text("gui.inspector.inspecting_display_name", display_name=display_name), font=("Arial", 16, "bold")
         )
         header.pack(anchor="w", pady=(0, 10))
 

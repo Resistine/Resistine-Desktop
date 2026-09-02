@@ -39,6 +39,7 @@ from gui import theme
 from gui.qt_toast import Toast
 from gui.qt_widgets import resource
 from utils.logger import logger
+from utils.i18n import get_text
 
 # Default (native) window size the app opens at, in logical pixels. Exposed as a
 # constant so width-driven UI (e.g. the vulnerabilities timeline's day-span
@@ -71,7 +72,7 @@ class AppWindow(QMainWindow):
         self.current_frame_name = ""
         self._current_main_screen = None
 
-        self.setWindowTitle("Resistine")
+        self.setWindowTitle(get_text("main.app_title"))
         self.resize(*DEFAULT_WINDOW_SIZE)
         self.setMinimumSize(820, 480)
         icon_png = resource("resources", "icons", "app_icon.png")
@@ -193,7 +194,7 @@ class AppWindow(QMainWindow):
             sb.addWidget(btn)
 
         sb.addStretch(1)
-        version = QLabel("Resistine Desktop")
+        version = QLabel(get_text("gui.app_window.resistine_desktop"))
         version.setObjectName("Muted")
         version.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sb.addWidget(version)
@@ -246,7 +247,7 @@ class AppWindow(QMainWindow):
             label.setPixmap(self._round_pixmap(pm, radius))
             return label
 
-        label.setText("Resistine")
+        label.setText(get_text("main.app_title"))
         label.setStyleSheet(
             f"font-size: 20px; font-weight: 800; color: {theme.color('accent')};")
         return label
@@ -292,7 +293,7 @@ class AppWindow(QMainWindow):
                 screen = plugin.create_main_screen()
             except Exception as e:
                 logger.error(f"Error building screen for {name}: {e}")
-                self.show_notification(f"Error loading {name}: {e}", "error")
+                self.show_notification(get_text("gui.app_window.error_loading_name_e", name=name, e=e), "error")
                 return
             self._screens[name] = screen
             self.stack.addWidget(screen)

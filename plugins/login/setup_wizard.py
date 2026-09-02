@@ -34,6 +34,7 @@ from plugins.login.setup_steps import build_steps
 from utils import settings
 from utils.functions import get_resource_path
 from utils.logger import logger
+from utils.i18n import get_text
 
 _BLUE = "#0D5394"
 _BLUE_HOVER = "#0A4275"
@@ -146,7 +147,7 @@ class SetupWizardScreen:
         col.addWidget(start, 0, Qt.AlignmentFlag.AlignHCenter)
         col.addSpacing(10)
 
-        skip = _link_button("Skip for now")
+        skip = _link_button(get_text("login.vpn_onboarding.skip_for_now"))
         skip.clicked.connect(self._skip_all)
         col.addWidget(skip, 0, Qt.AlignmentFlag.AlignHCenter)
         col.addStretch(1)
@@ -288,7 +289,7 @@ class SetupWizardScreen:
         col.addSpacing(10)
 
         # Skip this step
-        self._skip_btn = _link_button("Skip this step")
+        self._skip_btn = _link_button(get_text("login.setup_wizard.skip_this_step"))
         self._skip_btn.clicked.connect(self._skip_step)
         col.addWidget(self._skip_btn, 0, Qt.AlignmentFlag.AlignHCenter)
         col.addStretch(1)
@@ -327,7 +328,7 @@ class SetupWizardScreen:
         my_seq = self._act_seq
         self._primary.setEnabled(False)
         self._primary.setText(step.working_label)
-        self._skip_btn.setText("Skip this step")
+        self._skip_btn.setText(get_text("login.setup_wizard.skip_this_step"))
         self._bar.show()
         self._set_status(step.working_label)
 
@@ -393,8 +394,8 @@ class SetupWizardScreen:
             self._status.setStyleSheet(
                 f"font-size: 12px; color: {_c('#C0392B', '#E74C3C')};")
             self._primary.setEnabled(True)
-            self._primary.setText("Try Again")
-            self._skip_btn.setText("Skip this step")
+            self._primary.setText(get_text("login.setup_wizard.try_again"))
+            self._skip_btn.setText(get_text("login.setup_wizard.skip_this_step"))
         except RuntimeError:  # widgets from a replaced screen
             pass
 

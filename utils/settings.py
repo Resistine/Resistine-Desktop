@@ -18,6 +18,7 @@ import keyring
 from cryptography.fernet import Fernet
 
 from utils.logger import logger
+from utils.i18n import get_text
 
 # Removed standard logging logger
 
@@ -96,7 +97,7 @@ def _save_master_key_fallback(key: bytes):
         logger.info(f"Master key saved to fallback file: {key_file}")
     except Exception as e:
         logger.critical(f"Failed to save master key fallback: {e}")
-        raise RuntimeError("Could not save master key to keyring or file.") from e
+        raise RuntimeError(get_text("utils.settings.could_not_save_master_key")) from e
 
 
 def _get_master_key_fallback() -> Optional[bytes]:

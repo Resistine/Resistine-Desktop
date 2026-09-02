@@ -42,6 +42,7 @@ from plugins.base_plugin import BasePlugin
 from plugins.wazuh.config import WAZUH_MANAGER
 from utils import settings
 from utils.logger import logger
+from utils.i18n import get_text
 
 _PLATFORM = platform.system()
 _PLUGIN_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -170,7 +171,7 @@ class Plugin(BasePlugin):
             order=-1,
             name="Agent",
             status=None,
-            description="Install and manage the SIEM agent.",
+            description=get_text("wazuh.install_and_manage_the_siem"),
             supported_systems=["Darwin", "Linux", "Windows"],
             translations={"US": "Agent", "ES": "Agent", "FR": "Agent"},
             icon_light_path=os.path.join(_PLUGIN_DIR, "add_user_light.png"),
@@ -270,13 +271,13 @@ class Plugin(BasePlugin):
         col.setContentsMargins(20, 40, 20, 20)
         col.setSpacing(5)
 
-        title = QLabel("Unsupported Platform")
+        title = QLabel(get_text("wazuh.unsupported_platform"))
         title.setStyleSheet("font-size: 20px; font-weight: 700;")
         title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         col.addWidget(title)
 
         msg = QLabel(
-            f"SIEM agent management is not yet available on {_PLATFORM}.")
+            get_text("wazuh.siem_agent_management_is_not", _PLATFORM=_PLATFORM))
         msg.setStyleSheet(f"font-size: 14px; color: {_c(_COLOR_MUTED)};")
         msg.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         col.addWidget(msg)
@@ -395,7 +396,7 @@ class Plugin(BasePlugin):
         body.addWidget(self._progress_label)
         body.addSpacing(4)
 
-        self._install_btn = QPushButton("Reinstall Agent")
+        self._install_btn = QPushButton(get_text("wazuh.reinstall_agent"))
         self._install_btn.setMinimumHeight(40)
         self._install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._install_btn.clicked.connect(self._start_reinstall)
@@ -430,7 +431,7 @@ class Plugin(BasePlugin):
         vpn_ok = _safe(is_vpn_connected, True)
         if not vpn_ok:
             body.addSpacing(8)
-            warn = QLabel("Connect VPN to install the SIEM agent")
+            warn = QLabel(get_text("wazuh.connect_vpn_to_install_the"))
             warn.setWordWrap(True)
             warn.setStyleSheet(
                 f"font-size: 13px; font-weight: 700; color: {_c(_COLOR_ERROR)};")
@@ -452,7 +453,7 @@ class Plugin(BasePlugin):
         self._install_bar.hide()
         body.addSpacing(4)
 
-        self._install_btn = QPushButton("Install Agent")
+        self._install_btn = QPushButton(get_text("wazuh.install_agent"))
         self._install_btn.setMinimumHeight(40)
         self._install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._install_btn.clicked.connect(self._start_installation)
@@ -498,7 +499,7 @@ class Plugin(BasePlugin):
                 _COLOR_MUTED,
             )
             body.addSpacing(8)
-            install_btn = QPushButton("Download && Install Agent")
+            install_btn = QPushButton(get_text("wazuh.download_install_agent"))
             install_btn.setMinimumHeight(40)
             install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             install_btn.clicked.connect(self._force_download_start)
@@ -524,7 +525,7 @@ class Plugin(BasePlugin):
             msg = _REASON_MSG.get(reason, f"Download failed ({reason}).")
             self._paragraph(body, msg, _COLOR_ERROR)
             body.addSpacing(8)
-            retry_btn = QPushButton("Retry")
+            retry_btn = QPushButton(get_text("gui.update_dialog.retry"))
             retry_btn.setMinimumHeight(36)
             retry_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             retry_btn.clicked.connect(self._retry_download)
@@ -555,14 +556,14 @@ class Plugin(BasePlugin):
                 f"font-size: 13px; color: {_c(_COLOR_ACCENT)};")
             body.addWidget(self._progress_label)
             body.addSpacing(4)
-            self._install_btn = QPushButton("Install Security")
+            self._install_btn = QPushButton(get_text("wazuh.install_security"))
             self._install_btn.setMinimumHeight(40)
             self._install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             self._install_btn.clicked.connect(self._start_installation)
             body.addWidget(self._install_btn)
 
         elif state == STATE_INSTALLING:
-            self._progress_label = QLabel("Installing...")
+            self._progress_label = QLabel(get_text("wazuh.installing"))
             self._progress_label.setStyleSheet(
                 f"font-size: 13px; color: {_c(_COLOR_ACCENT)};")
             body.addWidget(self._progress_label)
@@ -588,27 +589,25 @@ class Plugin(BasePlugin):
                     "Couldn't reach the SIEM manager. Connect the VPN and retry."
                 ),
                 "enroll_failed": (
-                    "Enrollment with the SIEM manager failed. "
-                    "Connect the VPN and retry."
+                    get_text("wazuh.enrollment_with_the_siem_manager")
                 ),
             }
             if reason.startswith("enroll_rc_"):
                 msg = (
-                    "Enrollment with the SIEM manager failed. "
-                    "Connect the VPN and retry."
+                    get_text("wazuh.enrollment_with_the_siem_manager")
                 )
             else:
                 msg = _REASON_MSG.get(reason, f"Installation failed ({reason}).")
             self._paragraph(body, msg, _COLOR_ERROR)
             body.addSpacing(8)
             if reason != "user_canceled":
-                retry_btn = QPushButton("Retry")
+                retry_btn = QPushButton(get_text("gui.update_dialog.retry"))
                 retry_btn.setMinimumHeight(36)
                 retry_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 retry_btn.clicked.connect(self._retry_install)
                 body.addWidget(retry_btn)
             else:
-                self._install_btn = QPushButton("Install Security")
+                self._install_btn = QPushButton(get_text("wazuh.install_security"))
                 self._install_btn.setMinimumHeight(40)
                 self._install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 self._install_btn.clicked.connect(self._start_installation)
@@ -649,7 +648,7 @@ class Plugin(BasePlugin):
             f"font-size: 16px; color: {_c(status_color)};")
         header.addWidget(dot, 0, Qt.AlignmentFlag.AlignLeft)
         header.addSpacing(8)
-        name = QLabel("SIEM Agent")
+        name = QLabel(get_text("wazuh.siem_agent"))
         name.setStyleSheet("font-size: 18px; font-weight: 700;")
         header.addWidget(name, 0, Qt.AlignmentFlag.AlignLeft)
         header.addStretch(1)
@@ -664,7 +663,7 @@ class Plugin(BasePlugin):
 
         body.addSpacing(4)
         toggle_row = QHBoxLayout()
-        toggle_label = QLabel("Agent Service")
+        toggle_label = QLabel(get_text("wazuh.agent_service"))
         toggle_label.setStyleSheet("font-size: 14px;")
         toggle_row.addWidget(toggle_label, 0, Qt.AlignmentFlag.AlignVCenter)
         toggle_row.addStretch(1)
@@ -703,21 +702,17 @@ class Plugin(BasePlugin):
             self._add_separator(body)
             if not_connected:
                 warn = QLabel(
-                    "Agent is running but not connected to the SIEM "
-                    "manager. If the old agent was removed on the server, "
-                    "reconnect to re-register under a new identity.")
+                    get_text("wazuh.agent_is_running_but_not"))
                 warn.setStyleSheet(
                     f"font-size: 13px; color: {_c(_COLOR_ERROR)};")
             else:
                 warn = QLabel(
-                    "Connection can't be confirmed. If the dashboard "
-                    "shows this device offline, reconnect to re-register "
-                    "the agent.")
+                    get_text("wazuh.connection_can_t_be_confirmed"))
                 warn.setStyleSheet(
                     f"font-size: 13px; color: {_c(_COLOR_MUTED)};")
             warn.setWordWrap(True)
 
-            self._reconnect_btn = QPushButton("Reconnect")
+            self._reconnect_btn = QPushButton(get_text("wazuh.reconnect"))
             self._reconnect_btn.setMinimumHeight(32)
             self._reconnect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             accent = _c(_COLOR_ACCENT)
@@ -753,7 +748,7 @@ class Plugin(BasePlugin):
         if self._reconnect_btn is not None:
             try:
                 self._reconnect_btn.setEnabled(False)
-                self._reconnect_btn.setText("Reconnecting…")
+                self._reconnect_btn.setText(get_text("wazuh.reconnecting"))
             except RuntimeError:
                 pass
 
@@ -830,7 +825,7 @@ class Plugin(BasePlugin):
         # Re-check the VPN gate exactly as the original refuses without it.
         if not _safe(is_vpn_connected, True):
             self.app.show_notification(
-                "Connect VPN to install the SIEM agent", type="error")
+                get_text("wazuh.connect_vpn_to_install_the"), type="error")
             return
         self._installing = True
         self._set_install_btn("Installing...", enabled=False)
@@ -848,10 +843,10 @@ class Plugin(BasePlugin):
             self._installing = False
             if success:
                 self.app.show_notification(
-                    "SIEM agent installed!", type="success")
+                    get_text("wazuh.siem_agent_installed"), type="success")
             else:
                 self.app.show_notification(
-                    "Installation failed", type="error")
+                    get_text("wazuh.installation_failed"), type="error")
             self.app.after(0, self._refresh_screen)
 
         def _run():
@@ -909,7 +904,7 @@ class Plugin(BasePlugin):
         if self._install_poll_count > self._MAX_POLL_COUNT:
             self._installing = False
             self.app.show_notification(
-                "Installation timed out", type="error")
+                get_text("wazuh.installation_timed_out"), type="error")
             self._refresh_screen()
             return
 
@@ -932,10 +927,10 @@ class Plugin(BasePlugin):
             self._installing = False
             if result.get("success"):
                 self.app.show_notification(
-                    "Security agent installed!", type="success")
+                    get_text("wazuh.security_agent_installed"), type="success")
             else:
                 self.app.show_notification(
-                    "Installation failed", type="error")
+                    get_text("wazuh.installation_failed"), type="error")
             self._refresh_screen()
         else:
             self.app.after(3000, self._poll_install)
@@ -1013,10 +1008,10 @@ class Plugin(BasePlugin):
             self._installing = False
             if ok:
                 self.app.after(0, lambda: self.app.show_notification(
-                    "Agent reinstalled!", type="success"))
+                    get_text("wazuh.agent_reinstalled"), type="success"))
             else:
                 self.app.after(0, lambda: self.app.show_notification(
-                    "Reinstall failed", type="error"))
+                    get_text("wazuh.reinstall_failed"), type="error"))
             self.app.after(100, self._refresh_screen)
 
         threading.Thread(target=_run, daemon=True).start()
@@ -1032,7 +1027,7 @@ class Plugin(BasePlugin):
 
         if _PLATFORM != "Darwin" and want_start and not _safe(
                 is_vpn_connected, True):
-            self.app.show_notification("Connect VPN first", type="error")
+            self.app.show_notification(get_text("wazuh.connect_vpn_first"), type="error")
             self._set_toggle_checked(False)
             return
 

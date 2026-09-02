@@ -31,7 +31,6 @@ if _USE_EMOJI_ENTRY:
 if not _USE_EMOJI_ENTRY:
     EmojiEntry = customtkinter.CTkEntry
 else:
-    import tkinter as tk
 
     class EmojiEntry(customtkinter.CTkTextbox):
         """Single-line text input with inline colour emoji on Linux."""

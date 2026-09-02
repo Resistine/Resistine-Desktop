@@ -30,6 +30,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from utils.logger import logger
 from utils.settings import get_config_dir
+from utils.i18n import get_text
 
 # ── Timeout constants ─────────────────────────────────────
 SOCKET_PING_TIMEOUT = 2          # seconds: zPING handshake timeout
@@ -110,7 +111,7 @@ def _get_platform():
     elif system == "Windows":
         from plugins.antivirus import defender_windows as mod
     else:
-        raise RuntimeError(f"Unsupported platform: {system}")
+        raise RuntimeError(get_text("antivirus.clamav_common.unsupported_platform_system", system=system))
     return mod
 
 

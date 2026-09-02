@@ -28,6 +28,7 @@ import threading
 import webbrowser
 
 from utils.logger import logger
+from utils.i18n import get_text
 
 _PLATFORM = platform.system()
 
@@ -212,15 +213,15 @@ class _VPNStepBase(SetupStep):
 
 
 class _VPNStepMac(_VPNStepBase):
-    title = "Enable & Connect VPN"
-    subtitle = "Secure your connection with a private tunnel"
+    title = get_text("login.setup_steps.enable_connect_vpn")
+    subtitle = get_text("login.setup_steps.secure_your_connection_with_a")
     detail = (
         "Resistine installs a system network extension, then connects you to a "
         "secure VPN. Approving the extension is a one-time step in System "
         "Settings."
     )
-    primary_label = "Enable VPN"
-    working_label = "Setting up VPN…"
+    primary_label = get_text("login.vpn_onboarding.enable_vpn")
+    working_label = get_text("login.setup_steps.setting_up_vpn")
 
     def __init__(self, app):
         super().__init__(app)
@@ -286,8 +287,8 @@ class _VPNStepMac(_VPNStepBase):
 
 
 class _VPNStepWindows(_VPNStepBase):
-    title = "Set Up & Connect VPN"
-    subtitle = "Install WireGuard to secure your connection"
+    title = get_text("login.setup_steps.set_up_connect_vpn")
+    subtitle = get_text("login.setup_steps.install_wireguard_to_secure_your")
     detail = (
         "Resistine's VPN is powered by WireGuard. Install it once and Resistine "
         "connects and manages the secure tunnel for you."
@@ -297,8 +298,8 @@ class _VPNStepWindows(_VPNStepBase):
         "Run the WireGuard installer and accept the prompts.",
         "This step continues and connects automatically once installed.",
     ]
-    primary_label = "Download WireGuard"
-    working_label = "Setting up VPN…"
+    primary_label = get_text("login.setup_steps.download_wireguard")
+    working_label = get_text("login.setup_steps.setting_up_vpn")
 
     def _perm_ready(self) -> bool:
         from plugins.vpn.wireguard.vpn_functions_windows import check_wireguard_installed
@@ -321,14 +322,14 @@ class _VPNStepWindows(_VPNStepBase):
 
 
 class _VPNStepLinux(_VPNStepBase):
-    title = "Set Up & Connect VPN"
-    subtitle = "Install WireGuard to secure your connection"
+    title = get_text("login.setup_steps.set_up_connect_vpn")
+    subtitle = get_text("login.setup_steps.install_wireguard_to_secure_your")
     detail = (
         "Resistine's VPN is powered by WireGuard. We'll install the tools and "
         "connect you — you may be asked for your password."
     )
-    primary_label = "Set Up VPN"
-    working_label = "Setting up VPN…"
+    primary_label = get_text("login.setup_steps.set_up_vpn")
+    working_label = get_text("login.setup_steps.setting_up_vpn")
 
     def _perm_ready(self) -> bool:
         from plugins.vpn.wireguard.vpn_functions_linux import check_wireguard_installed
@@ -356,8 +357,8 @@ class _VPNStepLinux(_VPNStepBase):
 class _AntivirusStepMac(SetupStep):
     key = "antivirus"
     icon = "🛡️"
-    title = "Turn On Antivirus"
-    subtitle = "Real-time malware scanning with ClamAV"
+    title = get_text("login.setup_steps.turn_on_antivirus")
+    subtitle = get_text("login.setup_steps.real_time_malware_scanning_with")
     detail = (
         "Resistine downloads virus definitions and installs the ClamAV scanning "
         "service. You'll be asked once for your administrator password, then to "
@@ -370,8 +371,8 @@ class _AntivirusStepMac(SetupStep):
         "Then grant Resistine Full Disk Access when prompted — protection turns "
         "on automatically.",
     ]
-    primary_label = "Enable Antivirus"
-    working_label = "Setting up antivirus…"
+    primary_label = get_text("login.setup_steps.enable_antivirus")
+    working_label = get_text("login.setup_steps.setting_up_antivirus")
 
     def is_complete(self) -> bool:
         # STATE_COMPLETED means the admin install ran — but on macOS 13+ the
@@ -509,7 +510,7 @@ class _AntivirusStepMac(SetupStep):
                         if step and step != last_step:
                             logger.info(f"[AV-SETUP] install step -> {step}")
                             last_step = step
-                            on_status(_STEPS.get(step, "Setting up antivirus…"))
+                            on_status(_STEPS.get(step, get_text("login.setup_steps.setting_up_antivirus")))
                         if result.get("finished"):
                             logger.info(f"[AV-SETUP] install finished: {result}")
                             if result.get("success"):
@@ -628,14 +629,14 @@ class _AntivirusStepDefender(SetupStep):
 
     key = "antivirus"
     icon = "🛡️"
-    title = "Turn On Antivirus"
-    subtitle = "Enable real-time malware protection"
+    title = get_text("login.setup_steps.turn_on_antivirus")
+    subtitle = get_text("login.setup_steps.enable_real_time_malware_protection")
     detail = (
         "Resistine turns on real-time antivirus protection. You may be asked to "
         "approve an administrator prompt."
     )
-    primary_label = "Enable Antivirus"
-    working_label = "Turning on protection…"
+    primary_label = get_text("login.setup_steps.enable_antivirus")
+    working_label = get_text("login.setup_steps.turning_on_protection")
 
     def __init__(self, app):
         super().__init__(app)
@@ -839,8 +840,8 @@ def _wazuh_activate(on_status, cancelled=None):
 class _EndpointStepMac(SetupStep):
     key = "endpoint"
     icon = "📡"
-    title = "Install Endpoint Monitoring"
-    subtitle = "Detect threats with the SIEM agent"
+    title = get_text("login.setup_steps.install_endpoint_monitoring")
+    subtitle = get_text("login.setup_steps.detect_threats_with_the_siem")
     detail = (
         "The Resistine endpoint agent watches your device for suspicious "
         "activity and reports it securely. You'll be asked once for your "
@@ -851,8 +852,8 @@ class _EndpointStepMac(SetupStep):
         "Enter your administrator password when macOS asks.",
         "The agent installs and enrolls automatically.",
     ]
-    primary_label = "Install Endpoint Agent"
-    working_label = "Installing endpoint agent…"
+    primary_label = get_text("login.setup_steps.install_endpoint_agent")
+    working_label = get_text("login.setup_steps.installing_endpoint_agent")
 
     def is_complete(self) -> bool:
         # Installed AND running AND not a confirmed disconnect. "disconnected"
@@ -999,15 +1000,15 @@ class _EndpointStepDirect(SetupStep):
 
     key = "endpoint"
     icon = "📡"
-    title = "Install Endpoint Monitoring"
-    subtitle = "Detect threats with the SIEM agent"
+    title = get_text("login.setup_steps.install_endpoint_monitoring")
+    subtitle = get_text("login.setup_steps.detect_threats_with_the_siem")
     detail = (
         "The Resistine endpoint agent watches your device for suspicious "
         "activity and reports it securely. You may be asked to approve an "
         "administrator prompt."
     )
-    primary_label = "Install Endpoint Agent"
-    working_label = "Installing endpoint agent…"
+    primary_label = get_text("login.setup_steps.install_endpoint_agent")
+    working_label = get_text("login.setup_steps.installing_endpoint_agent")
 
     def is_complete(self) -> bool:
         # Installed AND running AND not a confirmed disconnect (dead key) — see

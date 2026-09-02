@@ -9,7 +9,6 @@ Licensed under the GNU General Public License v2 or later
 
 import base64
 import os
-import platform
 import re
 import socket
 import subprocess
@@ -33,6 +32,7 @@ from plugins.wazuh.config import (
     WINDOWS_SYSMON_ZIP_URL,
     WINDOWS_SYSMON_CONFIG_URL,
 )
+from utils.i18n import get_text
 
 _OSSEC_CONF = os.path.join(WINDOWS_WAZUH_DIR, "ossec.conf")
 _CLIENT_KEYS = os.path.join(WINDOWS_WAZUH_DIR, "client.keys")
@@ -674,7 +674,7 @@ def full_install(progress_callback=None):
 
     if not is_agent_installed():
         logger.error(f"Install failed (agent not present): {output}")
-        _p("Installation failed")
+        _p(get_text("wazuh.installation_failed"))
         return False
 
     # --- Unprivileged verify (no prompt) ---

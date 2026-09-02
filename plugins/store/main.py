@@ -38,6 +38,7 @@ from PyQt6.QtWidgets import (
 from gui import theme
 from gui.qt_widgets import CardGrid, StatusBadge, heading, muted, scroll_page
 from plugins.base_plugin import BasePlugin
+from utils.i18n import get_text
 
 _DIR = os.path.dirname(os.path.realpath(__file__))
 
@@ -144,7 +145,7 @@ class Plugin(BasePlugin):
             order=1000,
             name="Store",
             status=None,
-            description="This plugin allows you to download and install new plugins.",
+            description=get_text("store.this_plugin_allows_you_to"),
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Store", "ES": "Tienda", "FR": "Magasin"},
             icon_light_path=os.path.join(_DIR, "store_light.png"),
@@ -354,7 +355,7 @@ class Plugin(BasePlugin):
         def show_normal_buttons():
             card.clear_buttons()
 
-            info = QPushButton("Info")
+            info = QPushButton(get_text("store.info"))
             info.setCursor(Qt.CursorShape.PointingHandCursor)
             info.setStyleSheet(_info_style())
             info.clicked.connect(
@@ -363,13 +364,13 @@ class Plugin(BasePlugin):
             card.button_row.addWidget(info, 1)
 
             if is_remote or is_uninstalled:
-                install = QPushButton("Install")
+                install = QPushButton(get_text("store.install"))
                 install.setCursor(Qt.CursorShape.PointingHandCursor)
                 install.setStyleSheet(_install_style())
                 install.clicked.connect(lambda: self.handle_install(p))
                 card.button_row.addWidget(install, 1)
             elif getattr(p, "uninstall_enabled", True):
-                uninstall = QPushButton("Uninstall")
+                uninstall = QPushButton(get_text("store.uninstall"))
                 uninstall.setCursor(Qt.CursorShape.PointingHandCursor)
                 uninstall.setStyleSheet(_uninstall_style())
                 uninstall.clicked.connect(show_confirm_buttons)
@@ -377,13 +378,13 @@ class Plugin(BasePlugin):
 
         def show_confirm_buttons():
             card.clear_buttons()
-            cancel = QPushButton("Cancel")
+            cancel = QPushButton(get_text("dialog.password.button.cancel"))
             cancel.setCursor(Qt.CursorShape.PointingHandCursor)
             cancel.setStyleSheet(_cancel_style())
             cancel.clicked.connect(show_normal_buttons)
             card.button_row.addWidget(cancel, 1)
 
-            confirm = QPushButton("Confirm")
+            confirm = QPushButton(get_text("store.confirm"))
             confirm.setCursor(Qt.CursorShape.PointingHandCursor)
             confirm.setStyleSheet(_uninstall_style())
             confirm.clicked.connect(confirm_uninstall)
@@ -467,7 +468,7 @@ class Plugin(BasePlugin):
         except Exception as e:
             logger.error(f"Store: install failed for "
                          f"{getattr(remote_plugin, 'id', '?')}: {e}")
-            self.app.show_notification(f"Install failed: {e}", type="error")
+            self.app.show_notification(get_text("store.install_failed_e", e=e), type="error")
             return
 
         logger.info(f"Store: Installation result for "

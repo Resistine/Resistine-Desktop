@@ -12,6 +12,7 @@ from gui.notifications import ToastNotification
 from utils.logger import logger
 from utils.svg_loader import load_svg_as_ctk_image
 from utils.functions import get_resource_path
+from utils.i18n import get_text
 
 
 class AppUI(customtkinter.CTk):
@@ -348,7 +349,7 @@ class AppUI(customtkinter.CTk):
         # We can try to get the file path from the module
         module = sys.modules.get(plugin_module)
         if not module or not hasattr(module, "__file__"):
-            self.show_notification("Could not find plugin source for README", type="error")
+            self.show_notification(get_text("gui.user_interface.could_not_find_plugin_source"), type="error")
             return
             
         plugin_dir = os.path.dirname(module.__file__)
@@ -945,7 +946,7 @@ class AppUI(customtkinter.CTk):
 
             error_label = customtkinter.CTkLabel(
                 error_frame,
-                text=f"Error loading plugin:\n{e}",
+                text=get_text("gui.user_interface.error_loading_plugin_e", e=e),
                 text_color="#FF3333",
                 wraplength=400,
                 font=customtkinter.CTkFont(size=14, weight="bold"),

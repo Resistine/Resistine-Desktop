@@ -31,6 +31,7 @@ import subprocess
 import sys
 
 from utils.logger import logger
+from utils.i18n import get_text
 
 _EXTENSION_BUNDLE_ID = "com.resistine.desktop.network-extension"
 
@@ -618,11 +619,11 @@ def _deactivate_system_extension():
                 logger.info(
                     "[UNINSTALL] Extension already deactivated, treating as success")
                 return
-            raise OSError(f"Extension deactivation failed: {err}")
+            raise OSError(get_text("utils.uninstall.darwin.extension_deactivation_failed_err", err=err))
     except OSError:
         raise
     except Exception as e:
-        raise OSError(f"Extension deactivation error: {e}") from e
+        raise OSError(get_text("utils.uninstall.darwin.extension_deactivation_error_e", e=e)) from e
 
 
 def _remove_wireguard_configs():

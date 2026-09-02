@@ -70,7 +70,7 @@ class Plugin(BasePlugin):
         super().__init__(
             id="010", version="2025.01.01", order=1020, name="Settings",
             status=None,
-            description="This plugin allows you to configure your account settings.",
+            description=get_text("settings.this_plugin_allows_you_to"),
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Settings", "ES": "Configuracion",
                           "FR": "Paramètres"},
@@ -129,7 +129,7 @@ class Plugin(BasePlugin):
             f"Email: {email}" if email else "Not signed in"))
 
         if logged_in:
-            self.logout_button = QPushButton("Log Out")
+            self.logout_button = QPushButton(get_text("settings.log_out"))
             self.logout_button.setStyleSheet(
                 "background-color: #DC3545; color: white; border: none;"
                 "border-radius: 8px; padding: 8px 16px; font-weight: 600;")
@@ -144,7 +144,7 @@ class Plugin(BasePlugin):
                 self.logout_button.setIconSize(QSize(18, 18))
             self.logout_button.clicked.connect(self._handle_logout)
         else:
-            self.logout_button = QPushButton("Log In")
+            self.logout_button = QPushButton(get_text("settings.log_in"))
             self.logout_button.setStyleSheet(
                 "background-color: #0D5394; color: white; border: none;"
                 "border-radius: 8px; padding: 8px 16px; font-weight: 600;")
@@ -237,13 +237,13 @@ class Plugin(BasePlugin):
         # applies the new language everywhere.
         self.language_status_label.setText(
             _t("settings.language.restart_required",
-               "Restart Resistine to apply the new language."))
+               get_text("settings.language.restart_required")))
 
     # ---- Software Updates -------------------------------------------------
     def _updates_card(self) -> QWidget:
         card, lay = self._card("Software Updates")
         lay.addWidget(self._muted(f"Current version: {self._get_app_version()}"))
-        check = QPushButton("Check for Updates")
+        check = QPushButton(get_text("settings.check_for_updates"))
         check.setCursor(Qt.CursorShape.PointingHandCursor)
         check.clicked.connect(self._check_for_updates)
         lay.addWidget(check, 0, Qt.AlignmentFlag.AlignLeft)
@@ -257,7 +257,7 @@ class Plugin(BasePlugin):
         lay.addWidget(self._muted(
             "Permanently remove Resistine and all associated data from this "
             "computer."))
-        self.uninstall_button = QPushButton("Uninstall Resistine")
+        self.uninstall_button = QPushButton(get_text("settings.uninstall_resistine"))
         self.uninstall_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.uninstall_button.setStyleSheet(
             "background-color: #DC3545; color: white; border: none;"
@@ -328,18 +328,18 @@ class Plugin(BasePlugin):
             from utils import updates
             if not updates.is_available():
                 self.update_status_label.setText(
-                    "Updates not available in this build")
+                    get_text("settings.updates_not_available_in_this"))
                 self.app.after(
                     5000, lambda: self.update_status_label.setText(""))
                 return
-            self.update_status_label.setText("Checking for updates…")
+            self.update_status_label.setText(get_text("settings.checking_for_updates"))
             result = updates.check_for_updates()
             if result == "error":
-                self.update_status_label.setText("Update check failed")
+                self.update_status_label.setText(get_text("settings.update_check_failed"))
             self.app.after(4000, lambda: self.update_status_label.setText(""))
         except Exception as e:
             logger.error(f"Update check error: {e}")
-            self.update_status_label.setText(f"Error: {e}")
+            self.update_status_label.setText(get_text("settings.error_e", e=e))
 
     def _get_app_version(self):
         try:
@@ -372,7 +372,7 @@ class Plugin(BasePlugin):
         if not confirmed:
             return
         self.uninstall_button.setEnabled(False)
-        self.uninstall_status_label.setText("Uninstalling…")
+        self.uninstall_status_label.setText(get_text("settings.uninstalling"))
         try:
             from utils import uninstall
 
@@ -382,7 +382,7 @@ class Plugin(BasePlugin):
             success, message = uninstall.run_uninstall(
                 self.app, progress_callback=_progress)
             if success:
-                self.uninstall_status_label.setText("Uninstalled. Closing…")
+                self.uninstall_status_label.setText(get_text("settings.uninstalled_closing"))
                 if sys.platform == "darwin":
                     # macOS: deferred hard-exit so teardown finishes flushing
                     # (the spawned uninstaller outlives us).
@@ -405,7 +405,7 @@ class Plugin(BasePlugin):
         except Exception as e:
             logger.error(f"Uninstall error: {e}")
             self.uninstall_button.setEnabled(True)
-            self.uninstall_status_label.setText(f"Error: {e}")
+            self.uninstall_status_label.setText(get_text("settings.error_e", e=e))
 
     def _login_plugin_installed(self) -> bool:
         """True if the Login plugin (id 007) is installed."""
@@ -422,7 +422,7 @@ class Plugin(BasePlugin):
         # broken bootstrap path.
         if not self._login_plugin_installed():
             self.app.show_notification(
-                "Please install the Login plugin from the Store first.",
+                get_text("settings.please_install_the_login_plugin"),
                 type="warning",
             )
             return
@@ -442,7 +442,7 @@ class Plugin(BasePlugin):
             self.app.show_login()
         except Exception as e:
             logger.error(f"Failed to show login screen: {e}")
-            self.app.show_notification(f"Logout failed: {e}", type="error")
+            self.app.show_notification(get_text("settings.logout_failed_e", e=e), type="error")
 
     def _handle_login(self):
         """Bring up the full-screen login. No data is cleared — auth namespace
@@ -452,7 +452,7 @@ class Plugin(BasePlugin):
         """
         if not self._login_plugin_installed():
             self.app.show_notification(
-                "Please install the Login plugin from the Store first.",
+                get_text("settings.please_install_the_login_plugin"),
                 type="warning",
             )
             return
@@ -461,7 +461,7 @@ class Plugin(BasePlugin):
         except Exception as e:
             logger.error(f"Failed to show login screen: {e}")
             self.app.show_notification(
-                f"Could not open sign-in: {e}", type="error")
+                get_text("settings.could_not_open_sign_in", e=e), type="error")
 
     # ===================================================================
     #  Logout cleanup helpers (framework-agnostic — kept from CTk version)

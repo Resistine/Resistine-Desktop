@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import QApplication
 from utils import functions as functions
 from utils import settings
 from utils.logger import logger, setup_logging
+from utils.i18n import get_text
 
 DEBUG = False
 
@@ -156,7 +157,7 @@ def main() -> int:
     suppress_child_console_windows()
 
     parser = argparse.ArgumentParser(
-        description="Resistine Desktop Application",
+        description=get_text("main.resistine_desktop_application"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("-d", "--debug", action="store_true",

@@ -16,6 +16,7 @@ from PIL import Image
 
 from utils import settings
 from utils.logger import logger
+from utils.i18n import get_text
 
 
 SUPPORTED_PLATFORMS = {"Darwin", "Linux", "Windows"}
@@ -95,7 +96,7 @@ class VPNOnboardingScreen:
         # Title
         customtkinter.CTkLabel(
             container,
-            text="Almost there! Enable VPN Protection",
+            text=get_text("login.vpn_onboarding.almost_there_enable_vpn_protection"),
             font=customtkinter.CTkFont(family="Inter", size=20, weight="bold"),
             text_color=("#333333", "#FFFFFF"),
         ).grid(row=1, column=0, pady=(0, 15))
@@ -103,14 +104,11 @@ class VPNOnboardingScreen:
         # Subtitle
         if self.is_macos:
             subtitle = (
-                "To secure your connection, Resistine needs to install\n"
-                "a system network extension. This is a one-time setup\n"
-                "that requires your approval in System Settings."
+                get_text("login.vpn_onboarding.to_secure_your_connection_resistine")
             )
         else:
             subtitle = (
-                "To secure your connection, Resistine uses WireGuard.\n"
-                "Click below to verify your system is ready."
+                get_text("login.vpn_onboarding.to_secure_your_connection_resistine_2")
             )
 
         customtkinter.CTkLabel(
@@ -124,7 +122,7 @@ class VPNOnboardingScreen:
         # Enable VPN button
         customtkinter.CTkButton(
             container,
-            text="Enable VPN",
+            text=get_text("login.vpn_onboarding.enable_vpn"),
             command=self._on_enable_clicked,
             width=400,
             height=45,
@@ -137,7 +135,7 @@ class VPNOnboardingScreen:
         # Skip link
         customtkinter.CTkButton(
             container,
-            text="Skip for now",
+            text=get_text("login.vpn_onboarding.skip_for_now"),
             fg_color="transparent",
             hover_color=("gray90", "gray20"),
             text_color=("#0D5394", "#3a7ebf"),
@@ -172,7 +170,7 @@ class VPNOnboardingScreen:
         # Title
         customtkinter.CTkLabel(
             container,
-            text="Approve the System Extension",
+            text=get_text("login.vpn_onboarding.approve_the_system_extension"),
             font=customtkinter.CTkFont(family="Inter", size=18, weight="bold"),
             text_color=("#333333", "#FFFFFF"),
         ).grid(row=1, column=0, pady=(0, 20))
@@ -239,7 +237,7 @@ class VPNOnboardingScreen:
         # Status label
         self._status_label = customtkinter.CTkLabel(
             container,
-            text="Waiting for approval...",
+            text=get_text("login.vpn_onboarding.waiting_for_approval"),
             font=customtkinter.CTkFont(family="Inter", size=12),
             text_color=("#888888", "#888888"),
         )
@@ -249,7 +247,7 @@ class VPNOnboardingScreen:
         if self.is_macos:
             customtkinter.CTkButton(
                 container,
-                text="Open System Settings",
+                text=get_text("login.vpn_onboarding.open_system_settings"),
                 command=self._open_system_settings,
                 width=400,
                 height=45,
@@ -262,7 +260,7 @@ class VPNOnboardingScreen:
         # Skip link
         customtkinter.CTkButton(
             container,
-            text="Skip for now",
+            text=get_text("login.vpn_onboarding.skip_for_now"),
             fg_color="transparent",
             hover_color=("gray90", "gray20"),
             text_color=("#0D5394", "#3a7ebf"),
@@ -284,7 +282,7 @@ class VPNOnboardingScreen:
         # Success title
         customtkinter.CTkLabel(
             container,
-            text="VPN Protection Enabled!",
+            text=get_text("login.vpn_onboarding.vpn_protection_enabled"),
             font=customtkinter.CTkFont(family="Inter", size=22, weight="bold"),
             text_color=("#1E8E3E", "#2CC985"),
         ).grid(row=1, column=0, pady=(0, 15))
@@ -292,7 +290,7 @@ class VPNOnboardingScreen:
         # Subtitle
         customtkinter.CTkLabel(
             container,
-            text="Your connection is now ready to be secured\nwith Resistine VPN.",
+            text=get_text("login.vpn_onboarding.your_connection_is_now_ready"),
             font=customtkinter.CTkFont(family="Inter", size=14),
             text_color=("#666666", "#AAAAAA"),
             justify="center",
@@ -365,9 +363,9 @@ class VPNOnboardingScreen:
             self._on_extension_approved()
         else:
             if hasattr(self, "_status_label") and self._status_label.winfo_exists():
-                self._status_label.configure(text="Not approved yet. Please follow the steps above.")
+                self._status_label.configure(text=get_text("login.vpn_onboarding.not_approved_yet_please_follow"))
                 self.app.after(3000, lambda: (
-                    self._status_label.configure(text="Waiting for approval...")
+                    self._status_label.configure(text=get_text("login.vpn_onboarding.waiting_for_approval"))
                     if hasattr(self, "_status_label") and self._status_label.winfo_exists()
                     else None
                 ))

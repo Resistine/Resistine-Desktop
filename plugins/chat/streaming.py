@@ -13,6 +13,7 @@ import time
 from typing import TYPE_CHECKING, Callable
 
 from utils.logger import logger
+from utils.i18n import get_text
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -277,22 +278,17 @@ class StreamController:
 
             if is_conn:
                 msg = (
-                    f"Could not reach {endpoint}. "
-                    "Check that the host is reachable (VPN, DNS, firewall) "
-                    "and the URL in Settings is correct."
+                    get_text("chat.streaming.could_not_reach_endpoint_check", endpoint=endpoint)
                 )
             elif status == 403 or "not authorized" in raw or "no agent" in raw:
                 # The dashboard authorizes chat by the caller's source IP —
                 # it must map to an enrolled agent. "no agent found" means the
                 # IP the server sees has no registered endpoint agent.
                 msg = (
-                    "This device isn't authorized for chat yet: the server "
-                    "found no enrolled agent for your current IP. Make sure "
-                    "the VPN is on and the endpoint agent is enrolled/running, "
-                    f"then retry. (server said: {raw})"
+                    get_text("chat.streaming.this_device_isn_t_authorized", raw=raw)
                 )
             else:
-                msg = f"{raw} (endpoint: {endpoint})"
+                msg = get_text("chat.streaming.raw_endpoint_endpoint", raw=raw, endpoint=endpoint)
 
             logger.error(
                 f"[CHAT-STREAM] ✗ error after {elapsed:.2f}s"

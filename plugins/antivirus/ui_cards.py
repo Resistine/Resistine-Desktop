@@ -17,6 +17,7 @@ from plugins.antivirus.theme import (
     make_card,
     section_title,
 )
+from utils.i18n import get_text
 
 
 def _muted():
@@ -57,7 +58,7 @@ def build_quarantine_card(plugin, parent, row):
     plugin._quarantine_frame.grid_columnconfigure(0, weight=1)
 
     customtkinter.CTkLabel(
-        plugin._quarantine_frame, text="No threats quarantined",
+        plugin._quarantine_frame, text=get_text("antivirus.ui_cards.no_threats_quarantined"),
         font=font(12), text_color=_muted(),
     ).grid(row=0, column=0, sticky="w")
     return row + 1
@@ -78,7 +79,7 @@ def build_whitelist_card(plugin, parent, row):
     section_title(hdr, "Whitelist").grid(row=0, column=0, sticky="w")
 
     customtkinter.CTkButton(
-        hdr, text="+ Add", width=60, height=26, corner_radius=6,
+        hdr, text=get_text("antivirus.ui_cards.add"), width=60, height=26, corner_radius=6,
         font=font(11), fg_color="transparent", border_width=1,
         border_color=_btn_border(), text_color=_btn_border(),
         hover_color=_btn_hover(),
@@ -96,7 +97,7 @@ def build_whitelist_card(plugin, parent, row):
     plugin._whitelist_frame.grid_columnconfigure(0, weight=1)
 
     customtkinter.CTkLabel(
-        plugin._whitelist_frame, text="No whitelisted paths",
+        plugin._whitelist_frame, text=get_text("antivirus.ui_cards.no_whitelisted_paths"),
         font=font(12), text_color=_muted(),
     ).grid(row=0, column=0, sticky="w")
     return row + 1
@@ -111,14 +112,14 @@ def build_scan_exclusions(plugin, parent, row):
     card.grid_columnconfigure(0, weight=1)
 
     customtkinter.CTkLabel(
-        card, text="Scan Exclusions", font=font(14, bold=True),
+        card, text=get_text("antivirus.qt_ui.scan_exclusions"), font=font(14, bold=True),
     ).grid(row=0, column=0, columnspan=2, padx=16, pady=(14, 6), sticky="w")
 
     add_separator(card, 1)
 
     # ── Extension exclusions ──
     customtkinter.CTkLabel(
-        card, text="Skip File Extensions", font=font(12),
+        card, text=get_text("antivirus.ui_cards.skip_file_extensions"), font=font(12),
         text_color=_muted(),
     ).grid(row=2, column=0, columnspan=2, padx=16, pady=(8, 4), sticky="w")
 
@@ -129,14 +130,14 @@ def build_scan_exclusions(plugin, parent, row):
     add_row.grid_columnconfigure(0, weight=1)
 
     plugin._ext_entry = customtkinter.CTkEntry(
-        add_row, height=28, placeholder_text=".iso, .vmdk, .log",
+        add_row, height=28, placeholder_text=get_text("antivirus.qt_ui.iso_vmdk_log"),
         font=font(11),
     )
     plugin._ext_entry.grid(row=0, column=0, sticky="ew", padx=(0, 4))
     plugin._ext_entry.bind("<Return>", lambda e: plugin._add_excluded_extension())
 
     customtkinter.CTkButton(
-        add_row, text="+ Add", width=60, height=28, corner_radius=6,
+        add_row, text=get_text("antivirus.ui_cards.add"), width=60, height=28, corner_radius=6,
         font=font(11), fg_color="transparent", border_width=1,
         border_color=_btn_border(), text_color=_btn_border(),
         hover_color=_btn_hover(),
@@ -161,7 +162,7 @@ def build_scan_exclusions(plugin, parent, row):
     size_row.grid_columnconfigure(0, weight=1)
 
     customtkinter.CTkLabel(
-        size_row, text="Max File Size", font=font(12),
+        size_row, text=get_text("antivirus.qt_ui.max_file_size"), font=font(12),
     ).grid(row=0, column=0, sticky="w")
 
     right = customtkinter.CTkFrame(size_row, fg_color="transparent")
@@ -181,7 +182,7 @@ def build_scan_exclusions(plugin, parent, row):
     ).grid(row=0, column=1, padx=(4, 0))
 
     customtkinter.CTkLabel(
-        size_row, text="0 = no limit",
+        size_row, text=get_text("antivirus.ui_cards.0_no_limit"),
         font=font(10), text_color=_muted(),
     ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
@@ -201,14 +202,14 @@ def build_siem_card(plugin, parent, row):
     card.grid_columnconfigure(0, weight=1)
 
     customtkinter.CTkLabel(
-        card, text="SIEM Forwarding", font=font(14, bold=True),
+        card, text=get_text("antivirus.qt_ui.siem_forwarding"), font=font(14, bold=True),
     ).grid(row=0, column=0, columnspan=2, padx=16, pady=(14, 6), sticky="w")
 
     add_separator(card, 1)
 
     # Threat log source
     customtkinter.CTkLabel(
-        card, text="Threat Log", text_color=_muted(), font=font(12),
+        card, text=get_text("antivirus.ui_cards.threat_log"), text_color=_muted(), font=font(12),
     ).grid(row=2, column=0, padx=16, pady=(8, 0), sticky="w")
 
     customtkinter.CTkLabel(
@@ -226,7 +227,7 @@ def build_siem_card(plugin, parent, row):
     forwarding_on = is_forwarding_enabled()
 
     plugin._siem_switch = customtkinter.CTkSwitch(
-        card, text="Forward AV detections to the SIEM",
+        card, text=get_text("antivirus.ui_cards.forward_av_detections_to_the"),
         font=font(12), command=plugin._on_forwarding_toggle,
         onvalue=1, offvalue=0,
     )
@@ -239,7 +240,7 @@ def build_siem_card(plugin, parent, row):
     )
 
     if forwarding_on:
-        _status_text, _status_color = "Forwarding active", _ok_text()
+        _status_text, _status_color = get_text("antivirus.forwarding_active"), _ok_text()
     elif installed:
         _status_text, _status_color = (
             "Ready — turn on to forward AV detections", _muted())
@@ -292,7 +293,7 @@ def _build_auto_update_toggle(plugin, card, row):
     left.grid(row=0, column=0, sticky="w")
 
     customtkinter.CTkLabel(
-        left, text="Auto-update signatures", font=font(12),
+        left, text=get_text("antivirus.qt_ui.auto_update_signatures"), font=font(12),
     ).grid(row=0, column=0, sticky="w")
 
     if platform.system() == "Darwin":
@@ -300,7 +301,7 @@ def _build_auto_update_toggle(plugin, card, row):
         # closed, so auto-update is always on \u2014 no toggle to defeat its
         # purpose. Show a read-only "Automatic" status instead of a switch.
         customtkinter.CTkLabel(
-            left, text="Checks every ~4 hours, even when the app is closed",
+            left, text=get_text("antivirus.ui_cards.checks_every_4_hours_even"),
             font=font(11), text_color=_muted(),
         ).grid(row=1, column=0, sticky="w")
         customtkinter.CTkLabel(
@@ -312,7 +313,7 @@ def _build_auto_update_toggle(plugin, card, row):
     # Linux/Windows: the in-process scheduler is the only updater, and the
     # user-facing toggle is retained unchanged.
     customtkinter.CTkLabel(
-        left, text="Daily around 4:00 AM (\u00b12 hrs)",
+        left, text=get_text("antivirus.ui_cards.daily_around_4_00_am"),
         font=font(11), text_color=_muted(),
     ).grid(row=1, column=0, sticky="w")
 
@@ -359,7 +360,7 @@ def build_sig_updates_settings_card(plugin, parent, row):
     r = _build_auto_update_toggle(plugin, card, 2)
 
     update_btn = customtkinter.CTkButton(
-        card, text="Update Now", height=30, corner_radius=8,
+        card, text=get_text("antivirus.update_now"), height=30, corner_radius=8,
         font=font(12), fg_color="transparent", border_width=1,
         border_color=_btn_border(), text_color=_btn_border(),
         hover_color=_btn_hover(),

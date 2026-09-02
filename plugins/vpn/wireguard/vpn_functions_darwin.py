@@ -14,6 +14,7 @@ from typing import Optional, Tuple
 
 from utils import settings
 from utils.logger import logger
+from utils.i18n import get_text
 
 
 def get_writable_wireguard_dir():
@@ -641,7 +642,7 @@ def ensure_helper_registered():
             try:
                 service = SMAppService.daemonWithPlistName_(plist_name)
             except:
-                logger.warning("Could not create SMAppService for helper")
+                logger.warning(get_text("main.helper.could_not_create"))
                 return
 
         # Check current status
@@ -655,28 +656,28 @@ def ensure_helper_registered():
         status_str = status_map.get(status, "unknown")
 
         if status == 1:  # Already enabled
-            logger.info("Helper already enabled")
+            logger.info(get_text("main.helper.already_enabled"))
             return
 
         if status == 2:  # Requires approval
-            logger.warning("Helper registered but requires user approval")
+            logger.warning(get_text("main.helper.requires_approval"))
             prompt_helper_approval(service)
             return
 
         # Not registered yet (0 or 3), try to register
-        logger.info("Registering privileged helper...")
+        logger.info(get_text("main.helper.registering"))
         error = service.registerAndReturnError_(None)
 
         if error:
-            logger.error(f"Helper registration error: {error}")
+            logger.error(get_text("main.helper.registration_error", error=error))
             new_status = int(service.status())
             if new_status == 2:
                 prompt_helper_approval(service)
         else:
-            logger.info("Helper registered successfully")
+            logger.info(get_text("main.helper.registered"))
 
     except ImportError:
-        logger.warning("ServiceManagement framework not available")
+        logger.warning(get_text("main.helper.framework_unavailable"))
     except Exception as e:
         logger.error(f"Helper registration error: {e}")
 
@@ -699,9 +700,8 @@ def prompt_helper_approval(service):
 
         ask_yes_no(
             root,
-            "Helper Approval Required",
-            "Resistine needs your approval to install a helper tool for VPN functionality.\n\n"
-            "Click 'Yes' to open System Settings where you can enable it in Login Items.",
+            get_text("main.helper.approval_title"),
+            get_text("main.helper.approval_message"),
             on_confirm
         )
     except Exception as e:

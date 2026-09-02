@@ -30,6 +30,7 @@ from plugins.wazuh.config import (
     WAZUH_REGISTRATION_PORT,
     LINUX_WAZUH_DIR,
 )
+from utils.i18n import get_text
 
 # Deployment-variable prefix passed to the package installer.  Carries the
 # manager address, ports, protocol, agent name, and group so the package's
@@ -74,7 +75,7 @@ def run_privileged_command(command, timeout=120):
     except:
         root = None
     
-    dialog = CTkPasswordDialog(title="Authentication Required", text="Enter password to modify Wazuh Agent settings:")
+    dialog = CTkPasswordDialog(title=get_text("antivirus.clamav_platform_linux.authentication_required"), text=get_text("wazuh.agent.wazuh_functions_linux.enter_password_to_modify_wazuh"))
     password = dialog.get_input()
 
     if not password:
@@ -565,7 +566,7 @@ def full_install(progress_callback=None):
         return True
         
     if progress_callback:
-        progress_callback("Installation failed")
+        progress_callback(get_text("wazuh.installation_failed"))
     return False
 
 def reenroll_agent():

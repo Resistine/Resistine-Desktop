@@ -17,6 +17,7 @@ from plugins.antivirus.ui_cards import (
     build_sig_updates_settings_card,
     build_whitelist_card,
 )
+from utils.i18n import get_text
 
 
 def build_settings_header(plugin, parent, row):
@@ -30,7 +31,7 @@ def build_settings_header(plugin, parent, row):
     header.grid_columnconfigure(2, weight=0, minsize=80)
 
     back_btn = customtkinter.CTkButton(
-        header, text="\u2190  Back", width=80, height=32,
+        header, text=get_text("antivirus.ui_settings.back"), width=80, height=32,
         corner_radius=8, font=font(12),
         fg_color="transparent",
         hover_color=("#E5E7EB", "#2A2A2C"),

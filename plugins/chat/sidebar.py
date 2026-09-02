@@ -7,6 +7,7 @@ from typing import Callable
 import customtkinter
 
 from plugins.chat.fonts import RESISTINE_BLUE, ui_family
+from utils.i18n import get_text
 
 
 def _time_ago(ts: float) -> str:
@@ -80,7 +81,7 @@ class ChatSidebar(customtkinter.CTkFrame):
         ).grid(row=0, column=0, sticky="w", padx=4)
 
         customtkinter.CTkButton(
-            hdr, text="+ New",
+            hdr, text=get_text("chat.new"),
             font=customtkinter.CTkFont(
                 family=ui_family(), size=11, weight="bold"),
             fg_color=RESISTINE_BLUE, hover_color="#1565B0", text_color="#fff",
@@ -113,7 +114,7 @@ class ChatSidebar(customtkinter.CTkFrame):
                 w.destroy()
             self._items.clear()
             customtkinter.CTkLabel(
-                self._list, text="No conversations",
+                self._list, text=get_text("chat.no_conversations"),
                 font=customtkinter.CTkFont(family=ui_family(), size=12),
                 text_color="#6B7280",
             ).pack(pady=30)

@@ -24,7 +24,6 @@ Licensed under the GNU General Public License v2 or later
 
 import platform
 
-from utils.logger import logger
 
 # ---------------------------------------------------------------------------
 # Platform detection

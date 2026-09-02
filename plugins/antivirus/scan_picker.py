@@ -17,6 +17,7 @@ from tkinter import filedialog
 import customtkinter
 
 from plugins.antivirus.theme import CORNER_R, font
+from utils.i18n import get_text
 
 
 def pick_scan_targets(parent) -> list[str] | None:
@@ -107,19 +108,19 @@ class _ScanPickerDialog(customtkinter.CTkToplevel):
         btn_row.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 6))
 
         customtkinter.CTkButton(
-            btn_row, text="Add Files\u2026", width=120, height=32,
+            btn_row, text=get_text("antivirus.scan_picker.add_files"), width=120, height=32,
             corner_radius=8, font=font(12),
             command=self._add_files,
         ).pack(side="left", padx=(0, 8))
 
         customtkinter.CTkButton(
-            btn_row, text="Add Folders\u2026", width=120, height=32,
+            btn_row, text=get_text("antivirus.scan_picker.add_folders"), width=120, height=32,
             corner_radius=8, font=font(12),
             command=self._add_folders,
         ).pack(side="left", padx=(0, 8))
 
         self._remove_btn = customtkinter.CTkButton(
-            btn_row, text="Remove Last", width=100, height=32,
+            btn_row, text=get_text("antivirus.scan_picker.remove_last"), width=100, height=32,
             corner_radius=8, font=font(12),
             fg_color="transparent", border_width=1,
             command=self._remove_last,
@@ -140,7 +141,7 @@ class _ScanPickerDialog(customtkinter.CTkToplevel):
         bottom.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 14))
 
         self._count_label = customtkinter.CTkLabel(
-            bottom, text="0 items selected", font=font(11),
+            bottom, text=get_text("antivirus.scan_picker.0_items_selected"), font=font(11),
         )
         self._count_label.pack(side="left")
 
@@ -163,7 +164,7 @@ class _ScanPickerDialog(customtkinter.CTkToplevel):
 
     def _add_files(self):
         paths = list(filedialog.askopenfilenames(
-            title="Select Files to Scan", parent=self,
+            title=get_text("antivirus.scan_picker.select_files_to_scan"), parent=self,
         ) or [])
         for p in paths:
             if p not in self._paths:
@@ -173,7 +174,7 @@ class _ScanPickerDialog(customtkinter.CTkToplevel):
 
     def _add_folders(self):
         path = filedialog.askdirectory(
-            title="Select Folder to Scan", parent=self,
+            title=get_text("antivirus.scan_picker.select_folder_to_scan"), parent=self,
         )
         if path and path not in self._paths:
             self._paths.append(path)
@@ -190,7 +191,7 @@ class _ScanPickerDialog(customtkinter.CTkToplevel):
         self._listbox.delete("1.0", "end")
         for p in self._paths:
             prefix = "[DIR]" if os.path.isdir(p) else "[FILE]"
-            self._listbox.insert("end", f"{prefix}  {p}\n")
+            self._listbox.insert("end", get_text("antivirus.scan_picker.prefix_p", prefix=prefix, p=p))
         self._listbox.configure(state="disabled")
 
         count = len(self._paths)

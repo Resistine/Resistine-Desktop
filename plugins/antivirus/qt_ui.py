@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
 
 from gui import theme
 from gui.qt_widgets import load_icon, resource
+from utils.i18n import get_text
 
 
 # ── Small shared helpers ───────────────────────────────────
@@ -92,7 +93,7 @@ def build_status_banner(plugin, col: QVBoxLayout) -> None:
     # ("Connected" / "All traffic …"): 28px coloured title, 12px muted subtitle,
     # transparent backgrounds. The title colour is set per state in
     # _apply_realtime_status_ui via banner_title_color().
-    plugin._banner_label = QLabel("Checking...")
+    plugin._banner_label = QLabel(get_text("antivirus.qt_ui.checking"))
     plugin._banner_label.setStyleSheet(
         f"color: {banner_title_color('warn')}; font-size: 28px; "
         f"font-weight: 700; background: transparent;"
@@ -100,7 +101,7 @@ def build_status_banner(plugin, col: QVBoxLayout) -> None:
     text_col.addWidget(plugin._banner_label)
 
     _sub_color = "#AAAAAA" if theme.is_dark() else "#555555"
-    plugin._banner_subtitle = QLabel("Checking protection status...")
+    plugin._banner_subtitle = QLabel(get_text("antivirus.qt_ui.checking_protection_status"))
     plugin._banner_subtitle.setWordWrap(True)
     plugin._banner_subtitle.setStyleSheet(
         f"color: {_sub_color}; font-size: 12px; background: transparent;"
@@ -109,7 +110,7 @@ def build_status_banner(plugin, col: QVBoxLayout) -> None:
     text_col.addWidget(plugin._banner_subtitle)
     top.addLayout(text_col, 1)
 
-    plugin._banner_action_btn = QPushButton("Open Settings")
+    plugin._banner_action_btn = QPushButton(get_text("antivirus.qt_ui.open_settings"))
     plugin._banner_action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
     plugin._banner_action_btn.setMinimumWidth(130)
     plugin._banner_action_btn.hide()
@@ -200,13 +201,13 @@ def build_scan_activity(plugin, col: QVBoxLayout) -> None:
     header.addWidget(section_title("Scan Activity"))
     header.addStretch(1)
 
-    plugin._scan_status_label = QLabel("No scans yet")
+    plugin._scan_status_label = QLabel(get_text("antivirus.qt_ui.no_scans_yet"))
     plugin._scan_status_label.setStyleSheet(
         f"font-size: 11px; color: {theme.color('text_secondary')};"
     )
     header.addWidget(plugin._scan_status_label)
 
-    cancel_btn = QPushButton("Cancel")
+    cancel_btn = QPushButton(get_text("dialog.password.button.cancel"))
     cancel_btn.setObjectName("Danger")
     cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
     cancel_btn.setStyleSheet(
@@ -254,7 +255,7 @@ def build_quarantine_card(plugin, col: QVBoxLayout) -> None:
     qlay.setContentsMargins(0, 0, 0, 0)
     qlay.setSpacing(2)
     plugin._quarantine_layout = qlay
-    qlay.addWidget(muted("No threats quarantined"))
+    qlay.addWidget(muted(get_text("antivirus.ui_cards.no_threats_quarantined")))
     lay.addWidget(plugin._quarantine_frame)
     col.addWidget(frame)
 
@@ -298,7 +299,7 @@ def build_db_info_card(plugin, col: QVBoxLayout) -> None:
 
 def build_settings_header(plugin, col: QVBoxLayout) -> None:
     row = QHBoxLayout()
-    back = secondary_button("←  Back")
+    back = secondary_button(get_text("antivirus.ui_settings.back"))
     back.setStyleSheet(
         "QPushButton { background-color: transparent; border: none; "
         f"color: {theme.color('text_secondary')}; font-size: 12px; }}"
@@ -306,7 +307,7 @@ def build_settings_header(plugin, col: QVBoxLayout) -> None:
     back.clicked.connect(plugin._show_main_view)
     row.addWidget(back, 0, Qt.AlignmentFlag.AlignLeft)
     row.addStretch(1)
-    title = QLabel("Settings")
+    title = QLabel(get_text("antivirus.qt_ui.settings"))
     title.setStyleSheet("font-size: 18px; font-weight: 700;")
     row.addWidget(title)
     row.addStretch(1)
@@ -321,12 +322,12 @@ def build_siem_card(plugin, col: QVBoxLayout) -> None:
     from plugins.antivirus.threat_log import get_log_display, is_wazuh_installed
 
     frame, lay = card()
-    title = QLabel("SIEM Forwarding")
+    title = QLabel(get_text("antivirus.qt_ui.siem_forwarding"))
     title.setStyleSheet("font-size: 14px; font-weight: 700;")
     lay.addWidget(title)
     lay.addWidget(divider())
 
-    lay.addWidget(muted("Threat Log"))
+    lay.addWidget(muted(get_text("antivirus.ui_cards.threat_log")))
     try:
         disp = get_log_display()
     except Exception:
@@ -345,11 +346,11 @@ def build_siem_card(plugin, col: QVBoxLayout) -> None:
         wazuh = False
 
     if wazuh:
-        plugin._siem_status_label = QLabel("Wazuh agent detected")
+        plugin._siem_status_label = QLabel(get_text("antivirus.qt_ui.wazuh_agent_detected"))
         plugin._siem_status_label.setStyleSheet("color: #2ecc71;")
         lay.addWidget(plugin._siem_status_label)
 
-        plugin._siem_btn = secondary_button("Configure Forwarding")
+        plugin._siem_btn = secondary_button(get_text("antivirus.configure_forwarding"))
         plugin._siem_btn.clicked.connect(plugin._setup_wazuh_forwarding)
         lay.addWidget(plugin._siem_btn)
     else:
@@ -360,20 +361,20 @@ def build_siem_card(plugin, col: QVBoxLayout) -> None:
 
 def build_scan_exclusions(plugin, col: QVBoxLayout) -> None:
     frame, lay = card()
-    title = QLabel("Scan Exclusions")
+    title = QLabel(get_text("antivirus.qt_ui.scan_exclusions"))
     title.setStyleSheet("font-size: 14px; font-weight: 700;")
     lay.addWidget(title)
     lay.addWidget(divider())
 
-    lay.addWidget(muted("Skip File Extensions"))
+    lay.addWidget(muted(get_text("antivirus.ui_cards.skip_file_extensions")))
 
     add_row = QHBoxLayout()
     add_row.setSpacing(4)
     plugin._ext_entry = QLineEdit()
-    plugin._ext_entry.setPlaceholderText(".iso, .vmdk, .log")
+    plugin._ext_entry.setPlaceholderText(get_text("antivirus.qt_ui.iso_vmdk_log"))
     plugin._ext_entry.returnPressed.connect(plugin._add_excluded_extension)
     add_row.addWidget(plugin._ext_entry, 1)
-    add_btn = secondary_button("+ Add")
+    add_btn = secondary_button(get_text("antivirus.ui_cards.add"))
     add_btn.clicked.connect(plugin._add_excluded_extension)
     add_row.addWidget(add_btn)
     lay.addLayout(add_row)
@@ -389,7 +390,7 @@ def build_scan_exclusions(plugin, col: QVBoxLayout) -> None:
     lay.addWidget(divider())
 
     size_row = QHBoxLayout()
-    size_row.addWidget(QLabel("Max File Size"))
+    size_row.addWidget(QLabel(get_text("antivirus.qt_ui.max_file_size")))
     size_row.addStretch(1)
     plugin._size_entry = QLineEdit()
     plugin._size_entry.setFixedWidth(70)
@@ -402,7 +403,7 @@ def build_scan_exclusions(plugin, col: QVBoxLayout) -> None:
     size_row.addWidget(muted("MB"))
     lay.addLayout(size_row)
 
-    hint = muted("0 = no limit")
+    hint = muted(get_text("antivirus.ui_cards.0_no_limit"))
     hint.setStyleSheet(
         f"font-size: 10px; color: {theme.color('text_secondary')};"
     )
@@ -416,7 +417,7 @@ def build_whitelist_card(plugin, col: QVBoxLayout) -> None:
     header = QHBoxLayout()
     header.addWidget(section_title("Whitelist"))
     header.addStretch(1)
-    add_btn = secondary_button("+ Add")
+    add_btn = secondary_button(get_text("antivirus.ui_cards.add"))
     add_btn.clicked.connect(lambda: plugin._on_action("whitelist_add"))
     header.addWidget(add_btn)
     lay.addLayout(header)
@@ -428,7 +429,7 @@ def build_whitelist_card(plugin, col: QVBoxLayout) -> None:
     wlay.setContentsMargins(0, 0, 0, 0)
     wlay.setSpacing(2)
     plugin._whitelist_layout = wlay
-    wlay.addWidget(muted("No whitelisted paths"))
+    wlay.addWidget(muted(get_text("antivirus.ui_cards.no_whitelisted_paths")))
     lay.addWidget(plugin._whitelist_frame)
     col.addWidget(frame)
 
@@ -443,8 +444,8 @@ def build_sig_updates_settings_card(plugin, col: QVBoxLayout) -> None:
     auto_row = QHBoxLayout()
     left = QVBoxLayout()
     left.setSpacing(0)
-    left.addWidget(QLabel("Auto-update signatures"))
-    sub = muted("Daily around 4:00 AM (±2 hrs)")
+    left.addWidget(QLabel(get_text("antivirus.qt_ui.auto_update_signatures")))
+    sub = muted(get_text("antivirus.ui_cards.daily_around_4_00_am"))
     sub.setStyleSheet(
         f"font-size: 11px; color: {theme.color('text_secondary')};"
     )
@@ -458,7 +459,7 @@ def build_sig_updates_settings_card(plugin, col: QVBoxLayout) -> None:
                        0, Qt.AlignmentFlag.AlignRight)
     lay.addLayout(auto_row)
 
-    update_btn = secondary_button("Update Now")
+    update_btn = secondary_button(get_text("antivirus.update_now"))
     update_btn.clicked.connect(lambda: plugin._on_action("update_sigs"))
     lay.addWidget(update_btn)
     plugin._action_buttons["update_sigs"] = update_btn

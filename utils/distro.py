@@ -5,7 +5,6 @@ Provides a unified interface for detecting Linux distributions,
 handling package managers, and init systems.
 """
 import platform
-import subprocess
 import shutil
 import os
 from typing import Optional, List

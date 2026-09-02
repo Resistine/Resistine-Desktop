@@ -40,7 +40,6 @@ from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtGui import QColor, QFontMetrics, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QStackedWidget,
-    QBoxLayout,
     QComboBox,
     QFrame,
     QGraphicsOpacityEffect,
@@ -52,7 +51,6 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -65,6 +63,7 @@ from plugins.wazuh_overview import api_client, charts
 from plugins.wazuh_overview.config import EVENTS_WINDOW_HOURS, MAX_PARALLEL_FETCHES
 from plugins.wazuh_overview.loading import LoadingScreen, RampProgress
 from utils.logger import logger
+from utils.i18n import get_text
 
 _PLUGIN_DIR = os.path.dirname(os.path.realpath(__file__))
 # Reuse the SIEM-agent plugin's Wazuh iconography for the sidebar entry.
@@ -1372,7 +1371,7 @@ class Plugin(BasePlugin):
             order=5.5,
             name="Endpoint",
             status=None,
-            description="Security posture across your device group.",
+            description=get_text("wazuh_overview.security_posture_across_your_device"),
             supported_systems=["Darwin", "Linux", "Windows"],
             translations={"US": "Endpoint", "ES": "Endpoint", "FR": "Endpoint"},
             icon_light_path=os.path.join(_WAZUH_DIR, "wazuh_light.png"),
@@ -2261,15 +2260,14 @@ class Plugin(BasePlugin):
             bg, txt = theme.color("protect_warn_bg"), theme.color("protect_warn_text")
             disc_at = _format_relative(bi.get("disconnection_time"))
             msg = (
-                f"⚠  Agent is disconnected. Last contact with Wazuh manager was {disc_at}. "
-                "Plugin features below reflect the last successful scan."
+                get_text("wazuh_overview.agent_is_disconnected_last_contact", disc_at=disc_at)
             )
 
         f, h = bar(bg)
         h.addWidget(_label(msg, size=12, color=txt, wrap=True))
         h.addStretch(1)
         if not is_connected and is_local:
-            btn = QPushButton("Reconnect agent")
+            btn = QPushButton(get_text("wazuh_overview.reconnect_agent"))
             btn.setObjectName("Danger")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(self._on_reconnect_click)
@@ -2295,7 +2293,7 @@ class Plugin(BasePlugin):
             h.addWidget(_label(f"●  {key.capitalize()}", size=11, bold=True, color=fg))
 
         if _SHOW_DEV_REFRESH_BUTTON:
-            btn = QPushButton("↻ Refresh data")
+            btn = QPushButton(get_text("wazuh_overview.refresh_data"))
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(self.request_refresh)
             self._refresh_button = btn
@@ -2438,7 +2436,7 @@ class Plugin(BasePlugin):
         }
 
     def _sca_card(self):
-        title = "Compliance · SCA"
+        title = get_text("wazuh_overview.compliance_sca")
         if not _remote_sca_ready.is_set():
             return _loading_card(title, "OS signature checks and benchmarks")
         if _REMOTE_SCA_ERROR:
@@ -2833,7 +2831,7 @@ class Plugin(BasePlugin):
         h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(_label("EVENT SEARCH", size=11, bold=True))
         self._ev_search = QLineEdit()
-        self._ev_search.setPlaceholderText("Search rule, IP, description…")
+        self._ev_search.setPlaceholderText(get_text("wazuh_overview.search_rule_ip_description"))
         self._ev_search.textChanged.connect(self._on_event_search_changed)
         h.addWidget(self._ev_search, 1)
         self._ev_count_label = _label(f"{len(_REMOTE_VULN_EVENTS)} events", size=11, secondary=True)
@@ -2980,12 +2978,12 @@ class Plugin(BasePlugin):
             # Say why the stream is empty. A failed fetch and a genuinely quiet
             # window both render zero rows, and they need different responses.
             if _REMOTE_VULN_EVENTS_ERROR:
-                msg = f"Couldn't load events — {_REMOTE_VULN_EVENTS_ERROR}"
+                msg = get_text("wazuh_overview.couldn_t_load_events_remote", _REMOTE_VULN_EVENTS_ERROR=_REMOTE_VULN_EVENTS_ERROR)
             elif _REMOTE_VULN_EVENTS:
-                msg = "No events match the current filters"
+                msg = get_text("wazuh_overview.no_events_match_the_current")
             else:
                 days = EVENTS_WINDOW_HOURS // 24
-                msg = f"No security events in the last {days} days"
+                msg = get_text("wazuh_overview.no_security_events_in_the", days=days)
             empty = _label(msg, size=13, secondary=True)
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lay.insertWidget(lay.count() - 1, empty)
@@ -3664,7 +3662,7 @@ class Plugin(BasePlugin):
         top = QHBoxLayout()
         top.addWidget(_label("AFFECTED PACKAGES & CVES", size=11, bold=True))
         self._vuln_search = QLineEdit()
-        self._vuln_search.setPlaceholderText("Search CVE, package, severity…")
+        self._vuln_search.setPlaceholderText(get_text("wazuh_overview.search_cve_package_severity"))
         self._vuln_search.textChanged.connect(self._on_vuln_search_changed)
         top.addWidget(self._vuln_search, 1)
         self._vuln_count_label = _label(
@@ -4384,7 +4382,7 @@ class Plugin(BasePlugin):
             total = sum(r["count"] for r in rows)
             n_with_data = sum(1 for r in rows if r["count"] > 0)
             word = "interfaces" if view == "Network" else view.lower()
-            count_text = f"{n_with_data} devices · {total} {word} total"
+            count_text = get_text("wazuh_overview.n_with_data_devices_total", n_with_data=n_with_data, total=total, word=word)
         if self._inv_count_label is not None:
             self._inv_count_label.setText(count_text)
 

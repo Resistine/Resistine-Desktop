@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
 
 from plugins.base_plugin import BasePlugin
 from utils.logger import logger
+from utils.i18n import get_text
 
 _DIR = os.path.dirname(os.path.realpath(__file__))
 
@@ -95,7 +96,7 @@ class Plugin(BasePlugin):
         super().__init__(
             id="009", version="2025.01.01", order=1010, name="Help",
             status=None,
-            description="This plugin provides help documentation.",
+            description=get_text("help.this_plugin_provides_help_documentation"),
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Help", "ES": "Ayuda", "FR": "Aide"},
             icon_light_path=os.path.join(_DIR, "help_light.png"),
@@ -127,14 +128,14 @@ class Plugin(BasePlugin):
         nav = QHBoxLayout()
         nav.setSpacing(6)
 
-        self.back_button = QPushButton("←  Back")
+        self.back_button = QPushButton(get_text("antivirus.ui_settings.back"))
         self.back_button.setObjectName("Secondary")
         self.back_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.back_button.setEnabled(False)
         self.back_button.clicked.connect(self.go_back)
         nav.addWidget(self.back_button)
 
-        self.home_button = QPushButton("⌂  Home")
+        self.home_button = QPushButton(get_text("help.home"))
         self.home_button.setObjectName("Secondary")
         self.home_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.home_button.clicked.connect(self.go_home)

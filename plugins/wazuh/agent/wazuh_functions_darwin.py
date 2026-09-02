@@ -31,6 +31,7 @@ from plugins.wazuh.config import (
     WAZUH_REGISTRATION_PORT,
     WAZUH_VERSION,
 )
+from utils.i18n import get_text
 
 _WAZUH_CONTROL = f"{WAZUH_INSTALL_DIR}/bin/wazuh-control"
 
@@ -731,7 +732,7 @@ def full_install(progress_callback=None):
     if not launched:
         logger.error("Failed to launch postinstall script (user cancelled or osascript error)")
         if progress_callback:
-            progress_callback("Installation failed")
+            progress_callback(get_text("wazuh.installation_failed"))
         return False
 
     # Poll the status file until the script finishes.  full_install() is
@@ -769,7 +770,7 @@ def full_install(progress_callback=None):
         if not success:
             logger.error("Postinstall script timed out")
             if progress_callback:
-                progress_callback("Installation timed out")
+                progress_callback(get_text("wazuh.installation_timed_out"))
             return False
         logger.warning("Poll timed out but agent is installed on disk")
 

@@ -1,6 +1,5 @@
 import os
 import io
-import sys
 from PIL import Image
 import customtkinter
 

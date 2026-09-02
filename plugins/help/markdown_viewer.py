@@ -13,6 +13,7 @@ import webbrowser
 import customtkinter
 from customtkinter import ThemeManager
 from utils.logger import logger
+from utils.i18n import get_text
 
 
 class MarkdownViewer(customtkinter.CTkFrame):
@@ -36,7 +37,7 @@ class MarkdownViewer(customtkinter.CTkFrame):
         # Back button
         self.back_button = customtkinter.CTkButton(
             self.nav_frame,
-            text="\u2190  Back",
+            text=get_text("antivirus.ui_settings.back"),
             width=80,
             height=32,
             corner_radius=8,
@@ -54,7 +55,7 @@ class MarkdownViewer(customtkinter.CTkFrame):
         # Home button
         self.home_button = customtkinter.CTkButton(
             self.nav_frame,
-            text="\u2302  Home",
+            text=get_text("help.home"),
             width=80,
             height=32,
             corner_radius=8,

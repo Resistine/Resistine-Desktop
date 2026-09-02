@@ -26,6 +26,7 @@ from utils import settings
 from utils.logger import logger
 from utils.updates.appcast import AppcastItem, get_latest_linux_update
 from utils.updates.version import get_current_version, get_project_root
+from utils.i18n import get_text
 
 # Ed25519 public key (same key pair used by macOS Sparkle signatures)
 _ED25519_PUBLIC_KEY_B64 = "2eiUHVoMgl+qqhEWO8iix5SUcRAKfkWYESh9F7jG6ls="
@@ -139,8 +140,8 @@ def _show_up_to_date():
     version = get_current_version()
     show_info(
         _app,
-        "Software Update",
-        f"You're up to date!\n\nResistine {version} is the latest version.",
+        get_text("gui.update_dialog.software_update"),
+        get_text("utils.updates.linux.you_re_up_to_date", version=version),
     )
 
 

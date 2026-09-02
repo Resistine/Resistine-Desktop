@@ -19,6 +19,7 @@ import subprocess
 import time
 
 from utils.logger import logger
+from utils.i18n import get_text
 
 
 # ── Distro detection (local; avoids depending on utils.distro) ───
@@ -148,8 +149,8 @@ def _run_privileged(command: list[str], timeout: int = 300) -> tuple[bool, str]:
         return False, "GUI password dialog unavailable."
 
     dialog = CTkPasswordDialog(
-        title="Authentication Required",
-        text="Enter password to configure antivirus protection:",
+        title=get_text("antivirus.clamav_platform_linux.authentication_required"),
+        text=get_text("antivirus.clamav_platform_linux.enter_password_to_configure_antivirus"),
     )
     password = dialog.get_input()
     if not password:

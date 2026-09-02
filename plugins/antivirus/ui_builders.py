@@ -19,6 +19,7 @@ from plugins.antivirus.theme import (
     make_card,
     section_title,
 )
+from utils.i18n import get_text
 
 
 # ── 1. Protection Status Card (VPN-style) ──────────────
@@ -47,7 +48,7 @@ def build_status_banner(plugin, parent, row):
     plugin._banner_label.grid(row=0, column=0, sticky="w")
 
     plugin._banner_subtitle = customtkinter.CTkLabel(
-        text_col, text="Checking protection status...",
+        text_col, text=get_text("antivirus.qt_ui.checking_protection_status"),
         font=font(12),
         text_color=("#555555", "#AAAAAA"),
         wraplength=340, justify="left",
@@ -55,7 +56,7 @@ def build_status_banner(plugin, parent, row):
     plugin._banner_subtitle.grid(row=1, column=0, sticky="w", pady=(4, 0))
 
     plugin._banner_action_btn = customtkinter.CTkButton(
-        card, text="Open Settings", width=130, height=34,
+        card, text=get_text("antivirus.qt_ui.open_settings"), width=130, height=34,
         corner_radius=8,
         font=font(12, bold=True),
         command=lambda: None,
@@ -148,7 +149,7 @@ def build_scan_activity(plugin, parent, row):
     section_title(header, "Scan Activity").grid(row=0, column=0, sticky="w")
 
     plugin._scan_status_label = customtkinter.CTkLabel(
-        header, text="No scans yet", font=font(11),
+        header, text=get_text("antivirus.qt_ui.no_scans_yet"), font=font(11),
         text_color=ThemeManager.theme.get("Theme", {}).get("text_secondary"),
     )
     plugin._scan_status_label.grid(row=0, column=1, sticky="e")
