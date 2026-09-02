@@ -108,7 +108,7 @@ try:
             vpn_helper,
         )
 except Exception as _imp_err:  # pragma: no cover - depends on host OS
-    logger.warning(f"VPN backend import failed on {_PLATFORM}: {_imp_err}")
+    logger.warning(get_text("vpn.vpn_backend_import_failed_on", _PLATFORM=_PLATFORM, _imp_err=_imp_err))
 
 
 def _resolve_wireguard_folder() -> str:
@@ -117,7 +117,7 @@ def _resolve_wireguard_folder() -> str:
         if get_writable_wireguard_dir is not None:
             return get_writable_wireguard_dir()
     except Exception as e:
-        logger.warning(f"Could not resolve WireGuard dir: {e}")
+        logger.warning(get_text("vpn.could_not_resolve_wireguard_dir", e=e))
     # Fallback so the plugin can still build on an unsupported host.
     return os.path.join(os.path.expanduser("~"), ".config", "resistine", "wireguard")
 
@@ -154,7 +154,7 @@ _config_manager = VPNConfigManager(wireguard_folder)
 try:
     _config_manager.migrate_legacy_config()
 except Exception as e:
-    logger.warning(f"Legacy VPN config migration failed: {e}")
+    logger.warning(get_text("vpn.legacy_vpn_config_migration_failed", e=e))
 
 
 def _safe_extension_enabled() -> bool:
@@ -179,13 +179,13 @@ def initialize_vpn_status():
     except Exception:
         installed = False
     if not installed:
-        logger.warning("⚠️ WireGuard not installed - VPN features disabled")
+        logger.warning(get_text("vpn.wireguard_not_installed_vpn_features"))
         my_vpn_status = "Stopped"
         return
 
     if IS_MACOS:
         if not _safe_extension_enabled():
-            logger.warning("Network extension is not enabled — VPN unavailable")
+            logger.warning(get_text("vpn.network_extension_is_not_enabled"))
             my_vpn_status = "Stopped"
         else:
             try:
@@ -213,14 +213,14 @@ def initialize_vpn_status():
             else:
                 my_vpn_status = "Stopped"
         except Exception as e:
-            logger.warning(f"⚠️ Could not determine VPN status on Windows: {e}")
+            logger.warning(get_text("vpn.could_not_determine_vpn_status", e=e))
             my_vpn_status = "Stopped"
 
     elif IS_LINUX:
         try:
             existing_interfaces = os.popen("wg show interfaces").read().split()
         except Exception as e:
-            logger.warning(f"⚠️ Could not enumerate WireGuard interfaces: {e}")
+            logger.warning(get_text("vpn.could_not_enumerate_wireguard_interfaces", e=e))
             existing_interfaces = []
 
     # On Linux/Windows, find the active interface by polling each known one.
@@ -249,7 +249,7 @@ def initialize_vpn_status():
 try:
     initialize_vpn_status()
 except Exception as e:
-    logger.warning(f"VPN status initialization failed: {e}")
+    logger.warning(get_text("vpn.vpn_status_initialization_failed_e", e=e))
 
 
 # --- Theme colour helpers (mirror the original (light, dark) pairs) ---
@@ -314,7 +314,7 @@ class Plugin(BasePlugin):
         tunnel = self.get_selected_conf_file_name()
         if not tunnel:
             logger.warning(
-                "Debug auto-connect skipped: no VPN config found")
+                get_text("vpn.debug_auto_connect_skipped_no"))
             return
         logger.info(f"Debug mode: auto-connecting VPN tunnel {tunnel}")
         self.activate_tunnel(tunnel)
@@ -328,7 +328,7 @@ class Plugin(BasePlugin):
             if vpn_helper is not None:
                 vpn_helper.activate_extension()
         except Exception as e:
-            logger.warning(f"Extension activation request failed: {e}")
+            logger.warning(get_text("vpn.extension_activation_request_failed_e", e=e))
 
     def check_status(self):
         """Dynamic check of the VPN status from cheap cached state."""
@@ -410,7 +410,7 @@ class Plugin(BasePlugin):
 
             valid, reason = self.validate_wireguard_config(content)
             if not valid:
-                logger.warning(f"Invalid config rejected: {reason}")
+                logger.warning(get_text("vpn.invalid_config_rejected_reason", reason=reason))
                 self.app.show_notification(get_text("vpn.invalid_config_reason", reason=reason), type="error")
                 return
 
@@ -446,7 +446,7 @@ class Plugin(BasePlugin):
         try:
             return self.config_manager.get_active_config_name()
         except Exception as e:
-            logger.warning(f"Could not resolve active config: {e}")
+            logger.warning(get_text("vpn.could_not_resolve_active_config", e=e))
             return None
 
     def _get_client_public_key(self, private_key_b64):
@@ -462,7 +462,7 @@ class Plugin(BasePlugin):
             )
             return base64.b64encode(pub_bytes).decode("utf-8")
         except Exception as e:
-            logger.warning(f"Could not compute client public key: {e}")
+            logger.warning(get_text("vpn.could_not_compute_client_public", e=e))
             return "N/A"
 
     def get_system_info(self, tunnel_name):
@@ -1036,8 +1036,7 @@ class Plugin(BasePlugin):
             self.activate_tunnel(selected_conf_file)
         else:
             logger.warning(
-                f"⚠️ Switch state ({switch_value}) doesn't match VPN state "
-                f"(Running: {is_running})."
+                get_text("vpn.switch_state_switch_value_doesn", switch_value=switch_value, is_running=is_running)
             )
 
     def activate_tunnel(self, tunnel_name):

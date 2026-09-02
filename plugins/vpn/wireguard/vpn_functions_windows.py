@@ -144,7 +144,7 @@ def generate_wireguard_keys() -> dict | None:
             logger.info("WireGuard keys generated via wg.exe")
             return {"private_key": private_key, "public_key": public_key}
         except Exception as e:
-            logger.warning(f"wg.exe key generation failed: {e}")
+            logger.warning(get_text("vpn.wireguard.vpn_functions_windows.wg_exe_key_generation_failed", e=e))
 
     return None
 
@@ -164,7 +164,7 @@ def _generate_keys_fallback() -> dict | None:
             from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
             from cryptography.hazmat.primitives import serialization
         except ImportError:
-            logger.warning("cryptography library not available for key generation")
+            logger.warning(get_text("vpn.wireguard.vpn_functions_windows.cryptography_library_not_available_for"))
             return None
 
         private_key_bytes = secrets.token_bytes(32)
@@ -357,7 +357,7 @@ def parse_and_create_vpn_config(
         logger.error(f"Failed to parse VPN config JSON: {e}")
         return None
     except Exception as e:
-        logger.error(f"Error creating VPN config: {e}")
+        logger.error(get_text("vpn.wireguard.vpn_functions_linux.error_creating_vpn_config_e", e=e))
         return None
 
 

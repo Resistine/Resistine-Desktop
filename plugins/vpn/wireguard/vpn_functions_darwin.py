@@ -71,7 +71,7 @@ class HelperToolManager:
                 "Contents", "MacOS", "resistine-vpn-cli"
             )
             if os.path.exists(old_cli_path):
-                logger.warning("⚠️ Using legacy CLI path - please rebuild for full VPN support")
+                logger.warning(get_text("vpn.wireguard.vpn_functions_darwin.using_legacy_cli_path_please"))
                 return old_cli_path
 
         # Development mode: VPN features require the built app bundle
@@ -169,7 +169,7 @@ class VPNHelper:
     ) -> Tuple[bool, str]:
         """Check VPN status (interface_name is ignored - CLI uses 'status' without arguments)"""
         if not helper.cli_path:
-            logger.warning("⚠️ [HELPER] CLI path not available")
+            logger.warning(get_text("vpn.wireguard.vpn_functions_darwin.helper_cli_path_not_available"))
             return (False, "Stopped")
 
         try:
@@ -616,7 +616,7 @@ def is_extension_enabled():
         _extension_cache["timestamp"] = now
         return enabled
     except Exception as e:
-        logger.warning(f"Extension status check failed: {e}")
+        logger.warning(get_text("vpn.wireguard.vpn_functions_darwin.extension_status_check_failed_e", e=e))
         return False
 
 

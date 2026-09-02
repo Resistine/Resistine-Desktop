@@ -10,6 +10,7 @@ from plugins.chat.fonts import _BASE_SIZE, RESISTINE_BLUE, get_theme_colors, ui_
 from plugins.chat.markdown_renderer import MarkdownRenderer
 from plugins.chat.markdown_utils import strip_streaming_md
 from utils.logger import logger
+from utils.i18n import get_text
 
 # Streaming widget choice: CTkLabel + wraplength. Earlier this used tk.Text
 # with insert("end", delta) for O(delta) per-chunk cost, but tk.Text's
@@ -230,7 +231,7 @@ class AssistantBubble(customtkinter.CTkFrame):
                 self._is_dark, self._max_width)
         except Exception as exc:
             logger.warning(
-                f"MarkdownRenderer failed, using fallback: {exc}")
+                get_text("chat.markdown_bubble.markdownrenderer_failed_using_fallback_exc", exc=exc))
             from plugins.chat.markdown_bubble import MarkdownBubble
             self._renderer = MarkdownBubble(
                 self._content_frame, markdown_text, width=self._max_width)

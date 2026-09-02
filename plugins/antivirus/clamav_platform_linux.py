@@ -137,11 +137,11 @@ def _run_privileged(command: list[str], timeout: int = 300) -> tuple[bool, str]:
                 "Falling back to sudo.",
             )
         except FileNotFoundError:
-            logger.warning("ClamAV: pkexec not found, falling back to sudo")
+            logger.warning(get_text("antivirus.clamav_platform_linux.clamav_pkexec_not_found_falling"))
         except subprocess.TimeoutExpired:
             return False, "pkexec timed out."
         except Exception as exc:  # pragma: no cover — defensive
-            logger.warning(f"ClamAV: pkexec error: {exc}")
+            logger.warning(get_text("antivirus.clamav_platform_linux.clamav_pkexec_error_exc", exc=exc))
 
     try:
         from gui.dialogs import CTkPasswordDialog
@@ -598,8 +598,7 @@ def activate_system_daemons() -> tuple[bool, str]:
                 time.sleep(0.5)
             else:
                 logger.warning(
-                    "ClamAV: clamonacc not running after activation — "
-                    "real-time protection may not be available on this distro.",
+                    get_text("antivirus.clamav_platform_linux.clamav_clamonacc_not_running_after"),
                 )
             return True, "Protection activated."
 

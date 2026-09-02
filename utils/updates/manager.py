@@ -29,6 +29,7 @@ import random
 import threading
 
 from utils.logger import logger
+from utils.i18n import get_text
 
 # ---------------------------------------------------------------------------
 # Platform detection (same pattern as plugins/vpn/main.py)
@@ -119,7 +120,7 @@ def init(app):
     Call once from main.py after the window is created.
     """
     if _backend is None:
-        logger.warning("[UPDATE] No update backend for this platform")
+        logger.warning(get_text("utils.updates.manager.update_no_update_backend_for"))
         return
 
     _backend.init_updater(app)

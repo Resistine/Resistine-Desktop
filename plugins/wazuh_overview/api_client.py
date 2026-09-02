@@ -26,6 +26,7 @@ from plugins.wazuh_overview.config import (
     REQUEST_TIMEOUT,
 )
 from utils.logger import logger
+from utils.i18n import get_text
 
 
 # Module-level Session so every _get() reuses TCP connections via Keep-Alive
@@ -273,7 +274,7 @@ def fetch_all_vulnerabilities(devices=None):
             cves, derr = future.result()
             if derr:
                 failures += 1
-                logger.warning(f"Vulnerabilities: fetch for agent {aid} failed: {derr}")
+                logger.warning(get_text("wazuh_overview.api_client.vulnerabilities_fetch_for_agent_aid", aid=aid, derr=derr))
                 continue
             name = by_id[aid].get("agent_name") or ""
             for c in cves or []:

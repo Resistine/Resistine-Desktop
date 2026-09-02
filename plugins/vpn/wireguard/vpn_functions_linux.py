@@ -85,7 +85,7 @@ def run_privileged_command(command_args):
         except Exception as e:
             # pkexec itself could not be executed (e.g. missing polkit agent).
             # Only in this case do we fall back to the sudo password dialog.
-            logger.warning(f"pkexec could not run: {e}. Falling back to sudo.")
+            logger.warning(get_text("vpn.wireguard.vpn_functions_linux.pkexec_could_not_run_e", e=e))
 
     # Fallback to sudo with GUI password prompt (only reached when pkexec is
     # unavailable or failed to execute at all)
@@ -98,7 +98,7 @@ def run_privileged_command(command_args):
     password = dialog.get_input()
 
     if not password:
-        logger.warning("User cancelled password prompt")
+        logger.warning(get_text("vpn.wireguard.vpn_functions_linux.user_cancelled_password_prompt"))
         return None
 
     try:
@@ -330,7 +330,7 @@ Endpoint = {endpoint}
         logger.error(f"Error: Missing required field in VPN config: {e}")
         return None
     except Exception as e:
-        logger.error(f"Error creating VPN config: {e}")
+        logger.error(get_text("vpn.wireguard.vpn_functions_linux.error_creating_vpn_config_e", e=e))
         return None
 
 
@@ -364,7 +364,7 @@ def check_service_status(interface_name, test_ip):
             )
             if ping_result.returncode != 0:
                 logger.warning(
-                    f"Interface {interface_name} up but ping to {test_ip} failed."
+                    get_text("vpn.wireguard.vpn_functions_linux.interface_interface_name_up_but", interface_name=interface_name, test_ip=test_ip)
                 )
 
         return "Running"
@@ -432,7 +432,7 @@ def make_dns_compatible_config(config_path):
         with open(config_path, "r") as config_file:
             lines = config_file.readlines()
     except OSError as e:
-        logger.warning(f"Could not read config for DNS compatibility check: {e}")
+        logger.warning(get_text("vpn.wireguard.vpn_functions_linux.could_not_read_config_for", e=e))
         return config_path
 
     def is_dns_line(line):
@@ -622,9 +622,9 @@ def save_vpn_configuration(vpn_config_json, config_name="resistine"):
             logger.info("VPN configuration saved successfully")
             return config_path
         else:
-            logger.warning("Failed to create VPN config")
+            logger.warning(get_text("vpn.wireguard.vpn_functions_linux.failed_to_create_vpn_config"))
             return None
 
     except Exception as e:
-        logger.warning(f"Error creating VPN config: {e}")
+        logger.warning(get_text("vpn.wireguard.vpn_functions_linux.error_creating_vpn_config_e", e=e))
         return None

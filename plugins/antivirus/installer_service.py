@@ -18,6 +18,7 @@ import time
 
 from utils import settings
 from utils.logger import logger
+from utils.i18n import get_text
 
 # This module orchestrates the ClamAV setup state machine, but every concrete
 # implementation it calls into (_launch_clamav_postinstall, _SYSTEM_*, FDA
@@ -174,7 +175,7 @@ def trigger_system_setup() -> bool:
         state = get_setup_state()
         if state != STATE_DB_READY:
             logger.warning(
-                f"[AV-INSTALLER] trigger_system_setup in wrong state: {state}",
+                get_text("antivirus.installer_service.av_installer_trigger_system_setup", state=state),
             )
             return False
         _set_state(STATE_INSTALLING)
@@ -277,9 +278,7 @@ def check_and_advance():
         if _system_install_intact():
             return
         logger.warning(
-            "[AV-INSTALLER] setup_state=completed but system ClamAV install "
-            "is missing (likely wiped by a prior uninstall) — resetting to "
-            "re-run setup",
+            get_text("antivirus.installer_service.av_installer_setup_state_completed"),
         )
         with _lock:
             _set_state(STATE_NOT_STARTED)
@@ -333,7 +332,7 @@ def check_and_advance():
                 fcntl.flock(probe_fd, fcntl.LOCK_UN)
             # Lock was available → no freshclam running → stuck state
             with _lock:
-                logger.warning("[AV-INSTALLER] Stuck in SEEDING_DB, resetting")
+                logger.warning(get_text("antivirus.installer_service.av_installer_stuck_in_seeding"))
                 _set_state(STATE_NOT_STARTED)
                 state = STATE_NOT_STARTED
         except (OSError, BlockingIOError):

@@ -336,7 +336,7 @@ class VPNOnboardingScreen:
             from plugins.vpn.wireguard.vpn_functions_darwin import is_extension_enabled
             return is_extension_enabled()
         except Exception as e:
-            logger.warning(f"Extension status check failed: {e}")
+            logger.warning(get_text("vpn.wireguard.vpn_functions_darwin.extension_status_check_failed_e", e=e))
             return False
 
     def _start_polling(self):
@@ -440,4 +440,4 @@ class VPNOnboardingScreen:
                 parent, text="", image=shield_ctk
             ).grid(row=row, column=0, pady=(0, 25))
         except Exception as e:
-            logger.warning(f"Shield logo load failed: {e}")
+            logger.warning(get_text("login.vpn_onboarding.shield_logo_load_failed_e", e=e))

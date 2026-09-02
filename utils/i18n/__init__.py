@@ -150,7 +150,10 @@ def load_plugin_i18n_dir(plugin_path, plugin_name):
             logger.error(f"Error loading plugin i18n from {json_file}: {e}")
 
 
-def get_text(key, lang=None, **kwargs):
+def get_text(key, lang=None, /, **kwargs):
+    # key/lang are positional-only so template placeholders named "key"
+    # or "lang" (e.g. utils.settings.value_for_namespace_key_is) can be
+    # passed as format kwargs without colliding with the parameters.
     """
     Get a translated text string with optional formatting.
     

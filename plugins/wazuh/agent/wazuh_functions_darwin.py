@@ -52,7 +52,7 @@ def _get_hardware_uuid():
                 # Line format: "IOPlatformUUID" = "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
                 return line.split('"')[-2]
     except Exception as e:
-        logger.warning(f"Could not read hardware UUID: {e}")
+        logger.warning(get_text("wazuh.agent.wazuh_functions_darwin.could_not_read_hardware_uuid", e=e))
     return None
 
 
@@ -144,7 +144,7 @@ def get_agent_status():
     via wazuh-control instead of launchd).
     """
     if not is_agent_installed():
-        return "Not Installed"
+        return get_text("antivirus.not_installed")
 
     # Check launchd service first
     try:
@@ -157,7 +157,7 @@ def get_agent_status():
         if result.returncode == 0 and "state = running" in result.stdout:
             return "Running"
     except Exception as e:
-        logger.warning(f"Could not query launchd for Wazuh agent: {e}")
+        logger.warning(get_text("wazuh.agent.wazuh_functions_darwin.could_not_query_launchd_for", e=e))
 
     # Fallback: check if wazuh-agentd process is running (covers
     # agents started via wazuh-control instead of launchd)
@@ -170,7 +170,7 @@ def get_agent_status():
         if result.returncode == 0:
             return "Running"
     except Exception as e:
-        logger.warning(f"Could not check wazuh-agentd process: {e}")
+        logger.warning(get_text("wazuh.agent.wazuh_functions_darwin.could_not_check_wazuh_agentd", e=e))
 
     return "Stopped"
 
@@ -441,7 +441,7 @@ def stop_agent():
 
     # Verify processes are actually gone
     if _has_running_processes():
-        logger.warning("Wazuh processes still running after stop, force-killing")
+        logger.warning(get_text("wazuh.agent.wazuh_functions_darwin.wazuh_processes_still_running_after"))
         kill_script = "pkill -9 -f '/Library/Ossec/bin/wazuh-' 2>/dev/null; true"
         _run_privileged(kill_script)
 
@@ -772,7 +772,7 @@ def full_install(progress_callback=None):
             if progress_callback:
                 progress_callback(get_text("wazuh.installation_timed_out"))
             return False
-        logger.warning("Poll timed out but agent is installed on disk")
+        logger.warning(get_text("wazuh.agent.wazuh_functions_darwin.poll_timed_out_but_agent"))
 
     if not success:
         error = details.get("error", "unknown error")
@@ -788,7 +788,7 @@ def full_install(progress_callback=None):
     elif enrollment == "enrolled":
         logger.info("[WAZUH] Fresh enrollment succeeded — new agent registered on manager")
     elif enrollment == "enroll_failed":
-        logger.warning("[WAZUH] agent-auth enrollment failed — agent may connect via auto-enrollment")
+        logger.warning(get_text("wazuh.agent.wazuh_functions_darwin.wazuh_agent_auth_enrollment_failed"))
 
     # Verify the agent is actually running via launchd
     if get_agent_status() == "Running":
@@ -796,7 +796,7 @@ def full_install(progress_callback=None):
         if progress_callback:
             progress_callback("Wazuh agent installed and running")
     else:
-        logger.warning("Agent installed but not yet running")
+        logger.warning(get_text("wazuh.agent.wazuh_functions_windows.agent_installed_but_not_yet"))
         if progress_callback:
             progress_callback("Wazuh agent installed (agent may need manual start)")
 

@@ -20,6 +20,7 @@ import threading
 from ctypes import byref, c_uint, c_void_p, c_wchar_p
 
 from utils.logger import logger
+from utils.i18n import get_text
 
 # AMSI result codes
 AMSI_RESULT_CLEAN = 0
@@ -51,7 +52,7 @@ def _ensure_initialized() -> bool:
         try:
             _amsi = ctypes.windll.LoadLibrary("amsi.dll")
         except OSError:
-            logger.warning("AMSI: amsi.dll not found")
+            logger.warning(get_text("antivirus.amsi_scanner.amsi_amsi_dll_not_found"))
             return False
 
         try:
@@ -65,7 +66,7 @@ def _ensure_initialized() -> bool:
             logger.info("AMSI: initialized successfully")
             return True
         except Exception as e:
-            logger.warning(f"AMSI: init error: {e}")
+            logger.warning(get_text("antivirus.amsi_scanner.amsi_init_error_e", e=e))
             _context = c_void_p(0)
             return False
 

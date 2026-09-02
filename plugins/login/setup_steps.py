@@ -93,7 +93,7 @@ def _vpn_config():
         return (_config_manager.get_active_config_name(),
                 _config_manager.get_active_config_path())
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"[VPN-SETUP] config lookup failed: {e}")
+        logger.warning(get_text("login.setup_steps.vpn_setup_config_lookup_failed", e=e))
         return None, None
 
 
@@ -109,7 +109,7 @@ def _vpn_status(name):
         from plugins.vpn.wireguard.vpn_functions_darwin import check_service_status
         return check_service_status(name)
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"[VPN-SETUP] status check failed: {e}")
+        logger.warning(get_text("login.setup_steps.vpn_setup_status_check_failed", e=e))
         return "Stopped"
 
 
@@ -138,7 +138,7 @@ def _vpn_mark_connected(name):
             vpnmain.active_client_name = name
         logger.info("[VPN-SETUP] synced plugin toggle state -> Running")
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"[VPN-SETUP] could not sync plugin toggle state: {e}")
+        logger.warning(get_text("login.setup_steps.vpn_setup_could_not_sync", e=e))
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -242,7 +242,7 @@ class _VPNStepMac(_VPNStepBase):
         try:
             VPNHelper.activate_extension()
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"[VPN-SETUP] activate_extension failed: {e}")
+            logger.warning(get_text("login.setup_steps.vpn_setup_activate_extension_failed", e=e))
         self._open_settings()
         on_status("Approve the Resistine extension in System Settings — this "
                   "continues automatically once enabled.")
@@ -452,7 +452,7 @@ class _AntivirusStepMac(SetupStep):
             try:
                 av.check_and_advance()
             except Exception as e:  # noqa: BLE001
-                logger.warning(f"[AV-SETUP] check_and_advance: {e}")
+                logger.warning(get_text("login.setup_steps.av_setup_check_and_advance", e=e))
             state = av.get_setup_state()
             logger.info(f"[AV-SETUP] post-heal state={state} "
                         f"runtime={self._safe_runtime()}")
@@ -521,7 +521,7 @@ class _AntivirusStepMac(SetupStep):
                                 # don't hard-fail if that's the real blocker.
                                 rt = self._safe_runtime()
                                 logger.warning(
-                                    f"[AV-SETUP] install poll not success; runtime={rt}")
+                                    get_text("login.setup_steps.av_setup_install_poll_not", rt=rt))
                                 if rt != av.RUNTIME_APPROVAL_REQUIRED:
                                     self._failed = self._fail_msg("Antivirus setup didn't finish.")
                                     return
@@ -746,7 +746,7 @@ def _wazuh_reenroll(on_status) -> bool:
     import time
     m = _wazuh_mod()
     if not (m and hasattr(m, "reenroll_agent")):
-        logger.warning("[EP-SETUP] reenroll_agent unavailable on this platform")
+        logger.warning(get_text("login.setup_steps.ep_setup_reenroll_agent_unavailable"))
         return False
     on_status("Reconnecting to the monitoring server…")
     logger.info("[EP-SETUP] reenroll_agent()")
@@ -813,7 +813,7 @@ def _maybe_forward_clamav(on_status):
         from plugins.wazuh.agent.log_forwarding import ensure_clamav_log_forwarding
         ensure_clamav_log_forwarding(on_status)
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"[EP-SETUP] ClamAV forwarding skipped: {e}")
+        logger.warning(get_text("login.setup_steps.ep_setup_clamav_forwarding_skipped", e=e))
 
 
 def _wazuh_activate(on_status, cancelled=None):
@@ -833,7 +833,7 @@ def _wazuh_activate(on_status, cancelled=None):
             logger.info("[EP-SETUP] agent running")
             return True
         time.sleep(2)
-    logger.warning("[EP-SETUP] agent did not reach Running state")
+    logger.warning(get_text("login.setup_steps.ep_setup_agent_did_not"))
     return False
 
 

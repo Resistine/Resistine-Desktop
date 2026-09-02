@@ -14,6 +14,7 @@ import json
 import socket
 import logging
 import subprocess
+from utils.i18n import get_text
 
 try:
     import pystray
@@ -138,7 +139,7 @@ def _send_command(command: str, tunnel: str, config_path: str = None) -> dict:
     token = _load_ipc_token()
     if not token:
         return {"status": "error", "state": "Stopped",
-                "message": "IPC token unavailable — VPN service not installed"}
+                "message": get_text("vpn.wireguard.service_client.ipc_token_unavailable_vpn_service")}
 
     payload = {
         "token":   token,
@@ -157,9 +158,9 @@ def _send_command(command: str, tunnel: str, config_path: str = None) -> dict:
         data = _recv_response(sock)
         return json.loads(data.decode("utf-8"))
     except ConnectionRefusedError:
-        return {"status": "error", "state": "Stopped", "message": "Service not running"}
+        return {"status": "error", "state": "Stopped", "message": get_text("gui.tray.service_not_running")}
     except socket.timeout:
-        return {"status": "error", "state": "Stopped", "message": "Service timed out"}
+        return {"status": "error", "state": "Stopped", "message": get_text("gui.tray.service_timed_out")}
     except Exception as e:
         logger.error(f"IPC error: {e}")
         return {"status": "error", "state": "Stopped", "message": str(e)}
@@ -274,7 +275,7 @@ class ResistineTray:
                 self._icon.update_menu()
                 if changed:
                     self._icon.icon = _build_icon(new_state)
-                    logger.warning(f"VPN state changed: {new_state}")
+                    logger.warning(get_text("gui.tray.vpn_state_changed_new_state", new_state=new_state))
 
         except Exception as e:
             logger.error(f"Status poll failed: {e}")

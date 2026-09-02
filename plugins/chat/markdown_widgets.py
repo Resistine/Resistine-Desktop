@@ -25,6 +25,7 @@ from plugins.chat.markdown_bubble import (
     _EMOJI_RE, _EMOJI_RENDER, MarkdownBubble, attach_emoji_copy,
 )
 from utils.logger import logger
+from utils.i18n import get_text
 
 
 def _cell_has_emoji(text: str) -> bool:
@@ -431,7 +432,7 @@ class CodeBlockWidget(customtkinter.CTkFrame):
             self._copy_btn.configure(text="Copied!")
             self.after(1200, lambda: self._copy_btn.configure(text="Copy"))
         except Exception as exc:
-            logger.warning(f"Clipboard copy failed: {exc}")
+            logger.warning(get_text("chat.markdown_widgets.clipboard_copy_failed_exc", exc=exc))
             self._copy_btn.configure(text="Failed")
             self.after(1200, lambda: self._copy_btn.configure(text="Copy"))
 

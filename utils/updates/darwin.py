@@ -13,6 +13,7 @@ import os
 import sys
 
 from utils.logger import logger
+from utils.i18n import get_text
 
 _sparkle_loaded = False
 _controller = None
@@ -105,7 +106,7 @@ def check_for_updates():
     updates) or "error" on failure.
     """
     if _controller is None:
-        logger.warning("[SPARKLE] Controller not initialized")
+        logger.warning(get_text("utils.updates.darwin.sparkle_controller_not_initialized"))
         return "error"
     try:
         _controller.checkForUpdates_(None)

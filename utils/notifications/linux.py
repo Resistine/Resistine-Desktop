@@ -22,6 +22,7 @@ import subprocess
 import threading
 
 from utils.logger import logger
+from utils.i18n import get_text
 
 # App urgency level -> freedesktop urgency byte (spec: 0 low, 1 normal, 2 crit).
 _URGENCY_BYTE = {"low": 0, "normal": 1, "critical": 2}
@@ -175,9 +176,7 @@ def send(title: str, body: str, urgency: str = "normal"):
             return
         # Both paths failed — surface it so a silent miss is diagnosable.
         logger.warning(
-            "Desktop notification not delivered — D-Bus failed (%s) and "
-            "notify-send is unavailable. Install libnotify-bin or ensure a "
-            "notification daemon + session bus are running.",
+            get_text("utils.notifications.linux.desktop_notification_not_delivered_d"),
             dbus_err,
         )
 

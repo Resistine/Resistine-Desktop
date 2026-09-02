@@ -16,6 +16,7 @@ import sys
 
 from utils.logger import logger
 from utils.updates.version import get_current_version
+from utils.i18n import get_text
 
 _dll = None
 _initialized = False
@@ -147,7 +148,7 @@ def init_updater(app):
             _ED25519_PUBLIC_KEY.encode("utf-8")
         )
         if result != 1:
-            logger.warning("[WINSPARKLE] EdDSA public key was not accepted")
+            logger.warning(get_text("utils.updates.windows.winsparkle_eddsa_public_key_was"))
 
         _dll.win_sparkle_set_automatic_check_for_updates(1)
         _dll.win_sparkle_set_update_check_interval(14400)  # 4 hours
@@ -228,7 +229,7 @@ def check_for_updates():
     Returns "up_to_date" on success or "error" on failure.
     """
     if not _initialized:
-        logger.warning("[WINSPARKLE] Not initialized")
+        logger.warning(get_text("utils.updates.windows.winsparkle_not_initialized"))
         return "error"
     try:
         _dll.win_sparkle_check_update_with_ui()

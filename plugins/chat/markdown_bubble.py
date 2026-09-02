@@ -16,6 +16,7 @@ import customtkinter
 from plugins.chat.fonts import _is_dark_mode
 from plugins.chat.markdown_utils import is_box_drawing, strip_inline_md
 from utils.logger import logger
+from utils.i18n import get_text
 
 # ---------------------------------------------------------------------------
 # Emoji constants -- Linux-only colour emoji rendering via cairosvg
@@ -224,7 +225,7 @@ class MarkdownBubble(customtkinter.CTkFrame):
             )
         except Exception as exc:
             logger.warning(
-                f"MarkdownRenderer failed, using fallback: {exc}")
+                get_text("chat.markdown_bubble.markdownrenderer_failed_using_fallback_exc", exc=exc))
             self._render_fallback()
 
     # ------------------------------------------------------------------

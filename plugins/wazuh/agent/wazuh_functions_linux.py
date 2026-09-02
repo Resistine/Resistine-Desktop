@@ -64,9 +64,9 @@ def run_privileged_command(command, timeout=120):
                 f"pkexec failed (code {result.returncode}): {result.stderr.strip()}. Falling back to sudo."
             )
     except FileNotFoundError:
-        logger.warning("pkexec not found, falling back to sudo")
+        logger.warning(get_text("wazuh.agent.wazuh_functions_linux.pkexec_not_found_falling_back"))
     except Exception as e:
-        logger.warning(f"Error running pkexec: {e}")
+        logger.warning(get_text("wazuh.agent.wazuh_functions_linux.error_running_pkexec_e", e=e))
 
     logger.info("Falling back to sudo with themed password prompt")
     import tkinter as tk
@@ -79,7 +79,7 @@ def run_privileged_command(command, timeout=120):
     password = dialog.get_input()
 
     if not password:
-        logger.error("User cancelled password prompt")
+        logger.error(get_text("vpn.wireguard.vpn_functions_linux.user_cancelled_password_prompt"))
         return False, "User cancelled"
 
     try:
@@ -246,7 +246,7 @@ def is_agent_installed():
 
 def get_agent_status():
     if not is_agent_installed():
-        return "Not Installed"
+        return get_text("antivirus.not_installed")
     
     try:
         result = subprocess.run(
@@ -258,7 +258,7 @@ def get_agent_status():
         if result.stdout.strip() == "active":
             return "Running"
     except Exception as e:
-        logger.warning(f"Could not check wazuh-agent status: {e}")
+        logger.warning(get_text("wazuh.agent.wazuh_functions_linux.could_not_check_wazuh_agent", e=e))
         
     # Check processes
     try:

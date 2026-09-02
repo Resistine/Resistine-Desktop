@@ -248,7 +248,7 @@ class Plugin(BasePlugin):
 
     # ---- Software Updates -------------------------------------------------
     def _updates_card(self) -> QWidget:
-        card, lay = self._card("Software Updates")
+        card, lay = self._card(get_text("settings.software_updates"))
         lay.addWidget(self._muted(f"Current version: {self._get_app_version()}"))
         check = QPushButton(get_text("settings.check_for_updates"))
         check.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -262,8 +262,7 @@ class Plugin(BasePlugin):
     def _uninstall_card(self) -> QWidget:
         card, lay = self._card("Uninstall")
         lay.addWidget(self._muted(
-            "Permanently remove Resistine and all associated data from this "
-            "computer."))
+            get_text("settings.permanently_remove_resistine_and_all")))
         self.uninstall_button = QPushButton(get_text("settings.uninstall_resistine"))
         self.uninstall_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.uninstall_button.setStyleSheet(
@@ -497,7 +496,7 @@ class Plugin(BasePlugin):
                 if path:
                     stop_vpn(path)
         except Exception as e:
-            logger.warning(f"VPN disconnect on logout failed: {e}")
+            logger.warning(get_text("settings.vpn_disconnect_on_logout_failed", e=e))
 
     def _remove_wazuh_agent(self):
         import platform as plat
@@ -512,9 +511,9 @@ class Plugin(BasePlugin):
             else:
                 return
             if not remove_agent(wipe_keys=True):
-                logger.warning("Wazuh agent removal reported failure")
+                logger.warning(get_text("settings.wazuh_agent_removal_reported_failure"))
         except Exception as e:
-            logger.warning(f"Wazuh agent removal on logout failed: {e}")
+            logger.warning(get_text("settings.wazuh_agent_removal_on_logout", e=e))
 
     def _clear_user_data(self):
         import platform as plat
@@ -541,9 +540,9 @@ class Plugin(BasePlugin):
                 try:
                     os.remove(conf)
                 except OSError as e:
-                    logger.warning(f"Failed to remove VPN config {conf}: {e}")
+                    logger.warning(get_text("settings.failed_to_remove_vpn_config", conf=conf, e=e))
         except Exception as e:
-            logger.warning(f"VPN config cleanup failed: {e}")
+            logger.warning(get_text("settings.vpn_config_cleanup_failed_e", e=e))
         settings.clear_namespace("chat_history")
         settings.delete("chat", "openai_api_key")
         settings.delete("chat", "openai_base_url")

@@ -13,6 +13,7 @@ import subprocess
 import uuid
 
 from utils.logger import logger
+from utils.i18n import get_text
 
 _initialized = False
 _authorized = False
@@ -50,7 +51,7 @@ def _set_auth(granted: bool, err):
     if granted:
         logger.debug("macOS notification authorization granted")
     elif err:
-        logger.warning("macOS notification authorization denied: %s", err)
+        logger.warning(get_text("utils.notifications.darwin.macos_notification_authorization_denied_s"), err)
     else:
         logger.debug("macOS notification authorization denied by user")
 
@@ -95,9 +96,9 @@ def init():
         )
         center.setNotificationCategories_({threat_category})
     except ImportError:
-        logger.warning("UserNotifications framework not available (pyobjc missing?)")
+        logger.warning(get_text("utils.notifications.darwin.usernotifications_framework_not_available_pyobjc"))
     except Exception as e:
-        logger.warning("Failed to request notification authorization: %s", e)
+        logger.warning(get_text("utils.notifications.darwin.failed_to_request_notification_authorization"), e)
 
 
 def send(title: str, body: str, urgency: str = "normal"):
@@ -132,7 +133,7 @@ def send(title: str, body: str, urgency: str = "normal"):
             center.addNotificationRequest_withCompletionHandler_(request, None)
             return
         except Exception as e:
-            logger.warning("UNUserNotificationCenter send failed, trying osascript: %s", e)
+            logger.warning(get_text("utils.notifications.darwin.unusernotificationcenter_send_failed_trying_osascript"), e)
 
     # Fallback: osascript (works without authorization).
     # Strip newlines and control chars to prevent AppleScript injection.

@@ -97,7 +97,7 @@ def _build_app() -> tuple[QApplication, object]:
         from utils import notifications
         notifications.init()
     except Exception as e:
-        logger.warning(f"Failed to initialize system notifications: {e}")
+        logger.warning(get_text("main.failed_to_initialize_system_notifications", e=e))
 
     try:
         from utils.linux_desktop import ensure_desktop_entry
@@ -109,7 +109,7 @@ def _build_app() -> tuple[QApplication, object]:
         from utils import updates
         updates.init(window)
     except Exception as e:
-        logger.warning(f"Failed to start auto-updater: {e}")
+        logger.warning(get_text("main.failed_to_start_auto_updater", e=e))
 
     return qt_app, window
 
@@ -127,7 +127,7 @@ def _is_login_plugin_uninstalled() -> bool:
             state = json.load(f)
         return "007" in state.get("uninstalled", [])
     except Exception as e:
-        logger.warning(f"Could not read plugin state: {e}")
+        logger.warning(get_text("main.could_not_read_plugin_state", e=e))
         return False
 
 

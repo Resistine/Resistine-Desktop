@@ -24,6 +24,7 @@ import tempfile
 
 from utils import settings
 from utils.logger import logger
+from utils.i18n import get_text
 
 _PLATFORM = platform.system()
 _NAMESPACE = "wazuh"
@@ -135,5 +136,5 @@ def ensure_clamav_log_forwarding(on_status=None) -> bool:
         settings.set(_NAMESPACE, _FLAG, True)
         logger.info("[CLAMAV-FWD] forwarding enabled and agent restarted")
     else:
-        logger.warning("[CLAMAV-FWD] failed to enable forwarding")
+        logger.warning(get_text("wazuh.agent.log_forwarding.clamav_fwd_failed_to_enable"))
     return ok

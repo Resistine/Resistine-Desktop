@@ -304,7 +304,7 @@ class Plugin(BasePlugin):
         keys = ("vpn_config", "data", "vpn_configuration", "wireguard_config")
         config_data = next((result[k] for k in keys if k in (result or {})), None)
         if not config_data:
-            logger.warning("No VPN config in API response")
+            logger.warning(get_text("login.no_vpn_config_in_api"))
             return
         try:
             config_path = save_vpn_configuration(
@@ -318,7 +318,7 @@ class Plugin(BasePlugin):
                 mgr.set_active_config(RESISTINE_CONFIG_NAME)
                 logger.info("VPN config registered: %s", config_path)
         except Exception as e:
-            logger.warning(f"Failed to save VPN config: {e}")
+            logger.warning(get_text("login.failed_to_save_vpn_config", e=e))
 
     def skip_login(self):
         logger.info("User skipped login")

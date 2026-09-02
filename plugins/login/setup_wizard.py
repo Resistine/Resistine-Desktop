@@ -516,7 +516,7 @@ class SetupWizardScreen:
                 col.addWidget(shield)
                 col.addSpacing(20)
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"[SETUP] Shield logo load failed: {e}")
+            logger.warning(get_text("login.setup_wizard.setup_shield_logo_load_failed", e=e))
 
     def _title_label(self, text, size):
         lbl = QLabel(text)
@@ -541,5 +541,5 @@ class SetupWizardScreen:
         try:
             return fn()
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"[SETUP] check failed: {e}")
+            logger.warning(get_text("login.setup_wizard.setup_check_failed_e", e=e))
             return default

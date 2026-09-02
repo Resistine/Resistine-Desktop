@@ -75,7 +75,7 @@ def _get_machine_guid():
         winreg.CloseKey(key)
         return guid
     except Exception as e:
-        logger.warning(f"Could not read MachineGuid: {e}")
+        logger.warning(get_text("wazuh.agent.wazuh_functions_windows.could_not_read_machineguid_e", e=e))
         return None
 
 
@@ -134,7 +134,7 @@ def is_agent_installed():
 def get_agent_status():
     """Return 'Running', 'Stopped', or 'Not Installed'."""
     if not is_agent_installed():
-        return "Not Installed"
+        return get_text("antivirus.not_installed")
 
     try:
         result = subprocess.run(
@@ -152,7 +152,7 @@ def get_agent_status():
         if "STOPPED" in result.stdout:
             return "Stopped"
     except Exception as e:
-        logger.warning(f"Could not query {_SERVICE_NAME} service: {e}")
+        logger.warning(get_text("wazuh.agent.wazuh_functions_windows.could_not_query_service_name", _SERVICE_NAME=_SERVICE_NAME, e=e))
 
     return "Stopped"
 
@@ -432,7 +432,7 @@ def stop_agent():
 
     # Verify stopped
     if get_agent_status() == "Running":
-        logger.warning("Service still running after NET STOP, force-stopping")
+        logger.warning(get_text("wazuh.agent.wazuh_functions_windows.service_still_running_after_net"))
         _run_privileged(f"Stop-Service -Name '{_SERVICE_NAME}' -Force")
 
     stopped = get_agent_status() != "Running"
@@ -690,7 +690,7 @@ def full_install(progress_callback=None):
         logger.info("Wazuh agent installed and running")
         _p("Wazuh agent installed and running")
     else:
-        logger.warning("Agent installed but not yet running")
+        logger.warning(get_text("wazuh.agent.wazuh_functions_windows.agent_installed_but_not_yet"))
         _p("Wazuh agent installed (may need manual start)")
 
     # Record enrollment email

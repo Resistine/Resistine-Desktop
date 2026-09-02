@@ -106,7 +106,7 @@ try:
         )
         _platform_supported = True
 except Exception as e:  # pragma: no cover - defensive
-    logger.warning(f"SIEM backend import failed on {_PLATFORM}: {e}")
+    logger.warning(get_text("wazuh.siem_backend_import_failed_on", _PLATFORM=_PLATFORM, e=e))
     _platform_supported = False
 
 
@@ -130,7 +130,7 @@ def _safe(fn, default=None):
     try:
         return fn()
     except Exception as e:
-        logger.warning(f"SIEM backend call failed: {e}")
+        logger.warning(get_text("wazuh.siem_backend_call_failed_e", e=e))
         return default
 
 
@@ -1163,7 +1163,7 @@ class Plugin(BasePlugin):
         try:
             self.app.update_plugin(self.id)
         except Exception as e:
-            logger.warning(f"SIEM refresh failed: {e}")
+            logger.warning(get_text("wazuh.siem_refresh_failed_e", e=e))
 
     def destroy(self):
         """Clean up polling. Agent removal is handled by uninstallers."""

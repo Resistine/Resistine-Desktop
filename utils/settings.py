@@ -63,7 +63,7 @@ def _get_master_key() -> bytes:
             if key:
                 return key.encode()
         except Exception as e:
-            logger.warning(f"Failed to retrieve master key from keyring: {e}")
+            logger.warning(get_text("utils.settings.failed_to_retrieve_master_key", e=e))
 
         # Generate new key if not found or retrieval failed
         logger.info("Generating new master key...")
@@ -96,7 +96,7 @@ def _save_master_key_fallback(key: bytes):
         os.chmod(key_file, 0o600)
         logger.info(f"Master key saved to fallback file: {key_file}")
     except Exception as e:
-        logger.critical(f"Failed to save master key fallback: {e}")
+        logger.critical(get_text("utils.settings.failed_to_save_master_key", e=e))
         raise RuntimeError(get_text("utils.settings.could_not_save_master_key")) from e
 
 
@@ -250,7 +250,7 @@ def get_secret(namespace: str, key: str) -> Optional[str]:
         return None
 
     if not stored_value.startswith(ENCRYPTED_PREFIX):
-        logger.warning(f"Value for {namespace}.{key} is not encrypted.")
+        logger.warning(get_text("utils.settings.value_for_namespace_key_is", namespace=namespace, key=key))
         return stored_value  # Return as-is if not marked encrypted (legacy support?)
 
     try:

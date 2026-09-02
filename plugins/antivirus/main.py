@@ -335,7 +335,7 @@ class Plugin(BasePlugin):
             logger.info("Antivirus: pre-starting clamd for faster scans")
             ok, msg = clamav.start_clamd()
             if not ok:
-                logger.warning(f"Antivirus: clamd warm-up failed: {msg}")
+                logger.warning(get_text("antivirus.antivirus_clamd_warm_up_failed", msg=msg))
         except Exception:
             logger.debug("Antivirus: clamd warm-up errored")
 
@@ -596,7 +596,7 @@ class Plugin(BasePlugin):
 
         if not status.get("installed"):
             cfg = {
-                "kind": "error", "title": "Not Installed",
+                "kind": "error", "title": get_text("antivirus.not_installed"),
                 "subtitle": (
                     f"{_engine} is not available."
                     if _is_win
@@ -653,9 +653,8 @@ class Plugin(BasePlugin):
     def _get_setup_banner_cfg(self, setup_state, status) -> dict:
         if setup_state == "seeding_db":
             return {
-                "kind": "warn", "title": "Downloading Definitions...",
-                "subtitle": "Downloading malware signature database. "
-                            "This may take a few minutes.",
+                "kind": "warn", "title": get_text("antivirus.downloading_definitions"),
+                "subtitle": get_text("antivirus.downloading_malware_signature_database_this"),
                 "action": None,
             }
         if setup_state == "seed_failed":
@@ -681,25 +680,22 @@ class Plugin(BasePlugin):
                                     "Tap Retry to try again.",
             }.get(reason, "Download failed. Tap Retry to try again.")
             return {
-                "kind": "error", "title": "Download Failed",
+                "kind": "error", "title": get_text("antivirus.download_failed"),
                 "subtitle": reason_text,
                 "action": ("Retry", self._retry_setup),
             }
         if setup_state == "db_ready":
             return {
-                "kind": "warn", "title": "Set Up Protection",
+                "kind": "warn", "title": get_text("antivirus.set_up_protection"),
                 "subtitle": (
-                    "Signature database downloaded. "
-                    "Tap below to enable real-time protection "
-                    "(requires administrator password)."
+                    get_text("antivirus.signature_database_downloaded_tap_below")
                 ),
-                "action": ("Set Up Protection", self._start_system_setup),
+                "action": (get_text("antivirus.set_up_protection"), self._start_system_setup),
             }
         if setup_state == "installing":
             return {
-                "kind": "warn", "title": "Setting Up...",
-                "subtitle": "Configuring system-level protection. "
-                            "This may take a moment.",
+                "kind": "warn", "title": get_text("antivirus.setting_up"),
+                "subtitle": get_text("antivirus.configuring_system_level_protection_this"),
                 "action": None,
             }
         if setup_state == "install_failed":
@@ -715,13 +711,13 @@ class Plugin(BasePlugin):
             else:
                 subtitle = get_text("antivirus.system_setup_failed_tap_retry")
             return {
-                "kind": "error", "title": "Setup Failed",
+                "kind": "error", "title": get_text("antivirus.setup_failed"),
                 "subtitle": subtitle,
                 "action": ("Retry", self._retry_setup),
             }
         return {
-            "kind": "warn", "title": "Starting Setup...",
-            "subtitle": "Preparing to download malware definitions...",
+            "kind": "warn", "title": get_text("antivirus.starting_setup"),
+            "subtitle": get_text("antivirus.preparing_to_download_malware_definitions"),
             "action": None,
         }
 
@@ -738,34 +734,26 @@ class Plugin(BasePlugin):
             }
         if runtime_state == "degraded":
             return {
-                "kind": "warn", "title": "Protection Degraded",
+                "kind": "warn", "title": get_text("antivirus.protection_degraded"),
                 "subtitle": (
-                    "Scanning is available but real-time file monitoring "
-                    "is not running. The ResistineClamAV helper may need "
-                    "Full Disk Access."
+                    get_text("antivirus.scanning_is_available_but_real")
                 ),
                 "action": (get_text("antivirus.qt_ui.open_settings"), self._open_fda_for_helper),
             }
         if runtime_state == "approval_required":
             return {
-                "kind": "warn", "title": "Approval Required",
+                "kind": "warn", "title": get_text("antivirus.approval_required"),
                 "subtitle": (
-                    "Enable ClamAV daemons in System Settings "
-                    "› General › Login Items "
-                    "for real-time protection."
+                    get_text("antivirus.enable_clamav_daemons_in_system")
                 ),
                 "action": ("Open Login Items",
                            self._safe(clamav, "open_login_items_settings")),
             }
         if runtime_state == "fda_required":
             return {
-                "kind": "warn", "title": "Full Disk Access Required",
+                "kind": "warn", "title": get_text("antivirus.full_disk_access_required"),
                 "subtitle": (
-                    "Real-time monitoring runs in the ResistineClamAV "
-                    "helper, which needs its own Full Disk Access grant. "
-                    "Click Open Settings, then drag ResistineClamAV from "
-                    "the Finder window into the Full Disk Access list "
-                    "(or add it with the + button) and enable it."
+                    get_text("antivirus.real_time_monitoring_runs_in")
                 ),
                 "action": (get_text("antivirus.qt_ui.open_settings"), self._open_fda_for_helper),
             }
@@ -776,7 +764,7 @@ class Plugin(BasePlugin):
         except Exception:
             _engine = "ClamAV"
         return {
-            "kind": "error", "title": "Protection Offline",
+            "kind": "error", "title": get_text("antivirus.protection_offline"),
             "subtitle": (
                 f"{_engine} protection is offline"
                 if _is_win
@@ -879,7 +867,7 @@ class Plugin(BasePlugin):
                 threat_log.log_threat_detected(name, path)
             except Exception:
                 pass
-            logger.warning(f"Antivirus RTD: {name} at {path}")
+            logger.warning(get_text("antivirus.antivirus_rtd_name_at_path", name=name, path=path))
 
     def _toggle_auto_update(self, *args):
         # macOS has no auto-update toggle: signature updates are always on,
@@ -1018,7 +1006,7 @@ class Plugin(BasePlugin):
             settings.set("antivirus", "last_sig_update_ts", time.time())
             logger.info(f"Antivirus: auto-update succeeded — {msg}")
         else:
-            logger.warning(f"Antivirus: auto-update failed — {msg}")
+            logger.warning(get_text("antivirus.antivirus_auto_update_failed_msg", msg=msg))
         try:
             self.app.after(0, self._refresh_db_info)
         except Exception:
@@ -1353,8 +1341,8 @@ class Plugin(BasePlugin):
         targets = self._computer_scan_targets()
         if not targets:
             QMessageBox.information(
-                self.app, "Nothing to Scan",
-                "No scannable directories found. Check your whitelist.",
+                self.app, get_text("antivirus.nothing_to_scan"),
+                get_text("antivirus.no_scannable_directories_found_check"),
             )
             return
         self._run_multi_scan(targets)
@@ -1946,7 +1934,7 @@ class Plugin(BasePlugin):
         if ok:
             self._refresh_quarantine()
         else:
-            QMessageBox.critical(self.app, "Restore Failed", msg)
+            QMessageBox.critical(self.app, get_text("antivirus.restore_failed"), msg)
 
     def _delete_quarantined(self, qpath: str):
         name = os.path.basename(qpath).replace(".quarantined", "")

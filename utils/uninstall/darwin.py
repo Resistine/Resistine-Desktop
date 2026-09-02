@@ -300,8 +300,7 @@ def _remove_clamav_daemons(admin_cmds):
                     success, err = service.unregisterAndReturnError_(None)
                     if not success:
                         logger.warning(
-                            f"[UNINSTALL] SMAppService unregister error "
-                            f"({plist_name}): {err}",
+                            get_text("utils.uninstall.darwin.uninstall_smappservice_unregister_error_plist", plist_name=plist_name, err=err),
                         )
                     else:
                         logger.info(
@@ -309,7 +308,7 @@ def _remove_clamav_daemons(admin_cmds):
                         )
             except Exception as e:
                 logger.warning(
-                    f"[UNINSTALL] SMAppService unregister failed ({plist_name}): {e}",
+                    get_text("utils.uninstall.darwin.uninstall_smappservice_unregister_failed_plist", plist_name=plist_name, e=e),
                 )
     except ImportError:
         logger.debug("[UNINSTALL] ServiceManagement not available")
@@ -600,8 +599,7 @@ def _deactivate_system_extension():
 
         if not done_event.wait(timeout=15):
             logger.warning(
-                "[UNINSTALL] Extension deactivation timed out after 15s "
-                "— continuing anyway"
+                get_text("utils.uninstall.darwin.uninstall_extension_deactivation_timed_out")
             )
             return
         err = _DEACTIVATION_STATE.get("error")
@@ -665,7 +663,7 @@ def _remove_wireguard_configs():
                 os.remove(entry_path)
             removed += 1
         except OSError as e:
-            logger.warning(f"[UNINSTALL] Could not remove {entry_path}: {e}")
+            logger.warning(get_text("utils.uninstall.darwin.uninstall_could_not_remove_entry", entry_path=entry_path, e=e))
             failed.append(entry_path)
 
     # Try to remove the now-empty directory (may fail due to SIP — that's OK)
@@ -718,7 +716,7 @@ def _remove_app_config(admin_cmds):
                     logger.info(f"[UNINSTALL] Removed container {container_path}")
                 except OSError as e:
                     logger.warning(
-                        f"[UNINSTALL] Could not remove {container_path}: {e}"
+                        get_text("utils.uninstall.darwin.uninstall_could_not_remove_container", container_path=container_path, e=e)
                     )
 
     # System-level directory — batch with other admin commands
@@ -779,7 +777,7 @@ def _collect_app_bundle_admin_cmd(admin_cmds):
     app_bundle = str(Path(sys.executable).parents[2])
 
     if not app_bundle.endswith(".app"):
-        logger.warning(f"[UNINSTALL] Unexpected bundle path: {app_bundle}")
+        logger.warning(get_text("utils.uninstall.darwin.uninstall_unexpected_bundle_path_app", app_bundle=app_bundle))
         return
 
     if not os.path.exists(app_bundle):

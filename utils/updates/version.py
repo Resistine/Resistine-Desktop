@@ -14,6 +14,7 @@ import re
 import sys
 
 from utils.logger import logger
+from utils.i18n import get_text
 
 _VERSION_RE = re.compile(r"^VERSION\s*=\s*['\"](.+?)['\"]", re.MULTILINE)
 
@@ -45,7 +46,7 @@ def get_current_version() -> str:
             if version:
                 return version
         except (OSError, IOError) as e:
-            logger.warning(f"[VERSION] Could not read bundled VERSION file: {e}")
+            logger.warning(get_text("utils.updates.version.version_could_not_read_bundled", e=e))
 
     # Source / dev mode — parse from spec
     spec_path = os.path.join(_PROJECT_ROOT, "packaging", "Resistine.spec")
@@ -56,7 +57,7 @@ def get_current_version() -> str:
         if match:
             return match.group(1)
     except (OSError, IOError) as e:
-        logger.warning(f"[VERSION] Could not read spec file: {e}")
+        logger.warning(get_text("utils.updates.version.version_could_not_read_spec", e=e))
     return "0.0.0"
 
 

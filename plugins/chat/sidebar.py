@@ -143,7 +143,7 @@ class ChatSidebar(customtkinter.CTkFrame):
         active_bg = "#1A2F45" if self._is_dark else "#D6E4F0"
         for s in sessions:
             sid = s["id"]
-            title = s.get("title", "New Chat")
+            title = s.get("title", get_text("chat.history.new_chat"))
             updated = s.get("updated_at", 0)
             row = self._items.get(sid)
             if row is None:

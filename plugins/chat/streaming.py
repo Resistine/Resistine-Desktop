@@ -78,7 +78,7 @@ class StreamController:
         endpoint could not be reached).
         """
         if self._active:
-            logger.warning("StreamController.start() called while already active")
+            logger.warning(get_text("chat.streaming.streamcontroller_start_called_while_already"))
             return
 
         self._active = True

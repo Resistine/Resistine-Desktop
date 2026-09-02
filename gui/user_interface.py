@@ -543,7 +543,7 @@ class AppUI(customtkinter.CTk):
                 if info and int(info.get("row", 0)) > 1:
                     widget.destroy()
         except Exception as e:
-            logger.warning(f"Error while clearing navigation frame: {e}")
+            logger.warning(get_text("gui.user_interface.error_while_clearing_navigation_frame", e=e))
 
         # Reset grid row configurations to avoid gaps from uninstalled plugins
         # We assume a reasonable maximum number of plugins (e.g. 50) to clear weights

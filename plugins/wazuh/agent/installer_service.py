@@ -18,6 +18,7 @@ from utils import settings
 from utils.logger import logger
 
 from plugins.wazuh.config import WAZUH_VERSION
+from utils.i18n import get_text
 
 # ---------------------------------------------------------------------------
 # State constants
@@ -128,7 +129,7 @@ def trigger_install(app) -> bool:
     with _lock:
         state = get_install_state()
         if state != STATE_DOWNLOADED:
-            logger.warning(f"[INSTALLER] trigger_install called in wrong state: {state}")
+            logger.warning(get_text("wazuh.agent.installer_service.installer_trigger_install_called_in", state=state))
             return False
         _set_state(STATE_INSTALLING)
 
@@ -257,10 +258,10 @@ def verify_package(pkg_path: str) -> bool:
             logger.warning(f"[INSTALLER] pkgutil returned {result.returncode}")
             return False
         if "Developer ID Installer" not in output:
-            logger.warning("[INSTALLER] Package missing Developer ID Installer signature")
+            logger.warning(get_text("wazuh.agent.installer_service.installer_package_missing_developer_id"))
             return False
         if "Wazuh" not in output:
-            logger.warning("[INSTALLER] Package not signed by Wazuh")
+            logger.warning(get_text("wazuh.agent.installer_service.installer_package_not_signed_by"))
             return False
         logger.info("[INSTALLER] Package signature verified")
         return True

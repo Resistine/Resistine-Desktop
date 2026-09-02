@@ -360,7 +360,7 @@ def _load_all_agents(devices=None):
                 detail, derr = future.result()
                 if derr:
                     logger.warning(
-                        f"Inventory: fetch_device_inventory({aid}) failed: {derr}"
+                        get_text("wazuh_overview.inventory_fetch_device_inventory_aid", aid=aid, derr=derr)
                     )
                 detail_by_aid[aid] = detail
 
@@ -454,7 +454,7 @@ def _wait_for_vpn(poll_interval=2.0, timeout=60.0):
         from plugins.vpn.main import is_vpn_connected
     except ImportError:
         logger.warning(
-            "[ENDPOINT] VPN plugin unavailable; preloader proceeding without VPN gate"
+            get_text("wazuh_overview.endpoint_vpn_plugin_unavailable_preloader")
         )
         return
 
@@ -548,7 +548,7 @@ def _load_vuln_events_phase1_async():
     local_id = (_REMOTE_AGENT or {}).get("id") if isinstance(_REMOTE_AGENT, dict) else None
     if not local_id:
         logger.warning(
-            "[ENDPOINT] No local agent id — skipping vuln-events fetch"
+            get_text("wazuh_overview.endpoint_no_local_agent_id")
         )
         _REMOTE_VULN_EVENTS_ERROR = "no local agent"
         _remote_vuln_events_ready.set()
@@ -566,7 +566,7 @@ def _load_vuln_events_phase1_async():
         # Without this the tab renders an empty stream that's indistinguishable
         # from a genuine "no events in the window".
         logger.warning(
-            f"[ENDPOINT] Vuln-events fetch for local agent {local_id} failed: {err}"
+            get_text("wazuh_overview.endpoint_vuln_events_fetch_for", local_id=local_id, err=err)
         )
     else:
         normalized = [_normalize_wazuh_hit(h) for h in (local_events or [])]
@@ -607,7 +607,7 @@ def _load_vuln_events_phase2_async():
             events, derr = future.result()
             if derr:
                 logger.warning(
-                    f"[ENDPOINT] Vuln-events fetch for agent {aid} failed: {derr}"
+                    get_text("wazuh_overview.endpoint_vuln_events_fetch_for_2", aid=aid, derr=derr)
                 )
                 continue
             new_normalized = [_normalize_wazuh_hit(h) for h in (events or [])]

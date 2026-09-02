@@ -409,11 +409,11 @@ def reveal_clamav_helper_in_finder():
     macOS does not auto-add ESF daemons that fail to spawn)."""
     contents = _app_bundle_contents() or _installed_app_contents()
     if not contents:
-        logger.warning("ClamAV: no app bundle found to reveal helper")
+        logger.warning(get_text("antivirus.clamav_platform_darwin.clamav_no_app_bundle_found"))
         return
     helper = os.path.join(contents, "Helpers", "ResistineClamAV.app")
     if not os.path.exists(helper):
-        logger.warning(f"ClamAV: helper not found at {helper}")
+        logger.warning(get_text("antivirus.clamav_platform_darwin.clamav_helper_not_found_at", helper=helper))
         return
     try:
         subprocess.Popen(["open", "-R", helper])
@@ -514,7 +514,7 @@ def ensure_daemons_registered():
             try:
                 service = SMAppService.daemonWithPlistName_(plist_name)
             except Exception:
-                logger.warning(f"Could not create SMAppService for {plist_name}")
+                logger.warning(get_text("antivirus.clamav_platform_darwin.could_not_create_smappservice_for", plist_name=plist_name))
                 continue
 
         status = int(service.status())
@@ -540,8 +540,7 @@ def ensure_daemons_registered():
             if _daemon_loaded(label):
                 continue
             logger.warning(
-                f"ClamAV daemon {label} is enabled but not loaded "
-                f"in launchd — re-registering",
+                get_text("antivirus.clamav_platform_darwin.clamav_daemon_label_is_enabled", label=label),
             )
             try:
                 service.unregisterAndReturnError_(None)
@@ -563,7 +562,7 @@ def ensure_daemons_registered():
             logger.info(f"ClamAV daemon {plist_name} registered successfully")
 
     if needs_approval:
-        logger.warning("ClamAV daemons require user approval in Login Items")
+        logger.warning(get_text("antivirus.clamav_platform_darwin.clamav_daemons_require_user_approval"))
 
 
 # ── System daemon activation ─────────────────────────────
@@ -659,7 +658,7 @@ def _kickstart_clamonacc_admin():
                 f"{(result.stderr or '').strip()}",
             )
     except Exception as exc:
-        logger.warning(f"ClamAV: clamonacc kickstart error: {exc}")
+        logger.warning(get_text("antivirus.clamav_platform_darwin.clamav_clamonacc_kickstart_error_exc", exc=exc))
 
 
 def _app_bundle_contents() -> str | None:
@@ -854,7 +853,7 @@ def _poll_setup_status(status_file: str) -> tuple[bool, bool, dict]:
                 os.kill(pid, 0)
             except ProcessLookupError:
                 logger.warning(
-                    f"ClamAV: postinstall PID {pid} is dead — treating as crash",
+                    get_text("antivirus.clamav_platform_darwin.clamav_postinstall_pid_pid_is", pid=pid),
                 )
                 data["error"] = "Script process died unexpectedly"
                 data["error_code"] = "PROCESS_CRASHED"

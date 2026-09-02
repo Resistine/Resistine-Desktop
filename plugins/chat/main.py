@@ -1010,7 +1010,7 @@ class Plugin(BasePlugin):
             lay.insertWidget(
                 lay.count() - 1,
                 self._sidebar_item(
-                    s["id"], s.get("title", "New Chat"),
+                    s["id"], s.get("title", get_text("chat.history.new_chat")),
                     s["id"] == active_id))
 
     def _sidebar_item(self, sid: str, title: str, active: bool) -> QWidget:

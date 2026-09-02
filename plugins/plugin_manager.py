@@ -15,6 +15,7 @@ import re
 import json
 from utils.logger import logger
 from utils.settings import get_config_dir
+from utils.i18n import get_text
 
 class PluginManager:
     """
@@ -108,7 +109,7 @@ class PluginManager:
                 user_plugin_dir = os.path.join(self.user_plugins_path, folder_name)
             else:
                 # Fallback to old heuristic
-                logger.warning(f"Uninstallation: Unusual module path '{module_path}', falling back to heuristics.")
+                logger.warning(get_text("plugin_manager.uninstallation_unusual_module_path_module", module_path=module_path))
                 user_plugin_dir = os.path.join(self.user_plugins_path, os.path.basename(os.path.dirname(module_path.replace('.', '/'))))
         except Exception as e:
             logger.error(f"Uninstallation: Failed to calculate directory for {plugin.id}: {e}")
@@ -124,9 +125,9 @@ class PluginManager:
                 else:
                     logger.info(f"Uninstallation: ✅ Directory deleted: {user_plugin_dir}")
             except Exception as e:
-                logger.warning(f"Could not delete plugin directory {user_plugin_dir}: {e}")
+                logger.warning(get_text("plugin_manager.could_not_delete_plugin_directory", user_plugin_dir=user_plugin_dir, e=e))
         else:
-            logger.warning(f"Uninstallation: Directory not found or invalid: {user_plugin_dir}")
+            logger.warning(get_text("plugin_manager.uninstallation_directory_not_found_or", user_plugin_dir=user_plugin_dir))
         
         # Surgical Update: Remove the plugin from active lists and refresh only the sidebar
         logger.info(f"Uninstallation: Removing {plugin.id} from active memory lists")

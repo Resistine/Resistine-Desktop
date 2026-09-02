@@ -57,8 +57,7 @@ def init_updater(app) -> bool:
     version = get_current_version()
     if version == "0.0.0":
         logger.warning(
-            "[UPDATE-LINUX] Could not read version from spec file; "
-            "updater disabled"
+            get_text("utils.updates.linux.update_linux_could_not_read")
         )
         return False
 
@@ -245,8 +244,7 @@ def _download_worker(item: AppcastItem, dialog):
                 return
         else:
             logger.warning(
-                "[UPDATE-LINUX] No signature in appcast entry, skipping "
-                "verification"
+                get_text("utils.updates.linux.update_linux_no_signature_in")
             )
 
         # --- Apply update ---

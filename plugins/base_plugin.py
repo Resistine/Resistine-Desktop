@@ -18,6 +18,7 @@ from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtGui import QIcon, QPixmap
 
 from gui import theme
+from utils.i18n import get_text
 
 
 class BasePlugin:

@@ -22,6 +22,7 @@ from plugins.antivirus.threat_log import (
     parse_infection_line,
 )
 from utils.logger import logger
+from utils.i18n import get_text
 
 _FOUND_RE = re.compile(r"->\s*(.+?:\s*.+?\s+FOUND)\s*$")
 
@@ -101,7 +102,7 @@ class ClamdLogWatcher:
                     return
                 continue
             except OSError as exc:
-                logger.warning(f"RTD watcher: open error: {exc}, retrying")
+                logger.warning(get_text("antivirus.rtd_watcher.rtd_watcher_open_error_exc", exc=exc))
                 if self._stop_event.wait(timeout=_RETRY_INTERVAL):
                     return
                 continue
@@ -109,7 +110,7 @@ class ClamdLogWatcher:
             try:
                 self._tail(fh)
             except Exception as exc:
-                logger.warning(f"RTD watcher: error during tail: {exc}")
+                logger.warning(get_text("antivirus.rtd_watcher.rtd_watcher_error_during_tail", exc=exc))
             finally:
                 try:
                     fh.close()

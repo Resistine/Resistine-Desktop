@@ -24,6 +24,7 @@ import logging
 import time
 import sys
 import shutil
+from utils.i18n import get_text
 
 
 # ---------------- Configuration ----------------
@@ -254,7 +255,7 @@ def find_config(tunnel: str, config_path: str = None) -> str | None:
         logger.info(f"Using ProgramData config: {fallback}")
         return fallback
 
-    logger.warning(f"No config found for tunnel '{tunnel}'")
+    logger.warning(get_text("vpn.wireguard.windows_vpn_service.no_config_found_for_tunnel", tunnel=tunnel))
     return None
 
 
@@ -323,8 +324,7 @@ def _ensure_system_config(tunnel: str, source_conf: str) -> str:
     except Exception as e:
         # Non-fatal: try the original path and let WireGuard report the error
         logger.warning(
-            f"Could not copy config to ProgramData, using original path. "
-            f"Error: {e}"
+            get_text("vpn.wireguard.windows_vpn_service.could_not_copy_config_to", e=e)
         )
         return source_conf
 
@@ -371,7 +371,7 @@ def start_tunnel(tunnel: str):
     combined = (result.stdout + result.stderr).lower()
 
     if "already running" in combined:
-        return True, "Already running"
+        return True, get_text("vpn.wireguard.windows_vpn_service.already_running")
     if "start_pending" in combined or result.returncode == 1056:
         return True, "Starting"
     if result.returncode == 0:
@@ -386,7 +386,7 @@ def stop_tunnel(tunnel: str):
     combined = (result.stdout + result.stderr).lower()
 
     if "not started" in combined or "1062" in combined:
-        return True, "Already stopped"
+        return True, get_text("vpn.wireguard.windows_vpn_service.already_stopped")
 
     return result.returncode == 0, combined.strip()
 
@@ -396,7 +396,7 @@ def status_tunnel(tunnel: str) -> str:
     out = (result.stdout + result.stderr).lower()
 
     if "1060" in out or "does not exist" in out:
-        return "Not Installed"
+        return get_text("antivirus.not_installed")
     if "running" in out:
         return "Running"
     if "start_pending" in out:
@@ -421,10 +421,10 @@ def handle_request(request: dict) -> dict:
     config_path = request.get("config_path")
 
     if cmd not in ALLOWED_COMMANDS:
-        return {"status": "error", "message": f"Invalid command: {cmd}"}
+        return {"status": "error", "message": get_text("vpn.wireguard.windows_vpn_service.invalid_command_cmd", cmd=cmd)}
 
     if not tunnel:
-        return {"status": "error", "message": "Missing tunnel"}
+        return {"status": "error", "message": get_text("vpn.wireguard.windows_vpn_service.missing_tunnel")}
 
     try:
         if cmd == "status":
@@ -433,7 +433,7 @@ def handle_request(request: dict) -> dict:
         if cmd == "connect":
             state = status_tunnel(tunnel)
             if state == "Running":
-                return {"status": "ok", "state": "Running", "message": "Already running"}
+                return {"status": "ok", "state": "Running", "message": get_text("vpn.wireguard.windows_vpn_service.already_running")}
 
             # Always reinstall before starting — even if the tunnel service
             # exists in "Stopped" state. A stopped WireGuardTunnel$ service
@@ -456,7 +456,7 @@ def handle_request(request: dict) -> dict:
         if cmd == "disconnect":
             state = status_tunnel(tunnel)
             if state in ("Stopped", "Not Installed"):
-                return {"status": "ok", "state": "Stopped", "message": "Already stopped"}
+                return {"status": "ok", "state": "Stopped", "message": get_text("vpn.wireguard.windows_vpn_service.already_stopped")}
             ok, msg = stop_tunnel(tunnel)
             actual_state = status_tunnel(tunnel)
             if ok:
@@ -490,7 +490,7 @@ def handle_request(request: dict) -> dict:
         logger.exception(f"Error handling '{cmd}': {e}")
         return {"status": "error", "message": str(e)}
 
-    return {"status": "error", "message": "Unhandled command"}
+    return {"status": "error", "message": get_text("vpn.wireguard.windows_vpn_service.unhandled_command")}
 
 
 # ---------------- Socket Server ----------------
