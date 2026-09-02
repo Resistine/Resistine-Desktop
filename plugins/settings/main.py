@@ -233,11 +233,18 @@ class Plugin(BasePlugin):
             return
         settings.set("ui", "language", code)
         i18n.set_language(code)
-        # Screens already built keep their original strings — a restart
-        # applies the new language everywhere.
-        self.language_status_label.setText(
-            _t("settings.language.restart_required",
-               get_text("settings.language.restart_required")))
+        # Rebuild the whole shell so every screen is re-created with the
+        # new language — no restart needed. Deferred one tick so the combo
+        # popup finishes closing before its widget tree is torn down
+        # (same hazard as the appearance-mode switch).
+        self.app.after(0, self._rebuild_ui_for_language)
+
+    def _rebuild_ui_for_language(self):
+        try:
+            self.app.create_dashboard()
+            self.app.select_frame_by_name("frame_Settings")
+        except Exception as e:
+            logger.error(f"UI rebuild after language change failed: {e}")
 
     # ---- Software Updates -------------------------------------------------
     def _updates_card(self) -> QWidget:
