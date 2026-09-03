@@ -198,11 +198,20 @@ class Plugin(BasePlugin):
         card, lay = self._card(get_text("settings.appearance"))
         lay.addWidget(self._muted(get_text("settings.mode")))
         self.appearance_combo = _NoScrollComboBox()
-        self.appearance_combo.addItems(["System", "Light", "Dark"])
-        self.appearance_combo.setCurrentText(
+        # Display localized labels; store the canonical English mode as item
+        # data — settings persistence and set_appearance_mode() expect
+        # "System"/"Light"/"Dark" regardless of UI language.
+        for mode, key in (("System", "settings.appearance_mode.system"),
+                          ("Light", "settings.appearance_mode.light"),
+                          ("Dark", "settings.appearance_mode.dark")):
+            self.appearance_combo.addItem(_t(key, mode), mode)
+        idx = self.appearance_combo.findData(
             settings.get("ui", "appearance_mode", "System"))
-        self.appearance_combo.currentTextChanged.connect(
-            self.change_appearance_mode)
+        if idx >= 0:
+            self.appearance_combo.setCurrentIndex(idx)
+        self.appearance_combo.currentIndexChanged.connect(
+            lambda i: self.change_appearance_mode(
+                self.appearance_combo.itemData(i)))
         lay.addWidget(self.appearance_combo)
         return card
 

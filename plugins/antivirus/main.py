@@ -1774,7 +1774,7 @@ class Plugin(BasePlugin):
 
         if not excl["extensions"]:
             from plugins.antivirus.qt_ui import muted
-            layout.addWidget(muted("No excluded extensions"))
+            layout.addWidget(muted(get_text("antivirus.no_excluded_extensions")))
         else:
             for ext in excl["extensions"]:
                 row, h = self._list_row(ext)

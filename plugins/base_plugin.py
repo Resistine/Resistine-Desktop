@@ -127,7 +127,20 @@ class BasePlugin:
         self.description = description
 
     def get_description(self):
-        return self.description
+        """Localized description, resolved at display time.
+
+        Constructors pass an already-translated string, but that freezes
+        the app's *startup* language into the instance — a runtime
+        language switch rebuilds screens without re-instantiating
+        plugins. The canonical ``plugin.description.<name>`` catalog key
+        re-resolves on every call; the stored string is the fallback.
+        """
+        try:
+            from utils.i18n import get_text
+
+            return get_text(f"plugin.description.{self.name.lower()}")
+        except Exception:
+            return self.description
 
     def set_supported_systems(self, supported_systems):
         self.supported_systems = supported_systems

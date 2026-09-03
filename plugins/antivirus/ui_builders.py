@@ -146,7 +146,7 @@ def build_scan_activity(plugin, parent, row):
     header.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 3))
     header.grid_columnconfigure(0, weight=1)
 
-    section_title(header, "Scan Activity").grid(row=0, column=0, sticky="w")
+    section_title(header, get_text("antivirus.ui_builders.scan_activity")).grid(row=0, column=0, sticky="w")
 
     plugin._scan_status_label = customtkinter.CTkLabel(
         header, text=get_text("antivirus.qt_ui.no_scans_yet"), font=font(11),

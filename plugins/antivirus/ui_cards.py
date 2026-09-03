@@ -76,7 +76,7 @@ def build_whitelist_card(plugin, parent, row):
     hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 3))
     hdr.grid_columnconfigure(0, weight=1)
 
-    section_title(hdr, "Whitelist").grid(row=0, column=0, sticky="w")
+    section_title(hdr, get_text("antivirus.ui_cards.whitelist")).grid(row=0, column=0, sticky="w")
 
     customtkinter.CTkButton(
         hdr, text=get_text("antivirus.ui_cards.add"), width=60, height=26, corner_radius=6,
@@ -333,7 +333,7 @@ def build_db_info_card(plugin, parent, row):
     card = make_card(parent, row)
     card.grid_columnconfigure(1, weight=1)
 
-    section_title(card, "Signature Database").grid(
+    section_title(card, get_text("antivirus.ui_cards.signature_database")).grid(
         row=0, column=0, columnspan=2, padx=16, pady=(14, 3), sticky="w",
     )
 
@@ -351,7 +351,7 @@ def build_sig_updates_settings_card(plugin, parent, row):
     card = make_card(parent, row)
     card.grid_columnconfigure(1, weight=1)
 
-    section_title(card, "Signature Updates").grid(
+    section_title(card, get_text("antivirus.ui_cards.signature_updates")).grid(
         row=0, column=0, columnspan=2, padx=16, pady=(14, 3), sticky="w",
     )
 

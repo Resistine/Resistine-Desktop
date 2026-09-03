@@ -354,8 +354,8 @@ def build_siem_card(plugin, col: QVBoxLayout) -> None:
         plugin._siem_btn.clicked.connect(plugin._setup_wazuh_forwarding)
         lay.addWidget(plugin._siem_btn)
     else:
-        lay.addWidget(muted("Wazuh agent not installed"))
-        lay.addWidget(muted("Threat events are logged locally."))
+        lay.addWidget(muted(get_text("antivirus.qt_ui.wazuh_agent_not_installed")))
+        lay.addWidget(muted(get_text("antivirus.qt_ui.threat_events_logged_locally")))
     col.addWidget(frame)
 
 

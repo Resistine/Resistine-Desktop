@@ -178,7 +178,7 @@ class Plugin(BasePlugin):
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         col.addWidget(self.title_label)
         col.addSpacing(4)
-        subtitle = muted("Browse and install plugins to extend Resistine.")
+        subtitle = muted(get_text("store.browse_and_install_plugins"))
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         col.addWidget(subtitle)
         col.addSpacing(40)

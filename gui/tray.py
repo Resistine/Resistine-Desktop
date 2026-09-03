@@ -364,21 +364,24 @@ class ResistineTray:
         is_connected  = state == "connected"
         is_connecting = state == "connecting"
 
-        status_label = {
-            "connected":    "● Connected",
-            "disconnected": "● Disconnected",
-            "connecting":   "● Connecting...",
-        }.get(state, "● Unknown")
+        status_key = {
+            "connected":    "gui.tray.connected",
+            "disconnected": "gui.tray.disconnected",
+            "connecting":   "gui.tray.connecting",
+        }.get(state, "gui.tray.unknown")
+        status_label = "● " + get_text(status_key)
 
         return pystray.Menu(
             item(status_label,     None,               enabled=False),
             pystray.Menu.SEPARATOR,
-            item("Connect",        self.on_connect,
+            item(get_text("gui.tray.connect"), self.on_connect,
                  enabled=not is_connected and not is_connecting),
-            item("Disconnect",     self.on_disconnect, enabled=is_connected),
+            item(get_text("gui.tray.disconnect"), self.on_disconnect,
+                 enabled=is_connected),
             pystray.Menu.SEPARATOR,
-            item("Open Resistine", self.on_open_app, default=True),
-            item("Quit",           self.on_quit),
+            item(get_text("gui.tray.open_resistine"), self.on_open_app,
+                 default=True),
+            item(get_text("gui.tray.quit"), self.on_quit),
         )
 
     # ---- Run ----
@@ -406,4 +409,11 @@ class ResistineTray:
 
 
 if __name__ == "__main__":
+    # Standalone process: apply the app's persisted UI language so the
+    # tray menu matches the main app.
+    try:
+        from utils import i18n, settings
+        i18n.set_language(settings.get("ui", "language", i18n.DEFAULT_LANGUAGE))
+    except Exception:
+        pass
     ResistineTray().run()
