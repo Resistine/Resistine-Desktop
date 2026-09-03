@@ -228,23 +228,41 @@ class Plugin(BasePlugin):
     def change_language(self, index: int):
         from utils import i18n
 
-        code = self.language_combo.itemData(index)
+        try:
+            code = self.language_combo.itemData(index)
+        except RuntimeError:
+            # The combo this signal came from was deleted by a rebuild that
+            # is already in flight — the pending rebuild will pick up the
+            # persisted language, nothing to do.
+            return
         if not code or code == i18n.get_language():
             return
         settings.set("ui", "language", code)
         i18n.set_language(code)
-        # Rebuild the whole shell so every screen is re-created with the
-        # new language — no restart needed. Deferred one tick so the combo
-        # popup finishes closing before its widget tree is torn down
-        # (same hazard as the appearance-mode switch).
-        self.app.after(0, self._rebuild_ui_for_language)
+        # Rebuild the shell so every screen is re-created with the new
+        # language — no restart needed. Deferred 150 ms so the combo popup
+        # fully dismisses before its widget tree is torn down (tearing down
+        # under an open popup breaks the combo on some platforms). Rapid
+        # re-selections coalesce into a single rebuild via the pending flag.
+        if getattr(self, "_lang_rebuild_pending", False):
+            return
+        self._lang_rebuild_pending = True
+        self.app.after(150, self._rebuild_ui_for_language)
 
     def _rebuild_ui_for_language(self):
+        self._lang_rebuild_pending = False
         try:
-            self.app.create_dashboard()
-            self.app.select_frame_by_name("frame_Settings")
+            # Rebuild the shell and land back on Settings directly — going
+            # through create_dashboard() would build the Dashboard screen
+            # only to immediately swap it out for Settings.
+            self.app._build_main_ui()
+            self.app.navigate("Settings")
         except Exception as e:
             logger.error(f"UI rebuild after language change failed: {e}")
+            try:
+                self.app.create_dashboard()
+            except Exception:
+                pass
 
     # ---- Software Updates -------------------------------------------------
     def _updates_card(self) -> QWidget:
