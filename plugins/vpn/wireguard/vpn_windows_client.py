@@ -8,7 +8,6 @@ Copyright (c) Resistine 2025
 
 from plugins.vpn.wireguard.service_client import send_command
 from utils.logger import logger
-from utils.i18n import get_text
 
 
 def get_status(tunnel: str) -> dict:

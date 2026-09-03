@@ -724,7 +724,7 @@ class Plugin(BasePlugin):
     def _get_runtime_banner_cfg(self, runtime_state, status) -> dict:
         if runtime_state == "healthy":
             return {
-                "kind": "ok", "title": "Protected",
+                "kind": "ok", "title": get_text("antivirus.protected"),
                 "subtitle": (
                     "Real-time malware protection is active"
                     if status.get("clamonacc_running")
@@ -1295,13 +1295,13 @@ class Plugin(BasePlugin):
                 targets.append(path)
         if skipped:
             QMessageBox.information(
-                self.app, "Whitelisted",
+                self.app, get_text("antivirus.whitelisted"),
                 f"{len(skipped)} item(s) skipped (whitelisted):\n"
                 + "\n".join(skipped[:10]),
             )
         if not targets:
             return
-        self._run_multi_scan(targets, label="Scan")
+        self._run_multi_scan(targets, label=get_text("antivirus.scan"))
 
     def _computer_scan_targets(self) -> list[str]:
         system = platform.system()
@@ -1403,8 +1403,9 @@ class Plugin(BasePlugin):
                         agg["files_seen"] += 1
                         total = agg["total_files"]
                         if total > 0:
-                            status = (
-                                f"Scanned {agg['files_seen']} / {total} files")
+                            status = get_text(
+                                "antivirus.scanned_count_total_files",
+                                count=agg["files_seen"], total=total)
                             pct = agg["files_seen"] / total
                         else:
                             status = f"Scanned {agg['files_seen']} files"
@@ -1533,7 +1534,8 @@ class Plugin(BasePlugin):
 
         if result.infected > 0:
             self._scan_status_label.setText(
-                f"Threats found: {result.infected}")
+                get_text("antivirus.threats_found_infected",
+                         infected=result.infected))
             try:
                 notifications.send(
                     "Resistine — Threats Detected",
@@ -1567,7 +1569,7 @@ class Plugin(BasePlugin):
             listing += f"\n  ... and {len(names) - 20} more"
 
         answer = QMessageBox.question(
-            self.app, "Threats Detected",
+            self.app, get_text("antivirus.threats_detected"),
             f"{len(filepaths)} infected file(s) found:\n\n"
             f"{listing}\n\nMove all to quarantine?",
         ) == QMessageBox.StandardButton.Yes
@@ -1939,8 +1941,8 @@ class Plugin(BasePlugin):
     def _delete_quarantined(self, qpath: str):
         name = os.path.basename(qpath).replace(".quarantined", "")
         confirmed = QMessageBox.question(
-            self.app, "Delete Quarantined File",
-            f"Permanently delete '{name}'?",
+            self.app, get_text("antivirus.delete_quarantined_file"),
+            get_text("antivirus.permanently_delete_name", name=name),
         ) == QMessageBox.StandardButton.Yes
         if not confirmed:
             return

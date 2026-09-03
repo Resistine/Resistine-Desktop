@@ -79,7 +79,7 @@ def get_agent_name():
     # name.  Wazuh allows: alphanumerics, hyphens, underscores, dots.
     name = re.sub(r"[^A-Za-z0-9.\-_]", "", name)
     if not name:
-        raise ValueError(f"Agent name is empty after sanitizing hostname: {hostname!r}")
+        raise ValueError(get_text("wazuh.agent.wazuh_functions_darwin.agent_name_is_empty_after", hostname=repr(hostname)))
     return name
 
 

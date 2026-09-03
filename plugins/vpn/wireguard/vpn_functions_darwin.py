@@ -95,7 +95,7 @@ class VPNHelper:
     def activate_extension() -> bool:
         """Activate the System Extension using Main App PyObjC bridge"""
         try:
-            from .extension_activator import ExtensionActivator, run_activation
+            from .extension_activator import run_activation
             logger.info("🔌 [VPN] Triggering System Extension activation via Main App...")
             
             # Store reference to keep delegate alive

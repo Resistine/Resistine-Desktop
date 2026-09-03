@@ -414,7 +414,7 @@ def status_tunnel(tunnel: str) -> str:
 
 def handle_request(request: dict) -> dict:
     if request.get("token") != IPC_TOKEN:
-        return {"status": "error", "message": "Unauthorized"}
+        return {"status": "error", "message": get_text("vpn.wireguard.windows_vpn_service.unauthorized")}
 
     cmd         = request.get("command")
     tunnel      = request.get("tunnel")
@@ -476,7 +476,7 @@ def handle_request(request: dict) -> dict:
             time.sleep(1)
             ok, msg = start_tunnel(tunnel)
             actual_state = status_tunnel(tunnel)
-            return {"status": "ok" if ok else "error", "state": actual_state, "message": "Restarted"}
+            return {"status": "ok" if ok else "error", "state": actual_state, "message": get_text("vpn.wireguard.windows_vpn_service.restarted")}
 
         if cmd == "health":
             return {

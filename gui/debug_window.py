@@ -27,7 +27,7 @@ class DebugWindow:
         button_frame = tk.Frame(self.debug_window)
         button_frame.pack(fill=tk.X, padx=10, pady=5)
 
-        clear_button = tk.Button(button_frame, text="Clear", command=self.clear_output)
+        clear_button = tk.Button(button_frame, text=get_text("main.debug_window.button.clear"), command=self.clear_output)
         clear_button.pack(side=tk.LEFT, padx=5)
 
         save_button = tk.Button(button_frame, text=get_text("main.debug_window.button.save_log"), command=self.save_log)
@@ -38,7 +38,7 @@ class DebugWindow:
 
         # Add initial message
         self.log_message("=== RESISTINE DEBUG WINDOW ===\n")
-        self.log_message("All print statements and logs will appear here.\n")
+        self.log_message(get_text("main.debug_window.message") + "\n")
         self.log_message("=" * 50 + "\n")
 
     def redirect_output(self):
@@ -100,9 +100,9 @@ class DebugWindow:
                 with open(filename, "w") as f:
                     f.write(content)
 
-                self.log_message(f"Log saved to: {filename}\n")
+                self.log_message(get_text("main.debug_window.log_saved", filename=filename) + "\n")
             except Exception as e:
-                self.log_message(f"Error saving log: {e}\n")
+                self.log_message(get_text("main.debug_window.error_saving", error=e) + "\n")
 
     def restore_output(self):
         """Restore original stdout and stderr"""

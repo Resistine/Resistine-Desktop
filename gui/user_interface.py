@@ -936,7 +936,7 @@ class AppUI(customtkinter.CTk):
 
             # Update status to error so it shows on the dashboard
             if hasattr(frame, "set_status"):
-                frame.set_status("Error")
+                frame.set_status(get_text("gui.user_interface.error"))
 
             # Show error message in place of the plugin content
             error_frame = customtkinter.CTkFrame(self)

@@ -74,7 +74,17 @@ class StatusBadge(QLabel):
         # layout the badge becomes visible with its parent anyway.
         if self.parent() is not None:
             self.show()
-        self.setText(str(status).title())
+        # Display text is localized via a status.<slug> catalog key when one
+        # exists; the raw status string stays the styling key below, so
+        # internal state comparisons and QSS selectors are unaffected.
+        slug = str(status).strip().lower().replace(" ", "_")
+        try:
+            from utils.i18n import get_text
+
+            label = get_text(f"status.{slug}")
+        except Exception:
+            label = str(status).title()
+        self.setText(label)
         self.setProperty("badge", str(status).lower())
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)

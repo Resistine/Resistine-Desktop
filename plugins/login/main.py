@@ -205,7 +205,7 @@ class Plugin(BasePlugin):
 
     def _enter_otp_mode(self):
         self._otp_mode = True
-        self.title_label.setText(f"Enter the 6-digit code sent to {self.email}")
+        self.title_label.setText(get_text("login.enter_the_6_digit_code", email=self.email))
         self.email_entry.hide()
         self.otp_entry.show()
         self.otp_entry.setFocus()
@@ -242,7 +242,7 @@ class Plugin(BasePlugin):
         if not public_key:
             self.update_status(get_text("login.failed_to_generate_encryption_keys"))
             return
-        self.update_status("Verifying…", "#16A34A")
+        self.update_status(get_text("login.verifying"), "#16A34A")
         self.primary_btn.setEnabled(False)
 
         def work():

@@ -120,13 +120,14 @@ class Plugin(BasePlugin):
 
     # ---- Profile ----------------------------------------------------------
     def _profile_card(self) -> QWidget:
-        card, lay = self._card("Profile")
+        card, lay = self._card(get_text("settings.profile"))
         # Button text/color/action mirrors auth state: logged in -> Log Out
         # (red, destructive); logged out -> Log In (primary blue, action).
         logged_in = settings.get("auth", "logged_in", False)
         email = settings.get("auth", "email", None)
         lay.addWidget(self._muted(
-            f"Email: {email}" if email else "Not signed in"))
+            get_text("settings.email_label", email=email) if email
+            else get_text("settings.not_signed_in")))
 
         if logged_in:
             self.logout_button = QPushButton(get_text("settings.log_out"))
@@ -194,8 +195,8 @@ class Plugin(BasePlugin):
 
     # ---- Appearance -------------------------------------------------------
     def _appearance_card(self) -> QWidget:
-        card, lay = self._card("Appearance")
-        lay.addWidget(self._muted("Mode:"))
+        card, lay = self._card(get_text("settings.appearance"))
+        lay.addWidget(self._muted(get_text("settings.mode")))
         self.appearance_combo = _NoScrollComboBox()
         self.appearance_combo.addItems(["System", "Light", "Dark"])
         self.appearance_combo.setCurrentText(
@@ -267,7 +268,8 @@ class Plugin(BasePlugin):
     # ---- Software Updates -------------------------------------------------
     def _updates_card(self) -> QWidget:
         card, lay = self._card(get_text("settings.software_updates"))
-        lay.addWidget(self._muted(f"Current version: {self._get_app_version()}"))
+        lay.addWidget(self._muted(get_text(
+            "settings.current_version", version=self._get_app_version())))
         check = QPushButton(get_text("settings.check_for_updates"))
         check.setCursor(Qt.CursorShape.PointingHandCursor)
         check.clicked.connect(self._check_for_updates)
@@ -388,10 +390,8 @@ class Plugin(BasePlugin):
 
     def _handle_uninstall(self):
         confirmed = QMessageBox.question(
-            self.app, "Uninstall Resistine",
-            "Are you sure you want to completely uninstall Resistine?\n\n"
-            "This will remove all VPN configurations, application data, and the "
-            "application itself.\n\nThis action cannot be undone.",
+            self.app, get_text("settings.uninstall_resistine"),
+            get_text("settings.are_you_sure_you_want"),
         ) == QMessageBox.StandardButton.Yes
         if not confirmed:
             return
@@ -451,11 +451,8 @@ class Plugin(BasePlugin):
             )
             return
         confirmed = QMessageBox.question(
-            self.app, "Log Out",
-            "Are you sure you want to log out?\n\nThis will sign you out and "
-            "remove your VPN configurations, security agent enrollment, chat "
-            "history, and account data from this device.\n\nAn administrator "
-            "password may be required to fully uninstall the Wazuh agent.",
+            self.app, get_text("settings.log_out"),
+            get_text("settings.log_out_confirm"),
         ) == QMessageBox.StandardButton.Yes
         if not confirmed:
             return

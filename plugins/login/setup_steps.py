@@ -770,40 +770,37 @@ def _wazuh_reenroll(on_status) -> bool:
 # Human-readable messages for Wazuh installer failure reasons. Mirrors the
 # mapping the Endpoint plugin's own UI uses (plugins/wazuh/main.py) so the
 # wizard explains failures the same clear way instead of "didn't finish".
-_WZ_REASON_MSG = {
-    "user_canceled": "The install was cancelled.",
-    "script_failed": "The installer hit an error. You can try again or skip.",
-    "pkg_corrupted": "The downloaded package was corrupted. Try again to re-download.",
-    "no_status_file": "The install was interrupted. Try again.",
-    "dns_failed": "Couldn't reach the download server. Check your connection and try again.",
-    "network_timeout": "The download timed out. Check your connection and try again.",
-    "signature_invalid": "The package failed signature verification. Try again to re-download.",
-    "duplicate_name": (
-        "This device is already registered on the monitoring server. "
-        "Try again to enroll under a new identifier."
-    ),
-    "manager_unreachable": (
-        "Couldn't reach the monitoring server. Make sure the VPN is connected, "
-        "then try again."
-    ),
-    "enroll_failed": (
-        "Enrollment with the monitoring server failed. Make sure the VPN is "
-        "connected, then try again."
-    ),
+_WZ_REASON_KEYS = {
+    "user_canceled": "login.setup_steps.reason_user_canceled",
+    "script_failed": "login.setup_steps.reason_script_failed",
+    "pkg_corrupted": "login.setup_steps.reason_pkg_corrupted",
+    "no_status_file": "login.setup_steps.reason_no_status_file",
+    "dns_failed": "login.setup_steps.reason_dns_failed",
+    "network_timeout": "login.setup_steps.reason_network_timeout",
+    "signature_invalid": "login.setup_steps.reason_signature_invalid",
+    "duplicate_name": "login.setup_steps.reason_duplicate_name",
+    "manager_unreachable": "login.setup_steps.reason_manager_unreachable",
+    "enroll_failed": "login.setup_steps.enrollment_with_the_monitoring",
 }
 
 
 def _wazuh_reason_message(reason) -> str:
-    """Turn a Wazuh installer failure_reason into a clear, actionable message."""
+    """Turn a Wazuh installer failure_reason into a clear, actionable message.
+
+    Resolved lazily via get_text so the active language at display time
+    applies (a module-level message dict would freeze the import-time
+    language).
+    """
+    from utils.i18n import get_text
+
     if reason and reason.startswith("enroll_rc_"):
         rc = reason[len("enroll_rc_"):]
-        return (f"Enrollment with the monitoring server failed (code {rc}). "
-                "Make sure the VPN is connected, then try again.")
-    if reason in _WZ_REASON_MSG:
-        return _WZ_REASON_MSG[reason]
+        return get_text("login.setup_steps.reason_enroll_rc", rc=rc)
+    if reason in _WZ_REASON_KEYS:
+        return get_text(_WZ_REASON_KEYS[reason])
     if reason:
-        return f"Endpoint setup didn't finish ({reason}). You can try again or skip."
-    return "Endpoint setup didn't finish. You can try again or skip."
+        return get_text("login.setup_steps.reason_didnt_finish", reason=reason)
+    return get_text("login.setup_steps.reason_didnt_finish_generic")
 
 
 def _maybe_forward_clamav(on_status):

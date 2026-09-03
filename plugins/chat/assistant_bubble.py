@@ -245,7 +245,7 @@ class AssistantBubble(customtkinter.CTkFrame):
         (body text, tables and code) to the clipboard at once. Uses the app's
         blue (RESISTINE_BLUE) so it's clearly visible and on-brand."""
         self._copy_btn = customtkinter.CTkButton(
-            self, text="Copy", width=58, height=24, corner_radius=6,
+            self, text=get_text("chat.assistant_bubble.copy"), width=58, height=24, corner_radius=6,
             fg_color=RESISTINE_BLUE, hover_color="#1565B0", text_color="#FFFFFF",
             font=customtkinter.CTkFont(family=ui_family(), size=12),
             command=self._copy_response,
@@ -256,12 +256,12 @@ class AssistantBubble(customtkinter.CTkFrame):
         try:
             self.clipboard_clear()
             self.clipboard_append(getattr(self, "_markdown_text", "") or "")
-            self._copy_btn.configure(text="Copied!")
+            self._copy_btn.configure(text=get_text("chat.assistant_bubble.copied"))
 
             def _restore():
                 try:
                     if self._copy_btn.winfo_exists():
-                        self._copy_btn.configure(text="Copy")
+                        self._copy_btn.configure(text=get_text("chat.assistant_bubble.copy"))
                 except Exception:
                     pass
             self.after(1200, _restore)

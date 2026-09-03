@@ -18,7 +18,6 @@ from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtGui import QIcon, QPixmap
 
 from gui import theme
-from utils.i18n import get_text
 
 
 class BasePlugin:
@@ -102,6 +101,21 @@ class BasePlugin:
 
     def get_name(self):
         return self.name
+
+    def get_display_name(self):
+        """Localized name for UI display (sidebar, titles).
+
+        get_name() stays the stable English identifier — it is compared
+        against literals throughout the app (navigation, plugin lookup) —
+        so localization happens only at display time via the catalog key
+        ``plugin.name.<name>`` with the identifier as fallback.
+        """
+        try:
+            from utils.i18n import get_text
+
+            return get_text(f"plugin.name.{self.name.lower()}")
+        except Exception:
+            return self.name
 
     def set_translations(self, translations):
         self.translations = translations

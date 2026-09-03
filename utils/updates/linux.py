@@ -221,7 +221,11 @@ def _download_worker(item: AppcastItem, dialog):
                     frac = min(downloaded / total, 1.0)
                     mb_down = downloaded / (1024 * 1024)
                     mb_total = total / (1024 * 1024)
-                    status = f"Downloading... {mb_down:.1f} / {mb_total:.1f} MB"
+                    status = get_text(
+                        "utils.updates.linux.downloading_mb_down_mb_total",
+                        mb_down=f"{mb_down:.1f}",
+                        mb_total=f"{mb_total:.1f}",
+                    )
                     _app.after(
                         0, dialog.set_download_progress, frac, status
                     )

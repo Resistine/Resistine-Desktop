@@ -179,7 +179,7 @@ class AppWindow(QMainWindow):
         for p in self.plugins:
             if p.order <= 0 or p.order == -1:
                 continue  # Login (0) and explicitly-hidden (-1) plugins
-            btn = QPushButton(f"  {p.get_name()}")
+            btn = QPushButton(f"  {p.get_display_name()}")
             btn.setObjectName("NavButton")
             btn.setCheckable(True)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)

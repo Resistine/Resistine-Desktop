@@ -58,7 +58,7 @@ class _PluginCard(QFrame):
 
         title_col = QVBoxLayout()
         title_col.setSpacing(4)
-        title = QLabel(plugin.get_name())
+        title = QLabel(plugin.get_display_name())
         title.setStyleSheet("font-size: 16px; font-weight: 700;")
         title_col.addWidget(title)
         badge_row = QHBoxLayout()

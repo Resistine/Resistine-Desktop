@@ -7,6 +7,7 @@ import json
 
 import requests
 
+from utils.i18n import get_text
 from utils.logger import logger
 
 
@@ -52,10 +53,10 @@ class LoginAPI:
                     error_data = response.json()
                     logger.info(f"[LOGIN] send_otp error response: {error_data}")
                     error_msg = error_data.get("message") or error_data.get(
-                        "error", f"Server error {response.status_code}"
+                        "error", get_text("login.api.server_error_status_code", status_code=response.status_code)
                     )
                 except json.JSONDecodeError:
-                    error_msg = f"Server error {response.status_code}"
+                    error_msg = get_text("login.api.server_error_status_code", status_code=response.status_code)
                 return False, error_msg, {}
 
         except requests.exceptions.RequestException as e:
@@ -122,10 +123,10 @@ class LoginAPI:
                     error_data = response.json()
                     logger.info(f"[LOGIN] verify_otp error response: {error_data}")
                     error_msg = error_data.get("message") or error_data.get(
-                        "error", f"Server error {response.status_code}"
+                        "error", get_text("login.api.server_error_status_code", status_code=response.status_code)
                     )
                 except json.JSONDecodeError:
-                    error_msg = f"Server error {response.status_code}"
+                    error_msg = get_text("login.api.server_error_status_code", status_code=response.status_code)
                 return False, error_msg, {}
 
         except requests.exceptions.RequestException as e:

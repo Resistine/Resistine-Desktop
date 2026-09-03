@@ -178,7 +178,7 @@ def build_scan_exclusions(plugin, parent, row):
     plugin._size_entry.bind("<KeyRelease>", lambda e: plugin._debounced_save_max_file_size())
 
     customtkinter.CTkLabel(
-        right, text="MB", font=font(11), text_color=_muted(),
+        right, text=get_text("antivirus.ui_cards.mb"), font=font(11), text_color=_muted(),
     ).grid(row=0, column=1, padx=(4, 0))
 
     customtkinter.CTkLabel(
