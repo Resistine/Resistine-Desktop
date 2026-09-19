@@ -30,14 +30,13 @@ Here is the analysis and summary of all branches in the repository relative to `
 
 #### 1. Branches Merged into `develop`
 
+##### A. Localization
 - **`origin/feature/i18n-extractor`**
   - **Status:** Fully merged into `develop` (commit `b26f034`).
   - **Contents:** Added the `scripts/extract_i18n.py` utility to parse source files and catalog translatable strings into JSON dictionaries.
 - **`origin/weblate`**
   - **Status:** Fully merged into `develop` via PRs #96 and #97.
   - **Contents:** Continuous localization sync from Weblate for the Polish catalog (`pl.json`).
-
-##### A. Localization
 - **`origin/feature/i18n-languages`** *(18 ahead, 30 behind)*
   - **Contents:** Massive localization rollout (102 files, ~12.5k additions). Catalogs and translates 185+ UI elements (sidebar labels, badges, status cards, dialogs) into 12 locales, fixes layout/freezing bugs during rapid language switching, and localizes dashboard descriptions.
 
