@@ -34,6 +34,7 @@ LANGUAGE_NAMES = {
     'fr-FR': 'Français',
     'it-IT': 'Italiano',
     'nl-NL': 'Nederlands',
+    'pl': 'Polski',
     'pt-BR': 'Português (Brasil)',
     'ja-JP': '日本語',
     'tr-TR': 'Türkçe',

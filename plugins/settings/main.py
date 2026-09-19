@@ -306,6 +306,19 @@ class Plugin(BasePlugin):
     # ===================================================================
     #  Actions
     # ===================================================================
+    def _safe_set_text(self, label, text):
+        """Set a status label's text, tolerating a torn-down widget.
+
+        These are called from deferred after() callbacks that clear a status
+        line seconds later; by then the Settings screen may have been rebuilt
+        (theme toggle) or navigated away, leaving a live Python wrapper around
+        a deleted C++ QLabel — setText then raises RuntimeError.
+        """
+        try:
+            label.setText(text)
+        except RuntimeError:
+            pass
+
     def save_animation_setting(self):
         settings.set("chat", "disable_animation",
                      self.disable_animation_checkbox.isChecked())
@@ -337,7 +350,8 @@ class Plugin(BasePlugin):
                         plugin, "reinitialize_client"):
                     plugin.reinitialize_client()
                     break
-            self.app.after(2500, lambda: self.status_label.setText(""))
+            self.app.after(
+                2500, lambda: self._safe_set_text(self.status_label, ""))
         else:
             self.status_label.setText(
                 _t("settings.apikey.saved_error", "Save failed"))
@@ -365,13 +379,16 @@ class Plugin(BasePlugin):
                 self.update_status_label.setText(
                     get_text("settings.updates_not_available_in_this"))
                 self.app.after(
-                    5000, lambda: self.update_status_label.setText(""))
+                    5000,
+                    lambda: self._safe_set_text(self.update_status_label, ""))
                 return
             self.update_status_label.setText(get_text("settings.checking_for_updates"))
             result = updates.check_for_updates()
             if result == "error":
                 self.update_status_label.setText(get_text("settings.update_check_failed"))
-            self.app.after(4000, lambda: self.update_status_label.setText(""))
+            self.app.after(
+                4000,
+                lambda: self._safe_set_text(self.update_status_label, ""))
         except Exception as e:
             logger.error(f"Update check error: {e}")
             self.update_status_label.setText(get_text("settings.error_e", e=e))

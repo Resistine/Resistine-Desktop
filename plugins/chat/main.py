@@ -269,9 +269,17 @@ class _Bubble(QFrame):
         if self._copy_btn is None:
             return
         self._copy_btn.setText(get_text("chat.copied"))
-        QTimer.singleShot(
-            1500,
-            lambda: self._copy_btn and self._copy_btn.setText(get_text("chat.copy")))
+        QTimer.singleShot(1500, self._reset_copy_label)
+
+    def _reset_copy_label(self) -> None:
+        # Fires 1.5s later — the bubble may have been torn down by then, in
+        # which case _copy_btn is a live Python wrapper around a deleted C++
+        # object (truthy, but setText raises). Guard both.
+        try:
+            if self._copy_btn is not None:
+                self._copy_btn.setText(get_text("chat.copy"))
+        except RuntimeError:
+            pass
 
     # -- hover: fade the copy button in/out --------------------------------
 
@@ -330,9 +338,15 @@ class _Bubble(QFrame):
     def _render_thinking(self) -> None:
         frame = _SPINNER_FRAMES[self._spinner_idx % len(_SPINNER_FRAMES)]
         muted = theme.color("text_secondary")
-        self._view.setHtml(
-            f'<span style="color:{muted}; font-style:italic;">'
-            f"Thinking &nbsp; {frame}</span>")
+        try:
+            self._view.setHtml(
+                f'<span style="color:{muted}; font-style:italic;">'
+                f"Thinking &nbsp; {frame}</span>")
+        except RuntimeError:
+            # View deleted while the spinner timer was still pending — stop
+            # ticking so it can't fire against the dead object again.
+            self._end_thinking()
+            return
         self._fit_height()
 
     def _tick_spinner(self) -> None:
@@ -354,17 +368,25 @@ class _Bubble(QFrame):
         differently than it renders and clips the last line. A one-line
         floor + bottom padding covers block margins and descenders.
         """
-        doc = self._view.document()
-        doc.setTextWidth(self._max_width)
-        line = self._view.fontMetrics().lineSpacing()
-        h = max(doc.size().height(), line)
-        self._view.setFixedHeight(int(h) + 8)
+        try:
+            doc = self._view.document()
+            doc.setTextWidth(self._max_width)
+            line = self._view.fontMetrics().lineSpacing()
+            h = max(doc.size().height(), line)
+            self._view.setFixedHeight(int(h) + 8)
+        except RuntimeError:
+            # The browser's C++ object was deleted (chat cleared/rebuilt or
+            # session switched) while a deferred relayout was still pending.
+            pass
 
     def set_text(self, text: str, *, streaming: bool = False) -> None:
         del streaming  # accepted for call-site clarity; no behavioural effect
         if self._is_user:
             self._raw_text = text
-            self._label.setText(text)
+            try:
+                self._label.setText(text)
+            except RuntimeError:
+                pass
             return
         # Assistant: strip the leading whitespace the backend sometimes emits
         # (renders as a first-line indent), then render styled HTML.
@@ -372,18 +394,28 @@ class _Bubble(QFrame):
         self._raw_text = text
         if self._thinking and text:
             self._end_thinking()
-        self._view.setHtml(markdown_to_html(text) if text else "")
+        try:
+            self._view.setHtml(markdown_to_html(text) if text else "")
+        except RuntimeError:
+            # Browser deleted mid-stream (session switched / chat torn down).
+            return
         self._fit_height()
         if text and text != "…":
             self._has_content = True  # enables copy + hover reveal
 
     def set_max_width(self, max_width: int) -> None:
         self._max_width = max_width
-        if self._is_user:
-            self._label.setMaximumWidth(max_width)
-        else:
-            self._view.setFixedWidth(max_width)
-            self._fit_height()
+        try:
+            if self._is_user:
+                self._label.setMaximumWidth(max_width)
+            else:
+                self._view.setFixedWidth(max_width)
+                self._fit_height()
+        except RuntimeError:
+            # Bubble's underlying C++ widget was deleted while a resize/
+            # relayout (e.g. _apply_bubble_widths on a chat-area resize) was
+            # still iterating stale rows. Nothing to size — ignore.
+            pass
 
 
 class _BubbleRow(QWidget):
@@ -1256,13 +1288,6 @@ class Plugin(BasePlugin):
                 self._messages_lay.count() - 1, self._bottom_spacer)
             idx = self._messages_lay.indexOf(self._bottom_spacer)
         self._messages_lay.insertWidget(idx, row)
-
-    def _scroll_to_bottom(self) -> None:
-        try:
-            bar = self._scroll.verticalScrollBar()
-            QTimer.singleShot(0, lambda: bar.setValue(bar.maximum()))
-        except Exception:
-            pass
 
     def _pin_row_to_top(self, row: QWidget) -> None:
         """Scroll so *row* sits at the top of the viewport (Claude-style).

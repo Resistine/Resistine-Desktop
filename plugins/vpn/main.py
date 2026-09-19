@@ -87,7 +87,6 @@ try:
             connect,
             disconnect,
             get_status,
-            toggle,
         )
     elif IS_LINUX:
         from plugins.vpn.wireguard.vpn_functions_linux import (  # noqa: F401
@@ -297,7 +296,7 @@ class Plugin(BasePlugin):
             # Request extension activation once the Qt loop is running.
             self.app.after(1000, self._activate_extension_if_needed)
             # Debug-mode convenience: auto-connect the VPN so VPN-gated
-            # features (chat, wazuh_overview) work without a manual toggle.
+            # features (chat) work without a manual toggle.
             # Scheduled after extension activation has had time to settle.
             if os.environ.get("RESISTINE_DEBUG") == "1":
                 self.app.after(3000, self._debug_auto_connect)
@@ -1243,12 +1242,20 @@ class Plugin(BasePlugin):
         copy_btn = QPushButton(get_text("vpn.copy_to_clipboard"))
         copy_btn.setMinimumHeight(36)
 
+        def _reset_copy_label():
+            # Fires 2s later; the dialog (and this button) may be closed by
+            # then, leaving a deleted C++ object — setText would raise.
+            try:
+                copy_btn.setText(get_text("vpn.copy_to_clipboard"))
+            except RuntimeError:
+                pass
+
         def copy_to_clipboard():
             clip = QGuiApplication.clipboard()
             if clip is not None:
                 clip.setText(content)
             copy_btn.setText(get_text("chat.assistant_bubble.copied"))
-            self.app.after(2000, lambda: copy_btn.setText(get_text("vpn.copy_to_clipboard")))
+            self.app.after(2000, _reset_copy_label)
 
         copy_btn.clicked.connect(copy_to_clipboard)
         lay.addWidget(copy_btn)

@@ -207,10 +207,8 @@ if %errorlevel% neq 0 (
 
 del "%TEMP%\resistine_python_path.txt" >nul 2>&1
 
-:: ---- Launch tray now ----
-echo.
-echo Starting tray icon...
-start "" "%VENV_PYTHON%" "%TRAY_SCRIPT%"
+:: The tray is now a native QSystemTrayIcon inside the app (gui/system_tray.py),
+:: started by main.py — no separate tray process to launch here.
 
 :: ============================================================
 :: Done

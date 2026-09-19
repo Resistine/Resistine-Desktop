@@ -314,6 +314,8 @@ class _VPNStepWindows(_VPNStepBase):
         import time
         deadline = time.time() + 300
         while time.time() < deadline:
+            if self.cancelled():
+                return False
             if check_wireguard_installed():
                 return True
             time.sleep(3)

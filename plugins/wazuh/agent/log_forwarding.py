@@ -102,8 +102,9 @@ def _run_privileged(script: str) -> bool:
             ok, _out = rp(script)
             return ok
         from plugins.wazuh.agent.wazuh_functions_linux import run_privileged_command
-        result = run_privileged_command(["sh", "-c", script])
-        return bool(result and result.returncode == 0)
+        # run_privileged_command returns (success, output) — not a CompletedProcess.
+        ok, _out = run_privileged_command(["sh", "-c", script])
+        return bool(ok)
     except Exception as e:  # noqa: BLE001
         logger.error(f"[CLAMAV-FWD] privileged run failed: {e}")
         return False
