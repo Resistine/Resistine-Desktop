@@ -29,9 +29,10 @@ if "%SCRIPT_DIR:~-1%"=="\" set SCRIPT_DIR=%SCRIPT_DIR:~0,-1%
 for %%I in ("%SCRIPT_DIR%\..\..") do set PROJECT_ROOT=%%~fI
 
 :: Try bundled-installer layout first, then fall back to project-root location.
-set SERVICE_SCRIPT=%SCRIPT_DIR%\windows_vpn_service.py
-if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%SCRIPT_DIR%\plugins\vpn\wireguard\windows_vpn_service.py
-if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%PROJECT_ROOT%\plugins\vpn\wireguard\windows_vpn_service.py
+#set SERVICE_SCRIPT=%SCRIPT_DIR%\windows_vpn_service.py
+#if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%SCRIPT_DIR%\plugins\vpn\wireguard\windows_vpn_service.py
+#if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%PROJECT_ROOT%\plugins\vpn\wireguard\windows_vpn_service.py
+set "SERVICE_SCRIPT=%PROJECT_ROOT%\plugins\vpn\wireguard\windows_vpn_service.py"
 set PROGRAMDATA_DIR=%PROGRAMDATA%\Resistine\wireguard
 set LOG_DIR=%PROGRAMDATA%\Resistine
 set SERVICE_SETUP_LOG=%LOG_DIR%\vpn_service_install.log
@@ -142,7 +143,19 @@ echo [4/6] Installing Python dependencies...
 
 "%PYTHON_FULL%" -m pip install --quiet --upgrade pip
 
-set SERVICE_DEPS=pywin32 pywin32-ctypes
+"%PYTHON_FULL%" -m pip install pywin32 pywin32-ctypes loguru opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http
+if errorlevel 1 (
+    echo ERROR: Failed to install Python dependencies.
+    call :pause_if_needed
+    exit /b 1
+)
+
+"%PYTHON_FULL%" -c "import sys; print(sys.executable); import opentelemetry; print('OpenTelemetry OK')"
+if errorlevel 1 (
+    echo OpenTelemetry installation failed
+    pause
+    exit /b 1
+)
 
 for %%d in (%SERVICE_DEPS%) do (
     echo       Installing %%d...
@@ -214,7 +227,7 @@ if exist "%SERVICE_SETUP_LOG%" del "%SERVICE_SETUP_LOG%" >nul 2>&1
 set "SERVICE_INSTALL_EXIT="
 set /a INSTALL_ATTEMPT=1
 :install_service_retry
-"%PYTHON_FULL%" "%SERVICE_SCRIPT%" --startup auto install > "%SERVICE_SETUP_LOG%" 2>&1
+"%PYTHON_FULL%" "%SERVICE_SCRIPT%" --startup auto install
 if !errorlevel! neq 0 (
     set "SERVICE_INSTALL_EXIT=!errorlevel!"
     if !INSTALL_ATTEMPT! lss 4 (
