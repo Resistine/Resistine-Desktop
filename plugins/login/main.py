@@ -65,7 +65,7 @@ class Plugin(BasePlugin):
         )
         self.app = app
         self.email = None
-        self.api = LoginAPI("https://validate.resistine.work")
+        self.api = LoginAPI("https://validate.resistine.net")
 
     def show(self):
         self.app.setCentralWidget(self.create_main_screen())

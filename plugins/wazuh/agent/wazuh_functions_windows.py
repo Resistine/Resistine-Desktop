@@ -40,7 +40,7 @@ _KEY_BACKUP = os.path.join(os.environ.get("APPDATA", ""), "Resistine", "wazuh_cl
 _AGENT_AUTH = os.path.join(WINDOWS_WAZUH_DIR, "agent-auth.exe")
 _SERVICE_NAME = "WazuhSvc"
 
-_RESISTINE_API_BASE = "https://validate.resistine.work"
+_RESISTINE_API_BASE = "https://validate.resistine.net"
 
 # Sysmon paths
 _SYSMON_DIR = os.path.join(os.environ.get("PROGRAMFILES", r"C:\Program Files"), "Resistine", "Sysmon")

@@ -113,7 +113,7 @@ def needs_reenrollment():
     return False
 
 
-_RESISTINE_API_BASE = "https://validate.resistine.work"
+_RESISTINE_API_BASE = "https://validate.resistine.net"
 
 
 def get_package_url():
