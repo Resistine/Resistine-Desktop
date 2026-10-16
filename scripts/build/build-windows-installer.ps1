@@ -14,12 +14,12 @@ $_rawArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } els
 $IsARM64  = $_rawArch -eq "ARM64"
 
 function Get-AppVersion {
-    $specPath = Join-Path $ProjectRoot "packaging\Resistine.spec"
-    $match = Select-String -Path $specPath -Pattern "VERSION\s*=\s*'([^']+)'" | Select-Object -First 1
-    if (-not $match) {
-        throw "Could not find VERSION in Resistine.spec"
+    if ($env:RESISTINE_VERSION) { return $env:RESISTINE_VERSION }
+    $versionFile = Join-Path $ProjectRoot "VERSION"
+    if (-not (Test-Path $versionFile)) {
+        throw "VERSION file not found at $versionFile"
     }
-    return $match.Matches[0].Groups[1].Value
+    return (Get-Content $versionFile -Raw).Trim()
 }
 
 function Convert-LicenseMdToTxt {
@@ -76,6 +76,7 @@ function Resolve-InnoCompiler {
     $searchPaths = @(
         "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
         "C:\Program Files\Inno Setup 6\ISCC.exe"
+        "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
     )
     foreach ($candidate in $searchPaths) {
         if (Test-Path $candidate) {

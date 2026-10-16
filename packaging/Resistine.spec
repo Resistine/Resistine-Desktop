@@ -16,11 +16,14 @@ IS_WINDOWS = sys.platform == "win32"
 # Application metadata
 APP_NAME = 'Resistine'
 BUNDLE_ID = 'com.resistine.desktop'
-VERSION = '2026.07.20-rc'
 
 # Paths — project root is one level up from packaging/
 _spec_dir = os.path.dirname(os.path.abspath(SPEC))
 base_path = os.path.dirname(_spec_dir)
+# Single source of truth: VERSION file at the repo root.
+# RESISTINE_VERSION env var overrides it (useful for CI / test builds).
+_version_src = os.path.join(base_path, 'VERSION')
+VERSION = os.environ.get('RESISTINE_VERSION') or open(_version_src).read().strip()
 
 def _src(relpath):
     """Resolve a project-relative path to an absolute path."""
