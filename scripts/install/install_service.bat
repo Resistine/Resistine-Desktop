@@ -22,17 +22,17 @@ set SERVICE_NAME=ResistineVPN
 set SCRIPT_DIR=%~dp0
 if "%SCRIPT_DIR:~-1%"=="\" set SCRIPT_DIR=%SCRIPT_DIR:~0,-1%
 
-:: Project root is always two levels up from scripts\install\.
-:: Resolved unconditionally so the fallback SERVICE_SCRIPT paths below work
-:: correctly — the previous conditional-block version had a parse-time bug
-:: where %PROJECT_ROOT% was expanded before it was set.
-for %%I in ("%SCRIPT_DIR%\..\..") do set PROJECT_ROOT=%%~fI
-
-:: Try bundled-installer layout first, then fall back to project-root location.
-#set SERVICE_SCRIPT=%SCRIPT_DIR%\windows_vpn_service.py
-#if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%SCRIPT_DIR%\plugins\vpn\wireguard\windows_vpn_service.py
-#if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%PROJECT_ROOT%\plugins\vpn\wireguard\windows_vpn_service.py
-set "SERVICE_SCRIPT=%PROJECT_ROOT%\plugins\vpn\wireguard\windows_vpn_service.py"
+:: Two possible layouts:
+::  - Installed copy: install_service.bat sits directly in the app folder,
+::    alongside plugins\ (one level, same directory as SCRIPT_DIR).
+::  - Dev/repo copy: install_service.bat sits in scripts\install\, two
+::    levels below the project root.
+:: Try the installed layout first, then fall back to the dev layout.
+set "SERVICE_SCRIPT=%SCRIPT_DIR%\plugins\vpn\wireguard\windows_vpn_service.py"
+if not exist "%SERVICE_SCRIPT%" (
+    for %%I in ("%SCRIPT_DIR%\..\..") do set PROJECT_ROOT=%%~fI
+    set "SERVICE_SCRIPT=!PROJECT_ROOT!\plugins\vpn\wireguard\windows_vpn_service.py"
+)
 set PROGRAMDATA_DIR=%PROGRAMDATA%\Resistine\wireguard
 set LOG_DIR=%PROGRAMDATA%\Resistine
 set SERVICE_SETUP_LOG=%LOG_DIR%\vpn_service_install.log
@@ -153,18 +153,8 @@ if errorlevel 1 (
 "%PYTHON_FULL%" -c "import sys; print(sys.executable); import opentelemetry; print('OpenTelemetry OK')"
 if errorlevel 1 (
     echo OpenTelemetry installation failed
-    pause
+    call :pause_if_needed
     exit /b 1
-)
-
-for %%d in (%SERVICE_DEPS%) do (
-    echo       Installing %%d...
-    "%PYTHON_FULL%" -m pip install --quiet %%d
-    if !errorlevel! neq 0 (
-        echo ERROR: Failed to install %%d
-        call :pause_if_needed
-        exit /b 1
-    )
 )
 
 :: pywin32 post-install
@@ -227,7 +217,7 @@ if exist "%SERVICE_SETUP_LOG%" del "%SERVICE_SETUP_LOG%" >nul 2>&1
 set "SERVICE_INSTALL_EXIT="
 set /a INSTALL_ATTEMPT=1
 :install_service_retry
-"%PYTHON_FULL%" "%SERVICE_SCRIPT%" --startup auto install
+"%PYTHON_FULL%" "%SERVICE_SCRIPT%" --startup auto install > "%SERVICE_SETUP_LOG%" 2>&1
 if !errorlevel! neq 0 (
     set "SERVICE_INSTALL_EXIT=!errorlevel!"
     if !INSTALL_ATTEMPT! lss 4 (

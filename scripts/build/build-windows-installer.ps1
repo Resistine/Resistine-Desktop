@@ -157,6 +157,17 @@ if (Test-Path $vpnServiceSrc) {
     Write-Warning "windows_vpn_service.py not found at $vpnServiceSrc"
 }
 
+# windows_vpn_service.py is run standalone by install_service.bat (system Python,
+# not the frozen Resistine.exe), so it needs utils/ as a real sibling folder —
+# PyInstaller's bundled copy inside _internal/ isn't visible to it.
+$utilsSrc = Join-Path $ProjectRoot "utils"
+$utilsDst = Join-Path $sourceDir "utils"
+if (Test-Path $utilsSrc) {
+    Copy-Item $utilsSrc $utilsDst -Recurse -Force
+} else {
+    Write-Warning "utils/ not found at $utilsSrc"
+}
+
 # Download bundled dependency installers (Python, WireGuard)
 Write-Host "Downloading bundled dependency installers..."
 $depsScript = Join-Path $ProjectRoot "scripts\build\download-windows-deps.ps1"
