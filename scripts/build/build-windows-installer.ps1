@@ -14,13 +14,10 @@ $_rawArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } els
 $IsARM64  = $_rawArch -eq "ARM64"
 
 function Get-AppVersion {
-    if ($env:RESISTINE_VERSION) { return $env:RESISTINE_VERSION }
-    $versionFile = Join-Path $ProjectRoot "VERSION"
-    if (-not (Test-Path $versionFile)) {
-        throw "VERSION file not found at $versionFile"
-    }
-    return (Get-Content $versionFile -Raw).Trim()
+    if ($env:RESISTINE_VERSION) { return $env:RESISTINE_VERSION }   # manual override still works
+    return (Get-Date -Format "yyyy.MM.dd")                          # e.g. 2026.10.21
 }
+
 
 function Convert-LicenseMdToTxt {
     <#
@@ -75,7 +72,7 @@ function Resolve-InnoCompiler {
 
     $searchPaths = @(
         "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
-        "C:\Program Files\Inno Setup 6\ISCC.exe"
+        "C:\Program Files\Inno Setup 6\ISCC.exe",
         "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
     )
     foreach ($candidate in $searchPaths) {
@@ -128,9 +125,17 @@ if (-not $SkipDependencyInstall) {
     & $venvPython -m pip install pyinstaller
 }
 
+$version = Get-AppVersion
+
 if (-not $SkipPyInstaller) {
-    Write-Host "Building Windows application bundle with PyInstaller..."
-    & $venvPython -m PyInstaller (Join-Path $ProjectRoot "packaging\Resistine.spec") --clean --noconfirm
+    Write-Host "Building Windows application bundle with PyInstaller (version $version)..."
+    $prevVersionEnv = $env:RESISTINE_VERSION
+    $env:RESISTINE_VERSION = $version
+    try {
+        & $venvPython -m PyInstaller (Join-Path $ProjectRoot "packaging\Resistine.spec") --clean --noconfirm
+    } finally {
+        $env:RESISTINE_VERSION = $prevVersionEnv   # don't leave it set in your terminal
+    }
 }
 
 $sourceDir = Join-Path $ProjectRoot "dist\Resistine"
@@ -189,7 +194,6 @@ Convert-LicenseMdToTxt `
     -SourceMd (Join-Path $ProjectRoot "LICENSE.md") `
     -TargetTxt (Join-Path $ProjectRoot "LICENSE.txt")
 
-$version = Get-AppVersion
 $iscc = Resolve-InnoCompiler
 $issScript = Join-Path $ProjectRoot "packaging\windows\ResistineInstaller.iss"
 
